@@ -48,7 +48,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVBNzQ5MDNFRjQyRTExMUUKUldRZUVTNzBQcEIwV3FPZk1nZDUrUzFFclFJKzg2ZGs5Nnp6c01XR1UreURIZDUrMUhNOHk2dTgK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDBGNkE1RDE5NDdEQzhBNTUKUldSVml0eEhHVjFxRHlFOTM3YWd6YUt3K1d6U2kxTGZRVjFTUUFHQ05ocnMrNllMYTdrR3dLK3gK",
       "endpoints": [
         "https://agent.houflow.com/downloads/houhub/latest.json"
       ],
