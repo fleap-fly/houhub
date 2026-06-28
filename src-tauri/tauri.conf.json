@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "houhub",
+  "version": "0.18.3",
+  "identifier": "com.houflow.houhub",
+  "build": {
+    "beforeDevCommand": "pnpm tauri:before-dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "pnpm tauri:before-build",
+    "frontendDist": "../out"
+  },
+  "app": {
+    "windows": [],
+    "macOSPrivateApi": true,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../out": "web/"
+    },
+    "externalBin": [
+      "binaries/houhub-mcp"
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/installer-hooks.nsh"
+      }
+    },
+    "publisher": "Houflow",
+    "homepage": "https://houflow.com",
+    "category": "DeveloperTool",
+    "copyright": "Copyright (c) 2026 Houflow. All rights reserved.",
+    "macOS": {
+      "infoPlist": "Info.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVBNzQ5MDNFRjQyRTExMUUKUldRZUVTNzBQcEIwV3FPZk1nZDUrUzFFclFJKzg2ZGs5Nnp6c01XR1UreURIZDUrMUhNOHk2dTgK",
+      "endpoints": [
+        "https://agent.houflow.com/downloads/houhub/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+services:
+  houhub:
+    build: .
+    # Or use a pre-built image:
+    # image: fleap-fly/houhub:latest
+    ports:
+      - "3080:3080"
+    volumes:
+      - houhub-data:/data
+      # Mount your project directories (optional):
+      # - /path/to/projects:/projects
+    environment:
+      - HOUHUB_TOKEN=${HOUHUB_TOKEN:-}
+      - HOUHUB_PORT=3080
+      - HOUHUB_HOST=0.0.0.0
+    # In-place upgrades (Settings → Software Update) rewrite the binaries and
+    # web assets inside this container's writable layer, not the image. The
+    # houhub-data volume persists, but an upgrade lives only in the running
+    # container: recreating it (`--force-recreate`, or recreating after a
+    # `docker pull`) starts from the image again and drops the upgrade. Build or
+    # pull an image at the new version and recreate to make it permanent.
+    restart: unless-stopped
+
+volumes:
+  houhub-data:
