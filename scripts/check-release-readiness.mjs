@@ -9,6 +9,9 @@ const expectedVersion =
   valueArg("--version") || readJson("package.json").version
 const remoteChecks = args.has("--remote")
 const docsRoot = valueArg("--docs-root") || "/home/dev/next-ai-saas"
+const productionManifestUrl =
+  "https://agent.houflow.com/downloads/houhub/latest.json"
+const githubReleaseBase = `https://github.com/fleap-fly/houhub/releases/download/v${expectedVersion}/`
 
 const failures = []
 const warnings = []
@@ -53,6 +56,45 @@ function warn(message) {
 
 function assertEqual(actual, expected, label) {
   if (actual !== expected) fail(`${label}: expected ${expected}, got ${actual}`)
+}
+
+async function fetchText(url, options = {}) {
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      redirect: options.redirect || "follow",
+    })
+    const text = await response.text()
+    return { response, text, error: null }
+  } catch (error) {
+    return { response: null, text: "", error }
+  }
+}
+
+function normalizeJsonText(text) {
+  return `${JSON.stringify(JSON.parse(text), null, 2)}\n`
+}
+
+async function fetchGitHubReleaseText(url) {
+  const fetched = await fetchText(url)
+  if (!fetched.error) return fetched
+
+  const fallback = tryRun("curl", [
+    "-fsSL",
+    "--retry",
+    "3",
+    "--connect-timeout",
+    "20",
+    url,
+  ])
+  if (fallback !== null) {
+    return {
+      response: { ok: true, status: 200 },
+      text: fallback,
+      error: null,
+    }
+  }
+  return fetched
 }
 
 function forbiddenNeedles() {
@@ -266,7 +308,7 @@ async function checkRemoteState() {
     "tagName,assets",
   ])
   if (!releaseJson) {
-    warn(`release v${expectedVersion} is not readable yet`)
+    fail(`release v${expectedVersion} is not readable yet`)
   } else {
     const release = JSON.parse(releaseJson)
     const assetNames = new Set(
@@ -287,15 +329,61 @@ async function checkRemoteState() {
     }
   }
 
-  const response = await fetch(
-    "https://agent.houflow.com/downloads/houhub/latest.json",
-    { cache: "no-store" }
-  )
-  if (!response.ok) {
-    warn(`production latest.json returned HTTP ${response.status}`)
+  const githubLatestUrl = `${githubReleaseBase}latest.json`
+  const githubLatest = await fetchGitHubReleaseText(githubLatestUrl)
+  if (githubLatest.error) {
+    fail(`could not fetch GitHub latest.json: ${githubLatest.error.message}`)
     return
   }
-  const manifest = await response.json()
+  if (!githubLatest.response?.ok) {
+    fail(`GitHub latest.json returned HTTP ${githubLatest.response.status}`)
+    return
+  }
+
+  const productionLatest = await fetchText(productionManifestUrl)
+  if (productionLatest.error) {
+    fail(
+      `could not fetch production latest.json: ${productionLatest.error.message}`
+    )
+    return
+  }
+  if (!productionLatest.response?.ok) {
+    fail(
+      `production latest.json returned HTTP ${productionLatest.response.status}`
+    )
+    return
+  }
+
+  const cacheControl =
+    productionLatest.response.headers.get("cache-control") || ""
+  if (!/no-store/i.test(cacheControl) || !/no-cache/i.test(cacheControl)) {
+    fail(
+      `production latest.json must be no-cache/no-store; got Cache-Control: ${cacheControl || "(missing)"}`
+    )
+  }
+
+  let releaseManifest
+  let manifest
+  try {
+    releaseManifest = JSON.parse(githubLatest.text)
+    manifest = JSON.parse(productionLatest.text)
+  } catch (error) {
+    fail(`latest.json is invalid JSON: ${error.message}`)
+    return
+  }
+
+  if (
+    normalizeJsonText(githubLatest.text) !==
+    normalizeJsonText(productionLatest.text)
+  ) {
+    fail("production latest.json does not match GitHub release latest.json")
+  }
+
+  if (releaseManifest.version !== expectedVersion) {
+    fail(
+      `GitHub latest.json version expected ${expectedVersion}, got ${releaseManifest.version}`
+    )
+  }
   if (manifest.version !== expectedVersion) {
     fail(
       `production latest.json version expected ${expectedVersion}, got ${manifest.version}`
@@ -303,8 +391,51 @@ async function checkRemoteState() {
   }
   for (const entry of Object.values(manifest.platforms || {})) {
     const url = String(entry?.url || "")
-    if (!url.includes(`houhub_${expectedVersion}_`))
-      fail(`production manifest has non-versioned or stale URL: ${url}`)
+    const signature = String(entry?.signature || "")
+    if (
+      !url.startsWith(githubReleaseBase) ||
+      !url.includes(`houhub_${expectedVersion}_`)
+    ) {
+      fail(
+        `production manifest has non-GitHub, non-versioned, or stale URL: ${url}`
+      )
+    }
+    if (!signature) fail(`production manifest has empty signature for ${url}`)
+  }
+
+  const installerRoutes = [
+    {
+      route: "https://houflow.com/downloads/houhub/macos-arm64",
+      suffix: `houhub_${expectedVersion}_aarch64.dmg`,
+    },
+    {
+      route: "https://houflow.com/downloads/houhub/macos-x64",
+      suffix: `houhub_${expectedVersion}_x64.dmg`,
+    },
+    {
+      route: "https://houflow.com/downloads/houhub/windows-x64",
+      suffix: `houhub_${expectedVersion}_x64-setup.exe`,
+    },
+  ]
+  for (const item of installerRoutes) {
+    const routeCheck = await fetchText(item.route, { redirect: "manual" })
+    if (routeCheck.error) {
+      fail(`could not fetch ${item.route}: ${routeCheck.error.message}`)
+      continue
+    }
+    const route = routeCheck.response
+    const location = route.headers.get("location") || ""
+    if (route.status !== 302) {
+      fail(`${item.route} expected HTTP 302, got ${route.status}`)
+    }
+    if (
+      !location.startsWith(githubReleaseBase) ||
+      !location.includes(item.suffix)
+    ) {
+      fail(
+        `${item.route} redirects to unexpected location: ${location || "(missing)"}`
+      )
+    }
   }
 }
 
