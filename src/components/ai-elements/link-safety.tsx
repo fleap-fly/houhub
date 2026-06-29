@@ -1,7 +1,15 @@
 "use client"
 
 import type { ReactNode } from "react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { useTranslations } from "next-intl"
 import { openUrl } from "@/lib/platform"
 import { getActiveRemoteConnectionId, isDesktop } from "@/lib/transport"
@@ -16,6 +24,8 @@ interface LocalFileTarget {
   path: string
   line: number | null
 }
+
+const StreamdownLinkSafetyContext = createContext<LinkSafetyConfig | null>(null)
 
 const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:[\\/]/
 const URL_SCHEME = /^[a-zA-Z][a-zA-Z\d+\-.]*:/
@@ -250,7 +260,7 @@ function toWorkspaceRelativePath(
  * mid-flight (translator function, workspace context, etc.) cannot tear
  * down the effect and leave streamdown stuck with `isOpen === true`.
  */
-function DirectLinkOpen({
+export function DirectLinkOpen({
   url,
   isOpen,
   onClose,
@@ -355,7 +365,22 @@ export function useOpenLinkOrFile() {
   )
 }
 
+export function StreamdownLinkSafetyProvider({
+  value,
+  children,
+}: {
+  value: LinkSafetyConfig
+  children: ReactNode
+}) {
+  return (
+    <StreamdownLinkSafetyContext.Provider value={value}>
+      {children}
+    </StreamdownLinkSafetyContext.Provider>
+  )
+}
+
 export function useStreamdownLinkSafety(): LinkSafetyConfig {
+  const override = useContext(StreamdownLinkSafetyContext)
   const handleOpenTarget = useOpenLinkOrFile()
 
   const handleLinkCheck = useCallback(
@@ -370,7 +395,7 @@ export function useStreamdownLinkSafety(): LinkSafetyConfig {
     [handleOpenTarget]
   )
 
-  return useMemo(
+  const defaultConfig = useMemo(
     () => ({
       enabled: true,
       onLinkCheck: handleLinkCheck,
@@ -378,6 +403,8 @@ export function useStreamdownLinkSafety(): LinkSafetyConfig {
     }),
     [handleLinkCheck, renderModal]
   )
+
+  return override ?? defaultConfig
 }
 
 /**

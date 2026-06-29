@@ -3318,6 +3318,7 @@
     "loadingPreview": "Loading preview...",
     "openPreview": "Open preview",
     "previewUnavailable": "Preview unavailable",
+    "outputNotFound": "Cloud file not found in this session. Refresh files and try again.",
     "showMore": "Show {count} more",
     "showLess": "Show less",
     "targetPlaceholder": "Select cloud agent",
@@ -3461,5 +3462,25 @@
     "branchRemote": "Remote",
     "branchSearchPlaceholder": "Branches suchen…",
     "branchNone": "Keine Branches"
+  },
+  "WorkbenchCloud": {
+    "title": "Workbench Cloud",
+    "projectFallback": "Project space",
+    "refresh": "Refresh",
+    "signedOut": "Sign in to workbench to view project agents.",
+    "loadingMessages": "Loading messages...",
+    "emptyMessages": "Select an agent or start a project conversation.",
+    "emptyResponse": "No response returned.",
+    "messagePlaceholder": "Message the project agent...",
+    "sendFailed": "Failed to send message",
+    "newSession": "New project conversation",
+    "untitled": "Untitled conversation",
+    "agents": "Project agents",
+    "agentPlaceholder": "Select project agent",
+    "agentSearch": "Search project agents...",
+    "emptyAgents": "No project agents available",
+    "showMore": "Show {count} more",
+    "showLess": "Show less",
+    "openProjectFileFromTree": "Open this file from the project-space file tree."
   }
 }

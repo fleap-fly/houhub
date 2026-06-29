@@ -7,6 +7,7 @@ import {
 } from "@/contexts/workbench-route-context"
 import { AutomationsPage } from "@/components/automations/automations-page"
 import { CloudSessionPage } from "@/components/houflow/cloud-session-page"
+import { WorkbenchCloudPage } from "@/components/workbench/workbench-cloud-page"
 
 /**
  * Registry of full-page routes that take over the main content region. The
@@ -18,6 +19,7 @@ import { CloudSessionPage } from "@/components/houflow/cloud-session-page"
 const WORKBENCH_ROUTES: Partial<Record<WorkbenchRouteId, ComponentType>> = {
   automations: AutomationsPage,
   cloud: CloudSessionPage,
+  workbench_cloud: WorkbenchCloudPage,
 }
 
 /**

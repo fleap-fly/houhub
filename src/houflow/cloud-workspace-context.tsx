@@ -18,12 +18,19 @@ import {
   type HouflowCloudSession,
 } from "./cloud-sessions"
 
+interface HouflowCloudOutputSelectionRequest {
+  sessionId: string
+  target: string
+  nonce: number
+}
+
 interface HouflowCloudWorkspaceContextValue {
   sessions: HouflowCloudSession[]
   hostedCommands: HouflowCloudHostedCommand[]
   selectedTargetKey: string | null
   selectedSessionId: string | null
   selectedSession: HouflowCloudSession | null
+  selectedOutputRequest: HouflowCloudOutputSelectionRequest | null
   selectedHostedCommandId: string | null
   selectedHostedCommand: HouflowCloudHostedCommand | null
   loading: boolean
@@ -35,6 +42,7 @@ interface HouflowCloudWorkspaceContextValue {
   ) => Promise<HouflowCloudHostedCommand[]>
   selectTarget: (targetKey: string | null) => void
   selectSession: (sessionId: string | null) => void
+  openSessionOutput: (sessionId: string, target: string) => void
   selectHostedCommand: (command: HouflowCloudHostedCommand | null) => void
   rememberHostedCommand: (command: HouflowCloudHostedCommand) => void
   refreshHostedCommand: (
@@ -59,6 +67,8 @@ export function HouflowCloudWorkspaceProvider({
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
     null
   )
+  const [selectedOutputRequest, setSelectedOutputRequest] =
+    useState<HouflowCloudOutputSelectionRequest | null>(null)
   const [hostedCommands, setHostedCommands] = useState<
     HouflowCloudHostedCommand[]
   >([])
@@ -76,6 +86,7 @@ export function HouflowCloudWorkspaceProvider({
       setSessions([])
       setSelectedTargetKey(null)
       setSelectedSessionId(null)
+      setSelectedOutputRequest(null)
       setHostedCommands([])
       setSelectedHostedCommandId(null)
       setError(null)
@@ -109,6 +120,7 @@ export function HouflowCloudWorkspaceProvider({
         setSessions([])
         setSelectedTargetKey(null)
         setSelectedSessionId(null)
+        setSelectedOutputRequest(null)
         setHostedCommands([])
         setSelectedHostedCommandId(null)
         setError(null)
@@ -162,17 +174,30 @@ export function HouflowCloudWorkspaceProvider({
   const selectSession = useCallback((sessionId: string | null) => {
     setSelectedHostedCommandId(null)
     setSelectedSessionId(sessionId)
+    setSelectedOutputRequest(null)
   }, [])
 
   const selectTarget = useCallback((targetKey: string | null) => {
     setSelectedTargetKey(targetKey)
     setSelectedSessionId(null)
+    setSelectedOutputRequest(null)
     setSelectedHostedCommandId(null)
+  }, [])
+
+  const openSessionOutput = useCallback((sessionId: string, target: string) => {
+    setSelectedHostedCommandId(null)
+    setSelectedSessionId(sessionId)
+    setSelectedOutputRequest({
+      sessionId,
+      target,
+      nonce: Date.now(),
+    })
   }, [])
 
   const selectHostedCommand = useCallback(
     (command: HouflowCloudHostedCommand | null) => {
       setSelectedSessionId(null)
+      setSelectedOutputRequest(null)
       setSelectedHostedCommandId(command?.id ?? null)
       if (command) {
         setHostedCommands((current) => upsertHostedCommand(current, command))
@@ -219,6 +244,7 @@ export function HouflowCloudWorkspaceProvider({
       selectedTargetKey,
       selectedSessionId,
       selectedSession,
+      selectedOutputRequest,
       selectedHostedCommandId,
       selectedHostedCommand,
       loading,
@@ -227,6 +253,7 @@ export function HouflowCloudWorkspaceProvider({
       refreshHostedCommands,
       selectTarget,
       selectSession,
+      openSessionOutput,
       selectHostedCommand,
       rememberHostedCommand,
       refreshHostedCommand,
@@ -235,6 +262,7 @@ export function HouflowCloudWorkspaceProvider({
       error,
       hostedCommands,
       loading,
+      openSessionOutput,
       refreshHostedCommand,
       refreshHostedCommands,
       refreshSessions,
@@ -244,6 +272,7 @@ export function HouflowCloudWorkspaceProvider({
       selectSession,
       selectedHostedCommand,
       selectedHostedCommandId,
+      selectedOutputRequest,
       selectedSession,
       selectedSessionId,
       selectedTargetKey,

@@ -78,25 +78,37 @@ fn sanitize_agent_env(agent_type: AgentType, env: Vec<(String, String)>) -> Vec<
         return env;
     }
 
+    let mut saw_valid_codex_home = false;
+    let mut cleaned = Vec::with_capacity(env.len() + 1);
     env.into_iter()
-        .filter(|(key, value)| {
+        .for_each(|(key, value)| {
             if !key.eq_ignore_ascii_case("CODEX_HOME") {
-                return true;
+                cleaned.push((key, value));
+                return;
             }
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 tracing::warn!("[ACP][Codex] ignoring empty CODEX_HOME");
-                return false;
+                return;
             }
             if std::path::Path::new(trimmed).exists() {
-                return true;
+                saw_valid_codex_home = true;
+                cleaned.push((key, value));
+                return;
             }
             tracing::warn!(
                 "[ACP][Codex] ignoring CODEX_HOME={trimmed:?} because the path does not exist"
             );
-            false
-        })
-        .collect()
+    });
+    if !saw_valid_codex_home {
+        let home = crate::commands::acp::default_codex_home_dir_for_launch();
+        if let Err(err) = std::fs::create_dir_all(&home) {
+            tracing::warn!("[ACP][Codex] failed to create fallback CODEX_HOME {home:?}: {err}");
+        } else {
+            cleaned.push(("CODEX_HOME".to_string(), home.display().to_string()));
+        }
+    }
+    cleaned
 }
 
 fn pi_launch_preflight(runtime_env: &BTreeMap<String, String>) -> Option<String> {
@@ -104,20 +116,18 @@ fn pi_launch_preflight(runtime_env: &BTreeMap<String, String>) -> Option<String>
         .get("PI_ACP_PI_COMMAND")
         .map(|value| value.trim())
         .filter(|value| !value.is_empty());
-    let command = custom.unwrap_or("pi");
-    if crate::commands::acp::resolve_pi_command_path(command).is_some() {
-        return None;
+
+    if let Some(command) = custom {
+        if crate::commands::acp::resolve_pi_command_path(command).is_some() {
+            return None;
+        }
+        return Some(format!(
+            "Pi is not installed: the custom pi command \"{command}\" was not found. \
+             Update the Pi command in agent settings."
+        ));
     }
 
-    Some(match custom {
-        Some(cmd) => format!(
-            "Pi is not installed: the custom pi command \"{cmd}\" was not found. \
-             Update the Pi command in agent settings."
-        ),
-        None => "Pi is not installed. Install it with: \
-                 npm install -g @earendil-works/pi-coding-agent"
-            .to_string(),
-    })
+    None
 }
 
 /// Commands sent from Tauri command handlers to the ACP connection loop.
@@ -4857,6 +4867,65 @@ mod tests {
             json.get("type").is_none(),
             "stdio variant must serialize without a `type` tag (claude-agent-acp \
              treats absence-of-type as stdio); got {json:#?}"
+        );
+    }
+
+    #[test]
+    fn pi_default_launch_preflight_does_not_require_pi_command() {
+        let env = BTreeMap::new();
+        assert!(
+            pi_launch_preflight(&env).is_none(),
+            "installed pi-acp is enough for the default Pi launch path"
+        );
+    }
+
+    #[test]
+    fn pi_custom_launch_preflight_checks_custom_command() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "PI_ACP_PI_COMMAND".to_string(),
+            "/definitely/missing/pi".to_string(),
+        );
+
+        let message = pi_launch_preflight(&env).expect("missing custom command should fail");
+        assert!(message.contains("custom pi command"));
+    }
+
+    #[test]
+    fn codex_env_sanitizer_replaces_missing_codex_home() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let fake_home = tmp.path().join("user-home");
+        let fallback_home = fake_home.join(".codex");
+        let missing_home = tmp.path().join("missing-codex-home");
+
+        temp_env::with_vars(
+            [
+                ("CODEX_HOME", Some(missing_home.as_os_str())),
+                ("HOME", Some(fake_home.as_os_str())),
+            ],
+            || {
+                let env = sanitize_agent_env(
+                    AgentType::Codex,
+                    vec![
+                        ("CODEX_HOME".to_string(), missing_home.display().to_string()),
+                        ("OPENAI_API_KEY".to_string(), "sk-test".to_string()),
+                    ],
+                );
+
+                assert!(
+                    fallback_home.is_dir(),
+                    "fallback CODEX_HOME should be created"
+                );
+                assert!(env.iter().any(|(key, value)| {
+                    key == "CODEX_HOME" && value == fallback_home.to_string_lossy().as_ref()
+                }));
+                assert!(env
+                    .iter()
+                    .any(|(key, value)| { key == "OPENAI_API_KEY" && value == "sk-test" }));
+                assert!(!env.iter().any(|(key, value)| {
+                    key == "CODEX_HOME" && value == missing_home.to_string_lossy().as_ref()
+                }));
+            },
         );
     }
 

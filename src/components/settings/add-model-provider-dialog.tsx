@@ -130,7 +130,8 @@ export function AddModelProviderDialog({
   }, [])
 
   const modelPlaceholder = useMemo(() => {
-    if (agentTypes.includes("codex")) return t("modelPlaceholderCodex")
+    if (agentTypes.includes("codex") || agentTypes.includes("pi"))
+      return t("modelPlaceholderCodex")
     if (agentTypes.includes("gemini")) return t("modelPlaceholderGemini")
     return ""
   }, [agentTypes, t])

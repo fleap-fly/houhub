@@ -1049,6 +1049,26 @@ pub fn build_router(
             "/workbench_space_delete_file",
             post(handlers::workbench::workbench_space_delete_file),
         )
+        .route(
+            "/workbench_ai_list_assistants",
+            post(handlers::workbench::workbench_ai_list_assistants),
+        )
+        .route(
+            "/workbench_ai_list_sessions",
+            post(handlers::workbench::workbench_ai_list_sessions),
+        )
+        .route(
+            "/workbench_ai_create_session",
+            post(handlers::workbench::workbench_ai_create_session),
+        )
+        .route(
+            "/workbench_ai_get_session",
+            post(handlers::workbench::workbench_ai_get_session),
+        )
+        .route(
+            "/workbench_ai_send_message",
+            post(handlers::workbench::workbench_ai_send_message),
+        )
         // ─── Quick Messages ───
         .route(
             "/quick_messages_list",

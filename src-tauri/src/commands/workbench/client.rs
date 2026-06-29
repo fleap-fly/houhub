@@ -2,8 +2,8 @@
 //!
 //! All PS calls are made from the Rust backend so the webview never holds the
 //! PS session token and never makes a cross-origin request. Authenticated
-//! "space" calls carry the desktop session header plus the project-context
-//! header that PS's `resolveProjectContext` reads.
+//! calls carry the desktop session header plus the project-context header that
+//! PS's `resolveProjectContext` reads.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -21,6 +21,7 @@ pub(super) const DESKTOP_SESSION_HEADER: &str = "x-ps-desktop-session";
 pub(super) const PROJECT_ID_HEADER: &str = "x-auth-project-id";
 pub(super) const CLIENT_ID: &str = "houhub-desktop";
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const STREAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Maps a pending `deviceCode` to the host it was created against, so `poll`
 /// can target the same PS deployment without the webview threading the host
@@ -75,6 +76,10 @@ fn business_url(host: &str, path: &str) -> String {
     format!("{host}{API_PREFIX}/business{path}")
 }
 
+fn admin_url(host: &str, path: &str) -> String {
+    format!("{host}{API_PREFIX}/admin{path}")
+}
+
 /// Authenticated GET against a `/business{path}` PS endpoint bound to
 /// `project_id`. `query` pairs are URL-encoded by reqwest.
 pub(super) async fn ps_get(
@@ -87,6 +92,30 @@ pub(super) async fn ps_get(
     let resp = http_client()?
         .get(business_url(host, path))
         .query(query)
+        .header(DESKTOP_SESSION_HEADER, token)
+        .header(PROJECT_ID_HEADER, project_id)
+        .send()
+        .await
+        .map_err(request_error)?;
+    parse_json(resp).await
+}
+
+/// Authenticated GET against an `/admin{path}` PS endpoint. Admin routes read
+/// `projectId` from the query string; we also send the project header so the
+/// same request stays compatible with shared project-context hooks.
+pub(super) async fn ps_admin_get(
+    host: &str,
+    token: &str,
+    project_id: &str,
+    path: &str,
+    query: &[(&str, &str)],
+) -> Result<JsonValue, AppCommandError> {
+    let mut owned_query: Vec<(&str, &str)> = Vec::with_capacity(query.len() + 1);
+    owned_query.push(("projectId", project_id));
+    owned_query.extend_from_slice(query);
+    let resp = http_client()?
+        .get(admin_url(host, path))
+        .query(&owned_query)
         .header(DESKTOP_SESSION_HEADER, token)
         .header(PROJECT_ID_HEADER, project_id)
         .send()
@@ -112,6 +141,69 @@ pub(super) async fn ps_post(
         .await
         .map_err(request_error)?;
     parse_json(resp).await
+}
+
+/// Authenticated POST (JSON body) against an `/admin{path}` PS endpoint.
+pub(super) async fn ps_admin_post(
+    host: &str,
+    token: &str,
+    project_id: &str,
+    path: &str,
+    query: &[(&str, &str)],
+    body: JsonValue,
+) -> Result<JsonValue, AppCommandError> {
+    let mut owned_query: Vec<(&str, &str)> = Vec::with_capacity(query.len() + 1);
+    owned_query.push(("projectId", project_id));
+    owned_query.extend_from_slice(query);
+    let resp = http_client()?
+        .post(admin_url(host, path))
+        .query(&owned_query)
+        .header(DESKTOP_SESSION_HEADER, token)
+        .header(PROJECT_ID_HEADER, project_id)
+        .json(&body)
+        .send()
+        .await
+        .map_err(request_error)?;
+    parse_json(resp).await
+}
+
+/// Authenticated POST that returns the raw response text. Used for admin PS
+/// chat because `/admin/ai/agents/:id/messages` streams newline-delimited JSON
+/// instead of a single JSON document.
+pub(super) async fn ps_admin_post_text(
+    host: &str,
+    token: &str,
+    project_id: &str,
+    path: &str,
+    query: &[(&str, &str)],
+    body: JsonValue,
+) -> Result<String, AppCommandError> {
+    let mut owned_query: Vec<(&str, &str)> = Vec::with_capacity(query.len() + 1);
+    owned_query.push(("projectId", project_id));
+    owned_query.extend_from_slice(query);
+    let resp = reqwest::Client::builder()
+        .timeout(STREAM_REQUEST_TIMEOUT)
+        .build()
+        .map_err(|e| {
+            AppCommandError::external_command("failed to build HTTP client", e.to_string())
+        })?
+        .post(admin_url(host, path))
+        .query(&owned_query)
+        .header(DESKTOP_SESSION_HEADER, token)
+        .header(PROJECT_ID_HEADER, project_id)
+        .json(&body)
+        .send()
+        .await
+        .map_err(request_error)?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(request_error)?;
+    if !status.is_success() {
+        return Err(AppCommandError::external_command(
+            "project-system returned an error",
+            format!("status {status}: {text}"),
+        ));
+    }
+    Ok(text)
 }
 
 /// Authenticated DELETE against a `/business{path}` PS endpoint. PS replies 204

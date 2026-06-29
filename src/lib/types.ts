@@ -478,6 +478,7 @@ export const MODEL_PROVIDER_AGENT_TYPES: AgentType[] = [
   "claude_code",
   "codex",
   "gemini",
+  "pi",
 ]
 
 /**
@@ -2216,7 +2217,8 @@ export interface ModelProviderInfo {
   /**
    * Model value, interpretation depends on agent_type:
    * - claude_code: JSON string of {main, reasoning, haiku, sonnet, opus}
-   * - codex / gemini / others: plain model name string
+   * - non-Claude providers: optional display/default metadata only; runtime
+   *   model selection stays in each agent's own settings
    */
   model: string | null
   created_at: string

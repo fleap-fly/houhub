@@ -433,7 +433,7 @@ jobs:
           }
 
           const dist = "dist"
-          const baseUrl = "https://agent.houflow.com/downloads/houhub/"
+          const baseUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/`
           const requireFile = (name) => {
             const filePath = path.join(dist, name)
             if (!fs.existsSync(filePath)) {

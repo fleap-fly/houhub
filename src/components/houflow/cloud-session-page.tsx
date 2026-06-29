@@ -16,6 +16,12 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
+import type { LinkSafetyConfig, LinkSafetyModalProps } from "streamdown"
+import {
+  DirectLinkOpen,
+  StreamdownLinkSafetyProvider,
+  useOpenLinkOrFile,
+} from "@/components/ai-elements/link-safety"
 import { Message, MessageContent } from "@/components/ai-elements/message"
 import { MessageInput } from "@/components/chat/message-input"
 import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
@@ -46,6 +52,7 @@ import {
   type HouflowCloudHostedCommand,
   type HouflowCloudSessionEvent,
 } from "@/houflow/cloud-sessions"
+import { normalizeCloudOutputTarget } from "@/houflow/cloud-session-output-links"
 import type { HouflowAgentTarget } from "@/houflow/types"
 import { houflowCloudEventsToTurns } from "@/houflow/cloud-session-turns"
 import {
@@ -61,6 +68,42 @@ const CLOUD_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
   image: true,
   audio: false,
   embedded_context: true,
+}
+
+function useCloudSessionLinkSafety(sessionId: string | null): LinkSafetyConfig {
+  const cloud = useHouflowCloudWorkspace()
+  const auxPanel = useAuxPanelContext()
+  const openExternal = useOpenLinkOrFile()
+
+  const openCloudScopedTarget = useCallback(
+    async (url: string) => {
+      const outputTarget = normalizeCloudOutputTarget(url)
+      if (outputTarget) {
+        if (!sessionId) return
+        cloud.openSessionOutput(sessionId, url)
+        auxPanel.openTab("cloud_outputs")
+        return
+      }
+      await openExternal(url)
+    },
+    [auxPanel, cloud, openExternal, sessionId]
+  )
+
+  const renderModal = useCallback(
+    (props: LinkSafetyModalProps) => (
+      <DirectLinkOpen {...props} onAction={openCloudScopedTarget} />
+    ),
+    [openCloudScopedTarget]
+  )
+
+  return useMemo(
+    () => ({
+      enabled: true,
+      onLinkCheck: () => false,
+      renderModal,
+    }),
+    [renderModal]
+  )
 }
 
 export function CloudSessionPage() {
@@ -96,8 +139,7 @@ export function CloudSessionPage() {
       cloud.selectedTargetKey
         ? (cloudTargets.find(
             (target) => target.key === cloud.selectedTargetKey
-          ) ??
-          null)
+          ) ?? null)
         : null,
     [cloud.selectedTargetKey, cloudTargets]
   )
@@ -119,6 +161,7 @@ export function CloudSessionPage() {
       ""
     )}/sessions/${encodeURIComponent(selected.id)}`
   }, [houflow.session, selected])
+  const cloudLinkSafety = useCloudSessionLinkSafety(selectedId)
 
   const refreshEvents = useCallback(async () => {
     const requestId = ++eventsRequestRef.current
@@ -189,55 +232,54 @@ export function CloudSessionPage() {
     return () => window.clearInterval(timer)
   }, [cloud, hostedCommand])
 
-  const handleSend = useCallback(async (draft: PromptDraft) => {
-    if (!selected || houflow.session.status !== "signed_in") return
-    setSending(true)
-    try {
-      await sendHouflowCloudSessionMessage(
-        houflow.session,
-        houflow.secret,
-        selected,
-        cloudDispatchDraftFromPromptDraft(draft)
-      )
-      await Promise.all([cloud.refreshSessions(), refreshEvents()])
-    } catch (err) {
-      toast.error(t("sendFailed"), { description: toErrorMessage(err) })
-    } finally {
-      setSending(false)
-    }
-  }, [
-    cloud,
-    houflow.secret,
-    houflow.session,
-    refreshEvents,
-    selected,
-    t,
-  ])
-
-  const handleStartSession = useCallback(async (draft: PromptDraft) => {
-    if (!selectedTarget || houflow.session.status !== "signed_in") {
-      return
-    }
-    setStarting(true)
-    try {
-      const result = await startHouflowCloudTargetSession(
-        houflow.session,
-        houflow.secret,
-        selectedTarget,
-        cloudDispatchDraftFromPromptDraft(draft)
-      )
-      await cloud.refreshSessions()
-      if (result.kind === "managed") {
-        cloud.selectSession(result.session.id)
-      } else {
-        cloud.selectHostedCommand(result.dispatch.raw)
+  const handleSend = useCallback(
+    async (draft: PromptDraft) => {
+      if (!selected || houflow.session.status !== "signed_in") return
+      setSending(true)
+      try {
+        await sendHouflowCloudSessionMessage(
+          houflow.session,
+          houflow.secret,
+          selected,
+          cloudDispatchDraftFromPromptDraft(draft)
+        )
+        await Promise.all([cloud.refreshSessions(), refreshEvents()])
+      } catch (err) {
+        toast.error(t("sendFailed"), { description: toErrorMessage(err) })
+      } finally {
+        setSending(false)
       }
-    } catch (err) {
-      toast.error(t("startFailed"), { description: toErrorMessage(err) })
-    } finally {
-      setStarting(false)
-    }
-  }, [cloud, houflow.secret, houflow.session, selectedTarget, t])
+    },
+    [cloud, houflow.secret, houflow.session, refreshEvents, selected, t]
+  )
+
+  const handleStartSession = useCallback(
+    async (draft: PromptDraft) => {
+      if (!selectedTarget || houflow.session.status !== "signed_in") {
+        return
+      }
+      setStarting(true)
+      try {
+        const result = await startHouflowCloudTargetSession(
+          houflow.session,
+          houflow.secret,
+          selectedTarget,
+          cloudDispatchDraftFromPromptDraft(draft)
+        )
+        await cloud.refreshSessions()
+        if (result.kind === "managed") {
+          cloud.selectSession(result.session.id)
+        } else {
+          cloud.selectHostedCommand(result.dispatch.raw)
+        }
+      } catch (err) {
+        toast.error(t("startFailed"), { description: toErrorMessage(err) })
+      } finally {
+        setStarting(false)
+      }
+    },
+    [cloud, houflow.secret, houflow.session, selectedTarget, t]
+  )
 
   if (houflow.session.status !== "signed_in") {
     return (
@@ -373,10 +415,12 @@ export function CloudSessionPage() {
                   )}
                 >
                   <MessageContent>
-                    <ContentPartsRenderer
-                      parts={message.content}
-                      role={message.role}
-                    />
+                    <StreamdownLinkSafetyProvider value={cloudLinkSafety}>
+                      <ContentPartsRenderer
+                        parts={message.content}
+                        role={message.role}
+                      />
+                    </StreamdownLinkSafetyProvider>
                     <div className="text-[0.6875rem] text-muted-foreground">
                       {formatTimestamp(
                         message.completed_at ?? message.timestamp
@@ -480,7 +524,9 @@ function HostedCommandPage({
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <MessageCircle className="h-3.5 w-3.5" />
                 <span>{event.title || event.type}</span>
-                <span className="ml-auto">{formatTimestamp(event.created_at)}</span>
+                <span className="ml-auto">
+                  {formatTimestamp(event.created_at)}
+                </span>
               </div>
               {event.message ? (
                 <div className="mt-1 whitespace-pre-wrap text-sm">
@@ -749,9 +795,7 @@ function cloudDispatchDraftFromPromptDraft(
     }
 
     if (block.type === "resource_link") {
-      resourceNotes.push(
-        block.name ? `${block.name}: ${block.uri}` : block.uri
-      )
+      resourceNotes.push(block.name ? `${block.name}: ${block.uri}` : block.uri)
       continue
     }
 

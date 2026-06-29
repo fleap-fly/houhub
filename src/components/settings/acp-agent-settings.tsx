@@ -1309,6 +1309,7 @@ interface CodexImportantValues {
 }
 
 const CODEX_DEFAULT_MODEL_PROVIDER = "agent-hub"
+const MODEL_PROVIDER_MANUAL_VALUE = "__manual__"
 
 const CODEX_AUTH_MODES = [
   "api_key",
@@ -4192,8 +4193,9 @@ export function AcpAgentSettings() {
       const requestedModelProvider =
         modelProviderId == null
           ? null
-          : (modelProviders.find((provider) => provider.id === modelProviderId) ??
-            null)
+          : (modelProviders.find(
+              (provider) => provider.id === modelProviderId
+            ) ?? null)
       const modelProviderIsValid =
         requestedModelProvider == null
           ? modelProviderId == null
@@ -4875,8 +4877,7 @@ export function AcpAgentSettings() {
     if (!selectedAgent) return null
     if (!selectedDraft?.modelProviderId) return null
     const provider =
-      modelProviders.find((p) => p.id === selectedDraft.modelProviderId) ??
-      null
+      modelProviders.find((p) => p.id === selectedDraft.modelProviderId) ?? null
     return provider &&
       modelProviderSupportsAgentType(provider, selectedAgent.agent_type)
       ? provider
@@ -4886,8 +4887,7 @@ export function AcpAgentSettings() {
     if (!selectedAgent) return null
     if (!selectedDraft?.modelProviderId) return null
     const provider =
-      modelProviders.find((p) => p.id === selectedDraft.modelProviderId) ??
-      null
+      modelProviders.find((p) => p.id === selectedDraft.modelProviderId) ?? null
     if (!provider) return null
     return modelProviderSupportsAgentType(provider, selectedAgent.agent_type)
       ? null
@@ -4924,8 +4924,7 @@ export function AcpAgentSettings() {
       : selectedNeedsModelProvider && selectedCompatibleModelProviderId == null
         ? t("toasts.modelProviderRequired")
         : null
-  const selectedMissingModelProvider =
-    selectedModelProviderErrorMessage != null
+  const selectedMissingModelProvider = selectedModelProviderErrorMessage != null
   const selectedConfigText = selectedDraft?.configText ?? ""
   const selectedOpenCodeAuthJsonText = selectedDraft?.openCodeAuthJsonText ?? ""
   const selectedCodexReasoningEffortOption =
@@ -5243,7 +5242,10 @@ export function AcpAgentSettings() {
   const handleModelProviderSelect = useCallback(
     (providerIdStr: string) => {
       if (!selectedAgent || !selectedDraft) return
-      const providerId = providerIdStr ? Number(providerIdStr) : null
+      const providerId =
+        providerIdStr && providerIdStr !== MODEL_PROVIDER_MANUAL_VALUE
+          ? Number(providerIdStr)
+          : null
       const provider = providerId
         ? modelProviders.find(
             (p) =>
@@ -5372,19 +5374,16 @@ export function AcpAgentSettings() {
           }
         })
       } else if (agentType === "codex") {
-        const codexModel = provider?.model?.trim() ?? ""
         const nextAuthPatch = patchCodexAuthJsonText(
           selectedDraft.codexAuthJsonText,
           { apiKey, authMode: null }
         )
         const nextAuthJsonText = nextAuthPatch.authJsonText
-        // Always pass the provider's model (empty string clears it from the toml).
         const nextConfigTomlText = patchCodexConfigTomlText(
           selectedDraft.codexConfigTomlText,
           {
             modelProvider: CODEX_DEFAULT_MODEL_PROVIDER,
             apiBaseUrl: apiUrl,
-            model: codexModel,
           }
         )
         const synced = extractCodexImportantValues(
@@ -5396,7 +5395,7 @@ export function AcpAgentSettings() {
           modelProviderId: effectiveProviderId,
           apiBaseUrl: apiUrl,
           apiKey,
-          model: codexModel,
+          model: synced.model,
           codexAuthJsonText: nextAuthJsonText,
           codexConfigTomlText: nextConfigTomlText,
           codexModelProvider: CODEX_DEFAULT_MODEL_PROVIDER,
@@ -5404,11 +5403,10 @@ export function AcpAgentSettings() {
           envText: patchEnvText(current.envText, {
             OPENAI_API_KEY: apiKey,
             OPENAI_BASE_URL: apiUrl,
-            OPENAI_MODEL: codexModel,
+            OPENAI_MODEL: "",
           }),
         }))
       } else if (agentType === "gemini") {
-        const geminiModel = provider?.model?.trim() ?? ""
         const nextConfigJson = patchGeminiConfigText(selectedDraft.configText, {
           apiBaseUrl: apiUrl,
           geminiApiKey: apiKey,
@@ -5418,14 +5416,9 @@ export function AcpAgentSettings() {
           [agentType]: null,
         }))
         updateSelectedDraft((current) => {
-          let nextEnvText = patchGeminiEnvText(current.envText, {
+          const nextEnvText = patchGeminiEnvText(current.envText, {
             apiBaseUrl: apiUrl,
             geminiApiKey: apiKey,
-          })
-          // Always overwrite GEMINI_MODEL with the provider's value (empty
-          // string clears it).
-          nextEnvText = patchEnvText(nextEnvText, {
-            GEMINI_MODEL: geminiModel,
           })
           return {
             ...current,
@@ -5433,11 +5426,21 @@ export function AcpAgentSettings() {
             apiBaseUrl: apiUrl,
             apiKey,
             geminiApiKey: apiKey,
-            model: geminiModel,
             envText: nextEnvText,
             configText: nextConfigJson.configText,
           }
         })
+      } else if (agentType === "pi") {
+        updateSelectedDraft((current) => ({
+          ...current,
+          modelProviderId: effectiveProviderId,
+          apiBaseUrl: apiUrl,
+          apiKey,
+          envText: patchEnvText(current.envText, {
+            OPENAI_API_KEY: apiKey,
+            OPENAI_BASE_URL: apiUrl,
+          }),
+        }))
       } else {
         updateSelectedDraft((current) => ({
           ...current,
@@ -5470,9 +5473,7 @@ export function AcpAgentSettings() {
               null,
               2
             )
-          : agentType === "codex" || agentType === "gemini"
-            ? draft.model.trim()
-            : null
+          : null
       if (model == null || provider.model === model) return
       const result = await updateModelProvider({
         id: provider.id,
@@ -7492,9 +7493,6 @@ export function AcpAgentSettings() {
                         ) : (
                           <Input
                             value={selectedDraft.model}
-                            readOnly={
-                              selectedDraft.codexAuthMode === "model_provider"
-                            }
                             onChange={(event) => {
                               handleCodexImportantConfigChange(
                                 "model",
@@ -7788,9 +7786,6 @@ supports_websockets = false`}
                       ) : (
                         <Input
                           value={selectedDraft.model}
-                          readOnly={
-                            selectedDraft.geminiAuthMode === "model_provider"
-                          }
                           onChange={(event) => {
                             handleGeminiFieldChange("model", event.target.value)
                           }}
@@ -9441,6 +9436,47 @@ supports_websockets = false`}
                         </div>
                       )}
 
+                    {selectedAgent.agent_type === "pi" && (
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] text-muted-foreground">
+                          {t("selectModelProvider")}
+                        </label>
+                        {selectedModelProviders.length > 0 ? (
+                          <Select
+                            value={
+                              selectedCompatibleModelProviderId != null
+                                ? String(selectedCompatibleModelProviderId)
+                                : MODEL_PROVIDER_MANUAL_VALUE
+                            }
+                            onValueChange={handleModelProviderSelect}
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue
+                                placeholder={t("selectModelProvider")}
+                              />
+                            </SelectTrigger>
+                            <SelectContent align="start">
+                              <SelectItem value={MODEL_PROVIDER_MANUAL_VALUE}>
+                                {t("authModeCustomEndpoint")}
+                              </SelectItem>
+                              {selectedModelProviders.map((provider) => (
+                                <SelectItem
+                                  key={provider.id}
+                                  value={String(provider.id)}
+                                >
+                                  {provider.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <p className="text-[11px] text-muted-foreground">
+                            {t("noModelProviderAvailable")}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
                     {(selectedAgent.agent_type !== "claude_code" ||
                       selectedDraft.claudeAuthMode === "custom" ||
                       selectedDraft.claudeAuthMode === "model_provider") && (
@@ -9452,8 +9488,11 @@ supports_websockets = false`}
                           <Input
                             value={selectedDraft.apiBaseUrl}
                             readOnly={
-                              selectedAgent.agent_type === "claude_code" &&
-                              selectedDraft.claudeAuthMode === "model_provider"
+                              (selectedAgent.agent_type === "claude_code" &&
+                                selectedDraft.claudeAuthMode ===
+                                  "model_provider") ||
+                              (selectedAgent.agent_type === "pi" &&
+                                selectedCompatibleModelProviderId != null)
                             }
                             onChange={(event) => {
                               handleImportantConfigChange(
@@ -9478,9 +9517,11 @@ supports_websockets = false`}
                               }
                               value={selectedDraft.apiKey}
                               readOnly={
-                                selectedAgent.agent_type === "claude_code" &&
-                                selectedDraft.claudeAuthMode ===
-                                  "model_provider"
+                                (selectedAgent.agent_type === "claude_code" &&
+                                  selectedDraft.claudeAuthMode ===
+                                    "model_provider") ||
+                                (selectedAgent.agent_type === "pi" &&
+                                  selectedCompatibleModelProviderId != null)
                               }
                               onChange={(event) => {
                                 handleImportantConfigChange(
@@ -9882,7 +9923,6 @@ supports_websockets = false`}
                         ) : (
                           <Input
                             value={selectedDraft.model}
-                            readOnly={selectedCompatibleModelProviderId != null}
                             onChange={(event) => {
                               handleImportantConfigChange(
                                 "model",

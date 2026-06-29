@@ -35,3 +35,18 @@ export {
   type WorkbenchSpaceUsage,
   type WorkbenchSpacePresign,
 } from "./space-types"
+export {
+  WorkbenchCloudProvider,
+  useWorkbenchCloud,
+} from "./workbench-cloud-context"
+export {
+  createWorkbenchAiSession,
+  getWorkbenchAiSession,
+  listWorkbenchAiSessions,
+  listWorkbenchAssistants,
+  sendWorkbenchAiMessage,
+  type WorkbenchAiMessage,
+  type WorkbenchAiSession,
+  type WorkbenchAiSessionDetail,
+  type WorkbenchAssistant,
+} from "./ai"

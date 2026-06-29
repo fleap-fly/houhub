@@ -23,6 +23,7 @@ import {
   type SidebarConversationListHandle,
 } from "@/components/conversations/sidebar-conversation-list"
 import { CloudSessionsSidebarSection } from "@/components/houflow/cloud-sessions-sidebar-section"
+import { WorkbenchCloudSidebarSection } from "@/components/workbench/workbench-cloud-sidebar-section"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -307,6 +308,7 @@ export function Sidebar() {
         }
       >
         <CloudSessionsSidebarSection />
+        <WorkbenchCloudSidebarSection />
         <SidebarConversationList
           ref={listRef}
           showCompleted={showCompleted}

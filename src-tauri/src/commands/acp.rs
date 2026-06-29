@@ -193,6 +193,13 @@ pub(crate) async fn is_cmd_available(cmd: &str) -> bool {
     resolve_npx_command(cmd).await.is_some()
 }
 
+pub(crate) async fn npx_agent_launchable(agent_type: AgentType) -> bool {
+    match registry::get_agent_meta(agent_type).distribution {
+        registry::AgentDistribution::Npx { cmd, .. } => is_cmd_available(cmd).await,
+        _ => false,
+    }
+}
+
 pub(crate) fn resolve_command_on_path(cmd: &str) -> Option<PathBuf> {
     which::which(cmd).ok()
 }
@@ -339,6 +346,15 @@ impl NpxCommandResolver {
         self.per_cmd_cache.insert(cmd.to_string(), resolved.clone());
         resolved
     }
+
+    async fn resolve_agent_for_list(&mut self, agent_type: AgentType) -> bool {
+        let registry::AgentDistribution::Npx { cmd, .. } =
+            registry::get_agent_meta(agent_type).distribution
+        else {
+            return false;
+        };
+        self.resolve_for_list(cmd).await.is_some()
+    }
 }
 
 async fn resolve_npx_command_from_current_npm_prefix(cmd: &str) -> Option<PathBuf> {
@@ -441,14 +457,14 @@ fn is_npm_command_candidate(path: &Path) -> bool {
 /// agent isn't ready we return `AcpError::SdkNotInstalled` immediately
 /// and let the frontend prompt the user to install from Agent Settings.
 ///
-/// For NPX agents: checks the command is spawnable in this process environment.
+/// For NPX agents: checks the ACP wrapper command is spawnable in this process environment.
 /// For Binary agents: checks platform support and that the binary is
 /// already cached locally.
 pub(crate) async fn verify_agent_installed(agent_type: AgentType) -> Result<(), AcpError> {
     let meta = registry::get_agent_meta(agent_type);
     match meta.distribution {
-        registry::AgentDistribution::Npx { cmd, .. } => {
-            if !is_cmd_available(cmd).await {
+        registry::AgentDistribution::Npx { .. } => {
+            if !npx_agent_launchable(agent_type).await {
                 // INVARIANT: the substring "is not installed" is matched
                 // verbatim by the frontend catch block in
                 // `src/contexts/acp-connections-context.tsx` to surface a
@@ -971,6 +987,14 @@ fn codex_home_dir() -> PathBuf {
     }
 }
 
+pub(crate) fn codex_home_dir_for_launch() -> PathBuf {
+    codex_home_dir()
+}
+
+pub(crate) fn default_codex_home_dir_for_launch() -> PathBuf {
+    home_dir_or_default().join(".codex")
+}
+
 fn pi_agent_dir() -> PathBuf {
     match std::env::var("PI_CODING_AGENT_DIR")
         .ok()
@@ -1123,10 +1147,11 @@ fn ensure_codex_home_env(agent_type: AgentType, runtime_env: &mut BTreeMap<Strin
     {
         return;
     }
-    runtime_env.insert(
-        "CODEX_HOME".to_string(),
-        codex_home_dir().display().to_string(),
-    );
+    let codex_home = codex_home_dir();
+    if let Err(err) = fs::create_dir_all(&codex_home) {
+        tracing::warn!("[ACP][Codex] failed to create CODEX_HOME {codex_home:?}: {err}");
+    }
+    runtime_env.insert("CODEX_HOME".to_string(), codex_home.display().to_string());
 }
 
 fn opencode_primary_config_path() -> PathBuf {
@@ -1748,7 +1773,7 @@ fn persist_codex_native_config_files(
     codex_auth_json: Option<&str>,
     codex_config_toml: Option<&str>,
 ) -> Result<(), AcpError> {
-    if let Some(raw_toml) = codex_config_toml {
+    if let Some(raw_toml) = codex_config_toml.map(str::trim).filter(|raw| !raw.is_empty()) {
         toml::from_str::<toml::Table>(raw_toml)
             .map_err(|e| AcpError::protocol(format!("invalid codex config.toml: {e}")))?;
         let path = codex_config_toml_path();
@@ -1760,7 +1785,7 @@ fn persist_codex_native_config_files(
             .map_err(|e| AcpError::protocol(format!("write codex config.toml failed: {e}")))?;
     }
 
-    if let Some(raw_auth) = codex_auth_json {
+    if let Some(raw_auth) = codex_auth_json.map(str::trim).filter(|raw| !raw.is_empty()) {
         let parsed = serde_json::from_str::<serde_json::Value>(raw_auth)
             .map_err(|e| AcpError::protocol(format!("invalid codex auth.json: {e}")))?;
         if !parsed.is_object() {
@@ -4457,20 +4482,17 @@ const CLAUDE_MODEL_KEY_MAP: &[(&str, &str)] = &[
 /// Parse the model field stored on a model_provider into the env-var actions to
 /// apply on the dependent agent's `env_json` / local config file.
 ///
-/// The provider's model field is authoritative: every env key relevant to the
-/// agent type is returned, with `Some(value)` meaning "set" and `None` meaning
-/// "clear". This lets the caller overwrite even when the provider's value is
-/// empty.
+/// Only Claude treats the provider's model field as an authoritative runtime
+/// model bundle. For OpenAI/Gemini-compatible agents, provider.model is provider
+/// metadata/default-pick UI state; the concrete runtime model belongs to that
+/// agent's own settings. Mixing those two levels can route Codex/Gemini/Pi to a
+/// model name the HouFlow gateway does not serve and surface as a 404.
 ///
 /// - Claude: returns one entry per `CLAUDE_MODEL_KEY_MAP` row — the five
 ///   ANTHROPIC_*_MODEL fields plus the ANTHROPIC_CUSTOM_MODEL_OPTION trio. Each
 ///   entry is `None` when the provider's JSON omits that key or has an empty
 ///   value.
-/// - Gemini: returns `GEMINI_MODEL`.
-/// - Codex: returns `OPENAI_MODEL` so the provider can override env_json (the
-///   root `model` in `config.toml` is handled separately by
-///   `provider_codex_model_action`).
-/// - Others: returns `OPENAI_MODEL`.
+/// - Others: returns no model actions; URL/key still come from the provider.
 pub(crate) fn parse_provider_model(
     agent_type: AgentType,
     raw: Option<&str>,
@@ -4493,20 +4515,7 @@ pub(crate) fn parse_provider_model(
                 out.insert((*env_name).to_string(), value);
             }
         }
-        AgentType::Gemini => {
-            out.insert("GEMINI_MODEL".to_string(), trimmed_raw.map(str::to_string));
-        }
-        // Kimi reads its model name from KIMI_MODEL_NAME (the `KIMI_MODEL_*`
-        // family), not OPENAI_MODEL — see `agent_env_keys`.
-        AgentType::KimiCode => {
-            out.insert(
-                "KIMI_MODEL_NAME".to_string(),
-                trimmed_raw.map(str::to_string),
-            );
-        }
-        _ => {
-            out.insert("OPENAI_MODEL".to_string(), trimmed_raw.map(str::to_string));
-        }
+        _ => {}
     }
     out
 }
@@ -4522,16 +4531,10 @@ pub(crate) enum CodexModelAction {
 }
 
 pub(crate) fn provider_codex_model_action(
-    agent_type: AgentType,
-    raw: Option<&str>,
+    _agent_type: AgentType,
+    _raw: Option<&str>,
 ) -> CodexModelAction {
-    if agent_type != AgentType::Codex {
-        return CodexModelAction::NoOp;
-    }
-    match raw.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(v) => CodexModelAction::Set(v.to_string()),
-        None => CodexModelAction::Clear,
-    }
+    CodexModelAction::NoOp
 }
 
 /// Update on-disk config files for a single agent when model provider credentials change.
@@ -4720,8 +4723,9 @@ fn cascade_update_agent_config(
     Ok(())
 }
 
-/// Cascade model provider changes (credentials + model) to all dependent agent settings
-/// and config files.
+/// Cascade model provider changes to all dependent agent settings and config
+/// files. Credentials cascade for every supported agent; provider.model cascades
+/// only where `parse_provider_model` returns actions (currently Claude).
 pub(crate) async fn cascade_update_model_provider(
     db: &AppDatabase,
     provider_id: i32,
@@ -5398,11 +5402,12 @@ pub(crate) async fn acp_get_agent_status_core(
         .map_err(|e| AcpError::protocol(e.to_string()))?;
 
     let (available, installed_version) = match &meta.distribution {
-        registry::AgentDistribution::Npx { cmd, .. } => (
+        registry::AgentDistribution::Npx { .. } => (
             true,
-            resolve_npx_command(cmd)
+            npx_agent_launchable(agent_type)
                 .await
-                .and_then(|_| setting.as_ref().and_then(|m| m.installed_version.clone())),
+                .then(|| setting.as_ref().and_then(|m| m.installed_version.clone()))
+                .flatten(),
         ),
         registry::AgentDistribution::Binary { platforms, cmd, .. } => {
             let detected = binary_cache::detect_installed_version(agent_type, cmd)
@@ -5464,14 +5469,14 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
         let setting = settings_map.get(&agent_type);
         let meta = registry::get_agent_meta(agent_type);
         let (available, dist_type, local_installed_version) = match &meta.distribution {
-            registry::AgentDistribution::Npx { cmd, .. } => {
+            registry::AgentDistribution::Npx { .. } => {
                 // Keep the list path bounded: each list request probes npm
                 // global prefix at most once, then reuses the result across
                 // all NPX agents in the loop.
-                let cached = npx_resolver
-                    .resolve_for_list(cmd)
-                    .await
-                    .and_then(|_| setting.and_then(|m| m.installed_version.clone()));
+                let launchable = npx_resolver.resolve_agent_for_list(agent_type).await;
+                let cached = launchable
+                    .then(|| setting.and_then(|m| m.installed_version.clone()))
+                    .flatten();
                 (true, "npx", cached)
             }
             registry::AgentDistribution::Binary { platforms, cmd, .. } => {
@@ -5835,10 +5840,9 @@ async fn acp_update_agent_env_core_with_enabled_update(
         .await
         .map_err(|e| AcpError::protocol(e.to_string()))?;
 
-    // If a provider is selected, the provider's model field is authoritative:
-    // each relevant env key is set when the provider has a value and cleared
-    // (removed) when empty. Codex's root `model` in config.toml is handled the
-    // same way.
+    // If a provider is selected, URL/key come from the provider. Only Claude
+    // treats provider.model as authoritative runtime model data; other agents
+    // keep their model in their own engine-specific config.
     let mut merged_env = env;
     let mut codex_action = CodexModelAction::NoOp;
     // When a Claude provider is bound, capture the inputs to also rewrite the
@@ -7368,6 +7372,48 @@ wire_api = "chat"
         let mut claude_env = BTreeMap::new();
         ensure_codex_home_env(AgentType::ClaudeCode, &mut claude_env);
         assert!(!claude_env.contains_key("CODEX_HOME"));
+    }
+
+    #[test]
+    fn ensure_codex_home_env_creates_default_home() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path().join("codex-home");
+
+        temp_env::with_var("CODEX_HOME", Some(home.as_os_str()), || {
+            let mut codex_env = BTreeMap::new();
+            ensure_codex_home_env(AgentType::Codex, &mut codex_env);
+
+            assert!(home.is_dir(), "CODEX_HOME should be created before launch");
+            assert_eq!(
+                codex_env.get("CODEX_HOME").map(String::as_str),
+                Some(home.to_string_lossy().as_ref())
+            );
+        });
+    }
+
+    #[test]
+    fn blank_codex_native_config_inputs_are_noop() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path().join("codex-home");
+        fs::create_dir_all(&home).expect("create codex home");
+        let auth_path = home.join("auth.json");
+        let config_path = home.join("config.toml");
+        fs::write(&auth_path, "{\n  \"tokens\": {}\n}\n").expect("write auth");
+        fs::write(&config_path, "model = \"gpt-5\"\n").expect("write config");
+
+        temp_env::with_var("CODEX_HOME", Some(home.as_os_str()), || {
+            persist_codex_native_config_files(Some(" \n\t"), Some("\n"))
+                .expect("blank inputs should not be parsed or written");
+        });
+
+        assert_eq!(
+            fs::read_to_string(auth_path).expect("read auth"),
+            "{\n  \"tokens\": {}\n}\n"
+        );
+        assert_eq!(
+            fs::read_to_string(config_path).expect("read config"),
+            "model = \"gpt-5\"\n"
+        );
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
@@ -9134,13 +9180,24 @@ wire_api = "chat"
     }
 
     #[test]
-    fn kimi_parse_provider_model_uses_kimi_model_name() {
-        let out = parse_provider_model(AgentType::KimiCode, Some("kimi-for-coding"));
-        assert_eq!(
-            out.get("KIMI_MODEL_NAME"),
-            Some(&Some("kimi-for-coding".to_string()))
-        );
-        assert!(!out.contains_key("OPENAI_MODEL"));
+    fn non_claude_provider_model_does_not_override_agent_model() {
+        for agent_type in [
+            AgentType::Codex,
+            AgentType::Gemini,
+            AgentType::Pi,
+            AgentType::KimiCode,
+        ] {
+            let out = parse_provider_model(agent_type, Some("gateway-default"));
+            assert!(
+                out.is_empty(),
+                "{agent_type} must keep its model in the agent config"
+            );
+        }
+
+        assert!(matches!(
+            provider_codex_model_action(AgentType::Codex, Some("gpt-5")),
+            CodexModelAction::NoOp
+        ));
     }
 
     #[test]

@@ -13,11 +13,17 @@
 //! - [`space`]  portal-neutral project-space (digital asset center) data layer
 
 mod auth;
+mod ai;
 mod client;
 mod space;
 mod store;
 mod types;
 
+pub use ai::{
+    workbench_ai_create_session_core, workbench_ai_get_session_core,
+    workbench_ai_list_assistants_core, workbench_ai_list_sessions_core,
+    workbench_ai_send_message_core,
+};
 pub use auth::{
     workbench_begin_device_auth_core, workbench_get_session_core, workbench_list_projects_core,
     workbench_poll_device_auth_core, workbench_set_active_project_core, workbench_sign_out_core,
@@ -144,4 +150,52 @@ pub async fn workbench_space_delete_file(
     file_id: String,
 ) -> Result<JsonValue, AppCommandError> {
     workbench_space_delete_file_core(project_id, file_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn workbench_ai_list_assistants(
+    project_id: String,
+) -> Result<JsonValue, AppCommandError> {
+    workbench_ai_list_assistants_core(project_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn workbench_ai_list_sessions(
+    project_id: String,
+    assistant_id: Option<String>,
+    limit: Option<i64>,
+) -> Result<JsonValue, AppCommandError> {
+    workbench_ai_list_sessions_core(project_id, assistant_id, limit).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn workbench_ai_create_session(
+    project_id: String,
+    assistant_id: Option<String>,
+    title: Option<String>,
+) -> Result<JsonValue, AppCommandError> {
+    workbench_ai_create_session_core(project_id, assistant_id, title).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn workbench_ai_get_session(
+    project_id: String,
+    session_id: String,
+) -> Result<JsonValue, AppCommandError> {
+    workbench_ai_get_session_core(project_id, session_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn workbench_ai_send_message(
+    project_id: String,
+    assistant_id: String,
+    session_id: String,
+    query: String,
+) -> Result<JsonValue, AppCommandError> {
+    workbench_ai_send_message_core(project_id, assistant_id, session_id, query).await
 }

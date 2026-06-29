@@ -15,6 +15,12 @@ import { MessageResponse } from "@/components/ai-elements/message"
 import { Button } from "@/components/ui/button"
 import { ImagePreviewDialog } from "@/components/ui/image-preview-dialog"
 import { useHouflowDesktop } from "@/houflow"
+import {
+  isCloudImageOutput,
+  isCloudTextOutput,
+  mediaTypeForCloudOutputBlob,
+  outputMatchesTarget,
+} from "@/houflow/cloud-session-output-links"
 import { useHouflowCloudWorkspace } from "@/houflow/cloud-workspace-context"
 import {
   getHouflowCloudSessionOutputBytes,
@@ -31,6 +37,7 @@ export function CloudSessionOutputsPanel() {
   const cloud = useHouflowCloudWorkspace()
   const [outputs, setOutputs] = useState<HouflowCloudSessionOutput[]>([])
   const [loading, setLoading] = useState(false)
+  const [outputsLoaded, setOutputsLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedOutputId, setSelectedOutputId] = useState<string | null>(null)
   const [previewText, setPreviewText] = useState<string | null>(null)
@@ -38,9 +45,11 @@ export function CloudSessionOutputsPanel() {
   const [imageDialogOpen, setImageDialogOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [selectionError, setSelectionError] = useState<string | null>(null)
   const requestRef = useRef(0)
 
   const selectedSessionId = cloud.selectedSession?.id ?? null
+  const selectedOutputRequest = cloud.selectedOutputRequest
   const selectedOutput = useMemo(
     () =>
       selectedOutputId
@@ -55,10 +64,12 @@ export function CloudSessionOutputsPanel() {
       setOutputs([])
       setError(null)
       setLoading(false)
+      setOutputsLoaded(false)
       setSelectedOutputId(null)
       return
     }
     setLoading(true)
+    setOutputsLoaded(false)
     setError(null)
     try {
       const next = await listHouflowCloudSessionOutputs(
@@ -77,7 +88,10 @@ export function CloudSessionOutputsPanel() {
     } catch (err) {
       if (requestRef.current === requestId) setError(toErrorMessage(err))
     } finally {
-      if (requestRef.current === requestId) setLoading(false)
+      if (requestRef.current === requestId) {
+        setLoading(false)
+        setOutputsLoaded(true)
+      }
     }
   }, [houflow.secret, houflow.session, selectedSessionId])
 
@@ -86,9 +100,11 @@ export function CloudSessionOutputsPanel() {
     setOutputs([])
     setError(null)
     setLoading(false)
+    setOutputsLoaded(false)
     setSelectedOutputId(null)
     setPreviewText(null)
     setPreviewError(null)
+    setSelectionError(null)
     setPreviewLoading(false)
     setImageDialogOpen(false)
   }, [houflow.session.status, houflow.session.workspaceId, selectedSessionId])
@@ -96,6 +112,27 @@ export function CloudSessionOutputsPanel() {
   useEffect(() => {
     void refreshOutputs()
   }, [refreshOutputs])
+
+  useEffect(() => {
+    if (
+      !selectedOutputRequest ||
+      selectedOutputRequest.sessionId !== selectedSessionId
+    ) {
+      return
+    }
+    const matchingOutput = outputs.find((output) =>
+      outputMatchesTarget(output, selectedOutputRequest.target)
+    )
+    if (matchingOutput) {
+      setSelectionError(null)
+      setSelectedOutputId(matchingOutput.id)
+      return
+    }
+    if (outputsLoaded) {
+      setSelectedOutputId(null)
+      setSelectionError(t("outputNotFound"))
+    }
+  }, [outputs, outputsLoaded, selectedOutputRequest, selectedSessionId, t])
 
   useEffect(() => {
     if (!previewUrl) return
@@ -132,7 +169,7 @@ export function CloudSessionOutputsPanel() {
           )
           if (cancelled) return
           const blob = new Blob([bytes], {
-            type: selectedOutput.mediaType || "application/octet-stream",
+            type: mediaTypeForCloudOutputBlob(selectedOutput),
           })
           setPreviewUrl(URL.createObjectURL(blob))
           return
@@ -215,6 +252,12 @@ export function CloudSessionOutputsPanel() {
       {error ? (
         <div className="m-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
           {error}
+        </div>
+      ) : null}
+
+      {!error && selectionError ? (
+        <div className="m-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          {selectionError}
         </div>
       ) : null}
 
@@ -404,16 +447,11 @@ export function canPreviewOutput(output: HouflowCloudSessionOutput): boolean {
 
 function canTextPreviewOutput(output: HouflowCloudSessionOutput): boolean {
   if (output.sizeBytes > 512 * 1024) return false
-  return (
-    output.mediaType.startsWith("text/") ||
-    isMarkdownOutput(output) ||
-    isHtmlOutput(output) ||
-    output.mediaType === "application/json"
-  )
+  return isCloudTextOutput(output)
 }
 
 function isImageOutput(output: HouflowCloudSessionOutput): boolean {
-  return output.mediaType.startsWith("image/")
+  return isCloudImageOutput(output)
 }
 
 function isMarkdownOutput(output: HouflowCloudSessionOutput): boolean {
@@ -440,7 +478,7 @@ function downloadOutputName(output: HouflowCloudSessionOutput): string {
 
 function downloadBytes(output: HouflowCloudSessionOutput, bytes: Uint8Array) {
   const blob = new Blob([bytes], {
-    type: output.mediaType || "application/octet-stream",
+    type: mediaTypeForCloudOutputBlob(output),
   })
   const url = URL.createObjectURL(blob)
   const link = document.createElement("a")
@@ -453,7 +491,9 @@ function downloadBytes(output: HouflowCloudSessionOutput, bytes: Uint8Array) {
 }
 
 function openHtmlPreview(output: HouflowCloudSessionOutput, text: string) {
-  const blob = new Blob([text], { type: output.mediaType || "text/html" })
+  const blob = new Blob([text], {
+    type: mediaTypeForCloudOutputBlob(output) || "text/html",
+  })
   const url = URL.createObjectURL(blob)
   const opened = window.open(url, "_blank", "noreferrer")
   if (!opened) {

@@ -18,6 +18,7 @@ import {
   ConversationStatusEventBridge,
 } from "@/contexts/app-workspace-context"
 import { WorkbenchAutoMount } from "@/workbench/workbench-auto-mount"
+import { WorkbenchCloudProvider } from "@/workbench/workbench-cloud-context"
 import {
   ActiveFolderProvider,
   useActiveFolder,
@@ -891,16 +892,18 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                                 <SearchDialogProvider>
                                   <AutomationsViewProvider>
                                     <WorkbenchRouteProvider>
-                                      <HouflowCloudWorkspaceProvider>
-                                        <WorkbenchRouteConversationSync />
-                                        {/* Inside WorkbenchRouteProvider: the
-                                          listener calls openConversations() to
-                                          surface a launcher-opened folder. */}
-                                        <WorkspaceOpenFolderListener />
-                                        <FolderLayoutShell>
-                                          {children}
-                                        </FolderLayoutShell>
-                                      </HouflowCloudWorkspaceProvider>
+                                      <WorkbenchCloudProvider>
+                                        <HouflowCloudWorkspaceProvider>
+                                          <WorkbenchRouteConversationSync />
+                                          {/* Inside WorkbenchRouteProvider: the
+                                            listener calls openConversations() to
+                                            surface a launcher-opened folder. */}
+                                          <WorkspaceOpenFolderListener />
+                                          <FolderLayoutShell>
+                                            {children}
+                                          </FolderLayoutShell>
+                                        </HouflowCloudWorkspaceProvider>
+                                      </WorkbenchCloudProvider>
                                     </WorkbenchRouteProvider>
                                   </AutomationsViewProvider>
                                 </SearchDialogProvider>

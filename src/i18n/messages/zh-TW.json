@@ -3318,6 +3318,7 @@
     "loadingPreview": "正在載入預覽…",
     "openPreview": "開啟預覽",
     "previewUnavailable": "無法預覽",
+    "outputNotFound": "目前雲端會話未找到這個檔案，請重新整理檔案後再試。",
     "showMore": "展開 {count} 個",
     "showLess": "收起",
     "targetPlaceholder": "選擇雲端智能體",
@@ -3461,5 +3462,25 @@
     "branchRemote": "遠端",
     "branchSearchPlaceholder": "搜尋分支…",
     "branchNone": "無分支"
+  },
+  "WorkbenchCloud": {
+    "title": "项目云端",
+    "projectFallback": "项目空间",
+    "refresh": "刷新",
+    "signedOut": "登录工作台后查看项目智能体。",
+    "loadingMessages": "正在加载消息…",
+    "emptyMessages": "选择智能体或开始一个项目会话。",
+    "emptyResponse": "未返回响应。",
+    "messagePlaceholder": "向项目智能体发送消息…",
+    "sendFailed": "发送消息失败",
+    "newSession": "新项目会话",
+    "untitled": "未命名会话",
+    "agents": "项目智能体",
+    "agentPlaceholder": "选择项目智能体",
+    "agentSearch": "搜索项目智能体…",
+    "emptyAgents": "暂无可用项目智能体",
+    "showMore": "展开 {count} 个",
+    "showLess": "收起",
+    "openProjectFileFromTree": "请在右侧项目空间文件树中打开该文件。"
   }
 }

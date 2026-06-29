@@ -116,7 +116,9 @@ export function EditModelProviderDialog({
       ? parseClaudeProviderModel(provider.model)
       : {}
     setClaudeModel(nextClaudeModel)
-    setDefaultModel(nextClaudeModel.main ?? provider.model ?? provider.models[0] ?? "")
+    setDefaultModel(
+      nextClaudeModel.main ?? provider.model ?? provider.models[0] ?? ""
+    )
     setModelsText(provider.models.join("\n"))
     setError(null)
   }, [provider])
@@ -130,7 +132,8 @@ export function EditModelProviderDialog({
   )
 
   const modelPlaceholder = useMemo(() => {
-    if (agentTypes.includes("codex")) return t("modelPlaceholderCodex")
+    if (agentTypes.includes("codex") || agentTypes.includes("pi"))
+      return t("modelPlaceholderCodex")
     if (agentTypes.includes("gemini")) return t("modelPlaceholderGemini")
     return ""
   }, [agentTypes, t])

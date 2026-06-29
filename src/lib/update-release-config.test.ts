@@ -3,6 +3,8 @@ import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 
 const DOWNLOAD_BASE = "https://agent.houflow.com/downloads/houhub"
+const GITHUB_RELEASE_BASE =
+  "https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/"
 const LATEST_JSON = `${DOWNLOAD_BASE}/latest.json`
 
 function readWorkspaceFile(relativePath: string): string {
@@ -48,7 +50,7 @@ describe("HouHub update release configuration", () => {
     expect(workflow).toContain("houhub_${version}_x64.app.tar.gz")
     expect(workflow).toContain("windows-x86_64")
     expect(workflow).toContain("Build latest.json")
-    expect(workflow).toContain(DOWNLOAD_BASE)
+    expect(workflow).toContain(GITHUB_RELEASE_BASE)
     expect(workflow).not.toContain("github.com/fleap-fly/houhub")
   })
 })

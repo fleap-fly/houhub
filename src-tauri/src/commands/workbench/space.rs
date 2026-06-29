@@ -23,13 +23,13 @@ use super::store::load_stored;
 use super::types::WorkbenchStored;
 
 /// The persisted PS session (host + token) or a typed "signed out" error.
-fn require_session() -> Result<WorkbenchStored, AppCommandError> {
+pub(super) fn require_session() -> Result<WorkbenchStored, AppCommandError> {
     load_stored()
         .filter(|stored| !stored.session_token.is_empty())
         .ok_or_else(|| AppCommandError::authentication_failed("workbench is not signed in"))
 }
 
-fn require_project_id(project_id: &str) -> Result<String, AppCommandError> {
+pub(super) fn require_project_id(project_id: &str) -> Result<String, AppCommandError> {
     let trimmed = project_id.trim();
     if trimmed.is_empty() {
         return Err(AppCommandError::invalid_input("projectId is required"));
