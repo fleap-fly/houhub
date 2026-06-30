@@ -2,7 +2,7 @@
   "name": "houhub",
   "private": true,
   "packageManager": "pnpm@11.6.0",
-  "version": "0.18.5",
+  "version": "0.18.6",
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",

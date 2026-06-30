@@ -87,6 +87,7 @@ import {
   acpUpdateAgentEnv,
   acpUpdateHermesConfig,
   acpUpdateKimiCodeConfig,
+  acpUpdatePiConfig,
   acpFetchKimiModels,
   acpRevealHermesHome,
   acpOpenHermesSetupTerminal,
@@ -304,6 +305,12 @@ function providerDefaultModel(
   } catch {
     return removeSlotPrefixedModel(provider.model)
   }
+}
+
+function piProviderConfigId(provider: ModelProviderInfo): string {
+  return provider.name.trim().toLowerCase() === "houflow gateway"
+    ? "houflow"
+    : `houhub-provider-${provider.id}`
 }
 
 interface ImportantEnvKeys {
@@ -5629,6 +5636,45 @@ export function AcpAgentSettings() {
     [modelProviders, reportAffectedSessions]
   )
 
+  const persistPiNativeConfig = useCallback(
+    async (draft: AgentDraft): Promise<void> => {
+      if (draft.modelProviderId == null) {
+        const model = draft.model.trim()
+        if (!draft.apiBaseUrl.trim() && !draft.apiKey.trim() && !model) return
+        if (!model) {
+          throw new Error("Pi model is required")
+        }
+        await acpUpdatePiConfig({
+          provider: "houhub-custom",
+          model,
+          apiKey: draft.apiKey,
+          customBaseUrl: draft.apiBaseUrl,
+          customApi: "openai-completions",
+        })
+        return
+      }
+
+      const provider = modelProviders.find(
+        (item) =>
+          item.id === draft.modelProviderId &&
+          modelProviderSupportsAgentType(item, "pi")
+      )
+      if (!provider) return
+      const model = providerDefaultModel(provider)
+      if (!model) {
+        throw new Error(`Pi model provider ${provider.name} has no model`)
+      }
+      await acpUpdatePiConfig({
+        provider: piProviderConfigId(provider),
+        model,
+        apiKey: provider.api_key,
+        customBaseUrl: provider.api_url,
+        customApi: "openai-completions",
+      })
+    },
+    [modelProviders]
+  )
+
   const handleGeminiFieldChange = useCallback(
     (
       key:
@@ -10223,6 +10269,9 @@ supports_websockets = false`}
                               selectedDraft.envText,
                               selectedCompatibleModelProviderId
                             )
+                            if (selectedAgent.agent_type === "pi") {
+                              await persistPiNativeConfig(selectedDraft)
+                            }
                             await persistConfig(
                               selectedAgent.agent_type,
                               configToSave

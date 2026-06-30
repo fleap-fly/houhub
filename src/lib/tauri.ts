@@ -206,6 +206,42 @@ export async function acpUninstallPiBinary(taskId: string): Promise<void> {
   return invoke("acp_uninstall_pi_binary", { taskId })
 }
 
+export interface PiConfigProjection {
+  defaultProvider: string | null
+  defaultModel: string | null
+  defaultThinkingLevel: string | null
+  authProviders: string[]
+  customProviders: Array<{
+    id: string
+    baseUrl: string
+    api: string
+  }>
+}
+
+export interface PiConfigUpdate {
+  provider: string
+  model: string
+  thinkingLevel?: string | null
+  apiKey?: string | null
+  customBaseUrl?: string | null
+  customApi?: string | null
+}
+
+export async function acpUpdatePiConfig(update: PiConfigUpdate): Promise<void> {
+  return invoke("acp_update_pi_config", {
+    provider: update.provider,
+    model: update.model,
+    thinkingLevel: update.thinkingLevel ?? null,
+    apiKey: update.apiKey ?? null,
+    customBaseUrl: update.customBaseUrl ?? null,
+    customApi: update.customApi ?? null,
+  })
+}
+
+export async function acpLoadPiConfig(): Promise<PiConfigProjection> {
+  return invoke("acp_load_pi_config")
+}
+
 export async function acpDetectAgentLocalVersion(
   agentType: AgentType
 ): Promise<string | null> {

@@ -1047,6 +1047,241 @@ fn pi_agent_dir_for_env(runtime_env: &BTreeMap<String, String>) -> PathBuf {
         .unwrap_or_else(pi_agent_dir)
 }
 
+fn pi_settings_json_path() -> PathBuf {
+    pi_agent_dir().join("settings.json")
+}
+
+fn pi_auth_json_path() -> PathBuf {
+    pi_agent_dir().join("auth.json")
+}
+
+fn pi_models_json_path() -> PathBuf {
+    pi_agent_dir().join("models.json")
+}
+
+fn read_json_object_or_empty(path: &Path) -> serde_json::Map<String, serde_json::Value> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn write_json_object_pretty(
+    path: &Path,
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), AcpError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| AcpError::protocol(format!("create pi config directory failed: {err}")))?;
+    }
+    let mut body = serde_json::to_string_pretty(&serde_json::Value::Object(object.clone()))
+        .map_err(|err| AcpError::protocol(format!("serialize pi config failed: {err}")))?;
+    body.push('\n');
+    fs::write(path, body)
+        .map_err(|err| AcpError::protocol(format!("write pi config failed: {err}")))?;
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PiConfigUpdate {
+    pub provider: String,
+    pub model: String,
+    pub thinking_level: Option<String>,
+    pub api_key: Option<String>,
+    pub custom_base_url: Option<String>,
+    pub custom_api: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiCustomProvider {
+    pub id: String,
+    pub base_url: String,
+    pub api: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiConfigProjection {
+    pub default_provider: Option<String>,
+    pub default_model: Option<String>,
+    pub default_thinking_level: Option<String>,
+    pub auth_providers: Vec<String>,
+    pub custom_providers: Vec<PiCustomProvider>,
+}
+
+fn update_pi_config_files(update: PiConfigUpdate) -> Result<(), AcpError> {
+    let provider = update.provider.trim();
+    if provider.is_empty() {
+        return Err(AcpError::protocol("pi provider is required"));
+    }
+    let model = update.model.trim();
+    if model.is_empty() {
+        return Err(AcpError::protocol("pi model is required"));
+    }
+    if let Some(key) = update
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| key.contains(['\n', '\r']))
+    {
+        return Err(AcpError::protocol(
+            "pi API key must not contain line breaks",
+        ));
+    }
+
+    let mut settings = read_json_object_or_empty(&pi_settings_json_path());
+    settings.insert(
+        "defaultProvider".to_string(),
+        serde_json::Value::String(provider.to_string()),
+    );
+    settings.insert(
+        "defaultModel".to_string(),
+        serde_json::Value::String(model.to_string()),
+    );
+    if let Some(level) = update
+        .thinking_level
+        .as_deref()
+        .map(str::trim)
+        .filter(|level| !level.is_empty())
+    {
+        settings.insert(
+            "defaultThinkingLevel".to_string(),
+            serde_json::Value::String(level.to_string()),
+        );
+    }
+    write_json_object_pretty(&pi_settings_json_path(), &settings)?;
+
+    if let Some(key) = update
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    {
+        let mut auth = read_json_object_or_empty(&pi_auth_json_path());
+        auth.insert(
+            provider.to_string(),
+            serde_json::json!({
+                "type": "api_key",
+                "key": key,
+            }),
+        );
+        write_json_object_pretty(&pi_auth_json_path(), &auth)?;
+    }
+
+    if let Some(base_url) = update
+        .custom_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|base_url| !base_url.is_empty())
+    {
+        let api = update
+            .custom_api
+            .as_deref()
+            .map(str::trim)
+            .filter(|api| !api.is_empty())
+            .unwrap_or("openai-completions");
+        let mut document = read_json_object_or_empty(&pi_models_json_path());
+        let mut providers = match document.remove("providers") {
+            Some(serde_json::Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        let mut entry = match providers.remove(provider) {
+            Some(serde_json::Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        entry.insert(
+            "baseUrl".to_string(),
+            serde_json::Value::String(base_url.to_string()),
+        );
+        entry.insert("api".to_string(), serde_json::Value::String(api.to_string()));
+        let mut models = match entry.remove("models") {
+            Some(serde_json::Value::Array(models)) => models,
+            _ => Vec::new(),
+        };
+        if !models
+            .iter()
+            .any(|item| item.get("id").and_then(serde_json::Value::as_str) == Some(model))
+        {
+            models.push(serde_json::json!({
+                "id": model,
+                "name": model,
+            }));
+        }
+        entry.insert("models".to_string(), serde_json::Value::Array(models));
+        providers.insert(provider.to_string(), serde_json::Value::Object(entry));
+        document.insert("providers".to_string(), serde_json::Value::Object(providers));
+        write_json_object_pretty(&pi_models_json_path(), &document)?;
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn acp_update_pi_config_core(
+    update: PiConfigUpdate,
+    db: &AppDatabase,
+    emitter: &EventEmitter,
+) -> Result<(), AcpError> {
+    let default = agent_setting_service::AgentDefaultInput {
+        agent_type: AgentType::Pi,
+        registry_id: registry::registry_id_for(AgentType::Pi).to_string(),
+        default_sort_order: i32::MAX / 2,
+    };
+    agent_setting_service::ensure_defaults(&db.conn, &[default])
+        .await
+        .map_err(|err| AcpError::protocol(err.to_string()))?;
+    update_pi_config_files(update)?;
+    emit_acp_agents_updated(emitter, "config_updated", Some(AgentType::Pi));
+    Ok(())
+}
+
+pub(crate) fn load_pi_config_core() -> PiConfigProjection {
+    let settings = read_json_object_or_empty(&pi_settings_json_path());
+    let string_key = |key: &str| {
+        settings
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    let mut auth_providers: Vec<String> = read_json_object_or_empty(&pi_auth_json_path())
+        .keys()
+        .cloned()
+        .collect();
+    auth_providers.sort();
+    let mut custom_providers: Vec<PiCustomProvider> =
+        read_json_object_or_empty(&pi_models_json_path())
+            .get("providers")
+            .and_then(serde_json::Value::as_object)
+            .map(|providers| {
+                providers
+                    .iter()
+                    .map(|(id, entry)| PiCustomProvider {
+                        id: id.clone(),
+                        base_url: entry
+                            .get("baseUrl")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        api: entry
+                            .get("api")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("openai-completions")
+                            .to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    custom_providers.sort_by(|left, right| left.id.cmp(&right.id));
+    PiConfigProjection {
+        default_provider: string_key("defaultProvider"),
+        default_model: string_key("defaultModel"),
+        default_thinking_level: string_key("defaultThinkingLevel"),
+        auth_providers,
+        custom_providers,
+    }
+}
+
 pub(crate) const PI_TRUST_WORKSPACE_ENV: &str = "PI_ACP_TRUST_WORKSPACE";
 
 pub(crate) fn seed_pi_workspace_trust(cwd: &Path, runtime_env: &BTreeMap<String, String>) {
@@ -4503,6 +4738,94 @@ pub(crate) async fn apply_model_provider_env(
     }
 }
 
+fn parse_provider_models_json(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn provider_model_is_structured_bundle(raw: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .is_some_and(|value| value.is_object() || value.is_array())
+}
+
+fn pi_provider_id(provider: &crate::db::entities::model_provider::Model) -> String {
+    if provider.name.trim().eq_ignore_ascii_case("Houflow Gateway") {
+        "houflow".to_string()
+    } else {
+        format!("houhub-provider-{}", provider.id)
+    }
+}
+
+fn resolve_pi_provider_model(
+    provider: &crate::db::entities::model_provider::Model,
+    runtime_env: &BTreeMap<String, String>,
+) -> Result<String, AcpError> {
+    let models = parse_provider_models_json(&provider.models_json);
+    let env_model = runtime_env
+        .get("OPENAI_MODEL")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty());
+    if let Some(model) = env_model {
+        if models.is_empty() || models.iter().any(|item| item == model) {
+            return Ok(model.to_string());
+        }
+    }
+
+    let provider_model = provider.model.as_deref().map(str::trim).filter(|model| {
+        !model.is_empty() && !provider_model_is_structured_bundle(model)
+    });
+    if let Some(model) = provider_model {
+        if models.is_empty() || models.iter().any(|item| item == model) {
+            return Ok(model.to_string());
+        }
+    }
+
+    models.first().cloned().ok_or_else(|| {
+        AcpError::protocol(format!(
+            "Pi model provider {} has no available models",
+            provider.id
+        ))
+    })
+}
+
+async fn sync_pi_model_provider_config(
+    setting: Option<&crate::db::entities::agent_setting::Model>,
+    runtime_env: &mut BTreeMap<String, String>,
+    conn: &sea_orm::DatabaseConnection,
+) -> Result<(), AcpError> {
+    let provider_id = match setting.and_then(|s| s.model_provider_id) {
+        Some(id) => id,
+        None => return Ok(()),
+    };
+    let provider = model_provider_service::get_by_id(conn, provider_id)
+        .await
+        .map_err(|err| AcpError::protocol(err.to_string()))?
+        .ok_or_else(|| AcpError::protocol(format!("model provider not found: {provider_id}")))?;
+    let provider_key = pi_provider_id(&provider);
+    let model = resolve_pi_provider_model(&provider, runtime_env)?;
+    if !provider.api_url.trim().is_empty() {
+        runtime_env.insert("OPENAI_BASE_URL".to_string(), provider.api_url.clone());
+    }
+    if !provider.api_key.trim().is_empty() {
+        runtime_env.insert("OPENAI_API_KEY".to_string(), provider.api_key.clone());
+    }
+    runtime_env.insert("OPENAI_MODEL".to_string(), model.clone());
+    update_pi_config_files(PiConfigUpdate {
+        provider: provider_key,
+        model,
+        thinking_level: None,
+        api_key: Some(provider.api_key),
+        custom_base_url: Some(provider.api_url),
+        custom_api: Some("openai-completions".to_string()),
+    })
+}
+
 /// Claude Code provider-model JSON keys → ANTHROPIC_*_MODEL env var names.
 const CLAUDE_MODEL_KEY_MAP: &[(&str, &str)] = &[
     ("main", "ANTHROPIC_MODEL"),
@@ -4895,6 +5218,9 @@ pub(crate) async fn build_session_runtime_env(
     let mut runtime_env =
         build_runtime_env_from_setting(agent_type, setting.as_ref(), local_config_json.as_deref());
     apply_model_provider_env(agent_type, setting.as_ref(), &mut runtime_env, &db.conn).await;
+    if agent_type == AgentType::Pi {
+        sync_pi_model_provider_config(setting.as_ref(), &mut runtime_env, &db.conn).await?;
+    }
     ensure_codex_home_env(agent_type, &mut runtime_env);
 
     // codex resume no longer needs a `MODEL_PROVIDER` pin: codex-acp 1.0.1
@@ -4950,6 +5276,20 @@ pub(crate) fn fingerprint_config(
     hasher.update(b"\x01native\x01");
     if let Some(native) = load_agent_local_config_json(agent_type) {
         hasher.update(native.as_bytes());
+    }
+    if agent_type == AgentType::Pi {
+        for path in [
+            pi_settings_json_path(),
+            pi_auth_json_path(),
+            pi_models_json_path(),
+        ] {
+            hasher.update(path.to_string_lossy().as_bytes());
+            hasher.update([0u8]);
+            if let Ok(raw) = fs::read(&path) {
+                hasher.update(raw);
+            }
+            hasher.update([0u8]);
+        }
     }
     format!("{:x}", hasher.finalize())
 }
@@ -5896,6 +6236,7 @@ async fn acp_update_agent_env_core_with_enabled_update(
     // provider-edit cascade.
     let mut claude_local_cascade: Option<(String, String, BTreeMap<String, Option<String>>)> =
         None;
+    let mut pi_config_update: Option<PiConfigUpdate> = None;
     if let Some(pid) = model_provider_id {
         let provider = crate::db::service::model_provider_service::get_by_id(&db.conn, pid)
             .await
@@ -5937,6 +6278,18 @@ async fn acp_update_agent_env_core_with_enabled_update(
             claude_local_cascade =
                 Some((provider.api_url.clone(), provider.api_key.clone(), model_env));
         }
+        if agent_type == AgentType::Pi {
+            let model = resolve_pi_provider_model(&provider, &merged_env)?;
+            merged_env.insert("OPENAI_MODEL".to_string(), model.clone());
+            pi_config_update = Some(PiConfigUpdate {
+                provider: pi_provider_id(&provider),
+                model,
+                thinking_level: None,
+                api_key: Some(provider.api_key.clone()),
+                custom_base_url: Some(provider.api_url.clone()),
+                custom_api: Some("openai-completions".to_string()),
+            });
+        }
     }
 
     let patch = agent_setting_service::AgentSettingsUpdate {
@@ -5961,6 +6314,9 @@ async fn acp_update_agent_env_core_with_enabled_update(
         ) {
             eprintln!("[acp_update_agent_env] cascade_update_agent_config({agent_type}) failed: {e}");
         }
+    }
+    if let Some(update) = pi_config_update {
+        update_pi_config_files(update)?;
     }
 
     if let Err(e) = apply_codex_root_model_action(&codex_action) {
@@ -6251,6 +6607,40 @@ pub async fn acp_fetch_kimi_models(
     api_key: String,
 ) -> Result<Vec<String>, AcpError> {
     acp_fetch_kimi_models_core(&base_url, &api_key).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_update_pi_config(
+    provider: String,
+    model: String,
+    thinking_level: Option<String>,
+    api_key: Option<String>,
+    custom_base_url: Option<String>,
+    custom_api: Option<String>,
+    db: State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<(), AcpError> {
+    let emitter = EventEmitter::Tauri(app);
+    acp_update_pi_config_core(
+        PiConfigUpdate {
+            provider,
+            model,
+            thinking_level,
+            api_key,
+            custom_base_url,
+            custom_api,
+        },
+        &db,
+        &emitter,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_load_pi_config() -> Result<PiConfigProjection, AcpError> {
+    Ok(load_pi_config_core())
 }
 
 /// Launch Hermes's interactive setup in the OS terminal. `kind` selects the
@@ -7433,6 +7823,69 @@ pub(crate) async fn codex_poll_device_code_core(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pi_config_update_writes_native_files() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pi_home = tmp.path().join("pi-agent");
+
+        temp_env::with_var("PI_CODING_AGENT_DIR", Some(pi_home.as_os_str()), || {
+            update_pi_config_files(PiConfigUpdate {
+                provider: "houflow".to_string(),
+                model: "gpt-5".to_string(),
+                thinking_level: Some("medium".to_string()),
+                api_key: Some("sk-test".to_string()),
+                custom_base_url: Some("https://agent.houflow.com/api/gateway/openai/v1".to_string()),
+                custom_api: Some("openai-completions".to_string()),
+            })
+            .expect("write pi config");
+
+            let settings: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(pi_home.join("settings.json")).expect("read settings"),
+            )
+            .expect("settings json");
+            assert_eq!(settings["defaultProvider"], "houflow");
+            assert_eq!(settings["defaultModel"], "gpt-5");
+            assert_eq!(settings["defaultThinkingLevel"], "medium");
+
+            let auth: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(pi_home.join("auth.json")).expect("read auth"))
+                    .expect("auth json");
+            assert_eq!(auth["houflow"]["type"], "api_key");
+            assert_eq!(auth["houflow"]["key"], "sk-test");
+
+            let models: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(pi_home.join("models.json")).expect("read models"),
+            )
+            .expect("models json");
+            assert_eq!(
+                models["providers"]["houflow"]["baseUrl"],
+                "https://agent.houflow.com/api/gateway/openai/v1"
+            );
+            assert_eq!(models["providers"]["houflow"]["api"], "openai-completions");
+            assert_eq!(models["providers"]["houflow"]["models"][0]["id"], "gpt-5");
+        });
+    }
+
+    #[test]
+    fn resolve_pi_provider_model_ignores_structured_provider_bundle() {
+        let provider = crate::db::entities::model_provider::Model {
+            id: 7,
+            name: "Houflow Gateway".to_string(),
+            api_url: "https://agent.houflow.com/api/gateway/openai/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            agent_types_json: r#"["pi"]"#.to_string(),
+            agent_type: "pi".to_string(),
+            model: Some(r#"{"main":"gpt-5.5"}"#.to_string()),
+            models_json: r#"["gpt-5","gpt-5-mini"]"#.to_string(),
+            created_at: chrono::Utc::now().into(),
+            updated_at: chrono::Utc::now().into(),
+        };
+
+        let runtime_env = BTreeMap::new();
+        let model = resolve_pi_provider_model(&provider, &runtime_env).expect("resolve model");
+        assert_eq!(model, "gpt-5");
+    }
 
     #[test]
     fn codex_config_projection_tracks_model_provider_for_fingerprint() {
