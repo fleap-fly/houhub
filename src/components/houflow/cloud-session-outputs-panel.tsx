@@ -441,8 +441,10 @@ function OutputPreview({
 }
 
 export function canPreviewOutput(output: HouflowCloudSessionOutput): boolean {
-  if (output.sizeBytes > 2 * 1024 * 1024) return false
-  return isImageOutput(output) || canTextPreviewOutput(output)
+  if (isImageOutput(output)) {
+    return output.sizeBytes <= 25 * 1024 * 1024
+  }
+  return canTextPreviewOutput(output)
 }
 
 function canTextPreviewOutput(output: HouflowCloudSessionOutput): boolean {

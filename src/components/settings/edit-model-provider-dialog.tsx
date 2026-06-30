@@ -138,6 +138,15 @@ export function EditModelProviderDialog({
     return ""
   }, [agentTypes, t])
 
+  const handleAgentTypeToggle = useCallback((agentType: AgentType) => {
+    setAgentTypes((current) => {
+      if (current.includes(agentType)) {
+        return current.filter((item) => item !== agentType)
+      }
+      return [...current, agentType]
+    })
+  }, [])
+
   const handleSubmit = useCallback(async () => {
     if (!provider) return
     if (!name.trim()) {
@@ -176,6 +185,15 @@ export function EditModelProviderDialog({
     const modelsChanged =
       provider.models.length !== modelsPayload.length ||
       provider.models.some((model, index) => model !== modelsPayload[index])
+    const previousAgentTypes =
+      provider.agent_types.length > 0
+        ? provider.agent_types
+        : [provider.agent_type]
+    const agentTypesChanged =
+      previousAgentTypes.length !== agentTypes.length ||
+      previousAgentTypes.some(
+        (agentType, index) => agentType !== agentTypes[index]
+      )
 
     setLoading(true)
     setError(null)
@@ -185,6 +203,7 @@ export function EditModelProviderDialog({
         name: name.trim() !== provider.name ? name.trim() : undefined,
         apiUrl: apiUrl.trim() !== provider.api_url ? apiUrl.trim() : undefined,
         apiKey: apiKey.trim() || undefined,
+        agentTypes: agentTypesChanged ? agentTypes : undefined,
         model: modelChanged ? modelPayload : undefined,
         models: modelsChanged ? modelsPayload : undefined,
       })
@@ -276,14 +295,14 @@ export function EditModelProviderDialog({
                   key={at}
                   className="flex items-center gap-2 text-xs text-foreground"
                 >
-                  <Checkbox checked={agentTypes.includes(at)} disabled />
+                  <Checkbox
+                    checked={agentTypes.includes(at)}
+                    onCheckedChange={() => handleAgentTypeToggle(at)}
+                  />
                   {AGENT_LABELS[at]}
                 </label>
               ))}
             </div>
-            <p className="text-[11px] text-muted-foreground">
-              {t("agentTypeImmutableHint")}
-            </p>
           </div>
 
           <div className="space-y-1.5">

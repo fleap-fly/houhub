@@ -209,6 +209,7 @@ pub async fn update_model_provider_core(
     api_url: Option<String>,
     api_key: Option<String>,
     agent_type: Option<String>,
+    agent_types: Option<Vec<String>>,
     model: Option<String>,
     models: Option<Vec<String>>,
     emitter: &EventEmitter,
@@ -216,6 +217,9 @@ pub async fn update_model_provider_core(
     validate_fields(name.as_deref(), api_url.as_deref(), api_key.as_deref())?;
     if let Some(ref at) = agent_type {
         validate_agent_type(at)?;
+    }
+    if let Some(ref items) = agent_types {
+        validate_agent_types(items)?;
     }
 
     // Fetch old provider to detect changes and to determine effective agent_type for model validation.
@@ -235,6 +239,25 @@ pub async fn update_model_provider_core(
             )));
         }
     }
+
+    let agent_types_patch = if let Some(items) = agent_types {
+        if !items.iter().any(|item| item == &old_provider.agent_type) {
+            return Err(AppCommandError::invalid_input(format!(
+                "agent_types must include the current primary agent_type ({})",
+                old_provider.agent_type
+            )));
+        }
+        let mut ordered = Vec::with_capacity(items.len());
+        ordered.push(old_provider.agent_type.clone());
+        for item in items {
+            if item != old_provider.agent_type && !ordered.contains(&item) {
+                ordered.push(item);
+            }
+        }
+        Some(ordered)
+    } else {
+        None
+    };
 
     let effective_agent_type = old_provider.agent_type.as_str();
     if let Some(ref raw) = model {
@@ -256,7 +279,7 @@ pub async fn update_model_provider_core(
             .map(|inner| model_list_from_default_model(effective_agent_type, inner.as_deref()))
     });
 
-    let model_row = model_provider_service::update(
+    let mut model_row = model_provider_service::update(
         &db.conn,
         id,
         name,
@@ -268,6 +291,12 @@ pub async fn update_model_provider_core(
     )
     .await
     .map_err(AppCommandError::from)?;
+
+    if let Some(items) = agent_types_patch {
+        model_row = model_provider_service::update_agent_types(&db.conn, id, items)
+            .await
+            .map_err(AppCommandError::from)?;
+    }
 
     // Cascade credential/model changes to all dependent agent settings and config files.
     let url_changed = api_url
@@ -328,12 +357,13 @@ pub async fn update_model_provider_and_refresh(
     api_url: Option<String>,
     api_key: Option<String>,
     agent_type: Option<String>,
+    agent_types: Option<Vec<String>>,
     model: Option<String>,
     models: Option<Vec<String>>,
     emitter: &EventEmitter,
 ) -> Result<UpdateModelProviderResult, AppCommandError> {
     let provider = update_model_provider_core(
-        db, id, name, api_url, api_key, agent_type, model, models, emitter,
+        db, id, name, api_url, api_key, agent_type, agent_types, model, models, emitter,
     )
     .await?;
 
@@ -439,6 +469,7 @@ pub async fn update_model_provider(
     api_url: Option<String>,
     api_key: Option<String>,
     agent_type: Option<String>,
+    agent_types: Option<Vec<String>>,
     model: Option<String>,
     models: Option<Vec<String>>,
     app: tauri::AppHandle,
@@ -459,6 +490,7 @@ pub async fn update_model_provider(
         api_url,
         api_key,
         agent_type,
+        agent_types,
         model,
         models,
         &emitter,

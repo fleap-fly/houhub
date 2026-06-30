@@ -1041,6 +1041,8 @@ mod tauri_app {
                 acp_commands::acp_clear_binary_cache,
                 acp_commands::acp_download_agent_binary,
                 acp_commands::acp_install_uv_tool,
+                acp_commands::acp_install_pi_binary,
+                acp_commands::acp_uninstall_pi_binary,
                 acp_commands::acp_detect_agent_local_version,
                 acp_commands::acp_prepare_npx_agent,
                 acp_commands::acp_uninstall_agent,

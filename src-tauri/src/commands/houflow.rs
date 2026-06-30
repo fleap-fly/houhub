@@ -22,7 +22,6 @@ use crate::models::model_provider::ModelProviderInfo;
 use crate::web::event_bridge::EventEmitter;
 
 const CONNECTOR_COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
-#[cfg(feature = "tauri-runtime")]
 const CONTROL_HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(feature = "tauri-runtime")]
 const OAUTH_LOOPBACK_CALLBACK_PATH: &str = "/houflow/oauth-callback";
@@ -38,7 +37,6 @@ pub struct HouflowAuthSecret {
     pub houflow_session_token: Option<String>,
 }
 
-#[cfg(feature = "tauri-runtime")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HouflowControlHttpRequest {
@@ -50,7 +48,6 @@ pub struct HouflowControlHttpRequest {
     pub body: Option<String>,
 }
 
-#[cfg(feature = "tauri-runtime")]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HouflowControlHttpResponse {
@@ -94,8 +91,7 @@ pub fn houflow_clear_auth_secret() -> Result<(), String> {
     crate::keyring_store::delete_houflow_auth_secret()
 }
 
-#[cfg(feature = "tauri-runtime")]
-#[tauri::command]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn houflow_control_http_call(
     request: HouflowControlHttpRequest,
 ) -> Result<HouflowControlHttpResponse, AppCommandError> {
@@ -171,7 +167,6 @@ pub async fn houflow_control_http_call(
     })
 }
 
-#[cfg(feature = "tauri-runtime")]
 fn validate_houflow_control_url(
     base_url: &reqwest::Url,
     url: &reqwest::Url,
@@ -201,7 +196,6 @@ fn validate_houflow_control_url(
     Ok(())
 }
 
-#[cfg(feature = "tauri-runtime")]
 fn is_allowed_houflow_control_header(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
@@ -216,7 +210,6 @@ fn is_allowed_houflow_control_header(name: &str) -> bool {
     )
 }
 
-#[cfg(feature = "tauri-runtime")]
 fn is_exposed_houflow_control_header(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
@@ -499,6 +492,7 @@ pub async fn houflow_sync_managed_gateway_core(
                 Some(provider_name.clone()),
                 Some(api_url.clone()),
                 Some(api_key.clone()),
+                None,
                 None,
                 Some(model.clone().unwrap_or_default()),
                 Some(models.clone()),

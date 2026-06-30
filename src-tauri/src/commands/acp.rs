@@ -27,6 +27,7 @@ use crate::web::event_bridge::EventEmitter;
 
 const ACP_AGENTS_UPDATED_EVENT: &str = "app://acp-agents-updated";
 const NPM_PREFIX_TIMEOUT: Duration = Duration::from_millis(1500);
+const PI_CODING_AGENT_PACKAGE: &str = "@earendil-works/pi-coding-agent";
 
 static NPM_GLOBAL_PREFIX_CACHE: tokio::sync::OnceCell<PathBuf> = tokio::sync::OnceCell::const_new();
 
@@ -318,6 +319,12 @@ pub(crate) async fn resolve_npx_command(cmd: &str) -> Option<PathBuf> {
     resolve_npx_command_from_current_npm_prefix(cmd).await
 }
 
+pub(crate) async fn npm_command_bin_dir(cmd: &str) -> Option<PathBuf> {
+    resolve_npx_command(cmd)
+        .await
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
 #[derive(Default)]
 struct NpxCommandResolver {
     per_cmd_cache: HashMap<String, Option<PathBuf>>,
@@ -432,6 +439,25 @@ fn resolve_npx_command_from_npm_prefix(cmd: &str, prefix: &Path) -> Option<PathB
     candidates
         .into_iter()
         .find(|path| is_npm_command_candidate(path))
+}
+
+fn common_npm_prefix_candidates() -> Vec<PathBuf> {
+    let mut prefixes = Vec::new();
+    if let Some(prefix) = crate::process::user_npm_prefix() {
+        prefixes.push(prefix);
+    }
+    if cfg!(windows) {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            prefixes.push(PathBuf::from(appdata).join("npm"));
+        }
+    } else {
+        if let Some(home) = dirs::home_dir() {
+            prefixes.push(home.join(".npm-global"));
+            prefixes.push(home.join(".local"));
+        }
+        prefixes.push(PathBuf::from("/usr/local"));
+    }
+    prefixes
 }
 
 #[cfg(windows)]
@@ -1099,7 +1125,17 @@ pub(crate) fn resolve_pi_command_path(command: &str) -> Option<PathBuf> {
             .then(|| fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf()));
     }
 
-    which::which(trimmed).ok()
+    if let Ok(path) = which::which(trimmed) {
+        return Some(path);
+    }
+
+    for prefix in common_npm_prefix_candidates() {
+        if let Some(path) = resolve_npx_command_from_npm_prefix(trimmed, &prefix) {
+            return Some(path);
+        }
+    }
+
+    None
 }
 
 /// Hermes config/data directory. Honors `HERMES_HOME`, defaults to `~/.hermes`.
@@ -6814,6 +6850,93 @@ pub async fn acp_uninstall_agent(
 ) -> Result<(), AcpError> {
     let emitter = EventEmitter::Tauri(app);
     acp_uninstall_agent_core(agent_type, task_id, &db, &emitter).await
+}
+
+pub(crate) async fn acp_install_pi_binary_core(
+    task_id: String,
+    emitter: &EventEmitter,
+) -> Result<(), AcpError> {
+    emit_agent_install_event(emitter, &task_id, AgentInstallEventKind::Started, "");
+
+    let result =
+        install_npm_global_package_streaming(PI_CODING_AGENT_PACKAGE, &task_id, emitter).await;
+
+    match &result {
+        Ok(()) => {
+            emit_agent_install_event(
+                emitter,
+                &task_id,
+                AgentInstallEventKind::Completed,
+                "Pi CLI installed successfully",
+            );
+            emit_acp_agents_updated(emitter, "pi_binary_installed", Some(AgentType::Pi));
+        }
+        Err(e) => {
+            emit_agent_install_event(
+                emitter,
+                &task_id,
+                AgentInstallEventKind::Failed,
+                e.to_string(),
+            );
+        }
+    }
+    result
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_install_pi_binary(
+    task_id: String,
+    app: tauri::AppHandle,
+) -> Result<(), AcpError> {
+    let emitter = EventEmitter::Tauri(app);
+    acp_install_pi_binary_core(task_id, &emitter).await
+}
+
+pub(crate) async fn acp_uninstall_pi_binary_core(
+    task_id: String,
+    emitter: &EventEmitter,
+) -> Result<(), AcpError> {
+    emit_agent_install_event(emitter, &task_id, AgentInstallEventKind::Started, "");
+    emit_agent_install_event(
+        emitter,
+        &task_id,
+        AgentInstallEventKind::Log,
+        format!("$ npm uninstall -g {PI_CODING_AGENT_PACKAGE}"),
+    );
+
+    let result = uninstall_npm_global_package(PI_CODING_AGENT_PACKAGE).await;
+
+    match &result {
+        Ok(()) => {
+            emit_agent_install_event(
+                emitter,
+                &task_id,
+                AgentInstallEventKind::Completed,
+                "Pi CLI uninstalled successfully",
+            );
+            emit_acp_agents_updated(emitter, "pi_binary_uninstalled", Some(AgentType::Pi));
+        }
+        Err(e) => {
+            emit_agent_install_event(
+                emitter,
+                &task_id,
+                AgentInstallEventKind::Failed,
+                e.to_string(),
+            );
+        }
+    }
+    result
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_uninstall_pi_binary(
+    task_id: String,
+    app: tauri::AppHandle,
+) -> Result<(), AcpError> {
+    let emitter = EventEmitter::Tauri(app);
+    acp_uninstall_pi_binary_core(task_id, &emitter).await
 }
 
 pub(crate) async fn acp_reorder_agents_core(

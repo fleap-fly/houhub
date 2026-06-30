@@ -47,6 +47,7 @@ import {
 } from "@/lib/api"
 import { invalidateAgentSkillsCache } from "@/hooks/use-agent-skills"
 import { pickLocalized } from "@/lib/expert-presentation"
+import { piUsesCustomAgentDir } from "@/lib/pi-config"
 import type {
   AcpAgentInfo,
   ExpertLinkState,
@@ -286,7 +287,7 @@ export function OfficeToolsSettings() {
         acpListAgents(),
       ])
       setSkills(skillList)
-      setAgents(agentList)
+      setAgents(agentList.filter((agent) => !piUsesCustomAgentDir(agent)))
       // Remount the matrix so it re-fetches the authoritative status snapshot
       // (newly synced skills become enableable).
       setReloadKey((k) => k + 1)

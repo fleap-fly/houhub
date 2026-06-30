@@ -339,6 +339,18 @@ export async function acpInstallUvTool(taskId: string): Promise<void> {
   )
 }
 
+export async function acpInstallPiBinary(taskId: string): Promise<void> {
+  return getTransport().call(
+    "acp_install_pi_binary",
+    { taskId },
+    { timeoutMs: 600_000 }
+  )
+}
+
+export async function acpUninstallPiBinary(taskId: string): Promise<void> {
+  return getTransport().call("acp_uninstall_pi_binary", { taskId })
+}
+
 export async function acpDetectAgentLocalVersion(
   agentType: AgentType
 ): Promise<string | null> {
@@ -3024,6 +3036,7 @@ export async function updateModelProvider(params: {
   apiUrl?: string | null
   apiKey?: string | null
   agentType?: string | null
+  agentTypes?: string[] | null
   model?: string | null
   models?: string[] | null
 }): Promise<UpdateModelProviderResult> {
@@ -3033,6 +3046,7 @@ export async function updateModelProvider(params: {
     apiUrl: params.apiUrl ?? null,
     apiKey: params.apiKey ?? null,
     agentType: params.agentType ?? null,
+    agentTypes: params.agentTypes ?? null,
     model: params.model ?? null,
     models: params.models ?? null,
   })

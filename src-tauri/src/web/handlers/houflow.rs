@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::{extract::Extension, Json};
+use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
@@ -9,13 +10,20 @@ use crate::commands::houflow::{
     houflow_connector_down_core, houflow_connector_heartbeat_core, houflow_connector_login_core,
     houflow_connector_logs_core, houflow_connector_status_core,
     houflow_connector_sync_local_agents_core, houflow_connector_up_core,
-    houflow_sync_managed_gateway_core, HouflowConnectorAutostartInput,
-    HouflowConnectorCommandsInput, HouflowConnectorLogsInput, HouflowConnectorLoginInput,
-    HouflowConnectorStatusResult, HouflowConnectorSyncLocalAgentsInput,
-    HouflowConnectorSyncLocalAgentsResult, HouflowManagedGatewaySyncInput,
+    houflow_control_http_call, houflow_sync_managed_gateway_core,
+    HouflowConnectorAutostartInput, HouflowConnectorCommandsInput, HouflowConnectorLogsInput,
+    HouflowConnectorLoginInput, HouflowConnectorStatusResult,
+    HouflowConnectorSyncLocalAgentsInput, HouflowConnectorSyncLocalAgentsResult,
+    HouflowControlHttpRequest, HouflowControlHttpResponse, HouflowManagedGatewaySyncInput,
     HouflowManagedGatewaySyncResult,
 };
 use serde_json::Value as JsonValue;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HouflowControlHttpCallInput {
+    request: HouflowControlHttpRequest,
+}
 
 pub async fn houflow_sync_managed_gateway(
     Extension(state): Extension<Arc<AppState>>,
@@ -30,6 +38,12 @@ pub async fn houflow_sync_managed_gateway(
     )
     .await?;
     Ok(Json(result))
+}
+
+pub async fn houflow_control_http_call_web(
+    Json(input): Json<HouflowControlHttpCallInput>,
+) -> Result<Json<HouflowControlHttpResponse>, AppCommandError> {
+    Ok(Json(houflow_control_http_call(input.request).await?))
 }
 
 pub async fn houflow_connector_status() -> Result<Json<HouflowConnectorStatusResult>, AppCommandError> {

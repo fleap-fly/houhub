@@ -32,6 +32,7 @@ pub struct UpdateModelProviderParams {
     pub api_url: Option<String>,
     pub api_key: Option<String>,
     pub agent_type: Option<String>,
+    pub agent_types: Option<Vec<String>>,
     pub model: Option<String>,
     pub models: Option<Vec<String>>,
 }
@@ -88,6 +89,7 @@ pub async fn update_model_provider(
         params.api_url,
         params.api_key,
         params.agent_type,
+        params.agent_types,
         params.model,
         params.models,
         &state.emitter,

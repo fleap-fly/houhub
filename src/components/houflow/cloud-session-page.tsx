@@ -10,7 +10,6 @@ import {
   ExternalLink,
   FileText,
   Loader2,
-  MessageCircle,
   RefreshCw,
   ServerCog,
 } from "lucide-react"
@@ -54,7 +53,10 @@ import {
 } from "@/houflow/cloud-sessions"
 import { normalizeCloudOutputTarget } from "@/houflow/cloud-session-output-links"
 import type { HouflowAgentTarget } from "@/houflow/types"
-import { houflowCloudEventsToTurns } from "@/houflow/cloud-session-turns"
+import {
+  houflowCloudEventsToTurns,
+  isNonConversationalText,
+} from "@/houflow/cloud-session-turns"
 import {
   createMessageTurnAdapter,
   type MessageTurnAdapter,
@@ -281,6 +283,44 @@ export function CloudSessionPage() {
     [cloud, houflow.secret, houflow.session, selectedTarget, t]
   )
 
+  const handleSendHostedCommand = useCallback(
+    async (draft: PromptDraft) => {
+      if (!hostedCommand || houflow.session.status !== "signed_in") return
+      const target = cloudTargets.find(
+        (item) => item.id === hostedCommand.connected_agent_id
+      )
+      if (!target) {
+        toast.error(t("startFailed"), {
+          description: "Cloud target is no longer available.",
+        })
+        return
+      }
+      setStarting(true)
+      try {
+        const result = await startHouflowCloudTargetSession(
+          houflow.session,
+          houflow.secret,
+          target,
+          cloudDispatchDraftFromPromptDraft(draft)
+        )
+        if (result.kind === "hosted_connected") {
+          cloud.selectHostedCommand(result.dispatch.raw)
+        }
+        await cloud.refreshHostedCommand(
+          target.id,
+          result.kind === "hosted_connected"
+            ? result.dispatch.commandId
+            : hostedCommand.id
+        )
+      } catch (err) {
+        toast.error(t("startFailed"), { description: toErrorMessage(err) })
+      } finally {
+        setStarting(false)
+      }
+    },
+    [cloud, cloudTargets, hostedCommand, houflow.secret, houflow.session, t]
+  )
+
   if (houflow.session.status !== "signed_in") {
     return (
       <div className="flex h-full items-center justify-center px-6 text-sm text-muted-foreground">
@@ -303,7 +343,7 @@ export function CloudSessionPage() {
             hostedCommand.id
           )
         }
-        onSend={(draft) => void handleStartSession(draft)}
+        onSend={(draft) => void handleSendHostedCommand(draft)}
       />
     )
   }
@@ -467,9 +507,33 @@ function HostedCommandPage({
   onSend: (draft: PromptDraft) => void
 }) {
   const t = useTranslations("HouflowCloud")
-  const events = Array.isArray(command.events) ? command.events : []
+  const sharedT = useTranslations("Folder.chat.shared")
+  const [turnAdapter] = useState<MessageTurnAdapter>(() =>
+    createMessageTurnAdapter()
+  )
+  const hostedEvents = useMemo(
+    () =>
+      (Array.isArray(command.events) ? command.events : [])
+        .map(hostedCommandEventToCloudEvent)
+        .filter(isPresent),
+    [command.events]
+  )
+  const adapterText = useMemo(
+    () => ({
+      attachedResources: sharedT("attachedResources"),
+      toolCallFailed: sharedT("toolCallFailed"),
+    }),
+    [sharedT]
+  )
+  const messages = useMemo(
+    () =>
+      turnAdapter.adapt(houflowCloudEventsToTurns(hostedEvents), adapterText),
+    [adapterText, hostedEvents, turnAdapter]
+  )
   const outputText =
-    command.output && typeof command.output.text === "string"
+    command.output &&
+    typeof command.output.text === "string" &&
+    !isNonConversationalText(command.output.text)
       ? command.output.text
       : null
 
@@ -510,31 +574,40 @@ function HostedCommandPage({
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-3">
-          {events.length === 0 && !outputText ? (
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
+          {messages.length === 0 && !outputText ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               {t("emptyEvents")}
             </div>
           ) : null}
-          {events.map((event) => (
-            <div
-              key={event.id}
-              className="rounded-md border border-border bg-card px-3 py-2"
-            >
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <MessageCircle className="h-3.5 w-3.5" />
-                <span>{event.title || event.type}</span>
-                <span className="ml-auto">
-                  {formatTimestamp(event.created_at)}
-                </span>
-              </div>
-              {event.message ? (
-                <div className="mt-1 whitespace-pre-wrap text-sm">
-                  {event.message}
-                </div>
-              ) : null}
-            </div>
-          ))}
+          {messages.map((message) => {
+            const messageRole =
+              message.role === "user" ||
+              message.role === "assistant" ||
+              message.role === "system"
+                ? message.role
+                : "assistant"
+            return (
+              <Message
+                key={message.id}
+                from={messageRole}
+                className={cn(
+                  messageRole === "assistant" && "max-w-full",
+                  messageRole === "system" && "max-w-full opacity-80"
+                )}
+              >
+                <MessageContent>
+                  <ContentPartsRenderer
+                    parts={message.content}
+                    role={message.role}
+                  />
+                  <div className="text-[0.6875rem] text-muted-foreground">
+                    {formatTimestamp(message.completed_at ?? message.timestamp)}
+                  </div>
+                </MessageContent>
+              </Message>
+            )
+          })}
           {outputText ? (
             <Message from="assistant" className="max-w-full">
               <MessageContent>
@@ -563,6 +636,40 @@ function HostedCommandPage({
       </footer>
     </section>
   )
+}
+
+function hostedCommandEventToCloudEvent(
+  event: NonNullable<HouflowCloudHostedCommand["events"]>[number]
+): HouflowCloudSessionEvent | null {
+  if (!event || typeof event !== "object") return null
+  const record = event as Record<string, unknown>
+  const id = stringValue(record.id) || stringValue(record.created_at)
+  const type = stringValue(record.type) || "hosted.event"
+  if (!id || !type) return null
+  return {
+    id,
+    type,
+    role: nullableString(record.role),
+    text:
+      nullableString(record.message) ||
+      nullableString(record.text) ||
+      nullableString(record.title),
+    createdAt: nullableString(record.created_at),
+    raw: record,
+  }
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : ""
+}
+
+function nullableString(value: unknown): string | null {
+  const text = stringValue(value)
+  return text || null
+}
+
+function isPresent<T>(value: T | null | undefined): value is T {
+  return value !== null && value !== undefined
 }
 
 function CloudSessionStarter({

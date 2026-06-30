@@ -74,6 +74,7 @@ import {
   acpClearBinaryCache,
   acpDetectAgentLocalVersion,
   acpDownloadAgentBinary,
+  acpInstallPiBinary,
   acpInstallUvTool,
   acpGetAgentStatus,
   acpListAgents,
@@ -81,6 +82,7 @@ import {
   acpPrepareNpxAgent,
   acpReorderAgents,
   acpUninstallAgent,
+  acpUninstallPiBinary,
   acpUpdateAgentConfig,
   acpUpdateAgentEnv,
   acpUpdateHermesConfig,
@@ -181,6 +183,8 @@ type RunningActionKind =
   | "redownload_binary"
   | "custom_install"
   | "install_uv"
+  | "install_pi"
+  | "uninstall_pi"
 
 type UiFixAction =
   | FixAction
@@ -195,6 +199,8 @@ type UiFixAction =
         | "uninstall_npx"
         | "install_opencode_plugins"
         | "custom_install"
+        | "install_pi"
+        | "uninstall_pi"
       payload: string
       // When true, the fix renders as a greyed-out button (e.g. the uvx
       // agent-install action while the uv runtime isn't ready yet).
@@ -2926,10 +2932,25 @@ export function getAgentChecks(
     agent.distribution_type !== "uvx" || !uvCheck || uvCheck.status === "pass"
   const versionCheck = buildVersionCheck(agent, uvReady)
   const remoteChecks: UiCheckItem[] = (current?.result?.checks ?? []).map(
-    (check) => ({
-      ...check,
-      fixes: [...check.fixes],
-    })
+    (check) => {
+      const fixes: UiFixAction[] = [...check.fixes]
+      if (
+        agent.agent_type === "pi" &&
+        check.status !== "pass" &&
+        check.message.toLowerCase().includes("pi is not installed") &&
+        !fixes.some((fix) => fix.kind === "install_pi")
+      ) {
+        fixes.push({
+          label: acpText("actions.install", "Install"),
+          kind: "install_pi",
+          payload: agent.agent_type,
+        })
+      }
+      return {
+        ...check,
+        fixes,
+      }
+    }
   )
   return versionCheck ? [versionCheck, ...remoteChecks] : remoteChecks
 }
@@ -4636,6 +4657,56 @@ export function AcpAgentSettings() {
     [runPreflight, t, installStream.start]
   )
 
+  const runPiBinaryAction = useCallback(
+    async (agent: AcpAgentInfo, mode: "install" | "uninstall") => {
+      if (busyActionRef.current.has(agent.agent_type)) return
+      busyActionRef.current.add(agent.agent_type)
+      setBusyBinaryAction((prev) => ({ ...prev, [agent.agent_type]: true }))
+      setRunningActionKind((prev) => ({
+        ...prev,
+        [agent.agent_type]: mode === "install" ? "install_pi" : "uninstall_pi",
+      }))
+      const actionLabel =
+        mode === "install" ? t("actions.install") : t("actions.uninstall")
+      const taskId = randomUUID()
+      setStreamAgentType(agent.agent_type)
+      await installStream.start(taskId)
+      try {
+        if (mode === "install") {
+          await acpInstallPiBinary(taskId)
+        } else {
+          await acpUninstallPiBinary(taskId)
+        }
+        await runPreflight(agent.agent_type)
+        toast.success(
+          t("toasts.agentActionCompleted", {
+            name: "Pi CLI",
+            action: actionLabel,
+          })
+        )
+      } catch (err) {
+        const message = toErrorMessage(err)
+        toast.error(
+          t("toasts.agentActionFailed", {
+            name: "Pi CLI",
+            action: actionLabel,
+          }),
+          { description: message }
+        )
+        throw err
+      } finally {
+        busyActionRef.current.delete(agent.agent_type)
+        setBusyBinaryAction((prev) => ({ ...prev, [agent.agent_type]: false }))
+        setRunningActionKind((prev) => ({
+          ...prev,
+          [agent.agent_type]: undefined,
+        }))
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runPreflight, t, installStream.start]
+  )
+
   const handleFixAction = async (agent: AcpAgentInfo, action: UiFixAction) => {
     if (
       busyBinaryAction[agent.agent_type] ||
@@ -4678,6 +4749,14 @@ export function AcpAgentSettings() {
     }
     if (action.kind === "install_uv") {
       await runUvInstall(agent)
+      return
+    }
+    if (action.kind === "install_pi") {
+      await runPiBinaryAction(agent, "install")
+      return
+    }
+    if (action.kind === "uninstall_pi") {
+      await runPiBinaryAction(agent, "uninstall")
       return
     }
     if (action.kind === "custom_install") {
@@ -4807,6 +4886,8 @@ export function AcpAgentSettings() {
                           "install_opencode_plugins",
                           "custom_install",
                           "install_uv",
+                          "install_pi",
+                          "uninstall_pi",
                         ].includes(fix.kind))
                     }
                     onClick={() => {
@@ -4819,14 +4900,16 @@ export function AcpAgentSettings() {
                       <Loader2 className="h-3 w-3 animate-spin" />
                     ) : fix.kind === "download_binary" ||
                       fix.kind === "install_npx" ||
-                      fix.kind === "install_uv" ? (
+                      fix.kind === "install_uv" ||
+                      fix.kind === "install_pi" ? (
                       <Download className="h-3 w-3" />
                     ) : fix.kind === "upgrade_binary" ||
                       fix.kind === "upgrade_npx" ||
                       fix.kind === "redownload_binary" ? (
                       <Wrench className="h-3 w-3" />
                     ) : fix.kind === "uninstall_binary" ||
-                      fix.kind === "uninstall_npx" ? (
+                      fix.kind === "uninstall_npx" ||
+                      fix.kind === "uninstall_pi" ? (
                       <Trash2 className="h-3 w-3" />
                     ) : fix.kind === "install_opencode_plugins" ? (
                       <Download className="h-3 w-3" />
@@ -9437,43 +9520,109 @@ supports_websockets = false`}
                       )}
 
                     {selectedAgent.agent_type === "pi" && (
-                      <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
-                          {t("selectModelProvider")}
-                        </label>
-                        {selectedModelProviders.length > 0 ? (
-                          <Select
-                            value={
-                              selectedCompatibleModelProviderId != null
-                                ? String(selectedCompatibleModelProviderId)
-                                : MODEL_PROVIDER_MANUAL_VALUE
-                            }
-                            onValueChange={handleModelProviderSelect}
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue
-                                placeholder={t("selectModelProvider")}
-                              />
-                            </SelectTrigger>
-                            <SelectContent align="start">
-                              <SelectItem value={MODEL_PROVIDER_MANUAL_VALUE}>
-                                {t("authModeCustomEndpoint")}
-                              </SelectItem>
-                              {selectedModelProviders.map((provider) => (
-                                <SelectItem
-                                  key={provider.id}
-                                  value={String(provider.id)}
-                                >
-                                  {provider.name}
+                      <div className="space-y-3">
+                        <div className="space-y-1.5">
+                          <label className="text-[11px] text-muted-foreground">
+                            {t("selectModelProvider")}
+                          </label>
+                          {selectedModelProviders.length > 0 ? (
+                            <Select
+                              value={
+                                selectedCompatibleModelProviderId != null
+                                  ? String(selectedCompatibleModelProviderId)
+                                  : MODEL_PROVIDER_MANUAL_VALUE
+                              }
+                              onValueChange={handleModelProviderSelect}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue
+                                  placeholder={t("selectModelProvider")}
+                                />
+                              </SelectTrigger>
+                              <SelectContent align="start">
+                                <SelectItem value={MODEL_PROVIDER_MANUAL_VALUE}>
+                                  {t("authModeCustomEndpoint")}
                                 </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <p className="text-[11px] text-muted-foreground">
-                            {t("noModelProviderAvailable")}
-                          </p>
-                        )}
+                                {selectedModelProviders.map((provider) => (
+                                  <SelectItem
+                                    key={provider.id}
+                                    value={String(provider.id)}
+                                  >
+                                    {provider.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <p className="text-[11px] text-muted-foreground">
+                              {t("noModelProviderAvailable")}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium">Pi CLI</div>
+                            <div className="text-[11px] text-muted-foreground">
+                              pi-acp requires the pi command at runtime.
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="outline"
+                              disabled={Boolean(
+                                busyBinaryAction[selectedAgent.agent_type]
+                              )}
+                              onClick={() => {
+                                runPiBinaryAction(selectedAgent, "install").catch(
+                                  (err) => {
+                                    console.error(
+                                      "[Settings] Pi CLI install failed:",
+                                      err
+                                    )
+                                  }
+                                )
+                              }}
+                            >
+                              {runningActionKind[selectedAgent.agent_type] ===
+                              "install_pi" ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Download className="h-3 w-3" />
+                              )}
+                              {t("actions.install")}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="outline"
+                              disabled={Boolean(
+                                busyBinaryAction[selectedAgent.agent_type]
+                              )}
+                              onClick={() => {
+                                runPiBinaryAction(
+                                  selectedAgent,
+                                  "uninstall"
+                                ).catch((err) => {
+                                  console.error(
+                                    "[Settings] Pi CLI uninstall failed:",
+                                    err
+                                  )
+                                })
+                              }}
+                            >
+                              {runningActionKind[selectedAgent.agent_type] ===
+                              "uninstall_pi" ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3 w-3" />
+                              )}
+                              {t("actions.uninstall")}
+                            </Button>
+                          </div>
+                        </div>
                       </div>
                     )}
 

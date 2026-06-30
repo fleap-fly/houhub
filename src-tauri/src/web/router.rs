@@ -647,6 +647,14 @@ pub fn build_router(
             post(handlers::acp::acp_install_uv_tool),
         )
         .route(
+            "/acp_install_pi_binary",
+            post(handlers::acp::acp_install_pi_binary),
+        )
+        .route(
+            "/acp_uninstall_pi_binary",
+            post(handlers::acp::acp_uninstall_pi_binary),
+        )
+        .route(
             "/acp_detect_agent_local_version",
             post(handlers::acp::acp_detect_agent_local_version),
         )
@@ -959,6 +967,10 @@ pub fn build_router(
         .route(
             "/houflow_sync_managed_gateway",
             post(handlers::houflow::houflow_sync_managed_gateway),
+        )
+        .route(
+            "/houflow_control_http_call",
+            post(handlers::houflow::houflow_control_http_call_web),
         )
         .route(
             "/houflow_connector_status",

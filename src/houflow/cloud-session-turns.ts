@@ -8,9 +8,11 @@ export function houflowCloudEventsToTurns(
 }
 
 function eventToTurn(event: HouflowCloudSessionEvent): MessageTurn | null {
+  if (isNonConversationalEvent(event)) return null
   const role = roleFromEvent(event)
   const blocks = blocksFromEvent(event)
   if (blocks.length === 0) return null
+  if (blocks.every(isNonConversationalTextBlock)) return null
   return {
     id: event.id,
     role,
@@ -44,6 +46,51 @@ function blocksFromEvent(event: HouflowCloudSessionEvent): ContentBlock[] {
   if (block) return [block]
 
   return event.text ? [{ type: "text", text: event.text }] : []
+}
+
+function isNonConversationalEvent(event: HouflowCloudSessionEvent): boolean {
+  const type = event.type.toLowerCase()
+  if (
+    type.includes("lifecycle") ||
+    type.includes("heartbeat") ||
+    type.includes("dispatch") ||
+    type.includes("status")
+  ) {
+    return true
+  }
+  return Boolean(event.text && isNonConversationalText(event.text))
+}
+
+function isNonConversationalTextBlock(block: ContentBlock): boolean {
+  return block.type === "text" && isNonConversationalText(block.text)
+}
+
+export function isNonConversationalText(text: string): boolean {
+  const normalized = text.trim().replace(/\s+/g, " ")
+  const lower = normalized.toLowerCase()
+  if (!lower) return true
+  if (
+    lower === "session is idle." ||
+    lower === "session is idle" ||
+    lower === "session run queued." ||
+    lower === "session run queued" ||
+    lower === "hosted a2a dispatch started" ||
+    lower === "runtime plane native message dispatch started"
+  ) {
+    return true
+  }
+
+  const keyValueTokens = normalized.match(/\b[a-zA-Z][\w.-]*=[^\s]+/g) ?? []
+  if (
+    keyValueTokens.length >= 4 &&
+    /\b(normalized_spec|published_outputs|internal_files|internal_manifest|polish_status|ocr_status)=/.test(
+      normalized
+    )
+  ) {
+    return true
+  }
+
+  return false
 }
 
 function contentItemToBlock(item: unknown): ContentBlock | null {

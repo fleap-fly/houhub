@@ -194,6 +194,41 @@ describe("getAgentChecks uv gating", () => {
   })
 })
 
+describe("getAgentChecks Pi runtime gating", () => {
+  it("adds an Install Pi CLI fix when pi-acp is installed but the pi command is missing", () => {
+    const checks = getAgentChecks(
+      makeAgent({
+        agent_type: "pi" as AgentType,
+        registry_id: "pi",
+        name: "Pi",
+        distribution_type: "npx",
+        installed_version: "0.1.13",
+      }),
+      {
+        result: {
+          agent_type: "pi" as AgentType,
+          agent_name: "Pi",
+          passed: false,
+          checks: [
+            {
+              check_id: "sdk",
+              label: "SDK",
+              status: "fail",
+              message: "Pi is not installed: the pi command was not found.",
+              fixes: [],
+            },
+          ],
+        },
+      }
+    )
+
+    const sdkCheck = checks.find((check) => check.check_id === "sdk")
+    expect(sdkCheck?.fixes.some((fix) => fix.kind === "install_pi")).toBe(
+      true
+    )
+  })
+})
+
 describe("patchImportantConfigText — Claude custom model option", () => {
   const CLAUDE = "claude_code" as AgentType
 

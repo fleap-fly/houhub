@@ -73,6 +73,42 @@ fn merge_agent_env(
     merged.into_iter().collect()
 }
 
+fn prepend_path_value(current: Option<&str>, dirs: impl IntoIterator<Item = PathBuf>) -> String {
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let mut parts: Vec<String> = Vec::new();
+    for dir in dirs {
+        let value = dir.to_string_lossy().to_string();
+        if !value.is_empty() && !parts.iter().any(|item| item == &value) {
+            parts.push(value);
+        }
+    }
+    if let Some(value) = current.filter(|value| !value.is_empty()) {
+        parts.push(value.to_string());
+    }
+    parts.join(sep)
+}
+
+async fn patch_pi_launch_env(env: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut map: BTreeMap<String, String> = env.into_iter().collect();
+    let mut path_dirs = Vec::new();
+    if let Some(bin_dir) = crate::commands::acp::npm_command_bin_dir("pi-acp").await {
+        path_dirs.push(bin_dir);
+    }
+    if let Some(bin_dir) = crate::commands::acp::npm_command_bin_dir("pi").await {
+        path_dirs.push(bin_dir);
+    }
+    if let Some(bin_dir) = crate::commands::acp::resolve_pi_command_path("pi")
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+    {
+        path_dirs.push(bin_dir);
+    }
+    if !path_dirs.is_empty() {
+        let next_path = prepend_path_value(map.get("PATH").map(String::as_str), path_dirs);
+        map.insert("PATH".to_string(), next_path);
+    }
+    map.into_iter().collect()
+}
+
 fn sanitize_agent_env(agent_type: AgentType, env: Vec<(String, String)>) -> Vec<(String, String)> {
     if agent_type != AgentType::Codex {
         return env;
@@ -127,7 +163,14 @@ fn pi_launch_preflight(runtime_env: &BTreeMap<String, String>) -> Option<String>
         ));
     }
 
-    None
+    if crate::commands::acp::resolve_pi_command_path("pi").is_some() {
+        return None;
+    }
+
+    Some(
+        "Pi is not installed: the pi command was not found. Install Pi in Agent Settings."
+            .to_string(),
+    )
 }
 
 /// Commands sent from Tauri command handlers to the ACP connection loop.
@@ -260,7 +303,10 @@ async fn build_agent(
                 let cwd = resolve_working_dir(working_dir);
                 crate::commands::acp::seed_pi_workspace_trust(&cwd, runtime_env);
             }
-            let merged_env = sanitize_agent_env(agent_type, merge_agent_env(env, runtime_env));
+            let mut merged_env = sanitize_agent_env(agent_type, merge_agent_env(env, runtime_env));
+            if agent_type == AgentType::Pi {
+                merged_env = patch_pi_launch_env(merged_env).await;
+            }
             let mut parts: Vec<String> = Vec::new();
             for (k, v) in &merged_env {
                 parts.push(format!("{k}={v}"));
@@ -3814,8 +3860,18 @@ async fn run_conversation_loop<'a>(
     Ok(None)
 }
 
-/// Serialize a Vec<ToolCallContent> into a human-readable text string.
-fn serialize_tool_call_content(content: &[ToolCallContent]) -> Option<String> {
+/// Serialize tool-call `content` blocks into a single human-readable string.
+///
+/// `include_diffs = false` skips `Diff` blocks. Used when the edit has been
+/// hoisted into a synthesized canonical `raw_input` (see
+/// `synthesize_edit_input_from_diffs`): without this the same edit ships twice
+/// (doubling the event) and the hunkless full-file `--- /+++` blob stays in the
+/// tool `output`, where `extractEditLineChangeStats` mis-counts it as full-file
+/// +/- totals in the card header even though the body shows the compact diff.
+fn serialize_tool_call_content(
+    content: &[ToolCallContent],
+    include_diffs: bool,
+) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     for item in content {
         match item {
@@ -3824,7 +3880,7 @@ fn serialize_tool_call_content(content: &[ToolCallContent]) -> Option<String> {
                     parts.push(text.text.clone());
                 }
             }
-            ToolCallContent::Diff(diff) => {
+            ToolCallContent::Diff(diff) if include_diffs => {
                 let path = diff.path.display();
                 let mut diff_text = format!("--- {path}\n+++ {path}\n");
                 if let Some(old) = &diff.old_text {
@@ -3847,6 +3903,64 @@ fn serialize_tool_call_content(content: &[ToolCallContent]) -> Option<String> {
         None
     } else {
         Some(parts.join("\n"))
+    }
+}
+
+/// Synthesize a canonical edit `raw_input` from `ToolCallContent::Diff` block(s).
+///
+/// codex-acp reports file edits as ACP `Diff` content blocks and leaves
+/// `raw_input` empty — the edit lives only in `content`, and the ACP `title` is
+/// the diff header `--- <path>`. With no `raw_input` the frontend classifier
+/// (`inferLiveToolName`) falls back to `normalizeToolName(title)`, which returns
+/// unrecognized strings verbatim, so the tool call renders as a generic tool
+/// literally *named* `--- <path>` (wrench icon, raw header as the title) instead
+/// of an edit card. The historical path is unaffected because the JSONL parser
+/// stores codex's native `*** Begin Patch` text.
+///
+/// Reconstructing from the already-serialized `--- /+++` string would be lossy
+/// (content lines beginning with `-`/`+`/`---`/`+++`, the old/new boundary,
+/// CRLF). Here the structured `Diff` is still intact, so map it losslessly:
+/// - exactly one Diff  -> `{"file_path","old_string","new_string"}`
+/// - multiple Diffs    -> `{"changes":{"<path>":{"old_text","new_text"},…}}`
+///
+/// Both shapes classify as `"edit"` (`inferFromInput`) and render through the
+/// existing `EditToolInput` / `EditChangesToolInput` → `generateUnifiedDiff`
+/// pipeline (a real hunk diff, minimal even for full-file old/new). Returns
+/// `None` when `content` carries no `Diff`, so callers only fall back to it when
+/// the agent supplied no `raw_input` of its own.
+fn synthesize_edit_input_from_diffs(content: &[ToolCallContent]) -> Option<String> {
+    let diffs: Vec<(String, String, String)> = content
+        .iter()
+        .filter_map(|item| match item {
+            ToolCallContent::Diff(diff) => Some((
+                diff.path.display().to_string(),
+                diff.old_text.clone().unwrap_or_default(),
+                diff.new_text.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+
+    match diffs.as_slice() {
+        [] => None,
+        [(path, old, new)] => Some(
+            serde_json::json!({
+                "file_path": path,
+                "old_string": old,
+                "new_string": new,
+            })
+            .to_string(),
+        ),
+        many => {
+            let mut changes = serde_json::Map::new();
+            for (path, old, new) in many {
+                changes.insert(
+                    path.clone(),
+                    serde_json::json!({ "old_text": old, "new_text": new }),
+                );
+            }
+            Some(serde_json::json!({ "changes": changes }).to_string())
+        }
     }
 }
 
@@ -4410,11 +4524,27 @@ async fn emit_conversation_update(
             // CodeBuddy double-wraps a deferred MCP result as a `{type,text}`
             // content part; peel it (in both the content and raw_output channels)
             // so the dedicated delegation cards parse it instead of showing raw JSON.
-            let content = serialize_tool_call_content(&tc.content)
-                .map(|c| unwrap_codebuddy_deferred_output(agent_type, &c).unwrap_or(c));
+            // codex-acp reports file edits as a `Diff` content block with no
+            // `raw_input`; synthesize a canonical edit so the call classifies/
+            // renders as an edit instead of a tool named after the raw diff
+            // header (see synthesize_edit_input_from_diffs). When we do, drop the
+            // `Diff` from `content` — it's the same edit re-serialized hunklessly,
+            // which would otherwise double the event and skew the header +/- stats.
+            // Blank raw_input is treated as absent (matches the frontend guard).
+            let own_raw_input =
+                json_value_to_text(&tc.raw_input).filter(|t| !t.trim().is_empty());
+            let synthesized_edit = if own_raw_input.is_none() {
+                synthesize_edit_input_from_diffs(&tc.content)
+            } else {
+                None
+            };
+            let content =
+                serialize_tool_call_content(&tc.content, synthesized_edit.is_none())
+                    .map(|c| unwrap_codebuddy_deferred_output(agent_type, &c).unwrap_or(c));
             let images = extract_tool_call_images(&tc.content);
-            let raw_input =
-                json_value_to_text(&tc.raw_input).map(|text| resolve_live_tool_input(&text, cwd));
+            let raw_input = synthesized_edit
+                .or(own_raw_input)
+                .map(|text| resolve_live_tool_input(&text, cwd));
             // Initial tool_call notification — the frontend reducer
             // treats `raw_output` as a full replacement, so we bypass
             // the diff path and seed the cache with the current snapshot.
@@ -4486,18 +4616,33 @@ async fn emit_conversation_update(
             let tool_call_id = tcu.tool_call_id.to_string();
             // Peel CodeBuddy's `{type,text}` deferred-MCP wrapper here too — the
             // result often arrives on an update (see raw_output below).
+            // Same Diff→canonical-edit hoist as the initial ToolCall path: the
+            // edit may first arrive on an update. Drop the redundant Diff from
+            // `content` when hoisted. The reducer preserves a prior raw_input on
+            // status-only updates (`action.raw_input ?? block.info.raw_input`).
+            let own_raw_input =
+                json_value_to_text(&tcu.fields.raw_input).filter(|t| !t.trim().is_empty());
+            let synthesized_edit = if own_raw_input.is_none() {
+                tcu.fields
+                    .content
+                    .as_deref()
+                    .and_then(synthesize_edit_input_from_diffs)
+            } else {
+                None
+            };
             let content = tcu
                 .fields
                 .content
                 .as_deref()
-                .and_then(serialize_tool_call_content)
+                .and_then(|c| serialize_tool_call_content(c, synthesized_edit.is_none()))
                 .map(|c| unwrap_codebuddy_deferred_output(agent_type, &c).unwrap_or(c));
             let images = tcu
                 .fields
                 .content
                 .as_deref()
                 .and_then(extract_tool_call_images);
-            let raw_input = json_value_to_text(&tcu.fields.raw_input)
+            let raw_input = synthesized_edit
+                .or(own_raw_input)
                 .map(|text| resolve_live_tool_input(&text, cwd));
             // Diff the incoming raw_output against the last snapshot we
             // emitted for this tool call. This turns cumulative snapshots
@@ -4641,6 +4786,70 @@ async fn emit_conversation_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sacp::schema::Diff;
+
+    fn diff_content(path: &str, old: Option<&str>, new: &str) -> ToolCallContent {
+        let mut d = Diff::new(path, new);
+        if let Some(o) = old {
+            d = d.old_text(o.to_string());
+        }
+        ToolCallContent::Diff(d)
+    }
+
+    #[test]
+    fn synthesize_edit_single_diff_makes_canonical_edit() {
+        let content = vec![diff_content("/a.rs", Some("old line\n"), "new line\n")];
+        let json = synthesize_edit_input_from_diffs(&content).expect("one diff -> canonical edit");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["file_path"], "/a.rs");
+        assert_eq!(v["old_string"], "old line\n");
+        assert_eq!(v["new_string"], "new line\n");
+        // Classifies as "edit" on the frontend via old_string/new_string.
+        assert!(v.get("changes").is_none());
+    }
+
+    #[test]
+    fn synthesize_edit_new_file_has_empty_old_string() {
+        // codex-acp sends old_text=None for new files.
+        let content = vec![diff_content("/new.rs", None, "fn main() {}\n")];
+        let json = synthesize_edit_input_from_diffs(&content).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["old_string"], "");
+        assert_eq!(v["new_string"], "fn main() {}\n");
+    }
+
+    #[test]
+    fn synthesize_edit_multi_diff_makes_changes_map() {
+        let content = vec![
+            diff_content("/a.rs", Some("a-old"), "a-new"),
+            diff_content("/b.rs", None, "b-new"),
+        ];
+        let json = synthesize_edit_input_from_diffs(&content).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // Object map keyed by path — the shape extractEditChangesPayload reads.
+        assert_eq!(v["changes"]["/a.rs"]["old_text"], "a-old");
+        assert_eq!(v["changes"]["/a.rs"]["new_text"], "a-new");
+        assert_eq!(v["changes"]["/b.rs"]["old_text"], "");
+        assert_eq!(v["changes"]["/b.rs"]["new_text"], "b-new");
+    }
+
+    #[test]
+    fn synthesize_edit_returns_none_without_diff() {
+        // No Diff block -> None, so callers keep the agent's own raw_input.
+        assert!(synthesize_edit_input_from_diffs(&[]).is_none());
+    }
+
+    #[test]
+    fn serialize_excludes_diffs_when_hoisted_to_raw_input() {
+        let content = vec![diff_content("/a.rs", Some("old"), "new")];
+        // Default keeps the diff (unchanged behavior for non-hoisted content).
+        assert!(serialize_tool_call_content(&content, true)
+            .unwrap()
+            .contains("--- /a.rs"));
+        // When the edit is hoisted into raw_input, the diff is dropped so it
+        // isn't shipped twice and the header stats don't read the full-file blob.
+        assert!(serialize_tool_call_content(&content, false).is_none());
+    }
 
     #[test]
     fn claude_raw_sdk_meta_enabled_only_for_claude() {
@@ -4871,11 +5080,11 @@ mod tests {
     }
 
     #[test]
-    fn pi_default_launch_preflight_does_not_require_pi_command() {
+    fn pi_default_launch_preflight_requires_pi_command() {
         let env = BTreeMap::new();
         assert!(
-            pi_launch_preflight(&env).is_none(),
-            "installed pi-acp is enough for the default Pi launch path"
+            pi_launch_preflight(&env).is_some(),
+            "pi-acp shells out to the pi CLI, so the default launch path must check it"
         );
     }
 

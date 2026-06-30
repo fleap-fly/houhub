@@ -1,11 +1,7 @@
 "use client"
 
 import { browserFetch } from "@/lib/browser-fetch"
-import {
-  getActiveRemoteConnectionId,
-  getShellTransport,
-  isDesktop,
-} from "@/lib/transport"
+import { getTransport } from "@/lib/transport"
 import type { HouflowDesktopSession } from "./types"
 
 interface NativeHouflowControlResponse {
@@ -18,28 +14,23 @@ interface NativeHouflowControlResponse {
 export function createHouflowControlFetch(
   session: HouflowDesktopSession
 ): typeof fetch {
-  if (
-    typeof window === "undefined" ||
-    !isDesktop() ||
-    getActiveRemoteConnectionId() !== null
-  ) {
+  if (typeof window === "undefined") {
     return browserFetch
   }
 
   return async (input, init) => {
-    const response =
-      await getShellTransport().call<NativeHouflowControlResponse>(
-        "houflow_control_http_call",
-        {
-          request: {
-            baseUrl: session.consoleBaseUrl,
-            url: requestUrl(input),
-            method: init?.method ?? "GET",
-            headers: requestHeaders(init?.headers),
-            body: await requestBody(init?.body),
-          },
-        }
-      )
+    const response = await getTransport().call<NativeHouflowControlResponse>(
+      "houflow_control_http_call",
+      {
+        request: {
+          baseUrl: session.consoleBaseUrl,
+          url: requestUrl(input),
+          method: init?.method ?? "GET",
+          headers: requestHeaders(init?.headers),
+          body: await requestBody(init?.body),
+        },
+      }
+    )
     return new Response(new Uint8Array(response.body), {
       status: response.status,
       statusText: response.statusText,

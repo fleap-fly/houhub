@@ -1,8 +1,9 @@
 # Stage 1: Build Next.js static export
 FROM node:22-alpine AS frontend
-RUN corepack enable
+RUN corepack enable && corepack prepare pnpm@11.6.0 --activate
 WORKDIR /app
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY vendor/ ./vendor/
 RUN pnpm install --frozen-lockfile
 COPY src/ ./src/
 COPY public/ ./public/

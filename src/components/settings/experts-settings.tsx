@@ -24,6 +24,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import { getExpertIcon, pickLocalized } from "@/lib/expert-presentation"
 import { revealItemInDir } from "@/lib/platform"
 import { getActiveRemoteConnectionId, isDesktop } from "@/lib/transport"
+import { piUsesCustomAgentDir } from "@/lib/pi-config"
 import type { AcpAgentInfo, ExpertLinkState, ExpertListItem } from "@/lib/types"
 
 const CATEGORY_SORT: Record<string, number> = {
@@ -55,7 +56,7 @@ export function ExpertsSettings() {
         acpListAgents(),
       ])
       setExperts(expertList)
-      setAgents(agentList)
+      setAgents(agentList.filter((agent) => !piUsesCustomAgentDir(agent)))
       setReloadKey((k) => k + 1)
     } catch (err) {
       setLoadError(toErrorMessage(err))

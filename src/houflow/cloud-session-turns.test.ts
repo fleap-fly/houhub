@@ -72,6 +72,43 @@ describe("houflowCloudEventsToTurns", () => {
       },
     ])
   })
+
+  it("filters lifecycle logs and artifact manifests from chat turns", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_idle",
+        type: "session.status",
+        message: "Session is idle.",
+      }),
+      event({
+        id: "evt_dispatch",
+        type: "agent.log",
+        message: "Hosted A2A dispatch started",
+      }),
+      event({
+        id: "evt_manifest",
+        type: "agent.message",
+        content: [
+          {
+            type: "text",
+            text: "normalized_spec=tmp/normalized_exam_spec.json exam_html=written art_prompts=written polish_prompts=written proof_front=written published_outputs=exam.html,exam_paper_front.png internal_files=11 internal_manifest=tmp/render_outputs/render_manifest.json",
+          },
+        ],
+      }),
+      event({
+        id: "evt_real",
+        type: "agent.message",
+        content: [{ type: "text", text: "试卷已经生成，可以在右侧查看文件。" }],
+      }),
+    ])
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]).toMatchObject({
+      id: "evt_real",
+      role: "assistant",
+      blocks: [{ type: "text", text: "试卷已经生成，可以在右侧查看文件。" }],
+    })
+  })
 })
 
 function event(raw: Record<string, unknown>): HouflowCloudSessionEvent {

@@ -6,6 +6,8 @@ import {
   expertsListAllInstallStatuses,
   officecliSkillListAllInstallStatuses,
 } from "@/lib/api"
+import { useAcpAgents } from "@/hooks/use-acp-agents"
+import { piUsesCustomAgentDir } from "@/lib/pi-config"
 import type { AgentType, ExpertInstallStatus } from "@/lib/types"
 
 // Module-level cache shared across QuickActions mounts. The snapshots are
@@ -70,7 +72,9 @@ async function loadSnapshot(): Promise<ExpertInstallStatus[] | null> {
 export function useEnabledSkillIds(agentType: AgentType | null): {
   enabledIds: Set<string>
   ready: boolean
+  supported: boolean
 } {
+  const { agents, fresh: agentsFresh } = useAcpAgents()
   const [snapshot, setSnapshot] = useState<ExpertInstallStatus[] | null>(
     () => cached
   )
@@ -113,9 +117,16 @@ export function useEnabledSkillIds(agentType: AgentType | null): {
     return () => window.removeEventListener("focus", onFocus)
   }, [])
 
+  const piSkillsUnmanaged = useMemo(() => {
+    if (agentType !== "pi") return false
+    if (!agentsFresh) return true
+    const agent = agents.find((a) => a.agent_type === agentType)
+    return !agent || piUsesCustomAgentDir(agent)
+  }, [agentType, agentsFresh, agents])
+
   const enabledIds = useMemo(() => {
     const set = new Set<string>()
-    if (!snapshot || !agentType) return set
+    if (!snapshot || !agentType || piSkillsUnmanaged) return set
     for (const status of snapshot) {
       if (
         status.agentType === agentType &&
@@ -125,7 +136,11 @@ export function useEnabledSkillIds(agentType: AgentType | null): {
       }
     }
     return set
-  }, [snapshot, agentType])
+  }, [snapshot, agentType, piSkillsUnmanaged])
 
-  return { enabledIds, ready: snapshot !== null }
+  return {
+    enabledIds,
+    ready: piSkillsUnmanaged || snapshot !== null,
+    supported: !piSkillsUnmanaged,
+  }
 }
