@@ -799,6 +799,7 @@
       "customInstallSubmit": "설치"
     },
     "errors": {
+      "windowsFileLocked": "{name}의 파일이 실행 중인 세션에서 사용 중이어서 Windows에서 교체할 수 없습니다. 모든 {name} 세션을 닫은 후 다시 시도하세요.",
       "nativeJsonMustBeObject": "네이티브 JSON 구성은 객체여야 합니다",
       "nativeJsonInvalid": "네이티브 JSON 구성 형식 오류: {message}",
       "openCodeAuthMustBeObject": "OpenCode auth.json은 JSON 객체여야 합니다",
@@ -2335,6 +2336,18 @@
           "planLabel": "계획",
           "submitted": "계획 제출됨",
           "switched": "모드 전환됨"
+        },
+        "backgroundTask": {
+          "title": "백그라운드 작업",
+          "titleWithId": "백그라운드 작업 · {id}",
+          "running": "실행 중",
+          "completed": "완료됨",
+          "failed": "실패",
+          "stopped": "중지됨",
+          "exitCode": "종료 코드 {code}",
+          "polledTimes": "{count}회 폴링",
+          "runningInBackground": "백그라운드",
+          "launchNote": "백그라운드에서 실행 중 · {id}"
         }
       },
       "messageNav": {
@@ -3335,7 +3348,14 @@
     "targetHostedResident": "Hosted resident",
     "start": "Start",
     "startFailed": "Failed to start cloud session",
-    "hostedQueued": "Hosted agent request queued"
+    "hostedQueued": "Hosted agent request queued",
+    "starterTitle": "What should cloud agents handle today?",
+    "starterSubtitle": "Choose a cloud or hosted resident agent, then start a task. Session progress, tool calls, and files will stay in sync here.",
+    "starterTip": "Cloud sessions load events and files on demand, and the current workspace selection is cleared after sign-out.",
+    "approvalTitle": "Cloud tool approval required",
+    "approvalApprove": "Approve",
+    "approvalDeny": "Deny",
+    "approvalFailed": "Failed to respond to cloud approval"
   },
   "Automations": {
     "title": "자동화",

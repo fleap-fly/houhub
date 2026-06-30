@@ -19,7 +19,9 @@ import type {
   HouflowCloudHostedCommand,
   HouflowCloudSession,
 } from "@/houflow/cloud-sessions"
+import { cloudActivityTone } from "@/houflow/cloud-session-display"
 import type { HouflowAgentTarget } from "@/houflow/types"
+import { formatConversationTitle } from "@/lib/conversation-title"
 import { cn } from "@/lib/utils"
 
 const INITIAL_TARGET_COUNT = 6
@@ -380,8 +382,9 @@ function TargetGroup({
                 targetExpanded &&
                 hostedCommands.length > 0 ? (
                   <div className="ml-6 space-y-0.5">
-                    {hostedCommands.slice(0, INITIAL_SESSION_COUNT).map(
-                      (command) => (
+                    {hostedCommands
+                      .slice(0, INITIAL_SESSION_COUNT)
+                      .map((command) => (
                         <button
                           key={command.id}
                           type="button"
@@ -391,18 +394,15 @@ function TargetGroup({
                           <span
                             className={cn(
                               "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50",
-                              isActiveStatus(command.status) &&
-                                "bg-emerald-500",
-                              isFailedStatus(command.status) &&
-                                "bg-destructive"
+                              activityDotClass(command.status)
                             )}
                           />
                           <span className="min-w-0 flex-1 truncate text-[0.75rem] text-muted-foreground">
-                            {hostedCommandTitle(command)} · {command.status}
+                            {hostedCommandTitle(command) || t("untitled")} ·{" "}
+                            {command.status}
                           </span>
                         </button>
-                      )
-                    )}
+                      ))}
                   </div>
                 ) : null}
                 {targetExpanded && visibleSessions.length > 0 ? (
@@ -417,12 +417,13 @@ function TargetGroup({
                         <span
                           className={cn(
                             "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50",
-                            isActiveStatus(session.status) && "bg-emerald-500",
-                            isFailedStatus(session.status) && "bg-destructive"
+                            activityDotClass(session.status)
                           )}
                         />
                         <span className="min-w-0 flex-1 truncate text-[0.75rem] text-muted-foreground">
-                          {session.title || t("untitled")} · {session.status}
+                          {formatConversationTitle(session.title) ||
+                            t("untitled")}{" "}
+                          · {session.status}
                         </span>
                       </button>
                     ))}
@@ -463,23 +464,20 @@ function hostedCommandsByAgent(commands: HouflowCloudHostedCommand[]) {
   return map
 }
 
-function hostedCommandTitle(command: HouflowCloudHostedCommand): string {
-  const input = command.input
-  const message = input.message
-  if (typeof message === "string" && message.trim()) {
-    return message.trim()
-  }
-  return command.action
+function hostedCommandTitle(command: HouflowCloudHostedCommand): string | null {
+  if (command.action !== "workspace_message") return command.action
+  const message = stringValue(command.input.message)
+  return formatConversationTitle(message) || command.action
 }
 
-function isActiveStatus(status: string): boolean {
-  return (
-    status === "queued" || status === "running" || status === "requires_action"
-  )
+function activityDotClass(status: string): string {
+  const tone = cloudActivityTone(status)
+  if (tone === "active") return "bg-emerald-500"
+  if (tone === "success") return "bg-green-600"
+  if (tone === "failed") return "bg-destructive"
+  return "bg-muted-foreground/50"
 }
 
-function isFailedStatus(status: string): boolean {
-  return (
-    status === "failed" || status === "cancelled" || status === "interrupted"
-  )
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : ""
 }

@@ -799,6 +799,7 @@
       "customInstallSubmit": "Instalar"
     },
     "errors": {
+      "windowsFileLocked": "Os arquivos de {name} estão em uso por uma sessão ativa, então o Windows não consegue substituí-los. Feche todas as sessões de {name} e tente novamente.",
       "nativeJsonMustBeObject": "A configuração JSON nativa deve ser um objeto",
       "nativeJsonInvalid": "Erro de formato na configuração JSON nativa: {message}",
       "openCodeAuthMustBeObject": "OpenCode auth.json deve ser um objeto JSON",
@@ -2335,6 +2336,18 @@
           "planLabel": "Plano",
           "submitted": "Plano enviado",
           "switched": "Modo alterado"
+        },
+        "backgroundTask": {
+          "title": "Tarefa em segundo plano",
+          "titleWithId": "Tarefa em segundo plano · {id}",
+          "running": "Em execução",
+          "completed": "Concluída",
+          "failed": "Falhou",
+          "stopped": "Interrompida",
+          "exitCode": "saída {code}",
+          "polledTimes": "Consultada {count} vezes",
+          "runningInBackground": "Segundo plano",
+          "launchNote": "Em execução em segundo plano · {id}"
         }
       },
       "messageNav": {
@@ -3335,7 +3348,14 @@
     "targetHostedResident": "Hosted resident",
     "start": "Start",
     "startFailed": "Failed to start cloud session",
-    "hostedQueued": "Hosted agent request queued"
+    "hostedQueued": "Hosted agent request queued",
+    "starterTitle": "What should cloud agents handle today?",
+    "starterSubtitle": "Choose a cloud or hosted resident agent, then start a task. Session progress, tool calls, and files will stay in sync here.",
+    "starterTip": "Cloud sessions load events and files on demand, and the current workspace selection is cleared after sign-out.",
+    "approvalTitle": "Cloud tool approval required",
+    "approvalApprove": "Approve",
+    "approvalDeny": "Deny",
+    "approvalFailed": "Failed to respond to cloud approval"
   },
   "Automations": {
     "title": "Automações",

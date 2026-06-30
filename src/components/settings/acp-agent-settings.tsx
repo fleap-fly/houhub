@@ -106,6 +106,7 @@ import type {
 } from "@/lib/types"
 import { HERMES_PROVIDERS, parseClaudeProviderModel } from "@/lib/types"
 import { toErrorMessage } from "@/lib/app-error"
+import { getInstallErrorHintKey } from "@/lib/agent-install-error"
 import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
 import { OpencodePluginsModal } from "./opencode-plugins-modal"
 import { useHouflowDesktop, type HouflowAgentTarget } from "@/houflow"
@@ -3912,6 +3913,13 @@ export function AcpAgentSettings() {
   const [openCodeDeleteProviderId, setOpenCodeDeleteProviderId] = useState<
     string | null
   >(null)
+  const installErrorDescription = useCallback(
+    (message: string, name: string) => {
+      const hintKey = getInstallErrorHintKey(message)
+      return hintKey ? t(hintKey, { name }) : message
+    },
+    [t]
+  )
   const [dragging, setDragging] = useState<AgentType | null>(null)
   const [reordering, setReordering] = useState(false)
   const pendingOrderRef = useRef<AgentType[] | null>(null)
@@ -4418,7 +4426,7 @@ export function AcpAgentSettings() {
             action: actionLabel,
           }),
           {
-            description: message,
+            description: installErrorDescription(message, agent.name),
           }
         )
         if (clearCache) {
@@ -4452,7 +4460,7 @@ export function AcpAgentSettings() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [runPreflight, t, installStream.start]
+    [installErrorDescription, runPreflight, t, installStream.start]
   )
 
   const runNpxAction = useCallback(
@@ -4531,7 +4539,7 @@ export function AcpAgentSettings() {
             action: actionLabel,
           }),
           {
-            description: message,
+            description: installErrorDescription(message, agent.name),
           }
         )
         if (cleanFirst) {
@@ -4564,7 +4572,7 @@ export function AcpAgentSettings() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [runPreflight, t, installStream.start]
+    [installErrorDescription, runPreflight, t, installStream.start]
   )
 
   const runUninstallAction = useCallback(
@@ -4598,7 +4606,7 @@ export function AcpAgentSettings() {
       } catch (err) {
         const message = toErrorMessage(err)
         toast.error(t("toasts.uninstallFailed", { name: agent.name }), {
-          description: message,
+          description: installErrorDescription(message, agent.name),
         })
         throw err
       } finally {
@@ -4611,7 +4619,7 @@ export function AcpAgentSettings() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [runPreflight, t, installStream.start]
+    [installErrorDescription, runPreflight, t, installStream.start]
   )
 
   // Install ONLY the uv runtime (uvx) — separate from preparing a uvx agent's
@@ -4641,7 +4649,7 @@ export function AcpAgentSettings() {
         const message = toErrorMessage(err)
         toast.error(
           t("toasts.agentActionFailed", { name: "uv", action: actionLabel }),
-          { description: message }
+          { description: installErrorDescription(message, "uv") }
         )
         throw err
       } finally {
@@ -4654,7 +4662,7 @@ export function AcpAgentSettings() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [runPreflight, t, installStream.start]
+    [installErrorDescription, runPreflight, t, installStream.start]
   )
 
   const runPiBinaryAction = useCallback(
@@ -4691,7 +4699,7 @@ export function AcpAgentSettings() {
             name: "Pi CLI",
             action: actionLabel,
           }),
-          { description: message }
+          { description: installErrorDescription(message, "Pi CLI") }
         )
         throw err
       } finally {
@@ -4704,7 +4712,7 @@ export function AcpAgentSettings() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [runPreflight, t, installStream.start]
+    [installErrorDescription, runPreflight, t, installStream.start]
   )
 
   const handleFixAction = async (agent: AcpAgentInfo, action: UiFixAction) => {
@@ -9576,14 +9584,15 @@ supports_websockets = false`}
                                 busyBinaryAction[selectedAgent.agent_type]
                               )}
                               onClick={() => {
-                                runPiBinaryAction(selectedAgent, "install").catch(
-                                  (err) => {
-                                    console.error(
-                                      "[Settings] Pi CLI install failed:",
-                                      err
-                                    )
-                                  }
-                                )
+                                runPiBinaryAction(
+                                  selectedAgent,
+                                  "install"
+                                ).catch((err) => {
+                                  console.error(
+                                    "[Settings] Pi CLI install failed:",
+                                    err
+                                  )
+                                })
                               }}
                             >
                               {runningActionKind[selectedAgent.agent_type] ===

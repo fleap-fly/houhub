@@ -61,6 +61,25 @@ export interface HouflowCloudSessionOutput {
   relativePath: string | null
 }
 
+export type HouflowCloudApprovalStatus =
+  | "pending"
+  | "approved"
+  | "denied"
+  | "executed"
+  | "failed"
+
+export interface HouflowCloudApproval {
+  id: string
+  sessionId: string
+  toolUseId: string
+  toolName: string
+  toolInput: Record<string, unknown>
+  status: HouflowCloudApprovalStatus
+  resultEventId: string | null
+  createdAt: string | null
+  decidedAt: string | null
+}
+
 export type HouflowCloudHostedCommand = ConnectedAgentConnectorCommand
 
 export interface HouflowCloudDispatchDraft {
@@ -106,6 +125,18 @@ interface SessionOutputDto {
   updated_at?: unknown
 }
 
+interface ApprovalDto {
+  id?: unknown
+  session_id?: unknown
+  tool_use_id?: unknown
+  tool_name?: unknown
+  tool_input?: unknown
+  status?: unknown
+  result_event_id?: unknown
+  created_at?: unknown
+  decided_at?: unknown
+}
+
 export async function listHouflowCloudSessions(
   session: HouflowDesktopSession,
   secret: HouflowAuthSecret | null,
@@ -131,6 +162,40 @@ export async function getHouflowCloudSession(
   return sessionFromDto(
     await client.json<SessionDto>(
       `/v1/sessions/${encodeURIComponent(sessionId)}`
+    )
+  )
+}
+
+export async function listHouflowCloudSessionApprovals(
+  session: HouflowDesktopSession,
+  secret: HouflowAuthSecret | null,
+  sessionId: string
+): Promise<HouflowCloudApproval[]> {
+  assertHouflowSignedIn(session)
+  const client = new HouflowControlClient(session, secret)
+  const page = await client.json<PageCursor<ApprovalDto>>(
+    `/v1/sessions/${encodeURIComponent(sessionId)}/approvals`
+  )
+  return Array.isArray(page.data)
+    ? page.data.map(approvalFromDto).filter(isPresent)
+    : []
+}
+
+export async function decideHouflowCloudSessionApproval(
+  session: HouflowDesktopSession,
+  secret: HouflowAuthSecret | null,
+  sessionId: string,
+  approvalId: string,
+  decision: "approve" | "deny"
+): Promise<HouflowCloudApproval | null> {
+  assertHouflowSignedIn(session)
+  const client = new HouflowControlClient(session, secret)
+  return approvalFromDto(
+    await client.json<ApprovalDto>(
+      `/v1/sessions/${encodeURIComponent(
+        sessionId
+      )}/approvals/${encodeURIComponent(approvalId)}/${decision}`,
+      { method: "POST", body: {} }
     )
   )
 }
@@ -391,6 +456,26 @@ function outputFromDto(
   }
 }
 
+function approvalFromDto(value: ApprovalDto): HouflowCloudApproval | null {
+  const id = stringValue(value.id)
+  const sessionId = stringValue(value.session_id)
+  const toolUseId = stringValue(value.tool_use_id)
+  const toolName = stringValue(value.tool_name)
+  const status = approvalStatus(value.status)
+  if (!id || !sessionId || !toolUseId || !toolName || !status) return null
+  return {
+    id,
+    sessionId,
+    toolUseId,
+    toolName,
+    toolInput: isRecord(value.tool_input) ? value.tool_input : {},
+    status,
+    resultEventId: nullableString(value.result_event_id),
+    createdAt: nullableString(value.created_at),
+    decidedAt: nullableString(value.decided_at),
+  }
+}
+
 function eventText(value: SessionEventDto): string | null {
   const direct = nullableString(value.text) ?? nullableString(value.message)
   if (direct) return direct
@@ -408,6 +493,19 @@ function eventText(value: SessionEventDto): string | null {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
+}
+
+function approvalStatus(value: unknown): HouflowCloudApprovalStatus | null {
+  if (
+    value === "pending" ||
+    value === "approved" ||
+    value === "denied" ||
+    value === "executed" ||
+    value === "failed"
+  ) {
+    return value
+  }
+  return null
 }
 
 function numberValue(value: unknown): number {

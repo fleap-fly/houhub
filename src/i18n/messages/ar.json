@@ -799,6 +799,7 @@
       "customInstallSubmit": "تثبيت"
     },
     "errors": {
+      "windowsFileLocked": "ملفات {name} قيد الاستخدام بواسطة جلسة قيد التشغيل، لذا لا يمكن لـ Windows استبدالها. أغلق جميع جلسات {name} ثم حاول مرة أخرى.",
       "nativeJsonMustBeObject": "يجب أن يكون إعداد JSON الأصلي كائنًا",
       "nativeJsonInvalid": "خطأ في تنسيق إعداد JSON الأصلي: {message}",
       "openCodeAuthMustBeObject": "يجب أن يكون OpenCode auth.json كائن JSON",
@@ -2335,6 +2336,18 @@
           "planLabel": "الخطة",
           "submitted": "تم إرسال الخطة",
           "switched": "تم تبديل الوضع"
+        },
+        "backgroundTask": {
+          "title": "مهمة في الخلفية",
+          "titleWithId": "مهمة في الخلفية · {id}",
+          "running": "قيد التشغيل",
+          "completed": "اكتملت",
+          "failed": "فشلت",
+          "stopped": "متوقفة",
+          "exitCode": "رمز الخروج {code}",
+          "polledTimes": "تم الاستعلام {count} مرة",
+          "runningInBackground": "في الخلفية",
+          "launchNote": "قيد التشغيل في الخلفية · {id}"
         }
       },
       "messageNav": {
@@ -3335,7 +3348,14 @@
     "targetHostedResident": "Hosted resident",
     "start": "Start",
     "startFailed": "Failed to start cloud session",
-    "hostedQueued": "Hosted agent request queued"
+    "hostedQueued": "Hosted agent request queued",
+    "starterTitle": "What should cloud agents handle today?",
+    "starterSubtitle": "Choose a cloud or hosted resident agent, then start a task. Session progress, tool calls, and files will stay in sync here.",
+    "starterTip": "Cloud sessions load events and files on demand, and the current workspace selection is cleared after sign-out.",
+    "approvalTitle": "Cloud tool approval required",
+    "approvalApprove": "Approve",
+    "approvalDeny": "Deny",
+    "approvalFailed": "Failed to respond to cloud approval"
   },
   "Automations": {
     "title": "الأتمتة",

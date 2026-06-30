@@ -43,25 +43,27 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import {
+  decideHouflowCloudSessionApproval,
   isCloudSessionActive,
+  listHouflowCloudSessionApprovals,
   listHouflowCloudSessionEvents,
   sendHouflowCloudSessionMessage,
   startHouflowCloudTargetSession,
+  type HouflowCloudApproval,
   type HouflowCloudDispatchDraft,
   type HouflowCloudHostedCommand,
   type HouflowCloudSessionEvent,
 } from "@/houflow/cloud-sessions"
 import { normalizeCloudOutputTarget } from "@/houflow/cloud-session-output-links"
 import type { HouflowAgentTarget } from "@/houflow/types"
-import {
-  houflowCloudEventsToTurns,
-  isNonConversationalText,
-} from "@/houflow/cloud-session-turns"
+import { houflowCloudEventsToTurns } from "@/houflow/cloud-session-turns"
+import { cloudActivityTone } from "@/houflow/cloud-session-display"
 import {
   createMessageTurnAdapter,
   type MessageTurnAdapter,
 } from "@/lib/adapters/ai-elements-adapter"
 import { toErrorMessage } from "@/lib/app-error"
+import { formatConversationTitle } from "@/lib/conversation-title"
 import { openUrl } from "@/lib/platform"
 import type { PromptCapabilitiesInfo, PromptDraft } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -115,11 +117,17 @@ export function CloudSessionPage() {
   const cloud = useHouflowCloudWorkspace()
   const auxPanel = useAuxPanelContext()
   const [events, setEvents] = useState<HouflowCloudSessionEvent[]>([])
+  const [approvals, setApprovals] = useState<HouflowCloudApproval[]>([])
   const [eventsLoading, setEventsLoading] = useState(false)
   const [eventsError, setEventsError] = useState<string | null>(null)
+  const [approvalsError, setApprovalsError] = useState<string | null>(null)
+  const [approvalSubmittingId, setApprovalSubmittingId] = useState<
+    string | null
+  >(null)
   const [sending, setSending] = useState(false)
   const [starting, setStarting] = useState(false)
   const eventsRequestRef = useRef(0)
+  const approvalsRequestRef = useRef(0)
   const [turnAdapter] = useState<MessageTurnAdapter>(() =>
     createMessageTurnAdapter()
   )
@@ -164,6 +172,13 @@ export function CloudSessionPage() {
     )}/sessions/${encodeURIComponent(selected.id)}`
   }, [houflow.session, selected])
   const cloudLinkSafety = useCloudSessionLinkSafety(selectedId)
+  const selectedTitle = selected
+    ? formatConversationTitle(selected.title) || t("untitled")
+    : t("untitled")
+  const pendingApprovals = useMemo(
+    () => approvals.filter((approval) => approval.status === "pending"),
+    [approvals]
+  )
 
   const refreshEvents = useCallback(async () => {
     const requestId = ++eventsRequestRef.current
@@ -191,10 +206,35 @@ export function CloudSessionPage() {
     }
   }, [houflow.secret, houflow.session, selectedId])
 
+  const refreshApprovals = useCallback(async () => {
+    const requestId = ++approvalsRequestRef.current
+    if (houflow.session.status !== "signed_in" || !selectedId) {
+      setApprovals([])
+      setApprovalsError(null)
+      return
+    }
+    setApprovalsError(null)
+    try {
+      const next = await listHouflowCloudSessionApprovals(
+        houflow.session,
+        houflow.secret,
+        selectedId
+      )
+      if (approvalsRequestRef.current === requestId) setApprovals(next)
+    } catch (err) {
+      if (approvalsRequestRef.current === requestId) {
+        setApprovalsError(toErrorMessage(err))
+      }
+    }
+  }, [houflow.secret, houflow.session, selectedId])
+
   useEffect(() => {
     ++eventsRequestRef.current
+    ++approvalsRequestRef.current
     setEvents([])
+    setApprovals([])
     setEventsError(null)
+    setApprovalsError(null)
     setEventsLoading(false)
   }, [houflow.session.status, houflow.session.workspaceId, selectedId])
 
@@ -215,13 +255,18 @@ export function CloudSessionPage() {
   }, [refreshEvents])
 
   useEffect(() => {
+    void refreshApprovals()
+  }, [refreshApprovals])
+
+  useEffect(() => {
     if (!isCloudSessionActive(selected)) return
     const timer = window.setInterval(() => {
       void cloud.refreshSessions()
       void refreshEvents()
+      void refreshApprovals()
     }, 3000)
     return () => window.clearInterval(timer)
-  }, [cloud, refreshEvents, selected])
+  }, [cloud, refreshApprovals, refreshEvents, selected])
 
   useEffect(() => {
     if (!hostedCommand || !isHostedCommandActive(hostedCommand.status)) return
@@ -245,14 +290,60 @@ export function CloudSessionPage() {
           selected,
           cloudDispatchDraftFromPromptDraft(draft)
         )
-        await Promise.all([cloud.refreshSessions(), refreshEvents()])
+        await Promise.all([
+          cloud.refreshSessions(),
+          refreshEvents(),
+          refreshApprovals(),
+        ])
       } catch (err) {
         toast.error(t("sendFailed"), { description: toErrorMessage(err) })
       } finally {
         setSending(false)
       }
     },
-    [cloud, houflow.secret, houflow.session, refreshEvents, selected, t]
+    [
+      cloud,
+      houflow.secret,
+      houflow.session,
+      refreshApprovals,
+      refreshEvents,
+      selected,
+      t,
+    ]
+  )
+
+  const handleApprovalDecision = useCallback(
+    async (approvalId: string, decision: "approve" | "deny") => {
+      if (houflow.session.status !== "signed_in" || !selectedId) return
+      setApprovalSubmittingId(approvalId)
+      try {
+        await decideHouflowCloudSessionApproval(
+          houflow.session,
+          houflow.secret,
+          selectedId,
+          approvalId,
+          decision
+        )
+        await Promise.all([
+          refreshApprovals(),
+          refreshEvents(),
+          cloud.refreshSessions(),
+        ])
+      } catch (err) {
+        toast.error(t("approvalFailed"), { description: toErrorMessage(err) })
+      } finally {
+        setApprovalSubmittingId(null)
+      }
+    },
+    [
+      cloud,
+      houflow.secret,
+      houflow.session,
+      refreshApprovals,
+      refreshEvents,
+      selectedId,
+      t,
+    ]
   )
 
   const handleStartSession = useCallback(
@@ -370,9 +461,7 @@ export function CloudSessionPage() {
           <Cloud className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-semibold">
-            {selected.title || t("untitled")}
-          </h2>
+          <h2 className="truncate text-sm font-semibold">{selectedTitle}</h2>
           <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
             <span className="truncate">
               {selected.agentName || selected.agentId || t("unknownAgent")}
@@ -381,8 +470,7 @@ export function CloudSessionPage() {
               variant="outline"
               className={cn(
                 "h-4 rounded-md px-1.5 text-[0.625rem]",
-                isCloudSessionActive(selected) &&
-                  "border-emerald-500/30 text-emerald-600"
+                statusBadgeClass(selected.status)
               )}
             >
               {selected.status}
@@ -432,12 +520,25 @@ export function CloudSessionPage() {
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             {eventsError}
           </div>
-        ) : messages.length === 0 ? (
+        ) : approvalsError ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {approvalsError}
+          </div>
+        ) : messages.length === 0 && pendingApprovals.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             {eventsLoading ? t("loadingEvents") : t("emptyEvents")}
           </div>
         ) : (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
+            {pendingApprovals.length > 0 ? (
+              <CloudApprovalsPanel
+                approvals={pendingApprovals}
+                submittingId={approvalSubmittingId}
+                onDecision={(approvalId, decision) =>
+                  void handleApprovalDecision(approvalId, decision)
+                }
+              />
+            ) : null}
             {messages.map((message) => {
               const messageRole =
                 message.role === "user" ||
@@ -531,11 +632,11 @@ function HostedCommandPage({
     [adapterText, hostedEvents, turnAdapter]
   )
   const outputText =
-    command.output &&
-    typeof command.output.text === "string" &&
-    !isNonConversationalText(command.output.text)
+    command.output && typeof command.output.text === "string"
       ? command.output.text
       : null
+  const title = hostedCommandTitle(command) || t("untitled")
+  const toneClass = statusBadgeClass(command.status)
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
@@ -544,18 +645,14 @@ function HostedCommandPage({
           <ServerCog className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-semibold">
-            {target?.name || command.local_agent_ref || t("unknownAgent")}
-          </h2>
+          <h2 className="truncate text-sm font-semibold">{title}</h2>
           <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-            <span className="truncate">{t("targetHostedResident")}</span>
+            <span className="truncate">
+              {target?.name || command.local_agent_ref || t("unknownAgent")}
+            </span>
             <Badge
               variant="outline"
-              className={cn(
-                "h-4 rounded-md px-1.5 text-[0.625rem]",
-                isHostedCommandActive(command.status) &&
-                  "border-emerald-500/30 text-emerald-600"
-              )}
+              className={cn("h-4 rounded-md px-1.5 text-[0.625rem]", toneClass)}
             >
               {command.status}
             </Badge>
@@ -638,6 +735,68 @@ function HostedCommandPage({
   )
 }
 
+function CloudApprovalsPanel({
+  approvals,
+  submittingId,
+  onDecision,
+}: {
+  approvals: HouflowCloudApproval[]
+  submittingId: string | null
+  onDecision: (approvalId: string, decision: "approve" | "deny") => void
+}) {
+  const t = useTranslations("HouflowCloud")
+  return (
+    <div className="space-y-2">
+      {approvals.map((approval) => {
+        const submitting = submittingId === approval.id
+        return (
+          <div
+            key={approval.id}
+            className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-medium">{t("approvalTitle")}</div>
+                <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                  {approval.toolName}
+                </div>
+              </div>
+              <Badge variant="outline" className="shrink-0 text-[10px]">
+                {approval.status}
+              </Badge>
+            </div>
+            <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-border/60 bg-background/80 p-2 text-xs whitespace-pre-wrap break-all">
+              {JSON.stringify(approval.toolInput, null, 2)}
+            </pre>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                disabled={submitting}
+                onClick={() => onDecision(approval.id, "approve")}
+              >
+                {submitting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                {t("approvalApprove")}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={submitting}
+                onClick={() => onDecision(approval.id, "deny")}
+              >
+                {t("approvalDeny")}
+              </Button>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function hostedCommandEventToCloudEvent(
   event: NonNullable<HouflowCloudHostedCommand["events"]>[number]
 ): HouflowCloudSessionEvent | null {
@@ -666,6 +825,12 @@ function stringValue(value: unknown): string {
 function nullableString(value: unknown): string | null {
   const text = stringValue(value)
   return text || null
+}
+
+function hostedCommandTitle(command: HouflowCloudHostedCommand): string | null {
+  if (command.action !== "workspace_message") return command.action
+  const message = stringValue(command.input.message)
+  return formatConversationTitle(message) || command.action
 }
 
 function isPresent<T>(value: T | null | undefined): value is T {
@@ -700,51 +865,71 @@ function CloudSessionStarter({
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex flex-1 items-center justify-center px-4 py-8">
-        <div className="flex w-full max-w-3xl flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <CloudTargetSelector
-              open={open}
-              selectedTarget={selectedTarget}
-              managedTargets={managedTargets}
-              hostedTargets={hostedTargets}
-              targetKey={targetKey}
-              onOpenChange={setOpen}
-              onChange={(key) => {
-                onChangeTarget(key)
-                setOpen(false)
-              }}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onClick={onRefresh}
-              title={t("refresh")}
-              aria-label={t("refresh")}
-              disabled={loading}
-            >
-              {loading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
-            </Button>
+      <div className="relative isolate flex h-full min-h-0 flex-col overflow-x-hidden overflow-y-auto">
+        <div className="flex-1" />
+        <div className="mx-auto flex w-full max-w-3xl shrink-0 flex-col gap-6 px-4 py-4">
+          <div className="space-y-2 text-center">
+            <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Cloud className="h-5 w-5" />
+            </div>
+            <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+              {t("starterTitle")}
+            </h1>
+            <p className="mx-auto max-w-xl text-sm text-muted-foreground">
+              {t("starterSubtitle")}
+            </p>
           </div>
-          <div>
-            <MessageInput
-              onSend={onSend}
-              promptCapabilities={CLOUD_PROMPT_CAPABILITIES}
-              disabled={sending || !selectedTarget}
-              placeholder={t("messagePlaceholder")}
-              draftStorageKey={
-                selectedTarget
-                  ? `houflow-cloud-start:${selectedTarget.key}`
-                  : "houflow-cloud-start"
-              }
-              isActive
-              className="min-h-24 max-h-60"
-            />
+          <div className="flex justify-center">
+            <div className="flex min-w-0 max-w-full items-center gap-2">
+              <CloudTargetSelector
+                open={open}
+                selectedTarget={selectedTarget}
+                managedTargets={managedTargets}
+                hostedTargets={hostedTargets}
+                targetKey={targetKey}
+                onOpenChange={setOpen}
+                onChange={(key) => {
+                  onChangeTarget(key)
+                  setOpen(false)
+                }}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                onClick={onRefresh}
+                title={t("refresh")}
+                aria-label={t("refresh")}
+                disabled={loading}
+              >
+                {loading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+          </div>
+          <MessageInput
+            onSend={onSend}
+            promptCapabilities={CLOUD_PROMPT_CAPABILITIES}
+            disabled={sending || !selectedTarget}
+            placeholder={t("messagePlaceholder")}
+            draftStorageKey={
+              selectedTarget
+                ? `houflow-cloud-start:${selectedTarget.key}`
+                : "houflow-cloud-start"
+            }
+            isActive
+            className="min-h-24 max-h-60"
+          />
+        </div>
+        <div className="flex-1" />
+        <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-6">
+          <div className="flex max-w-full justify-center">
+            <div className="max-w-full rounded-full border border-border/40 bg-muted/40 px-4 py-1.5 text-center text-xs text-muted-foreground/90">
+              {t("starterTip")}
+            </div>
           </div>
         </div>
       </div>
@@ -941,4 +1126,12 @@ function formatTimestamp(value: string | null): string {
 
 function isHostedCommandActive(status: string): boolean {
   return status === "queued" || status === "leased" || status === "running"
+}
+
+function statusBadgeClass(status: string): string {
+  const tone = cloudActivityTone(status)
+  if (tone === "active") return "border-emerald-500/30 text-emerald-600"
+  if (tone === "success") return "border-green-500/30 text-green-600"
+  if (tone === "failed") return "border-destructive/40 text-destructive"
+  return "border-muted-foreground/25 text-muted-foreground"
 }

@@ -799,6 +799,7 @@
       "customInstallSubmit": "インストール"
     },
     "errors": {
+      "windowsFileLocked": "{name} のファイルは実行中のセッションが使用中のため、Windows では置き換えられません。{name} のセッションをすべて終了してから再試行してください。",
       "nativeJsonMustBeObject": "ネイティブJSON設定はオブジェクトである必要があります",
       "nativeJsonInvalid": "ネイティブJSON設定の形式エラー: {message}",
       "openCodeAuthMustBeObject": "OpenCode の auth.json はJSONオブジェクトである必要があります",
@@ -2335,6 +2336,18 @@
           "planLabel": "計画",
           "submitted": "計画を送信しました",
           "switched": "モードを切り替え"
+        },
+        "backgroundTask": {
+          "title": "バックグラウンドタスク",
+          "titleWithId": "バックグラウンドタスク · {id}",
+          "running": "実行中",
+          "completed": "完了",
+          "failed": "失敗",
+          "stopped": "停止しました",
+          "exitCode": "終了コード {code}",
+          "polledTimes": "{count} 回ポーリング",
+          "runningInBackground": "バックグラウンド",
+          "launchNote": "バックグラウンドで実行中 · {id}"
         }
       },
       "messageNav": {
@@ -3335,7 +3348,14 @@
     "targetHostedResident": "Hosted resident",
     "start": "Start",
     "startFailed": "Failed to start cloud session",
-    "hostedQueued": "Hosted agent request queued"
+    "hostedQueued": "Hosted agent request queued",
+    "starterTitle": "What should cloud agents handle today?",
+    "starterSubtitle": "Choose a cloud or hosted resident agent, then start a task. Session progress, tool calls, and files will stay in sync here.",
+    "starterTip": "Cloud sessions load events and files on demand, and the current workspace selection is cleared after sign-out.",
+    "approvalTitle": "Cloud tool approval required",
+    "approvalApprove": "Approve",
+    "approvalDeny": "Deny",
+    "approvalFailed": "Failed to respond to cloud approval"
   },
   "Automations": {
     "title": "オートメーション",

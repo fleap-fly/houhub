@@ -28,7 +28,7 @@ describe("houflowCloudEventsToTurns", () => {
           {
             type: "tool_result",
             tool_use_id: "call_1",
-            output: "ok",
+            content: [{ type: "text", text: "ok" }],
           },
         ],
       }),
@@ -73,16 +73,16 @@ describe("houflowCloudEventsToTurns", () => {
     ])
   })
 
-  it("filters lifecycle logs and artifact manifests from chat turns", () => {
+  it("filters explicit lifecycle events but keeps agent messages intact", () => {
     const turns = houflowCloudEventsToTurns([
       event({
         id: "evt_idle",
-        type: "session.status",
+        type: "session.status_idle",
         message: "Session is idle.",
       }),
       event({
         id: "evt_dispatch",
-        type: "agent.log",
+        type: "runtime.status",
         message: "Hosted A2A dispatch started",
       }),
       event({
@@ -96,17 +96,112 @@ describe("houflowCloudEventsToTurns", () => {
         ],
       }),
       event({
+        id: "evt_check_json",
+        type: "agent.message",
+        content: [
+          {
+            type: "text",
+            text: '{"checked":[{"image":"outputs/exam_paper_front.png","job_id":"65308652316057600","quality_flags":[],"raw_text_chars":1514,"structural_image_ma":true}]}',
+          },
+        ],
+      }),
+      event({
         id: "evt_real",
         type: "agent.message",
         content: [{ type: "text", text: "试卷已经生成，可以在右侧查看文件。" }],
       }),
     ])
 
-    expect(turns).toHaveLength(1)
+    expect(turns).toHaveLength(3)
     expect(turns[0]).toMatchObject({
+      id: "evt_manifest",
+      role: "assistant",
+    })
+    expect(turns[1]).toMatchObject({
+      id: "evt_check_json",
+      role: "assistant",
+    })
+    expect(turns[2]).toMatchObject({
       id: "evt_real",
       role: "assistant",
       blocks: [{ type: "text", text: "试卷已经生成，可以在右侧查看文件。" }],
+    })
+  })
+
+  it("maps Agent Hub tool events into the local tool/delegation renderer shape", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_delegate",
+        type: "agent.tool_use",
+        name: "mcp__houhub-mcp__delegate_to_agent",
+        tool_use_id: "call_delegate",
+        input: { agent: "codex", task: "检查诗歌题" },
+        metadata: {
+          "houhub.delegation": {
+            status: "running",
+            child_conversation_id: "42",
+          },
+        },
+      }),
+      event({
+        id: "evt_status",
+        type: "agent.tool_result",
+        tool_use_id: "call_delegate",
+        content: [
+          {
+            type: "text",
+            text: "task_id=abc. Call get_delegation_status later.",
+          },
+        ],
+      }),
+      event({
+        id: "evt_poll",
+        type: "agent.tool_use",
+        name: "get_delegation_status",
+        tool_use_id: "call_poll",
+        input: { task_ids: ["abc"] },
+      }),
+      event({
+        id: "evt_poll_result",
+        type: "agent.tool_result",
+        tool_use_id: "call_poll",
+        content: [
+          {
+            type: "text",
+            text: '{"tasks":[{"task_id":"abc","status":"running","text":"Running."}]}',
+          },
+        ],
+      }),
+    ])
+
+    expect(turns).toHaveLength(2)
+    expect(turns[0]?.blocks[0]).toMatchObject({
+      type: "tool_use",
+      tool_use_id: "call_delegate",
+      tool_name: "mcp__houhub-mcp__delegate_to_agent",
+      input_preview: '{"agent":"codex","task":"检查诗歌题"}',
+      meta: {
+        "houhub.delegation": {
+          status: "running",
+          child_conversation_id: "42",
+        },
+      },
+    })
+    expect(turns[1]?.blocks[0]).toMatchObject({
+      type: "tool_use",
+      tool_use_id: "call_poll",
+      tool_name: "get_delegation_status",
+    })
+    expect(turns[1]?.blocks[1]).toMatchObject({
+      type: "tool_result",
+      tool_use_id: "call_poll",
+      output_preview:
+        '{"tasks":[{"task_id":"abc","status":"running","text":"Running."}]}',
+    })
+    expect(turns[0]?.blocks[1]).toMatchObject({
+      type: "tool_result",
+      tool_use_id: "call_delegate",
+      output_preview: "task_id=abc. Call get_delegation_status later.",
     })
   })
 })

@@ -4,7 +4,48 @@ import type { HouflowCloudSessionEvent } from "./cloud-sessions"
 export function houflowCloudEventsToTurns(
   events: HouflowCloudSessionEvent[]
 ): MessageTurn[] {
-  return events.map(eventToTurn).filter(isPresent)
+  return mergeAdjacentToolEvents(events.map(eventToTurn).filter(isPresent))
+}
+
+function mergeAdjacentToolEvents(turns: MessageTurn[]): MessageTurn[] {
+  const merged: MessageTurn[] = []
+  for (const turn of turns) {
+    const previous = merged[merged.length - 1]
+    if (previous && canMergeToolTurn(previous, turn)) {
+      previous.blocks = [...previous.blocks, ...turn.blocks]
+      previous.completed_at = turn.completed_at ?? previous.completed_at
+      previous.timestamp = turn.timestamp || previous.timestamp
+      continue
+    }
+    merged.push({ ...turn, blocks: [...turn.blocks] })
+  }
+  return merged
+}
+
+function canMergeToolTurn(previous: MessageTurn, next: MessageTurn): boolean {
+  if (previous.role !== "assistant" || next.role !== "assistant") return false
+  if (!next.blocks.every((block) => block.type === "tool_result")) return false
+  const previousToolIds = toolUseIdsForMerge(previous)
+  return next.blocks.every(
+    (block) =>
+      block.type === "tool_result" &&
+      !!block.tool_use_id &&
+      previousToolIds.has(block.tool_use_id)
+  )
+}
+
+function toolUseIdsForMerge(turn: MessageTurn): Set<string> {
+  const ids = new Set<string>()
+  for (const block of turn.blocks) {
+    if (block.type === "tool_use" && block.tool_use_id) {
+      ids.add(block.tool_use_id)
+      continue
+    }
+    if (block.type === "tool_result" && block.tool_use_id) {
+      ids.delete(block.tool_use_id)
+    }
+  }
+  return ids
 }
 
 function eventToTurn(event: HouflowCloudSessionEvent): MessageTurn | null {
@@ -36,28 +77,20 @@ function roleFromEvent(event: HouflowCloudSessionEvent): TurnRole {
 }
 
 function blocksFromEvent(event: HouflowCloudSessionEvent): ContentBlock[] {
+  const block = eventObjectToBlock(event.raw)
+  if (block) return [block]
+
   const content = event.raw.content
   if (Array.isArray(content)) {
     const blocks = content.map(contentItemToBlock).filter(isPresent)
     if (blocks.length > 0) return blocks
   }
 
-  const block = eventObjectToBlock(event.raw)
-  if (block) return [block]
-
   return event.text ? [{ type: "text", text: event.text }] : []
 }
 
 function isNonConversationalEvent(event: HouflowCloudSessionEvent): boolean {
-  const type = event.type.toLowerCase()
-  if (
-    type.includes("lifecycle") ||
-    type.includes("heartbeat") ||
-    type.includes("dispatch") ||
-    type.includes("status")
-  ) {
-    return true
-  }
+  if (NON_CONVERSATIONAL_EVENT_TYPES.has(event.type)) return true
   return Boolean(event.text && isNonConversationalText(event.text))
 }
 
@@ -68,29 +101,7 @@ function isNonConversationalTextBlock(block: ContentBlock): boolean {
 export function isNonConversationalText(text: string): boolean {
   const normalized = text.trim().replace(/\s+/g, " ")
   const lower = normalized.toLowerCase()
-  if (!lower) return true
-  if (
-    lower === "session is idle." ||
-    lower === "session is idle" ||
-    lower === "session run queued." ||
-    lower === "session run queued" ||
-    lower === "hosted a2a dispatch started" ||
-    lower === "runtime plane native message dispatch started"
-  ) {
-    return true
-  }
-
-  const keyValueTokens = normalized.match(/\b[a-zA-Z][\w.-]*=[^\s]+/g) ?? []
-  if (
-    keyValueTokens.length >= 4 &&
-    /\b(normalized_spec|published_outputs|internal_files|internal_manifest|polish_status|ocr_status)=/.test(
-      normalized
-    )
-  ) {
-    return true
-  }
-
-  return false
+  return !lower
 }
 
 function contentItemToBlock(item: unknown): ContentBlock | null {
@@ -106,43 +117,56 @@ function contentItemToBlock(item: unknown): ContentBlock | null {
     return text ? { type: "thinking", text } : null
   }
 
-  if (
-    type === "tool_use" ||
-    type === "tool_call" ||
-    type === "custom_tool_use" ||
-    type === "function_call"
-  ) {
+  if (type === "tool_use" || type === "custom_tool_use") {
+    const toolName = stringValue(item.name) || stringValue(item.tool_name)
+    if (!toolName) return null
     return {
       type: "tool_use",
       tool_use_id:
-        stringValue(item.id) || stringValue(item.tool_call_id) || null,
-      tool_name:
-        stringValue(item.name) ||
-        stringValue(item.tool_name) ||
-        stringValue(item.function_name) ||
-        "tool",
-      input_preview: previewValue(
-        item.input ?? item.arguments ?? item.params ?? item.payload
-      ),
+        stringValue(item.id) ||
+        stringValue(item.tool_use_id) ||
+        stringValue(item.custom_tool_use_id) ||
+        null,
+      tool_name: toolName,
+      input_preview: previewValue(item.input),
       meta: null,
     }
   }
 
-  if (
-    type === "tool_result" ||
-    type === "custom_tool_result" ||
-    type === "function_call_output"
-  ) {
+  if (type === "mcp_tool_use") {
+    const toolName = stringValue(item.name)
+    if (!toolName) return null
+    return {
+      type: "tool_use",
+      tool_use_id:
+        stringValue(item.id) || stringValue(item.mcp_tool_use_id) || null,
+      tool_name: toolName,
+      input_preview: previewValue(item.input),
+      meta: null,
+    }
+  }
+
+  if (type === "tool_result" || type === "custom_tool_result") {
     return {
       type: "tool_result",
       tool_use_id:
         stringValue(item.tool_use_id) ||
         stringValue(item.custom_tool_use_id) ||
-        stringValue(item.tool_call_id) ||
-        stringValue(item.call_id) ||
         null,
-      output_preview: previewValue(item.output ?? item.result ?? item.content),
-      is_error: Boolean(item.is_error ?? item.error),
+      output_preview: previewToolOutput(item.content),
+      is_error: item.is_error === true,
+    }
+  }
+
+  if (type === "mcp_tool_result") {
+    return {
+      type: "tool_result",
+      tool_use_id:
+        stringValue(item.mcp_tool_use_id) ||
+        stringValue(item.tool_use_id) ||
+        null,
+      output_preview: previewToolOutput(item.content),
+      is_error: item.is_error === true,
     }
   }
 
@@ -151,38 +175,70 @@ function contentItemToBlock(item: unknown): ContentBlock | null {
 
 function eventObjectToBlock(raw: Record<string, unknown>): ContentBlock | null {
   const type = stringValue(raw.type)
-  if (type.includes("tool") || type.includes("function")) {
-    const output = raw.output ?? raw.result
-    if (output !== undefined) {
-      return {
-        type: "tool_result",
-        tool_use_id:
-          stringValue(raw.tool_use_id) ||
-          stringValue(raw.custom_tool_use_id) ||
-          stringValue(raw.tool_call_id) ||
-          stringValue(raw.call_id) ||
-          null,
-        output_preview: previewValue(output),
-        is_error: Boolean(raw.is_error ?? raw.error),
-      }
+  if (type === "agent.tool_use" || type === "agent.custom_tool_use") {
+    const toolName = stringValue(raw.name)
+    if (!toolName) return null
+    return {
+      type: "tool_use",
+      tool_use_id:
+        stringValue(raw.tool_use_id) ||
+        stringValue(raw.custom_tool_use_id) ||
+        stringValue(raw.id) ||
+        null,
+      tool_name: toolName,
+      input_preview: previewValue(raw.input),
+      meta: toolMeta(raw, toolName),
     }
-    const input = raw.input ?? raw.arguments ?? raw.params
-    if (input !== undefined) {
-      return {
-        type: "tool_use",
-        tool_use_id:
-          stringValue(raw.id) || stringValue(raw.tool_call_id) || null,
-        tool_name:
-          stringValue(raw.tool_name) ||
-          stringValue(raw.name) ||
-          stringValue(raw.function_name) ||
-          "tool",
-        input_preview: previewValue(input),
-        meta: null,
-      }
+  }
+  if (type === "agent.mcp_tool_use") {
+    const toolName = stringValue(raw.name)
+    if (!toolName) return null
+    return {
+      type: "tool_use",
+      tool_use_id:
+        stringValue(raw.mcp_tool_use_id) || stringValue(raw.id) || null,
+      tool_name: toolName,
+      input_preview: previewValue(raw.input),
+      meta: toolMeta(raw, toolName),
+    }
+  }
+  if (type === "agent.tool_result" || type === "agent.custom_tool_result") {
+    return {
+      type: "tool_result",
+      tool_use_id:
+        stringValue(raw.tool_use_id) ||
+        stringValue(raw.custom_tool_use_id) ||
+        stringValue(raw.parent_event_id) ||
+        null,
+      output_preview: previewToolOutput(raw.content),
+      is_error: raw.is_error === true,
+    }
+  }
+  if (type === "agent.mcp_tool_result") {
+    return {
+      type: "tool_result",
+      tool_use_id:
+        stringValue(raw.mcp_tool_use_id) ||
+        stringValue(raw.tool_use_id) ||
+        stringValue(raw.parent_event_id) ||
+        null,
+      output_preview: previewToolOutput(raw.content),
+      is_error: raw.is_error === true,
     }
   }
   return null
+}
+
+function toolMeta(
+  raw: Record<string, unknown>,
+  toolName: string
+): Record<string, unknown> | null {
+  const meta = raw.metadata
+  if (!isRecord(meta)) return null
+  const delegation = meta["houhub.delegation"]
+  if (!isRecord(delegation)) return null
+  if (!toolName.trim()) return null
+  return { "houhub.delegation": delegation }
 }
 
 function previewValue(value: unknown): string | null {
@@ -193,6 +249,17 @@ function previewValue(value: unknown): string | null {
   } catch {
     return String(value)
   }
+}
+
+function previewToolOutput(value: unknown): string | null {
+  if (!Array.isArray(value)) return previewValue(value)
+  const textParts = value
+    .map((item) => {
+      if (!isRecord(item)) return null
+      return stringValue(item.text) || stringValue(item.content) || null
+    })
+    .filter(isPresent)
+  return textParts.length > 0 ? textParts.join("\n") : previewValue(value)
 }
 
 function stringValue(value: unknown): string {
@@ -206,3 +273,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isPresent<T>(value: T | null | undefined): value is T {
   return value !== null && value !== undefined
 }
+
+const NON_CONVERSATIONAL_EVENT_TYPES = new Set([
+  "session.created",
+  "session.deleted",
+  "session.resource_added",
+  "session.resource_updated",
+  "session.resource_deleted",
+  "session.thread_created",
+  "session.thread_status_running",
+  "session.thread_status_idle",
+  "session.thread_status_terminated",
+  "session.thread_status_rescheduled",
+  "session.status_running",
+  "session.status_idle",
+  "session.status_rescheduled",
+  "session.status_terminated",
+  "runtime.status",
+  "runtime.evidence",
+  "runtime.warm_lease_acquired",
+  "runtime.cold_start_required",
+  "runtime.warm_lease_unavailable",
+  "run.context_package_created",
+  "run.context_compacted",
+  "tool.call_started",
+  "tool.call_completed",
+  "tool.call_failed",
+  "approval.intent_created",
+  "approval.approved",
+  "approval.denied",
+  "approval.resolved",
+  "memory.writeback",
+  "file.created",
+  "file.deleted",
+  "file.promoted",
+  "host.session_bound",
+  "wake.inbound_accepted",
+  "channel.inbound_deferred",
+  "channel.inbound_dequeued",
+  "channel.outbound_intent_created",
+])

@@ -799,6 +799,7 @@
       "customInstallSubmit": "安裝"
     },
     "errors": {
+      "windowsFileLocked": "{name} 的程式檔案正被執行中的工作階段佔用，Windows 下無法替換。請先關閉所有 {name} 工作階段後重試。",
       "nativeJsonMustBeObject": "原生 JSON 配置必須是物件",
       "nativeJsonInvalid": "原生 JSON 配置格式錯誤：{message}",
       "openCodeAuthMustBeObject": "OpenCode auth.json 必須是 JSON 物件",
@@ -2335,6 +2336,18 @@
           "planLabel": "計畫",
           "submitted": "計畫已提交",
           "switched": "切換模式"
+        },
+        "backgroundTask": {
+          "title": "背景任務",
+          "titleWithId": "背景任務 · {id}",
+          "running": "執行中",
+          "completed": "已完成",
+          "failed": "失敗",
+          "stopped": "已停止",
+          "exitCode": "退出碼 {code}",
+          "polledTimes": "輪詢 {count} 次",
+          "runningInBackground": "背景執行",
+          "launchNote": "已在背景執行 · {id}"
         }
       },
       "messageNav": {
@@ -3335,7 +3348,14 @@
     "targetHostedResident": "託管常駐",
     "start": "開始",
     "startFailed": "啟動雲端會話失敗",
-    "hostedQueued": "託管智能體請求已提交"
+    "hostedQueued": "託管智能體請求已提交",
+    "starterTitle": "What should cloud agents handle today?",
+    "starterSubtitle": "Choose a cloud or hosted resident agent, then start a task. Session progress, tool calls, and files will stay in sync here.",
+    "starterTip": "Cloud sessions load events and files on demand, and the current workspace selection is cleared after sign-out.",
+    "approvalTitle": "Cloud tool approval required",
+    "approvalApprove": "Approve",
+    "approvalDeny": "Deny",
+    "approvalFailed": "Failed to respond to cloud approval"
   },
   "Automations": {
     "title": "自動化",

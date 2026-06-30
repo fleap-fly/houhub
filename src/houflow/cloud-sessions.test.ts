@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { RequestOptions } from "@houshan/agent-hub-network-sdk"
 import {
+  decideHouflowCloudSessionApproval,
   getHouflowCloudSessionOutputBytes,
   getHouflowCloudSessionOutputText,
+  listHouflowCloudSessionApprovals,
   listHouflowHostedAgentCommands,
   listHouflowCloudSessionEvents,
   listHouflowCloudSessionOutputs,
@@ -107,6 +109,99 @@ describe("Houflow cloud sessions", () => {
         archivedAt: null,
       },
     ])
+  })
+
+  it("does not infer missing session titles from non-contract fields", async () => {
+    mocks.responses.push({
+      data: [
+        {
+          id: "ses_named",
+          status: "idle",
+          name: "诗歌裁决 2",
+          environment_id: "env_1",
+          agent: { id: "agt_1", name: "云端助手" },
+          created_at: "2026-06-28T00:00:00.000Z",
+          updated_at: "2026-06-28T00:01:00.000Z",
+          archived_at: null,
+        },
+        {
+          id: "ses_meta",
+          status: "idle",
+          environment_id: "env_1",
+          metadata: { title: "试卷渲染检查" },
+          agent: { id: "agt_1", name: "云端助手" },
+        },
+      ],
+    })
+
+    const sessions = await listHouflowCloudSessions(session(), secret())
+
+    expect(sessions.map((item) => item.title)).toEqual([null, null])
+  })
+
+  it("lists and decides session approval intents through Agent Hub approval endpoints", async () => {
+    mocks.responses.push({
+      data: [
+        {
+          id: "apr_1",
+          session_id: "ses_1",
+          tool_use_id: "call_1",
+          tool_name: "web_fetch",
+          tool_input: { url: "https://example.com" },
+          status: "pending",
+          result_event_id: null,
+          created_at: "2026-06-28T00:05:00.000Z",
+          decided_at: null,
+        },
+      ],
+    })
+    mocks.responses.push({
+      id: "apr_1",
+      session_id: "ses_1",
+      tool_use_id: "call_1",
+      tool_name: "web_fetch",
+      tool_input: { url: "https://example.com" },
+      status: "approved",
+      result_event_id: null,
+      created_at: "2026-06-28T00:05:00.000Z",
+      decided_at: "2026-06-28T00:06:00.000Z",
+    })
+
+    const approvals = await listHouflowCloudSessionApprovals(
+      session(),
+      secret(),
+      "ses_1"
+    )
+    const approved = await decideHouflowCloudSessionApproval(
+      session(),
+      secret(),
+      "ses_1",
+      "apr_1",
+      "approve"
+    )
+
+    expect(mocks.calls).toEqual([
+      { path: "/v1/sessions/ses_1/approvals", options: {} },
+      {
+        path: "/v1/sessions/ses_1/approvals/apr_1/approve",
+        options: { method: "POST", body: {} },
+      },
+    ])
+    expect(approvals).toMatchObject([
+      {
+        id: "apr_1",
+        sessionId: "ses_1",
+        toolUseId: "call_1",
+        toolName: "web_fetch",
+        toolInput: { url: "https://example.com" },
+        status: "pending",
+      },
+    ])
+    expect(approved).toMatchObject({
+      id: "apr_1",
+      status: "approved",
+      decidedAt: "2026-06-28T00:06:00.000Z",
+    })
   })
 
   it("maps session events into compact sidebar/page data", async () => {
