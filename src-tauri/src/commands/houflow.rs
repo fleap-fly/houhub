@@ -862,7 +862,12 @@ fn required_trimmed(value: String, field: &str) -> Result<String, AppCommandErro
 }
 
 fn gateway_agent_types() -> Vec<AgentType> {
-    vec![AgentType::Codex, AgentType::ClaudeCode, AgentType::Gemini]
+    vec![
+        AgentType::Codex,
+        AgentType::ClaudeCode,
+        AgentType::Gemini,
+        AgentType::Pi,
+    ]
 }
 
 fn synced_gateway_model(
@@ -878,9 +883,6 @@ fn synced_gateway_model(
         if models.iter().any(|model| model == existing_model) {
             return Ok(Some(existing_model.to_string()));
         }
-        return Err(AppCommandError::invalid_input(format!(
-            "HouFlow gateway model '{existing_model}' is no longer available. Choose an available model in Model Providers, then sync HouFlow again."
-        )));
     }
     Ok(default_model.or_else(|| models.first().cloned()))
 }
@@ -1103,4 +1105,58 @@ fn default_skills_directory(provider: &str) -> Option<String> {
             .display()
             .to_string()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gateway_agent_types, synced_gateway_model};
+    use crate::models::agent::AgentType;
+    use crate::models::model_provider::ModelProviderInfo;
+
+    fn provider_with_model(model: Option<&str>) -> ModelProviderInfo {
+        ModelProviderInfo {
+            id: 1,
+            name: "Houflow Gateway".to_string(),
+            api_url: "https://agent.houflow.com/api/gateway/openai/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            api_key_masked: "sk-test".to_string(),
+            agent_types: vec![],
+            agent_type: "codex".to_string(),
+            model: model.map(str::to_string),
+            models: vec![],
+            created_at: "2026-06-30T00:00:00Z".to_string(),
+            updated_at: "2026-06-30T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn gateway_sync_includes_pi() {
+        assert!(gateway_agent_types().contains(&AgentType::Pi));
+    }
+
+    #[test]
+    fn gateway_sync_replaces_stale_claude_bundle_model() {
+        let models = vec!["gpt-5.5".to_string(), "gpt-5".to_string()];
+        let selected = synced_gateway_model(
+            Some(&provider_with_model(Some(r#"{"main":"gpt-5.5"}"#))),
+            Some("gpt-5.5".to_string()),
+            &models,
+        )
+        .expect("stale model bundle should migrate instead of blocking sync");
+
+        assert_eq!(selected.as_deref(), Some("gpt-5.5"));
+    }
+
+    #[test]
+    fn gateway_sync_keeps_existing_valid_model() {
+        let models = vec!["gpt-5.5".to_string(), "gpt-5".to_string()];
+        let selected = synced_gateway_model(
+            Some(&provider_with_model(Some("gpt-5"))),
+            Some("gpt-5.5".to_string()),
+            &models,
+        )
+        .expect("valid existing model should stay selected");
+
+        assert_eq!(selected.as_deref(), Some("gpt-5"));
+    }
 }

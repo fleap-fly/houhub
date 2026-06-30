@@ -91,6 +91,9 @@ fn prepend_path_value(current: Option<&str>, dirs: impl IntoIterator<Item = Path
 async fn patch_pi_launch_env(env: Vec<(String, String)>) -> Vec<(String, String)> {
     let mut map: BTreeMap<String, String> = env.into_iter().collect();
     let mut path_dirs = Vec::new();
+    if let Some(bin_dir) = crate::commands::acp::node_command_bin_dir() {
+        path_dirs.push(bin_dir);
+    }
     if let Some(bin_dir) = crate::commands::acp::npm_command_bin_dir("pi-acp").await {
         path_dirs.push(bin_dir);
     }

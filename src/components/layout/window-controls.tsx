@@ -11,16 +11,19 @@ async function getTauriWindow() {
   return getCurrentWindow()
 }
 
+export const WINDOW_CONTROLS_WIDTH = 138
+
 export function WindowControls() {
   const t = useTranslations("Folder.windowControls")
-  const { isWindows } = usePlatform()
+  const { isWindows, isLinux } = usePlatform()
+  const showControls = isWindows || isLinux
   const [isMaximized, setIsMaximized] = useState(false)
   const appWindowRef = useRef<Awaited<
     ReturnType<typeof getTauriWindow>
   > | null>(null)
 
   useEffect(() => {
-    if (!isWindows || !isDesktop()) return
+    if (!showControls || !isDesktop()) return
 
     let disposed = false
     let unlistenResize: (() => void) | null = null
@@ -66,9 +69,9 @@ export function WindowControls() {
       }
       unlistenResize?.()
     }
-  }, [isWindows])
+  }, [showControls])
 
-  if (!isWindows || !isDesktop()) return null
+  if (!showControls || !isDesktop()) return null
 
   return (
     <div className="flex h-8 items-stretch [-webkit-app-region:no-drag]">

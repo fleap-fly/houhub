@@ -20,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import type { ModelProviderInfo } from "@/lib/types"
+import { parseClaudeProviderModel, type ModelProviderInfo } from "@/lib/types"
 
 interface TestResult {
   success: boolean
@@ -48,17 +48,17 @@ export function TestModelProviderDialog({
     if (!provider) return []
     return provider.models.length > 0
       ? provider.models
-      : provider.model
-        ? [provider.model]
-        : []
+      : [parseClaudeProviderModel(provider.model).main ?? provider.model ?? ""]
+          .map((model) => model.trim())
+          .filter(Boolean)
   }, [provider])
 
   useEffect(() => {
     if (!provider) return
-    setSelectedModel(provider.model ?? provider.models[0] ?? "")
+    setSelectedModel(modelList[0] ?? "")
     setCustomModel("")
     setResult(null)
-  }, [provider])
+  }, [provider, modelList])
 
   const effectiveModel = customModel.trim() || selectedModel
 

@@ -68,6 +68,19 @@ function claudeModelValues(model: ClaudeProviderModel): string[] {
   ])
 }
 
+function providerDefaultModel(provider: ModelProviderInfo): string {
+  const listed = provider.models.find((model) => model.trim())
+  if (listed) return listed.trim()
+  if (!provider.model) return ""
+  try {
+    const parsed = JSON.parse(provider.model) as Record<string, unknown>
+    const main = parsed?.main
+    return typeof main === "string" ? main.trim() : ""
+  } catch {
+    return provider.model.trim()
+  }
+}
+
 interface EditModelProviderDialogProps {
   provider: ModelProviderInfo | null
   onOpenChange: (open: boolean) => void
@@ -117,7 +130,9 @@ export function EditModelProviderDialog({
       : {}
     setClaudeModel(nextClaudeModel)
     setDefaultModel(
-      nextClaudeModel.main ?? provider.model ?? provider.models[0] ?? ""
+      nextAgentTypes.includes("claude_code")
+        ? (nextClaudeModel.main ?? providerDefaultModel(provider))
+        : providerDefaultModel(provider)
     )
     setModelsText(provider.models.join("\n"))
     setError(null)

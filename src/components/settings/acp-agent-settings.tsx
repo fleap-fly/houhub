@@ -282,6 +282,30 @@ function patchEnvText(
   return envMapToText(envMap)
 }
 
+function removeSlotPrefixedModel(value: string): string {
+  const trimmed = value.trim()
+  const match = /^(main|reasoning|haiku|sonnet|opus):(.+)$/.exec(trimmed)
+  return match ? match[2].trim() : trimmed
+}
+
+function providerDefaultModel(
+  provider: ModelProviderInfo | null | undefined
+): string {
+  if (!provider) return ""
+  const listed = provider.models
+    .map(removeSlotPrefixedModel)
+    .find((model) => model.length > 0)
+  if (listed) return listed
+  if (!provider.model) return ""
+  try {
+    const parsed = JSON.parse(provider.model) as Record<string, unknown>
+    const main = parsed?.main
+    return typeof main === "string" ? main.trim() : ""
+  } catch {
+    return removeSlotPrefixedModel(provider.model)
+  }
+}
+
 interface ImportantEnvKeys {
   apiBaseUrl: string[]
   apiKey: string[]
@@ -4033,7 +4057,6 @@ export function AcpAgentSettings() {
 
         if (versionState.status === "fulfilled") {
           setAgents((prev) => {
-            if (versionState.value === null) return prev
             let changed = false
             const next = prev.map((agent) => {
               if (agent.agent_type !== agentType) return agent
@@ -4992,7 +5015,16 @@ export function AcpAgentSettings() {
       modelProviders
     )
   }, [modelProviders, selectedAgent, selectedDraft?.modelProviderId])
-  const selectedProviderModelOptions = selectedModelProvider?.models ?? []
+  const selectedProviderModelOptions = useMemo(() => {
+    const seen = new Set<string>()
+    return (selectedModelProvider?.models ?? [])
+      .map(removeSlotPrefixedModel)
+      .filter((model) => {
+        if (!model || seen.has(model)) return false
+        seen.add(model)
+        return true
+      })
+  }, [selectedModelProvider])
 
   const selectedNeedsModelProvider = useMemo(() => {
     if (!selectedDraft) return false
@@ -5051,6 +5083,20 @@ export function AcpAgentSettings() {
     if (!selectedAgent || !locale) return []
     return getAgentChecks(selectedAgent, selectedCurrent)
   }, [locale, selectedAgent, selectedCurrent])
+  const selectedPiInstallFix = useMemo(() => {
+    if (selectedAgent?.agent_type !== "pi") return null
+    for (const check of selectedChecks) {
+      const fix = check.fixes.find((item) => item.kind === "install_pi")
+      if (fix) return fix
+    }
+    return null
+  }, [selectedAgent, selectedChecks])
+  const selectedPiReady =
+    selectedAgent?.agent_type === "pi" &&
+    selectedCurrent?.result?.passed === true &&
+    !selectedPiInstallFix
+  const selectedPiChecked =
+    selectedAgent?.agent_type === "pi" && Boolean(selectedCurrent?.result)
 
   useEffect(() => {
     if (!selectedAgent || selectedChecks.length === 0) return
@@ -5522,14 +5568,17 @@ export function AcpAgentSettings() {
           }
         })
       } else if (agentType === "pi") {
+        const model = providerDefaultModel(provider)
         updateSelectedDraft((current) => ({
           ...current,
           modelProviderId: effectiveProviderId,
           apiBaseUrl: apiUrl,
           apiKey,
+          model,
           envText: patchEnvText(current.envText, {
             OPENAI_API_KEY: apiKey,
             OPENAI_BASE_URL: apiUrl,
+            OPENAI_MODEL: model,
           }),
         }))
       } else {
@@ -9572,64 +9621,91 @@ supports_websockets = false`}
                           <div className="min-w-0">
                             <div className="text-xs font-medium">Pi CLI</div>
                             <div className="text-[11px] text-muted-foreground">
-                              pi-acp requires the pi command at runtime.
+                              {selectedPiReady
+                                ? "pi command is available for pi-acp."
+                                : "pi-acp requires the pi command at runtime."}
                             </div>
                           </div>
                           <div className="flex shrink-0 items-center gap-1.5">
-                            <Button
-                              type="button"
-                              size="xs"
-                              variant="outline"
-                              disabled={Boolean(
-                                busyBinaryAction[selectedAgent.agent_type]
-                              )}
-                              onClick={() => {
-                                runPiBinaryAction(
-                                  selectedAgent,
-                                  "install"
-                                ).catch((err) => {
-                                  console.error(
-                                    "[Settings] Pi CLI install failed:",
-                                    err
-                                  )
-                                })
-                              }}
-                            >
-                              {runningActionKind[selectedAgent.agent_type] ===
-                              "install_pi" ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <Download className="h-3 w-3" />
-                              )}
-                              {t("actions.install")}
-                            </Button>
-                            <Button
-                              type="button"
-                              size="xs"
-                              variant="outline"
-                              disabled={Boolean(
-                                busyBinaryAction[selectedAgent.agent_type]
-                              )}
-                              onClick={() => {
-                                runPiBinaryAction(
-                                  selectedAgent,
-                                  "uninstall"
-                                ).catch((err) => {
-                                  console.error(
-                                    "[Settings] Pi CLI uninstall failed:",
-                                    err
-                                  )
-                                })
-                              }}
-                            >
-                              {runningActionKind[selectedAgent.agent_type] ===
-                              "uninstall_pi" ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <Trash2 className="h-3 w-3" />
-                              )}
-                              {t("actions.uninstall")}
-                            </Button>
+                            {selectedPiInstallFix ? (
+                              <Button
+                                type="button"
+                                size="xs"
+                                variant="outline"
+                                disabled={Boolean(
+                                  busyBinaryAction[selectedAgent.agent_type]
+                                )}
+                                onClick={() => {
+                                  runPiBinaryAction(
+                                    selectedAgent,
+                                    "install"
+                                  ).catch((err) => {
+                                    console.error(
+                                      "[Settings] Pi CLI install failed:",
+                                      err
+                                    )
+                                  })
+                                }}
+                              >
+                                {runningActionKind[selectedAgent.agent_type] ===
+                                "install_pi" ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Download className="h-3 w-3" />
+                                )}
+                                {t("actions.install")}
+                              </Button>
+                            ) : selectedPiChecked ? (
+                              <Button
+                                type="button"
+                                size="xs"
+                                variant="outline"
+                                disabled={Boolean(
+                                  busyBinaryAction[selectedAgent.agent_type]
+                                )}
+                                onClick={() => {
+                                  runPiBinaryAction(
+                                    selectedAgent,
+                                    "uninstall"
+                                  ).catch((err) => {
+                                    console.error(
+                                      "[Settings] Pi CLI uninstall failed:",
+                                      err
+                                    )
+                                  })
+                                }}
+                              >
+                                {runningActionKind[selectedAgent.agent_type] ===
+                                "uninstall_pi" ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3 w-3" />
+                                )}
+                                {t("actions.uninstall")}
+                              </Button>
+                            ) : (
+                              <Button
+                                type="button"
+                                size="xs"
+                                variant="outline"
+                                disabled={Boolean(checking.pi)}
+                                onClick={() => {
+                                  runPreflight("pi").catch((err) => {
+                                    console.error(
+                                      "[Settings] Pi CLI check failed:",
+                                      err
+                                    )
+                                  })
+                                }}
+                              >
+                                {checking.pi ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-3 w-3" />
+                                )}
+                                {acpText("actions.check", "Check")}
+                              </Button>
+                            )}
                           </div>
                         </div>
                       </div>

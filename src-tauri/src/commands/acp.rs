@@ -325,6 +325,12 @@ pub(crate) async fn npm_command_bin_dir(cmd: &str) -> Option<PathBuf> {
         .and_then(|path| path.parent().map(Path::to_path_buf))
 }
 
+pub(crate) fn node_command_bin_dir() -> Option<PathBuf> {
+    which::which("node")
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
 #[derive(Default)]
 struct NpxCommandResolver {
     per_cmd_cache: HashMap<String, Option<PathBuf>>,

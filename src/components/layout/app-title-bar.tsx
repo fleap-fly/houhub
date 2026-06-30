@@ -23,16 +23,17 @@ export function AppTitleBar({
   rowClassName,
   showWindowControls = true,
 }: AppTitleBarProps) {
-  const { isMac, isWindows } = usePlatform()
+  const { isMac, isWindows, isLinux } = usePlatform()
   const isMobile = useIsMobile()
   const isDesktopRuntime =
     typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
   const hasDesktopWindowChrome = showWindowControls && isDesktopRuntime
+  const usesRightControls = (isWindows || isLinux) && hasDesktopWindowChrome
 
   const rowPadding = cn(
     "px-3",
     isMac && hasDesktopWindowChrome && "pl-[92px]",
-    isWindows && hasDesktopWindowChrome && "pr-[138px]"
+    usesRightControls && "pr-[138px]"
   )
 
   return (
@@ -55,12 +56,7 @@ export function AppTitleBar({
       >
         <div className="min-w-0 flex-1">{left}</div>
         {right ? (
-          <div
-            className={cn(
-              "ml-auto shrink-0",
-              isWindows && hasDesktopWindowChrome && "mr-4"
-            )}
-          >
+          <div className={cn("ml-auto shrink-0", usesRightControls && "mr-4")}>
             {right}
           </div>
         ) : null}
@@ -72,7 +68,7 @@ export function AppTitleBar({
         </div>
       ) : null}
 
-      {hasDesktopWindowChrome && isWindows ? (
+      {usesRightControls ? (
         <div className="absolute right-0 top-0 z-30">
           <WindowControls />
         </div>

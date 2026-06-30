@@ -223,9 +223,41 @@ describe("getAgentChecks Pi runtime gating", () => {
     )
 
     const sdkCheck = checks.find((check) => check.check_id === "sdk")
-    expect(sdkCheck?.fixes.some((fix) => fix.kind === "install_pi")).toBe(
-      true
+    expect(sdkCheck?.fixes.some((fix) => fix.kind === "install_pi")).toBe(true)
+  })
+
+  it("does not add an Install Pi CLI fix when pi preflight passes", () => {
+    const checks = getAgentChecks(
+      makeAgent({
+        agent_type: "pi" as AgentType,
+        registry_id: "pi",
+        name: "Pi",
+        distribution_type: "npx",
+        installed_version: "0.0.31",
+      }),
+      {
+        result: {
+          agent_type: "pi" as AgentType,
+          agent_name: "Pi",
+          passed: true,
+          checks: [
+            {
+              check_id: "sdk",
+              label: "SDK",
+              status: "pass",
+              message: "Pi is installed.",
+              fixes: [],
+            },
+          ],
+        },
+      }
     )
+
+    expect(
+      checks.some((check) =>
+        check.fixes.some((fix) => fix.kind === "install_pi")
+      )
+    ).toBe(false)
   })
 })
 
