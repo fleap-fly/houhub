@@ -749,6 +749,20 @@ pub async fn acp_load_pi_config(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpValidatePiCommandParams {
+    pub command: String,
+}
+
+pub async fn acp_validate_pi_command(
+    Json(params): Json<AcpValidatePiCommandParams>,
+) -> Result<Json<acp_commands::PiCommandValidation>, AppCommandError> {
+    Ok(Json(acp_commands::acp_validate_pi_command_core(
+        params.command,
+    )))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpDownloadAgentBinaryParams {
     pub agent_type: AgentType,
     #[serde(default)]

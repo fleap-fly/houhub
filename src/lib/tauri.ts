@@ -242,6 +242,14 @@ export async function acpLoadPiConfig(): Promise<PiConfigProjection> {
   return invoke("acp_load_pi_config")
 }
 
+export async function acpValidatePiCommand(command: string): Promise<{
+  found: boolean
+  resolvedPath: string | null
+  version: string | null
+}> {
+  return invoke("acp_validate_pi_command", { command })
+}
+
 export async function acpDetectAgentLocalVersion(
   agentType: AgentType
 ): Promise<string | null> {

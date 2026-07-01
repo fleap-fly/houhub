@@ -358,7 +358,7 @@ export function EditModelProviderDialog({
                       main: e.target.value,
                     }))
                   }
-                  placeholder="claude-sonnet-4-6"
+                  placeholder="claude-sonnet-5"
                 />
               </div>
               <div className="space-y-1.5">
@@ -403,7 +403,7 @@ export function EditModelProviderDialog({
                       sonnet: e.target.value,
                     }))
                   }
-                  placeholder="claude-sonnet-4-6"
+                  placeholder="claude-sonnet-5"
                 />
               </div>
               <div className="space-y-1.5 md:col-span-2">

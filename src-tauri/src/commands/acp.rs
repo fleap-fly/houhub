@@ -1111,6 +1111,14 @@ pub struct PiConfigProjection {
     pub custom_providers: Vec<PiCustomProvider>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiCommandValidation {
+    pub found: bool,
+    pub resolved_path: Option<String>,
+    pub version: Option<String>,
+}
+
 fn update_pi_config_files(update: PiConfigUpdate) -> Result<(), AcpError> {
     let provider = update.provider.trim();
     if provider.is_empty() {
@@ -1377,6 +1385,40 @@ pub(crate) fn resolve_pi_command_path(command: &str) -> Option<PathBuf> {
     }
 
     None
+}
+
+pub(crate) fn acp_validate_pi_command_core(command: String) -> PiCommandValidation {
+    let Some(resolved_path) = resolve_pi_command_path(&command) else {
+        return PiCommandValidation {
+            found: false,
+            resolved_path: None,
+            version: None,
+        };
+    };
+
+    let version = probe_pi_version(&resolved_path);
+    PiCommandValidation {
+        found: true,
+        resolved_path: Some(resolved_path.to_string_lossy().into_owned()),
+        version,
+    }
+}
+
+fn probe_pi_version(resolved_path: &Path) -> Option<String> {
+    let output = std::process::Command::new(resolved_path)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
 }
 
 /// Hermes config/data directory. Honors `HERMES_HOME`, defaults to `~/.hermes`.
@@ -6641,6 +6683,12 @@ pub async fn acp_update_pi_config(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn acp_load_pi_config() -> Result<PiConfigProjection, AcpError> {
     Ok(load_pi_config_core())
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_validate_pi_command(command: String) -> Result<PiCommandValidation, AcpError> {
+    Ok(acp_validate_pi_command_core(command))
 }
 
 /// Launch Hermes's interactive setup in the OS terminal. `kind` selects the

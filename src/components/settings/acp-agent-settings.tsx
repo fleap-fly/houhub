@@ -74,7 +74,6 @@ import {
   acpClearBinaryCache,
   acpDetectAgentLocalVersion,
   acpDownloadAgentBinary,
-  acpInstallPiBinary,
   acpInstallUvTool,
   acpGetAgentStatus,
   acpListAgents,
@@ -82,12 +81,10 @@ import {
   acpPrepareNpxAgent,
   acpReorderAgents,
   acpUninstallAgent,
-  acpUninstallPiBinary,
   acpUpdateAgentConfig,
   acpUpdateAgentEnv,
   acpUpdateHermesConfig,
   acpUpdateKimiCodeConfig,
-  acpUpdatePiConfig,
   acpFetchKimiModels,
   acpRevealHermesHome,
   acpOpenHermesSetupTerminal,
@@ -112,6 +109,7 @@ import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
 import { OpencodePluginsModal } from "./opencode-plugins-modal"
 import { useHouflowDesktop, type HouflowAgentTarget } from "@/houflow"
 import { CodeBuddyConfigPanel } from "./codebuddy-config-panel"
+import { PiConfigPanel } from "./pi-config-panel"
 
 interface AgentCheckState {
   result?: PreflightResult
@@ -185,8 +183,6 @@ type RunningActionKind =
   | "redownload_binary"
   | "custom_install"
   | "install_uv"
-  | "install_pi"
-  | "uninstall_pi"
 
 type UiFixAction =
   | FixAction
@@ -201,8 +197,6 @@ type UiFixAction =
         | "uninstall_npx"
         | "install_opencode_plugins"
         | "custom_install"
-        | "install_pi"
-        | "uninstall_pi"
       payload: string
       // When true, the fix renders as a greyed-out button (e.g. the uvx
       // agent-install action while the uv runtime isn't ready yet).
@@ -287,30 +281,6 @@ function removeSlotPrefixedModel(value: string): string {
   const trimmed = value.trim()
   const match = /^(main|reasoning|haiku|sonnet|opus):(.+)$/.exec(trimmed)
   return match ? match[2].trim() : trimmed
-}
-
-function providerDefaultModel(
-  provider: ModelProviderInfo | null | undefined
-): string {
-  if (!provider) return ""
-  const listed = provider.models
-    .map(removeSlotPrefixedModel)
-    .find((model) => model.length > 0)
-  if (listed) return listed
-  if (!provider.model) return ""
-  try {
-    const parsed = JSON.parse(provider.model) as Record<string, unknown>
-    const main = parsed?.main
-    return typeof main === "string" ? main.trim() : ""
-  } catch {
-    return removeSlotPrefixedModel(provider.model)
-  }
-}
-
-function piProviderConfigId(provider: ModelProviderInfo): string {
-  return provider.name.trim().toLowerCase() === "houflow gateway"
-    ? "houflow"
-    : `houhub-provider-${provider.id}`
 }
 
 interface ImportantEnvKeys {
@@ -2963,27 +2933,7 @@ export function getAgentChecks(
   const uvReady =
     agent.distribution_type !== "uvx" || !uvCheck || uvCheck.status === "pass"
   const versionCheck = buildVersionCheck(agent, uvReady)
-  const remoteChecks: UiCheckItem[] = (current?.result?.checks ?? []).map(
-    (check) => {
-      const fixes: UiFixAction[] = [...check.fixes]
-      if (
-        agent.agent_type === "pi" &&
-        check.status !== "pass" &&
-        check.message.toLowerCase().includes("pi is not installed") &&
-        !fixes.some((fix) => fix.kind === "install_pi")
-      ) {
-        fixes.push({
-          label: acpText("actions.install", "Install"),
-          kind: "install_pi",
-          payload: agent.agent_type,
-        })
-      }
-      return {
-        ...check,
-        fixes,
-      }
-    }
-  )
+  const remoteChecks: UiCheckItem[] = current?.result?.checks ?? []
   return versionCheck ? [versionCheck, ...remoteChecks] : remoteChecks
 }
 
@@ -4695,56 +4645,6 @@ export function AcpAgentSettings() {
     [installErrorDescription, runPreflight, t, installStream.start]
   )
 
-  const runPiBinaryAction = useCallback(
-    async (agent: AcpAgentInfo, mode: "install" | "uninstall") => {
-      if (busyActionRef.current.has(agent.agent_type)) return
-      busyActionRef.current.add(agent.agent_type)
-      setBusyBinaryAction((prev) => ({ ...prev, [agent.agent_type]: true }))
-      setRunningActionKind((prev) => ({
-        ...prev,
-        [agent.agent_type]: mode === "install" ? "install_pi" : "uninstall_pi",
-      }))
-      const actionLabel =
-        mode === "install" ? t("actions.install") : t("actions.uninstall")
-      const taskId = randomUUID()
-      setStreamAgentType(agent.agent_type)
-      await installStream.start(taskId)
-      try {
-        if (mode === "install") {
-          await acpInstallPiBinary(taskId)
-        } else {
-          await acpUninstallPiBinary(taskId)
-        }
-        await runPreflight(agent.agent_type)
-        toast.success(
-          t("toasts.agentActionCompleted", {
-            name: "Pi CLI",
-            action: actionLabel,
-          })
-        )
-      } catch (err) {
-        const message = toErrorMessage(err)
-        toast.error(
-          t("toasts.agentActionFailed", {
-            name: "Pi CLI",
-            action: actionLabel,
-          }),
-          { description: installErrorDescription(message, "Pi CLI") }
-        )
-        throw err
-      } finally {
-        busyActionRef.current.delete(agent.agent_type)
-        setBusyBinaryAction((prev) => ({ ...prev, [agent.agent_type]: false }))
-        setRunningActionKind((prev) => ({
-          ...prev,
-          [agent.agent_type]: undefined,
-        }))
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [installErrorDescription, runPreflight, t, installStream.start]
-  )
-
   const handleFixAction = async (agent: AcpAgentInfo, action: UiFixAction) => {
     if (
       busyBinaryAction[agent.agent_type] ||
@@ -4787,14 +4687,6 @@ export function AcpAgentSettings() {
     }
     if (action.kind === "install_uv") {
       await runUvInstall(agent)
-      return
-    }
-    if (action.kind === "install_pi") {
-      await runPiBinaryAction(agent, "install")
-      return
-    }
-    if (action.kind === "uninstall_pi") {
-      await runPiBinaryAction(agent, "uninstall")
       return
     }
     if (action.kind === "custom_install") {
@@ -4924,8 +4816,6 @@ export function AcpAgentSettings() {
                           "install_opencode_plugins",
                           "custom_install",
                           "install_uv",
-                          "install_pi",
-                          "uninstall_pi",
                         ].includes(fix.kind))
                     }
                     onClick={() => {
@@ -4938,16 +4828,14 @@ export function AcpAgentSettings() {
                       <Loader2 className="h-3 w-3 animate-spin" />
                     ) : fix.kind === "download_binary" ||
                       fix.kind === "install_npx" ||
-                      fix.kind === "install_uv" ||
-                      fix.kind === "install_pi" ? (
+                      fix.kind === "install_uv" ? (
                       <Download className="h-3 w-3" />
                     ) : fix.kind === "upgrade_binary" ||
                       fix.kind === "upgrade_npx" ||
                       fix.kind === "redownload_binary" ? (
                       <Wrench className="h-3 w-3" />
                     ) : fix.kind === "uninstall_binary" ||
-                      fix.kind === "uninstall_npx" ||
-                      fix.kind === "uninstall_pi" ? (
+                      fix.kind === "uninstall_npx" ? (
                       <Trash2 className="h-3 w-3" />
                     ) : fix.kind === "install_opencode_plugins" ? (
                       <Download className="h-3 w-3" />
@@ -5090,21 +4978,6 @@ export function AcpAgentSettings() {
     if (!selectedAgent || !locale) return []
     return getAgentChecks(selectedAgent, selectedCurrent)
   }, [locale, selectedAgent, selectedCurrent])
-  const selectedPiInstallFix = useMemo(() => {
-    if (selectedAgent?.agent_type !== "pi") return null
-    for (const check of selectedChecks) {
-      const fix = check.fixes.find((item) => item.kind === "install_pi")
-      if (fix) return fix
-    }
-    return null
-  }, [selectedAgent, selectedChecks])
-  const selectedPiReady =
-    selectedAgent?.agent_type === "pi" &&
-    selectedCurrent?.result?.passed === true &&
-    !selectedPiInstallFix
-  const selectedPiChecked =
-    selectedAgent?.agent_type === "pi" && Boolean(selectedCurrent?.result)
-
   useEffect(() => {
     if (!selectedAgent || selectedChecks.length === 0) return
     setExpandedChecks((prev) => {
@@ -5574,20 +5447,6 @@ export function AcpAgentSettings() {
             configText: nextConfigJson.configText,
           }
         })
-      } else if (agentType === "pi") {
-        const model = providerDefaultModel(provider)
-        updateSelectedDraft((current) => ({
-          ...current,
-          modelProviderId: effectiveProviderId,
-          apiBaseUrl: apiUrl,
-          apiKey,
-          model,
-          envText: patchEnvText(current.envText, {
-            OPENAI_API_KEY: apiKey,
-            OPENAI_BASE_URL: apiUrl,
-            OPENAI_MODEL: model,
-          }),
-        }))
       } else {
         updateSelectedDraft((current) => ({
           ...current,
@@ -5634,45 +5493,6 @@ export function AcpAgentSettings() {
       reportAffectedSessions(result.affectedRunningSessions)
     },
     [modelProviders, reportAffectedSessions]
-  )
-
-  const persistPiNativeConfig = useCallback(
-    async (draft: AgentDraft): Promise<void> => {
-      if (draft.modelProviderId == null) {
-        const model = draft.model.trim()
-        if (!draft.apiBaseUrl.trim() && !draft.apiKey.trim() && !model) return
-        if (!model) {
-          throw new Error("Pi model is required")
-        }
-        await acpUpdatePiConfig({
-          provider: "houhub-custom",
-          model,
-          apiKey: draft.apiKey,
-          customBaseUrl: draft.apiBaseUrl,
-          customApi: "openai-completions",
-        })
-        return
-      }
-
-      const provider = modelProviders.find(
-        (item) =>
-          item.id === draft.modelProviderId &&
-          modelProviderSupportsAgentType(item, "pi")
-      )
-      if (!provider) return
-      const model = providerDefaultModel(provider)
-      if (!model) {
-        throw new Error(`Pi model provider ${provider.name} has no model`)
-      }
-      await acpUpdatePiConfig({
-        provider: piProviderConfigId(provider),
-        model,
-        apiKey: provider.api_key,
-        customBaseUrl: provider.api_url,
-        customApi: "openai-completions",
-      })
-    },
-    [modelProviders]
   )
 
   const handleGeminiFieldChange = useCallback(
@@ -8970,7 +8790,7 @@ supports_websockets = false`}
                             event.target.value
                           )
                         }}
-                        placeholder="claude-sonnet-4-5-20250514"
+                        placeholder="claude-sonnet-5"
                       />
                     </div>
 
@@ -9003,7 +8823,7 @@ supports_websockets = false`}
                         placeholder={`{
   "apiProvider": "anthropic",
   "apiKey": "sk-...",
-  "model": "claude-sonnet-4-5-20250514"
+  "model": "claude-sonnet-5"
 }`}
                       />
                       {selectedConfigError && (
@@ -9525,6 +9345,21 @@ supports_websockets = false`}
                     agent={selectedAgent}
                     onSaved={refreshAgents}
                   />
+                ) : selectedAgent.agent_type === "pi" ? (
+                  <PiConfigPanel
+                    agent={selectedAgent}
+                    saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                    onSaveEnv={(env, enabled) =>
+                      persistEnv(
+                        selectedAgent.agent_type,
+                        enabled,
+                        envMapToText(env),
+                        selectedAgent.model_provider_id
+                      )
+                    }
+                    onSaved={refreshAgents}
+                    modelProviders={modelProviders}
+                  />
                 ) : (
                   <div className="space-y-3 rounded-md border bg-muted/10 p-3">
                     <div>
@@ -9622,141 +9457,6 @@ supports_websockets = false`}
                         </div>
                       )}
 
-                    {selectedAgent.agent_type === "pi" && (
-                      <div className="space-y-3">
-                        <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
-                            {t("selectModelProvider")}
-                          </label>
-                          {selectedModelProviders.length > 0 ? (
-                            <Select
-                              value={
-                                selectedCompatibleModelProviderId != null
-                                  ? String(selectedCompatibleModelProviderId)
-                                  : MODEL_PROVIDER_MANUAL_VALUE
-                              }
-                              onValueChange={handleModelProviderSelect}
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue
-                                  placeholder={t("selectModelProvider")}
-                                />
-                              </SelectTrigger>
-                              <SelectContent align="start">
-                                <SelectItem value={MODEL_PROVIDER_MANUAL_VALUE}>
-                                  {t("authModeCustomEndpoint")}
-                                </SelectItem>
-                                {selectedModelProviders.map((provider) => (
-                                  <SelectItem
-                                    key={provider.id}
-                                    value={String(provider.id)}
-                                  >
-                                    {provider.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          ) : (
-                            <p className="text-[11px] text-muted-foreground">
-                              {t("noModelProviderAvailable")}
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2">
-                          <div className="min-w-0">
-                            <div className="text-xs font-medium">Pi CLI</div>
-                            <div className="text-[11px] text-muted-foreground">
-                              {selectedPiReady
-                                ? "pi command is available for pi-acp."
-                                : "pi-acp requires the pi command at runtime."}
-                            </div>
-                          </div>
-                          <div className="flex shrink-0 items-center gap-1.5">
-                            {selectedPiInstallFix ? (
-                              <Button
-                                type="button"
-                                size="xs"
-                                variant="outline"
-                                disabled={Boolean(
-                                  busyBinaryAction[selectedAgent.agent_type]
-                                )}
-                                onClick={() => {
-                                  runPiBinaryAction(
-                                    selectedAgent,
-                                    "install"
-                                  ).catch((err) => {
-                                    console.error(
-                                      "[Settings] Pi CLI install failed:",
-                                      err
-                                    )
-                                  })
-                                }}
-                              >
-                                {runningActionKind[selectedAgent.agent_type] ===
-                                "install_pi" ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <Download className="h-3 w-3" />
-                                )}
-                                {t("actions.install")}
-                              </Button>
-                            ) : selectedPiChecked ? (
-                              <Button
-                                type="button"
-                                size="xs"
-                                variant="outline"
-                                disabled={Boolean(
-                                  busyBinaryAction[selectedAgent.agent_type]
-                                )}
-                                onClick={() => {
-                                  runPiBinaryAction(
-                                    selectedAgent,
-                                    "uninstall"
-                                  ).catch((err) => {
-                                    console.error(
-                                      "[Settings] Pi CLI uninstall failed:",
-                                      err
-                                    )
-                                  })
-                                }}
-                              >
-                                {runningActionKind[selectedAgent.agent_type] ===
-                                "uninstall_pi" ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <Trash2 className="h-3 w-3" />
-                                )}
-                                {t("actions.uninstall")}
-                              </Button>
-                            ) : (
-                              <Button
-                                type="button"
-                                size="xs"
-                                variant="outline"
-                                disabled={Boolean(checking.pi)}
-                                onClick={() => {
-                                  runPreflight("pi").catch((err) => {
-                                    console.error(
-                                      "[Settings] Pi CLI check failed:",
-                                      err
-                                    )
-                                  })
-                                }}
-                              >
-                                {checking.pi ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <RefreshCw className="h-3 w-3" />
-                                )}
-                                {acpText("actions.check", "Check")}
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
                     {(selectedAgent.agent_type !== "claude_code" ||
                       selectedDraft.claudeAuthMode === "custom" ||
                       selectedDraft.claudeAuthMode === "model_provider") && (
@@ -9770,9 +9470,7 @@ supports_websockets = false`}
                             readOnly={
                               (selectedAgent.agent_type === "claude_code" &&
                                 selectedDraft.claudeAuthMode ===
-                                  "model_provider") ||
-                              (selectedAgent.agent_type === "pi" &&
-                                selectedCompatibleModelProviderId != null)
+                                  "model_provider")
                             }
                             onChange={(event) => {
                               handleImportantConfigChange(
@@ -9799,9 +9497,7 @@ supports_websockets = false`}
                               readOnly={
                                 (selectedAgent.agent_type === "claude_code" &&
                                   selectedDraft.claudeAuthMode ===
-                                    "model_provider") ||
-                                (selectedAgent.agent_type === "pi" &&
-                                  selectedCompatibleModelProviderId != null)
+                                    "model_provider")
                               }
                               onChange={(event) => {
                                 handleImportantConfigChange(
@@ -9884,7 +9580,7 @@ supports_websockets = false`}
                                     event.target.value
                                   )
                                 }}
-                                placeholder="claude-sonnet-4-6"
+                                placeholder="claude-sonnet-5"
                               />
                             )}
                           </div>
@@ -10022,7 +9718,7 @@ supports_websockets = false`}
                                     event.target.value
                                   )
                                 }}
-                                placeholder="claude-sonnet-4-6"
+                                placeholder="claude-sonnet-5"
                               />
                             )}
                           </div>
@@ -10269,9 +9965,6 @@ supports_websockets = false`}
                               selectedDraft.envText,
                               selectedCompatibleModelProviderId
                             )
-                            if (selectedAgent.agent_type === "pi") {
-                              await persistPiNativeConfig(selectedDraft)
-                            }
                             await persistConfig(
                               selectedAgent.agent_type,
                               configToSave

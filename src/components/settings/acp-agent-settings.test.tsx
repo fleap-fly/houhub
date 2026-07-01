@@ -195,7 +195,7 @@ describe("getAgentChecks uv gating", () => {
 })
 
 describe("getAgentChecks Pi runtime gating", () => {
-  it("adds an Install Pi CLI fix when pi-acp is installed but the pi command is missing", () => {
+  it("passes Pi runtime preflight checks through without adding settings-panel fixes", () => {
     const checks = getAgentChecks(
       makeAgent({
         agent_type: "pi" as AgentType,
@@ -223,10 +223,11 @@ describe("getAgentChecks Pi runtime gating", () => {
     )
 
     const sdkCheck = checks.find((check) => check.check_id === "sdk")
-    expect(sdkCheck?.fixes.some((fix) => fix.kind === "install_pi")).toBe(true)
+    expect(sdkCheck?.status).toBe("fail")
+    expect(sdkCheck?.fixes).toEqual([])
   })
 
-  it("does not add an Install Pi CLI fix when pi preflight passes", () => {
+  it("keeps passing Pi runtime preflight checks unchanged", () => {
     const checks = getAgentChecks(
       makeAgent({
         agent_type: "pi" as AgentType,
@@ -253,11 +254,9 @@ describe("getAgentChecks Pi runtime gating", () => {
       }
     )
 
-    expect(
-      checks.some((check) =>
-        check.fixes.some((fix) => fix.kind === "install_pi")
-      )
-    ).toBe(false)
+    const sdkCheck = checks.find((check) => check.check_id === "sdk")
+    expect(sdkCheck?.status).toBe("pass")
+    expect(sdkCheck?.fixes).toEqual([])
   })
 })
 
