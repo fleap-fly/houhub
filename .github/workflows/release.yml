@@ -25,7 +25,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 11.6.0
+          version: 11.9.0
           run_install: false
 
       - name: Setup Node.js
@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           corepack enable
-          corepack prepare pnpm@11.6.0 --activate
+          corepack prepare pnpm@11.9.0 --activate
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
@@ -80,7 +80,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 11.6.0
+          version: 11.9.0
           run_install: false
 
       - name: Setup Node.js
@@ -105,7 +105,7 @@ jobs:
         shell: bash
         run: |
           corepack enable
-          corepack prepare pnpm@11.6.0 --activate
+          corepack prepare pnpm@11.9.0 --activate
 
       - name: Install Tauri CLI dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts --prefer-offline
@@ -262,7 +262,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 11.6.0
+          version: 11.9.0
           run_install: false
 
       - name: Setup Node.js
@@ -287,7 +287,7 @@ jobs:
         shell: bash
         run: |
           corepack enable
-          corepack prepare pnpm@11.6.0 --activate
+          corepack prepare pnpm@11.9.0 --activate
 
       - name: Install Tauri CLI dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts --prefer-offline
