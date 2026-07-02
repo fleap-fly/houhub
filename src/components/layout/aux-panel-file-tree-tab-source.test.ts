@@ -101,19 +101,97 @@ describe("use-open-file-tabs-watch external-change coverage", () => {
     // workspace event — one batched setState marks them stale and the
     // activation path refreshes them.
     expect(watchSource).toMatch(/staleBatch/)
-    expect(watchSource).toMatch(/markTabsStaleBatch\(folderId, staleBatch\)/)
+    expect(watchSource).toMatch(/markTabsStaleBatch\(staleBatch\)/)
   })
 })
 
-describe("workspace-context stale-aware save guard", () => {
-  it("verifies a stale dirty tab against disk inside saveFileTab", () => {
+describe("file-workspace-panel routes active-tab openers by tab folder", () => {
+  const panelSource = readFileSync(
+    resolve(process.cwd(), "src/components/files/file-workspace-panel.tsx"),
+    "utf8"
+  )
+
+  it("diff-overview rows open files in the overview tab's folder", () => {
+    // A background-folder overview must never open its rows through the
+    // active workspace folder.
+    expect(panelSource).toMatch(
+      /openFilePreview\(path, \{ folderId: overviewFolderId \}\)/
+    )
+  })
+
+  it("markdown preview links open by absolute path", () => {
+    // preprocessMarkdownPaths resolves every local href against the
+    // document's ABSOLUTE directory, so the click handler must hand the
+    // target to openFilePreview as-is (keeping the leading slash) — never
+    // strip it back to a folder-relative path.
+    expect(panelSource).toMatch(/void openFilePreview\(target\)/)
+    expect(panelSource).not.toMatch(
+      /target\s*=\s*clean\s*\.replace\(\/\^\\\/\+\//
+    )
+  })
+
+  it("excludes protocol-relative // hrefs from the local anchor branch", () => {
+    // "//host/…" is a web url; collapsing it into a local path would read
+    // the wrong file. The isRelative gate must reject the double-slash form.
+    const gateIdx = panelSource.indexOf("const isRelative =")
+    expect(gateIdx).toBeGreaterThan(-1)
+    const gate = panelSource.slice(gateIdx, gateIdx + 200)
+    expect(gate).toMatch(/\^\\\/\\\//)
+  })
+
+  it("treats protocol-relative // image srcs as remote, never local file IO", () => {
+    // A "/"-prefixed src is an absolute local path under the new model,
+    // but "//host/…" is a protocol-relative URL — routing it into
+    // readFileBase64 would attempt local reads of "//Users/…"-style
+    // paths. The isLocal gate must exclude the double-slash form.
+    const isLocalIdx = panelSource.indexOf("const isLocal =")
+    expect(isLocalIdx).toBeGreaterThan(-1)
+    const gate = panelSource.slice(isLocalIdx, isLocalIdx + 300)
+    expect(gate).toMatch(/\^\\\/\\\//)
+  })
+
+  it("disables local markdown resolution for UNC-hosted documents", () => {
+    // A UNC document's local sub-resources cannot be resolved safely: the
+    // //server/share authority is lost through the harden round trip and a
+    // collapsed single-slash path would read a DIFFERENT local file. So
+    // preprocessing, the image loader, and the link opener are all gated on
+    // localRefsEnabled = non-UNC fileDir.
+    expect(panelSource).toMatch(
+      /const localRefsEnabled = !fileDir \|\| !isUncPath\(fileDir\)/
+    )
+    expect(panelSource).toMatch(
+      /fileDir=\{localRefsEnabled \? fileDir : null\}/
+    )
+    expect(panelSource).toMatch(/isRelative && href && localRefsEnabled/)
+  })
+})
+
+describe("aux file tree derives its selection from the absolute tab path", () => {
+  const auxTreeSource = readFileSync(
+    resolve(process.cwd(), "src/components/layout/aux-panel-file-tree-tab.tsx"),
+    "utf8"
+  )
+
+  it("maps the absolute active path to a folder-relative tree selection", () => {
+    // Tree node paths are relative to THIS panel's folder; the absolute
+    // activeFilePath must be re-based (and unselected when outside).
+    expect(auxTreeSource).toMatch(/findOwningFolder\(activeFilePath/)
+    expect(auxTreeSource).toMatch(/selectedPath=\{selectedTreePath\}/)
+    expect(auxTreeSource).not.toMatch(/selectedPath=\{activeFilePath/)
+  })
+})
+
+describe("workspace-context divergence-aware save guard", () => {
+  it("verifies stale and unwatched dirty tabs against disk inside saveFileTab", () => {
     // Blocker #18: every write path funnels through saveFileTab, so the
     // guard must live there — a stale buffer is never written blindly.
+    // Files outside every registered folder have no live watcher, so
+    // their saves must ALWAYS pre-verify (`unwatched`).
     expect(providerSource).toMatch(
-      /if \(tab\.stale && !options\?\.force\)[\s\S]{0,600}readFileForEdit\(folderPath, tab\.path\)/
+      /if \(\(tab\.stale \|\| unwatched\) && !options\?\.force\)[\s\S]{0,600}readFileForEdit\(io\.rootPath, io\.ioPath\)/
     )
     expect(providerSource).toMatch(
-      /if \(tab\.stale && !options\?\.force\)[\s\S]{0,1200}enqueueExternalConflict/
+      /if \(\(tab\.stale \|\| unwatched\) && !options\?\.force\)[\s\S]{0,1200}enqueueExternalConflict/
     )
   })
 })
