@@ -17,7 +17,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { LinkSafetyConfig, LinkSafetyModalProps } from "streamdown"
 import { toast } from "sonner"
 import { useActiveFolder } from "@/contexts/active-folder-context"
-import { useWorkspaceContext } from "@/contexts/workspace-context"
+import { useWorkspaceActions } from "@/contexts/workspace-context"
 import { cn } from "@/lib/utils"
 
 interface LocalFileTarget {
@@ -305,7 +305,7 @@ export function useOpenLinkOrFile() {
   const t = useTranslations("Folder.chat.linkSafety")
   const { activeFolder: folder } = useActiveFolder()
   const folderPath = folder?.path
-  const { openFilePreview } = useWorkspaceContext()
+  const { openFilePreview } = useWorkspaceActions()
 
   return useCallback(
     async (url: string) => {
@@ -449,7 +449,7 @@ export function FilePathLink({
   const t = useTranslations("Folder.chat.linkSafety")
   const { activeFolder: folder } = useActiveFolder()
   const folderPath = folder?.path ?? null
-  const { openFilePreview } = useWorkspaceContext()
+  const { openFilePreview } = useWorkspaceActions()
   // `opening` drives the visual busy state. `openingRef` is the synchronous
   // gate that survives rapid double-fires within a single event tick —
   // React batches the `setOpening(true)` commit, so relying purely on the

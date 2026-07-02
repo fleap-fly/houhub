@@ -64,16 +64,17 @@ export interface FileWorkspaceTab {
   stale?: boolean
 }
 
-interface WorkspaceContextValue {
-  mode: WorkspaceMode
-  activePane: WorkspacePane
+// The provider value is split across three contexts so high-frequency
+// fileTabs churn (per-keystroke content updates, watcher-driven reloads)
+// only re-renders components that actually read tab data. Action-only
+// consumers on the conversation render path (message nav, artifacts,
+// links, search) subscribe to WorkspaceActionsContext, whose value is
+// stable for the provider's lifetime; layout chrome subscribes to
+// WorkspaceViewContext, which only changes on mode/pane/maximize flips.
+interface WorkspaceActionsValue {
   setActivePane: (pane: WorkspacePane) => void
   activateConversationPane: () => void
   activateFilePane: () => void
-  fileTabs: FileWorkspaceTab[]
-  activeFileTabId: string | null
-  activeFileTab: FileWorkspaceTab | null
-  activeFilePath: string | null
   switchFileTab: (tabId: string) => void
   closeFileTab: (tabId: string) => void
   closeOtherFileTabs: (tabId: string) => void
@@ -104,11 +105,6 @@ interface WorkspaceContextValue {
   // permission revoked, …), so the user is never shown a stale buffer that
   // no longer corresponds to disk.
   rejectFileTab: (path: string, errorMessage: string) => void
-  pendingFileReveal: {
-    requestId: number
-    path: string
-    line: number
-  } | null
   consumePendingFileReveal: (requestId: number) => void
   openWorkingTreeDiff: (
     path?: string,
@@ -137,13 +133,40 @@ interface WorkspaceContextValue {
   updateActiveFileContent: (content: string) => void
   saveActiveFile: (options?: { force?: boolean }) => Promise<boolean>
   reloadActiveFile: () => Promise<void>
-  previewFileTabIds: Set<string>
   toggleFileTabPreview: (tabId: string) => void
-  filesMaximized: boolean
   toggleFilesMaximized: () => void
 }
 
-const WorkspaceContext = createContext<WorkspaceContextValue | null>(null)
+interface WorkspaceViewValue {
+  mode: WorkspaceMode
+  activePane: WorkspacePane
+  filesMaximized: boolean
+}
+
+interface WorkspaceFileTabsValue {
+  fileTabs: FileWorkspaceTab[]
+  activeFileTabId: string | null
+  activeFileTab: FileWorkspaceTab | null
+  activeFilePath: string | null
+  previewFileTabIds: Set<string>
+  pendingFileReveal: {
+    requestId: number
+    path: string
+    line: number
+  } | null
+}
+
+type WorkspaceContextValue = WorkspaceActionsValue &
+  WorkspaceViewValue &
+  WorkspaceFileTabsValue
+
+const WorkspaceActionsContext = createContext<WorkspaceActionsValue | null>(
+  null
+)
+const WorkspaceViewContext = createContext<WorkspaceViewValue | null>(null)
+const WorkspaceFileTabsContext = createContext<WorkspaceFileTabsValue | null>(
+  null
+)
 
 function normalizePath(path: string): string {
   return path.replace(/\\/g, "/")
@@ -257,6 +280,13 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
   )
   const [filesMaximized, setFilesMaximized] = useState(false)
   const fileTabsRef = useRef<FileWorkspaceTab[]>([])
+  // Latest-state mirrors for the stable action callbacks. Actions live in a
+  // context value that must NOT change identity when tabs/folder change, so
+  // they read these refs instead of capturing render-scoped state. The refs
+  // are synced in effects (post-commit), giving the same staleness window a
+  // recreated closure would have had — never fresher, never older.
+  const activeFileTabIdRef = useRef<string | null>(null)
+  const folderPathRef = useRef<string | undefined>(undefined)
   const fileRevealRequestIdRef = useRef(0)
   // tabId -> generation of its current in-flight fetch. Serves two roles:
   //   (a) Dedup: `has(tabId)` collapses rapid re-clicks within one event
@@ -271,6 +301,14 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
   useEffect(() => {
     fileTabsRef.current = fileTabs
   }, [fileTabs])
+
+  useEffect(() => {
+    activeFileTabIdRef.current = activeFileTabId
+  }, [activeFileTabId])
+
+  useEffect(() => {
+    folderPathRef.current = folderPath
+  }, [folderPath])
 
   const mode: WorkspaceMode = fileTabs.length > 0 ? "fusion" : "conversation"
   const effectiveFilesMaximized = mode === "fusion" && filesMaximized
@@ -602,6 +640,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
   // (conflict resolution belongs to the watcher via markTabsStale).
   const reloadOpenFileBackground = useCallback(
     async (rawPath: string) => {
+      const folderPath = folderPathRef.current
       if (!folderPath) return
       const path = normalizePath(rawPath)
       const tabId = `file:${path}`
@@ -685,14 +724,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         rejectTab(tabId, toErrorMessage(error))
       }
     },
-    [
-      folderPath,
-      beginFetchGeneration,
-      markTabRefreshing,
-      rejectTab,
-      settleFetch,
-      t,
-    ]
+    [beginFetchGeneration, markTabRefreshing, rejectTab, settleFetch, t]
   )
 
   // Mark the tab matching `path` as stale so the next activation triggers a
@@ -728,6 +760,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
   // reload via the openFilePreview dedup path.
   const applyExternalReload = useCallback(
     async (rawPath: string, fetched: FileEditContent) => {
+      const folderPath = folderPathRef.current
       if (!folderPath) return
       const path = normalizePath(rawPath)
       const tabId = `file:${path}`
@@ -815,7 +848,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         }
       })()
     },
-    [folderPath, beginFetchGeneration, settleFetch, t]
+    [beginFetchGeneration, settleFetch, t]
   )
 
   // Mark a clean open tab as load-failed. Used by the change-detection
@@ -859,6 +892,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
 
   const openFilePreview = useCallback(
     async (rawPath: string, options?: { line?: number; reload?: boolean }) => {
+      const folderPath = folderPathRef.current
       if (!folderPath) return
       const path = normalizePath(rawPath)
       const requestedLine =
@@ -989,7 +1023,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         rejectTab(tabId, toErrorMessage(error))
       }
     },
-    [folderPath, decideLoad, rejectTab, settleFetch, t]
+    [decideLoad, rejectTab, settleFetch, t]
   )
 
   const openWorkingTreeDiff = useCallback(
@@ -997,6 +1031,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       rawPath?: string,
       options?: { mode?: "auto" | "unified" | "overview" }
     ) => {
+      const folderPath = folderPathRef.current
       if (!folderPath) return
 
       if (!rawPath) {
@@ -1107,15 +1142,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         if (settleFetch(tabId, gen)) rejectTab(tabId, toErrorMessage(error))
       }
     },
-    [
-      folderPath,
-      beginDiffLoad,
-      rejectTab,
-      resolveTab,
-      resolveRichDiffTab,
-      settleFetch,
-      t,
-    ]
+    [beginDiffLoad, rejectTab, resolveTab, resolveRichDiffTab, settleFetch, t]
   )
 
   const openBranchDiff = useCallback(
@@ -1124,6 +1151,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       rawPath?: string,
       options?: { mode?: "default" | "overview" }
     ) => {
+      const folderPath = folderPathRef.current
       if (!folderPath) return
       const targetBranch = branch.trim()
       if (!targetBranch) return
@@ -1192,19 +1220,12 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         if (settleFetch(tabId, gen)) rejectTab(tabId, toErrorMessage(error))
       }
     },
-    [
-      folderPath,
-      beginDiffLoad,
-      rejectTab,
-      resolveRichDiffTab,
-      resolveTab,
-      settleFetch,
-      t,
-    ]
+    [beginDiffLoad, rejectTab, resolveRichDiffTab, resolveTab, settleFetch, t]
   )
 
   const openCommitDiff = useCallback(
     async (commit: string, rawPath?: string, message?: string) => {
+      const folderPath = folderPathRef.current
       if (!folderPath) return
       const path = rawPath ? normalizePath(rawPath) : null
       const tabId = `diff:commit:${commit}:${path ?? "all"}`
@@ -1263,15 +1284,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         }
       }
     },
-    [
-      folderPath,
-      beginDiffLoad,
-      rejectTab,
-      resolveTab,
-      resolveRichDiffTab,
-      settleFetch,
-      t,
-    ]
+    [beginDiffLoad, rejectTab, resolveTab, resolveRichDiffTab, settleFetch, t]
   )
 
   const openSessionFileDiff = useCallback(
@@ -1323,32 +1336,31 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     [replaceTabContent, t]
   )
 
-  const updateActiveFileContent = useCallback(
-    (content: string) => {
-      if (!activeFileTabId) return
+  const updateActiveFileContent = useCallback((content: string) => {
+    const activeId = activeFileTabIdRef.current
+    if (!activeId) return
 
-      setFileTabs((prev) =>
-        prev.map((tab) => {
-          if (tab.id !== activeFileTabId || tab.kind !== "file") return tab
-          if (tab.loading || tab.readonly) return tab
-          if (tab.content === content) return tab
+    setFileTabs((prev) =>
+      prev.map((tab) => {
+        if (tab.id !== activeId || tab.kind !== "file") return tab
+        if (tab.loading || tab.readonly) return tab
+        if (tab.content === content) return tab
 
-          const savedContent = tab.savedContent ?? ""
-          return {
-            ...tab,
-            content,
-            isDirty: content !== savedContent,
-            saveState: tab.saveState === "saving" ? "saving" : "idle",
-            saveError: null,
-          }
-        })
-      )
-    },
-    [activeFileTabId]
-  )
+        const savedContent = tab.savedContent ?? ""
+        return {
+          ...tab,
+          content,
+          isDirty: content !== savedContent,
+          saveState: tab.saveState === "saving" ? "saving" : "idle",
+          saveError: null,
+        }
+      })
+    )
+  }, [])
 
   const saveFileTab = useCallback(
     async (tabId: string, options?: { force?: boolean }): Promise<boolean> => {
+      const folderPath = folderPathRef.current
       if (!folderPath) return false
       const tab = fileTabsRef.current.find(
         (candidate) => candidate.id === tabId
@@ -1423,19 +1435,21 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         return false
       }
     },
-    [folderPath, t]
+    [t]
   )
 
   const saveActiveFile = useCallback(
     async (options?: { force?: boolean }) => {
-      if (!activeFileTabId) return false
-      return saveFileTab(activeFileTabId, options)
+      const activeId = activeFileTabIdRef.current
+      if (!activeId) return false
+      return saveFileTab(activeId, options)
     },
-    [activeFileTabId, saveFileTab]
+    [saveFileTab]
   )
 
   const reloadFileTab = useCallback(
     async (tabId: string) => {
+      const folderPath = folderPathRef.current
       if (!folderPath) return
       const tab = fileTabsRef.current.find(
         (candidate) => candidate.id === tabId
@@ -1507,23 +1521,25 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         )
       }
     },
-    [folderPath, t]
+    [t]
   )
 
   const reloadActiveFile = useCallback(async () => {
-    if (!activeFileTabId) return
-    await reloadFileTab(activeFileTabId)
-  }, [activeFileTabId, reloadFileTab])
+    const activeId = activeFileTabIdRef.current
+    if (!activeId) return
+    await reloadFileTab(activeId)
+  }, [reloadFileTab])
 
   const switchFileTab = useCallback(
     (tabId: string) => {
-      if (activeFileTabId && activeFileTabId !== tabId) {
-        void saveFileTab(activeFileTabId)
+      const activeId = activeFileTabIdRef.current
+      if (activeId && activeId !== tabId) {
+        void saveFileTab(activeId)
       }
       setActiveFileTabId(tabId)
       activateFilePane()
     },
-    [activeFileTabId, activateFilePane, saveFileTab]
+    [activateFilePane, saveFileTab]
   )
 
   const closeFileTab = useCallback(
@@ -1631,17 +1647,15 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     })
   }, [])
 
-  const value = useMemo<WorkspaceContextValue>(
+  // Stable for the provider's lifetime: every callback reads mutable state
+  // through refs or functional updaters, never through render-scoped
+  // closures, so this memo's inputs only change if a callback identity
+  // changes (which none do after mount).
+  const actions = useMemo<WorkspaceActionsValue>(
     () => ({
-      mode,
-      activePane,
       setActivePane,
       activateConversationPane,
       activateFilePane,
-      fileTabs,
-      activeFileTabId,
-      activeFileTab,
-      activeFilePath,
       switchFileTab,
       closeFileTab,
       closeOtherFileTabs,
@@ -1652,7 +1666,6 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       applyExternalReload,
       markTabsStale,
       rejectFileTab,
-      pendingFileReveal,
       consumePendingFileReveal,
       openWorkingTreeDiff,
       openBranchDiff,
@@ -1662,21 +1675,13 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       updateActiveFileContent,
       saveActiveFile,
       reloadActiveFile,
-      previewFileTabIds,
       toggleFileTabPreview,
-      filesMaximized: effectiveFilesMaximized,
       toggleFilesMaximized,
     }),
     [
-      mode,
-      activePane,
       setActivePane,
       activateConversationPane,
       activateFilePane,
-      fileTabs,
-      activeFileTabId,
-      activeFileTab,
-      activeFilePath,
       switchFileTab,
       closeFileTab,
       closeOtherFileTabs,
@@ -1687,7 +1692,6 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       applyExternalReload,
       markTabsStale,
       rejectFileTab,
-      pendingFileReveal,
       consumePendingFileReveal,
       openWorkingTreeDiff,
       openBranchDiff,
@@ -1697,24 +1701,96 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       updateActiveFileContent,
       saveActiveFile,
       reloadActiveFile,
-      previewFileTabIds,
       toggleFileTabPreview,
-      effectiveFilesMaximized,
       toggleFilesMaximized,
     ]
   )
 
+  const view = useMemo<WorkspaceViewValue>(
+    () => ({
+      mode,
+      activePane,
+      filesMaximized: effectiveFilesMaximized,
+    }),
+    [mode, activePane, effectiveFilesMaximized]
+  )
+
+  const fileTabsValue = useMemo<WorkspaceFileTabsValue>(
+    () => ({
+      fileTabs,
+      activeFileTabId,
+      activeFileTab,
+      activeFilePath,
+      previewFileTabIds,
+      pendingFileReveal,
+    }),
+    [
+      fileTabs,
+      activeFileTabId,
+      activeFileTab,
+      activeFilePath,
+      previewFileTabIds,
+      pendingFileReveal,
+    ]
+  )
+
   return (
-    <WorkspaceContext.Provider value={value}>
-      {children}
-    </WorkspaceContext.Provider>
+    <WorkspaceActionsContext.Provider value={actions}>
+      <WorkspaceViewContext.Provider value={view}>
+        <WorkspaceFileTabsContext.Provider value={fileTabsValue}>
+          {children}
+        </WorkspaceFileTabsContext.Provider>
+      </WorkspaceViewContext.Provider>
+    </WorkspaceActionsContext.Provider>
   )
 }
 
-export function useWorkspaceContext() {
-  const ctx = useContext(WorkspaceContext)
+// Workspace action callbacks. Value identity is stable for the provider's
+// lifetime — subscribing here never re-renders on tab/content churn.
+export function useWorkspaceActions(): WorkspaceActionsValue {
+  const ctx = useContext(WorkspaceActionsContext)
   if (!ctx) {
-    throw new Error("useWorkspaceContext must be used within WorkspaceProvider")
+    throw new Error("useWorkspaceActions must be used within WorkspaceProvider")
   }
   return ctx
+}
+
+// Low-frequency layout state (mode / activePane / filesMaximized). Changes
+// only on fusion transitions, pane switches, and maximize toggles.
+export function useWorkspaceView(): WorkspaceViewValue {
+  const ctx = useContext(WorkspaceViewContext)
+  if (!ctx) {
+    throw new Error("useWorkspaceView must be used within WorkspaceProvider")
+  }
+  return ctx
+}
+
+// High-frequency tab data — changes on every keystroke, load, and
+// watcher-driven reload. Only file-pane components should subscribe.
+export function useWorkspaceFileTabs(): WorkspaceFileTabsValue {
+  const ctx = useContext(WorkspaceFileTabsContext)
+  if (!ctx) {
+    throw new Error(
+      "useWorkspaceFileTabs must be used within WorkspaceProvider"
+    )
+  }
+  return ctx
+}
+
+/**
+ * Aggregate of all three workspace slices.
+ *
+ * @deprecated Subscribes to the high-frequency fileTabs slice, so callers
+ * re-render on every keystroke and watcher reload. Components on the
+ * conversation render path must use `useWorkspaceActions` /
+ * `useWorkspaceView` / `useWorkspaceFileTabs` instead.
+ */
+export function useWorkspaceContext(): WorkspaceContextValue {
+  const actions = useWorkspaceActions()
+  const view = useWorkspaceView()
+  const fileTabs = useWorkspaceFileTabs()
+  return useMemo(
+    () => ({ ...actions, ...view, ...fileTabs }),
+    [actions, view, fileTabs]
+  )
 }
