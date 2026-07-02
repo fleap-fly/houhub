@@ -7883,7 +7883,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 thinking_level: Some("medium".to_string()),
                 api_key: Some("sk-test".to_string()),
-                custom_base_url: Some("https://agent.houflow.com/api/gateway/openai/v1".to_string()),
+                custom_base_url: Some("https://api.houshanai.com/v1".to_string()),
                 custom_api: Some("openai-completions".to_string()),
             })
             .expect("write pi config");
@@ -7908,7 +7908,7 @@ mod tests {
             .expect("models json");
             assert_eq!(
                 models["providers"]["houflow"]["baseUrl"],
-                "https://agent.houflow.com/api/gateway/openai/v1"
+                "https://api.houshanai.com/v1"
             );
             assert_eq!(models["providers"]["houflow"]["api"], "openai-completions");
             assert_eq!(models["providers"]["houflow"]["models"][0]["id"], "gpt-5");
@@ -7920,7 +7920,7 @@ mod tests {
         let provider = crate::db::entities::model_provider::Model {
             id: 7,
             name: "Houflow Gateway".to_string(),
-            api_url: "https://agent.houflow.com/api/gateway/openai/v1".to_string(),
+            api_url: "https://api.houshanai.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             agent_types_json: r#"["pi"]"#.to_string(),
             agent_type: "pi".to_string(),

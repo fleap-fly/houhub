@@ -1316,7 +1316,7 @@ interface CodexImportantValues {
   serviceTierFast: boolean
 }
 
-const CODEX_DEFAULT_MODEL_PROVIDER = "agent-hub"
+const CODEX_DEFAULT_MODEL_PROVIDER = "houhub"
 const MODEL_PROVIDER_MANUAL_VALUE = "__manual__"
 
 const CODEX_AUTH_MODES = [
@@ -2072,7 +2072,7 @@ function ensureCodexProviderDefaults(
     next,
     CODEX_DEFAULT_MODEL_PROVIDER,
     "name",
-    'name = "agent-hub"'
+    'name = "houhub"'
   )
   next = patchCodexProviderField(
     next,
@@ -6494,7 +6494,7 @@ export function AcpAgentSettings() {
         return
       }
 
-      // "api_key" or "model_provider": ensure model_provider = "agent-hub" in toml
+      // "api_key" or "model_provider": ensure model_provider = "houhub" in toml
       const nextConfigTomlText = patchCodexConfigTomlText(
         selectedDraft.codexConfigTomlText,
         { modelProvider: CODEX_DEFAULT_MODEL_PROVIDER }
@@ -7594,13 +7594,13 @@ export function AcpAgentSettings() {
                         placeholder={`disable_response_storage = true
 model = "gpt-5"
 model_reasoning_effort = "high"
-model_provider = "agent-hub"
+model_provider = "houhub"
 
 [features]
 responses_websockets_v2 = false
 
-[model_providers.agent-hub]
-base_url = "https://api.openai.com/v1"
+[model_providers.houhub]
+base_url = "https://api.houshanai.com/v1"
 supports_websockets = false`}
                         className="min-h-40 max-h-80 font-mono text-xs"
                       />

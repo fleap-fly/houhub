@@ -1117,7 +1117,7 @@ mod tests {
         ModelProviderInfo {
             id: 1,
             name: "Houflow Gateway".to_string(),
-            api_url: "https://agent.houflow.com/api/gateway/openai/v1".to_string(),
+            api_url: "https://api.houshanai.com/v1".to_string(),
             api_key: "sk-test".to_string(),
             api_key_masked: "sk-test".to_string(),
             agent_types: vec![],
