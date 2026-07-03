@@ -25,7 +25,7 @@ import { toast } from "sonner"
 import { useAcpActions, useAcpEvent } from "@/contexts/acp-connections-context"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
-import { useTabContext } from "@/contexts/tab-context"
+import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { useSessionStats } from "@/contexts/session-stats-context"
 import { useTaskContext } from "@/contexts/task-context"
 import { cn, copyTextFromMenu, randomUUID } from "@/lib/utils"
@@ -163,14 +163,25 @@ const ConversationTabView = memo(function ConversationTabView({
   const t = useTranslations("Folder.conversation")
   const tWelcome = useTranslations("Folder.chat.welcomeInputPanel")
   const sharedT = useTranslations("Folder.chat.shared")
-  const { activeFolder: folder, activeFolderId } = useActiveFolder()
   const refreshConversations = useAppWorkspaceStore(
     (s) => s.refreshConversations
   )
   const upsertFolder = useAppWorkspaceStore((s) => s.upsertFolder)
-  const folderId = activeFolderId ?? 0
+  // Subscribe to ONLY this tab's own row (identified by `tabId`), not the whole
+  // `tabs` array — so a sibling tab changing, or a tab-switch (isActive rides in
+  // as a prop), never re-renders this keep-alive panel. `find` returns the same
+  // object reference across derives until this tab itself changes.
+  const ownTab = useTabStore(
+    (s) => s.tabs.find((tab) => tab.id === tabId) ?? null
+  )
+  const ownFolderId = ownTab?.folderId ?? null
+  const folder = useAppWorkspaceStore((s) =>
+    ownFolderId != null
+      ? (s.allFolders.find((f) => f.id === ownFolderId) ?? null)
+      : null
+  )
+  const folderId = ownFolderId ?? 0
   const {
-    tabs,
     bindConversationTab,
     setChatDraftWorkingDir,
     setTabRuntimeConversationId,
@@ -179,7 +190,7 @@ const ConversationTabView = memo(function ConversationTabView({
     closeTab,
     confirmDraftAgent,
     setDraftAgentFromFallback,
-  } = useTabContext()
+  } = useTabActions()
   const { setSessionStats } = useSessionStats()
   const {
     appendOptimisticTurn,
@@ -234,15 +245,6 @@ const ConversationTabView = memo(function ConversationTabView({
     useState<ComposerInjectContent | null>(null)
 
   const hasPersistedConversation = dbConversationId != null
-  const ownTab = useMemo(
-    () => tabs.find((tab) => tab.id === tabId) ?? null,
-    [tabs, tabId]
-  )
-  const folderId = ownTab?.folderId ?? 0
-  const folder = useMemo(
-    () => (ownTab ? getFolder(ownTab.folderId) : null),
-    [getFolder, ownTab]
-  )
 
   // A folderless chat draft before its first send (chat tab, not yet persisted).
   // Used to trigger the eager scratch-dir prepare below, which gives the draft a
@@ -722,7 +724,7 @@ const ConversationTabView = memo(function ConversationTabView({
       // createChatConversation, reusing this eager dir). The composer is gated
       // on `connected` for chat drafts too, so by the time we get here the agent
       // is live and the prompt is delivered inline — never parked in the queue.
-      const sendOwnTab = tabs.find((tab) => tab.id === tabId)
+      const sendOwnTab = ownTab
 
       if (!hasPersistedConversation && !canAutoConnect) {
         setAgentConnectError(tWelcome("enableAgentFirstPlaceholder"))
@@ -792,8 +794,7 @@ const ConversationTabView = memo(function ConversationTabView({
       }
 
       // Pin the tab if it was a temporary preview (single-click opened)
-      const currentTab = tabs.find((tab) => tab.id === tabId)
-      if (currentTab && !currentTab.isPinned) {
+      if (ownTab && !ownTab.isPinned) {
         pinTab(tabId)
       }
 
@@ -957,7 +958,7 @@ const ConversationTabView = memo(function ConversationTabView({
       setPendingCleanup,
       setSyncState,
       sharedT,
-      tabs,
+      ownTab,
       tWelcome,
       tabId,
       upsertFolder,
@@ -1490,18 +1491,14 @@ export function ConversationDetailPanel() {
   const { activeFolder: folder } = useActiveFolder()
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
-  const {
-    tabs,
-    activeTabId,
-    isTileMode,
-    openNewConversationTab,
-    closeTab,
-    switchTab,
-    onPreviewTabReplaced,
-  } = useTabContext()
+  const tabs = useTabStore((s) => s.tabs)
+  const activeTabId = useTabStore((s) => s.activeTabId)
+  const isTileMode = useTabStore((s) => s.isTileMode)
   // The per-tile conversation header is desktop-only; the mobile shell keeps its
   // own tab bar + menu, so the tile renders the view alone there.
   const isMobile = useIsMobile()
+  const { openNewConversationTab, closeTab, switchTab, onPreviewTabReplaced } =
+    useTabActions()
   const newConversation = useMemo(() => {
     const activeTab = tabs.find((tab) => tab.id === activeTabId)
     if (!activeTab || activeTab.conversationId != null) return null

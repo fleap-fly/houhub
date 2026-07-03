@@ -36,7 +36,7 @@ import {
 } from "lucide-react"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
-import { useTabContext } from "@/contexts/tab-context"
+import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useConversationLocate } from "@/contexts/conversation-locate-context"
 import { useTaskContext } from "@/contexts/task-context"
@@ -655,15 +655,15 @@ export function SidebarConversationList({
   const refreshing = loading
   const { activeFolder } = useActiveFolder()
 
+  const activeTabId = useTabStore((s) => s.activeTabId)
+  const tabs = useTabStore((s) => s.tabs)
   const {
     openTab,
     closeConversationTab,
     closeTabsByFolder,
     openNewConversationTab,
     openChatModeTab,
-    activeTabId,
-    tabs,
-  } = useTabContext()
+  } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const { addTask, updateTask } = useTaskContext()
 

@@ -27,7 +27,7 @@ import {
 } from "@/contexts/acp-connections-context"
 import { DelegationProvider } from "@/contexts/delegation-context"
 import { ConversationRuntimeProvider } from "@/contexts/conversation-runtime-context"
-import { TabProvider, useTabContext } from "@/contexts/tab-context"
+import { TabProvider, useTabStore, useTabActions } from "@/contexts/tab-context"
 import { SessionStatsProvider } from "@/contexts/session-stats-context"
 import { SidebarProvider, useSidebarContext } from "@/contexts/sidebar-context"
 import { ConversationLocateProvider } from "@/contexts/conversation-locate-context"
@@ -124,7 +124,7 @@ const PANEL_SLIDE_MS = 240
 const PANEL_SLIDE_CLEANUP_MS = PANEL_SLIDE_MS + 60
 
 function TabKeysSync() {
-  const { tabs } = useTabContext()
+  const tabs = useTabStore((s) => s.tabs)
   const { registerOpenTabKeys } = useAcpActions()
   const keys = useMemo(() => new Set(tabs.map((t) => t.id)), [tabs])
   useEffect(() => {
@@ -1095,7 +1095,8 @@ function FolderLayoutShell({ children }: { children: React.ReactNode }) {
 // change activeTabId, so the interactive conversation pickers (sidebar list,
 // search dialog, run history) also call openConversations() directly.
 function WorkbenchRouteConversationSync() {
-  const { activeTabId, consumeRemoteActivation } = useTabContext()
+  const activeTabId = useTabStore((s) => s.activeTabId)
+  const { consumeRemoteActivation } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const prevRef = useRef(activeTabId)
   useEffect(() => {
