@@ -2741,7 +2741,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-goal-{nanos}.jsonl"));
+        let path: PathBuf = env::temp_dir().join(format!("houhub-codex-goal-{nanos}.jsonl"));
 
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"goal-1\",\"cwd\":\"/tmp/demo\"}}\n",
@@ -2834,7 +2834,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-goalnull-{nanos}.jsonl"));
+        let path: PathBuf = env::temp_dir().join(format!("houhub-codex-goalnull-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"gc-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5-codex\"}}\n",
@@ -2897,7 +2897,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-puregoal-{nanos}.jsonl"));
+        let path: PathBuf = env::temp_dir().join(format!("houhub-codex-puregoal-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"pg-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Build a static test page\",\"status\":\"active\"}}}\n",
@@ -2970,7 +2970,7 @@ mod tests {
             .expect("system time ok")
             .as_nanos();
         let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-goaltext-{nanos}.jsonl"));
+            env::temp_dir().join(format!("houhub-codex-goaltext-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"gt-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"/goal Analyze the README\"}}\n",
@@ -3018,7 +3018,7 @@ mod tests {
             .expect("system time ok")
             .as_nanos();
         let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-goaldup-{nanos}.jsonl"));
+            env::temp_dir().join(format!("houhub-codex-goaldup-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"gd-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Investigate auth\",\"status\":\"active\"}}}\n",
@@ -3067,7 +3067,7 @@ mod tests {
             .expect("system time ok")
             .as_nanos();
         let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-goalconfirm-{nanos}.jsonl"));
+            env::temp_dir().join(format!("houhub-codex-goalconfirm-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"gc-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Build a static page\",\"status\":\"active\"}}}\n",
@@ -3136,7 +3136,7 @@ mod tests {
             .expect("system time ok")
             .as_nanos();
         let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-sumconfirm-{nanos}.jsonl"));
+            env::temp_dir().join(format!("houhub-codex-sumconfirm-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"sc-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Build a static page\",\"status\":\"active\"}}}\n",
@@ -3172,7 +3172,7 @@ mod tests {
             .expect("system time ok")
             .as_nanos();
         let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-sumgoal-{nanos}.jsonl"));
+            env::temp_dir().join(format!("houhub-codex-sumgoal-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"sg-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Build a static test page\",\"status\":\"active\"}}}\n",
@@ -3207,7 +3207,7 @@ mod tests {
             .expect("system time ok")
             .as_nanos();
         let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-sumname-{nanos}.jsonl"));
+            env::temp_dir().join(format!("houhub-codex-sumname-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"sn-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Build a static test page\",\"status\":\"active\"}}}\n",
@@ -3239,7 +3239,7 @@ mod tests {
             .expect("system time ok")
             .as_nanos();
         let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-sumimg-{nanos}.jsonl"));
+            env::temp_dir().join(format!("houhub-codex-sumimg-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"si-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Do the thing\",\"status\":\"active\"}}}\n",
@@ -3291,7 +3291,7 @@ mod tests {
             .expect("system time ok")
             .as_nanos();
         let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-sumnull-{nanos}.jsonl"));
+            env::temp_dir().join(format!("houhub-codex-sumnull-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"snl-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":null}}\n",
@@ -3324,7 +3324,7 @@ mod tests {
             .expect("system time ok")
             .as_nanos();
         let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-gtxt-{nanos}.jsonl"));
+            env::temp_dir().join(format!("houhub-codex-gtxt-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"gt2-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Do X\",\"status\":\"active\"}}}\n",
@@ -3377,7 +3377,7 @@ mod tests {
 
         // (a) terminal-only goal → no capture, no synthetic count/title.
         let path_a: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-term-{nanos}.jsonl"));
+            env::temp_dir().join(format!("houhub-codex-term-{nanos}.jsonl"));
         fs::write(
             &path_a,
             concat!(
@@ -3399,7 +3399,7 @@ mod tests {
         // (b) terminal THEN active → the active objective is captured (not the
         // terminal one), matching the detail parser's first-create_goal capture.
         let path_b: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-termact-{nanos}.jsonl"));
+            env::temp_dir().join(format!("houhub-codex-termact-{nanos}.jsonl"));
         fs::write(
             &path_b,
             concat!(
