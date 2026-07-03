@@ -22,9 +22,6 @@ export function TabBar({ embedded = false }: { embedded?: boolean } = {}) {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const isTileMode = useTabStore((s) => s.isTileMode)
   const {
-    tabs,
-    activeTabId,
-    isTileMode,
     switchTab,
     closeTab,
     closeOtherTabs,

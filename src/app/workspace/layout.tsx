@@ -18,10 +18,7 @@ import {
 } from "@/contexts/app-workspace-context"
 import { WorkbenchAutoMount } from "@/workbench/workbench-auto-mount"
 import { WorkbenchCloudProvider } from "@/workbench/workbench-cloud-context"
-import {
-  ActiveFolderProvider,
-  useActiveFolder,
-} from "@/contexts/active-folder-context"
+import { useActiveFolder } from "@/contexts/active-folder-context"
 import { TaskProvider } from "@/contexts/task-context"
 import { AlertProvider } from "@/contexts/alert-context"
 import {

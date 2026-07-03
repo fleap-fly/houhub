@@ -24,7 +24,7 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { useAcpActions, useAcpEvent } from "@/contexts/acp-connections-context"
 import { useActiveFolder } from "@/contexts/active-folder-context"
-import { useAppWorkspace } from "@/contexts/app-workspace-context"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabContext } from "@/contexts/tab-context"
 import { useSessionStats } from "@/contexts/session-stats-context"
 import { useTaskContext } from "@/contexts/task-context"
@@ -163,7 +163,12 @@ const ConversationTabView = memo(function ConversationTabView({
   const t = useTranslations("Folder.conversation")
   const tWelcome = useTranslations("Folder.chat.welcomeInputPanel")
   const sharedT = useTranslations("Folder.chat.shared")
-  const { refreshConversations, upsertFolder, getFolder } = useAppWorkspace()
+  const { activeFolder: folder, activeFolderId } = useActiveFolder()
+  const refreshConversations = useAppWorkspaceStore(
+    (s) => s.refreshConversations
+  )
+  const upsertFolder = useAppWorkspaceStore((s) => s.upsertFolder)
+  const folderId = activeFolderId ?? 0
   const {
     tabs,
     bindConversationTab,
@@ -1483,7 +1488,8 @@ export function ConversationDetailPanel() {
     removeConversation: runtimeRemoveConversation,
   } = useConversationRuntime()
   const { activeFolder: folder } = useActiveFolder()
-  const { conversations, allFolders } = useAppWorkspace()
+  const conversations = useAppWorkspaceStore((s) => s.conversations)
+  const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const {
     tabs,
     activeTabId,
@@ -1530,9 +1536,14 @@ export function ConversationDetailPanel() {
         const runtimeConversationId = getConversationIdByExternalId(
           envelope.session_id
         )
-        const summary = conversations.find(
-          (item) => item.external_id === envelope.session_id
-        )
+        // Event-time read: fresher than a render capture ("`conversations`
+        // may lag the tab update on fast turns" below applies to the render
+        // snapshot; getState() narrows that window).
+        const summary = useAppWorkspaceStore
+          .getState()
+          .conversations.find(
+            (item) => item.external_id === envelope.session_id
+          )
         const matchedConversationId =
           runtimeConversationId ?? summary?.id ?? null
         if (!matchedConversationId) return
@@ -1569,7 +1580,6 @@ export function ConversationDetailPanel() {
         }
       },
       [
-        conversations,
         tabs,
         getConversationIdByExternalId,
         getSession,

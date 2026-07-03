@@ -46,7 +46,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { AgentIcon } from "@/components/agent-icon"
-import { useAppWorkspace } from "@/contexts/app-workspace-context"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabContext } from "@/contexts/tab-context"
 import {
   deleteConversation,
@@ -114,7 +114,10 @@ export function ConversationManageDialog({
   const tCommon = useTranslations("Folder.common")
   const tStatus = useTranslations("Folder.statusLabels")
 
-  const { allFolders, refreshConversations } = useAppWorkspace()
+  const allFolders = useAppWorkspaceStore((s) => s.allFolders)
+  const refreshConversations = useAppWorkspaceStore(
+    (s) => s.refreshConversations
+  )
   const { closeConversationTab } = useTabContext()
   const queryFolderIds = useMemo(
     () => getConversationManageQueryFolderIds(folderId, allFolders),
