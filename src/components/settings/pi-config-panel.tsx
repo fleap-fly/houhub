@@ -133,6 +133,21 @@ const PI_CUSTOM_API_PROTOCOLS = [
   "google-generative-ai",
 ]
 
+function modelChoicesFromProvider(provider: ModelProviderInfo): string[] {
+  const seen = new Set<string>()
+  const choices: string[] = []
+  for (const value of provider.models) {
+    const trimmed = value.trim()
+    const match = /^(main|reasoning|haiku|sonnet|opus):(.+)$/.exec(trimmed)
+    const model = (match ? match[2] : trimmed).trim()
+    if (model && !seen.has(model)) {
+      seen.add(model)
+      choices.push(model)
+    }
+  }
+  return choices
+}
+
 type PiValidation = {
   found: boolean
   resolvedPath: string | null
@@ -203,7 +218,7 @@ export function PiConfigPanel({
   const [customBaseUrl, setCustomBaseUrl] = useState("")
   const [customApi, setCustomApi] = useState(PI_CUSTOM_API_PROTOCOLS[0])
   const [customProviders, setCustomProviders] = useState<
-    { id: string; baseUrl: string; api: string }[]
+    { id: string; baseUrl: string; api: string; models: string[] }[]
   >([])
   const [model, setModel] = useState("")
   const [thinkingLevel, setThinkingLevel] = useState("")
@@ -217,6 +232,37 @@ export function PiConfigPanel({
   const isCustom = selectedProvider === PI_CUSTOM_SENTINEL
   const effectiveProvider = (isCustom ? customId : selectedProvider).trim()
 
+  const houhubModelProviders = useMemo(
+    () =>
+      modelProviders.filter((provider) => provider.agent_types.includes("pi")),
+    [modelProviders]
+  )
+
+  const selectedHouhubModelProvider = useMemo(
+    () =>
+      selectedModelProviderId
+        ? (houhubModelProviders.find(
+            (item) => String(item.id) === selectedModelProviderId
+          ) ?? null)
+        : null,
+    [houhubModelProviders, selectedModelProviderId]
+  )
+
+  const selectedCustomProvider = useMemo(
+    () =>
+      isCustom
+        ? (customProviders.find((provider) => provider.id === customId) ?? null)
+        : null,
+    [customId, customProviders, isCustom]
+  )
+
+  const modelChoices = useMemo(() => {
+    if (selectedHouhubModelProvider) {
+      return modelChoicesFromProvider(selectedHouhubModelProvider)
+    }
+    return selectedCustomProvider?.models ?? []
+  }, [selectedCustomProvider, selectedHouhubModelProvider])
+
   useEffect(() => {
     let cancelled = false
     setLoadingCreds(true)
@@ -226,7 +272,10 @@ export function PiConfigPanel({
         setModel(cfg.defaultModel ?? "")
         setThinkingLevel(cfg.defaultThinkingLevel ?? "")
         setAuthProviders(cfg.authProviders ?? [])
-        const customs = cfg.customProviders ?? []
+        const customs = (cfg.customProviders ?? []).map((provider) => ({
+          ...provider,
+          models: Array.isArray(provider.models) ? provider.models : [],
+        }))
         setCustomProviders(customs)
         const dp = cfg.defaultProvider ?? ""
         const matched = customs.find((c) => c.id === dp)
@@ -268,6 +317,7 @@ export function PiConfigPanel({
       await acpUpdatePiConfig({
         provider: effectiveProvider,
         model: trimmedModel,
+        models: modelChoices.length > 0 ? modelChoices : [trimmedModel],
         thinkingLevel: thinkingLevel || undefined,
         apiKey: apiKey.trim() || undefined,
         customBaseUrl: isCustom ? trimmedBaseUrl : undefined,
@@ -289,6 +339,7 @@ export function PiConfigPanel({
             id: effectiveProvider,
             baseUrl: trimmedBaseUrl,
             api: customApi,
+            models: modelChoices.length > 0 ? modelChoices : [trimmedModel],
           })
           next.sort((a, b) => a.id.localeCompare(b.id))
           return next
@@ -308,6 +359,7 @@ export function PiConfigPanel({
     customBaseUrl,
     customApi,
     model,
+    modelChoices,
     thinkingLevel,
     apiKey,
     onSaved,
@@ -333,20 +385,8 @@ export function PiConfigPanel({
   const credsIncomplete =
     !effectiveProvider || !model.trim() || (isCustom && !customBaseUrl.trim())
 
-  const houhubModelProviders = useMemo(
-    () =>
-      modelProviders.filter((provider) => provider.agent_types.includes("pi")),
-    [modelProviders]
-  )
-
   const providerDefaultModel = useCallback((provider: ModelProviderInfo) => {
-    const listed = provider.models
-      .map((value) => {
-        const trimmed = value.trim()
-        const match = /^(main|reasoning|haiku|sonnet|opus):(.+)$/.exec(trimmed)
-        return match ? match[2].trim() : trimmed
-      })
-      .find((value) => value.length > 0)
+    const listed = modelChoicesFromProvider(provider)[0]
     if (listed) return listed
     if (!provider.model) return ""
     try {
@@ -401,9 +441,10 @@ export function PiConfigPanel({
         setCustomId(first.id)
         setCustomBaseUrl(first.baseUrl)
         setCustomApi(first.api || PI_CUSTOM_API_PROTOCOLS[0])
+        setModel(first.models[0] ?? model)
       }
     },
-    [customId, customProviders, handleHouhubProviderChange]
+    [customId, customProviders, handleHouhubProviderChange, model]
   )
 
   // --- pi binary (pi-coding-agent) — the prerequisite pi-acp spawns ---
@@ -992,13 +1033,32 @@ export function PiConfigPanel({
           <label className="text-[11px] text-muted-foreground">
             {t("pi.modelLabel")}
           </label>
-          <Input
-            value={model}
-            onChange={(event) => setModel(event.target.value)}
-            placeholder="claude-sonnet-4-20250514"
-            spellCheck={false}
-            disabled={savingCreds || loadingCreds}
-          />
+          {modelChoices.length > 0 ? (
+            <Select
+              value={model}
+              onValueChange={setModel}
+              disabled={savingCreds || loadingCreds}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={modelChoices[0]} />
+              </SelectTrigger>
+              <SelectContent align="start">
+                {modelChoices.map((choice) => (
+                  <SelectItem key={choice} value={choice}>
+                    {choice}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <Input
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              placeholder="claude-sonnet-4-20250514"
+              spellCheck={false}
+              disabled={savingCreds || loadingCreds}
+            />
+          )}
         </div>
 
         <div className="space-y-1.5">

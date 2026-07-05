@@ -1087,6 +1087,7 @@ fn write_json_object_pretty(
 pub(crate) struct PiConfigUpdate {
     pub provider: String,
     pub model: String,
+    pub models: Option<Vec<String>>,
     pub thinking_level: Option<String>,
     pub api_key: Option<String>,
     pub custom_base_url: Option<String>,
@@ -1099,6 +1100,7 @@ pub struct PiCustomProvider {
     pub id: String,
     pub base_url: String,
     pub api: String,
+    pub models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1128,7 +1130,7 @@ fn update_pi_config_files(update: PiConfigUpdate) -> Result<(), AcpError> {
     if model.is_empty() {
         return Err(AcpError::protocol("pi model is required"));
     }
-    if let Some(key) = update
+    if let Some(_key) = update
         .api_key
         .as_deref()
         .map(str::trim)
@@ -1204,19 +1206,10 @@ fn update_pi_config_files(update: PiConfigUpdate) -> Result<(), AcpError> {
             serde_json::Value::String(base_url.to_string()),
         );
         entry.insert("api".to_string(), serde_json::Value::String(api.to_string()));
-        let mut models = match entry.remove("models") {
-            Some(serde_json::Value::Array(models)) => models,
-            _ => Vec::new(),
-        };
-        if !models
-            .iter()
-            .any(|item| item.get("id").and_then(serde_json::Value::as_str) == Some(model))
-        {
-            models.push(serde_json::json!({
-                "id": model,
-                "name": model,
-            }));
-        }
+        let models = normalize_pi_provider_models(update.models.as_ref(), model)
+            .into_iter()
+            .map(|id| serde_json::json!({ "id": id, "name": id }))
+            .collect();
         entry.insert("models".to_string(), serde_json::Value::Array(models));
         providers.insert(provider.to_string(), serde_json::Value::Object(entry));
         document.insert("providers".to_string(), serde_json::Value::Object(providers));
@@ -1276,6 +1269,7 @@ pub(crate) fn load_pi_config_core() -> PiConfigProjection {
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or("openai-completions")
                             .to_string(),
+                        models: pi_provider_models(entry),
                     })
                     .collect()
             })
@@ -1288,6 +1282,48 @@ pub(crate) fn load_pi_config_core() -> PiConfigProjection {
         auth_providers,
         custom_providers,
     }
+}
+
+fn normalize_pi_provider_models(models: Option<&Vec<String>>, default_model: &str) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut normalized = Vec::new();
+    for model in models.into_iter().flatten() {
+        let trimmed = model.trim();
+        let id = match trimmed.split_once(':') {
+            Some(("main" | "reasoning" | "haiku" | "sonnet" | "opus", rest)) => rest.trim(),
+            _ => trimmed,
+        };
+        if !id.is_empty() && seen.insert(id.to_string()) {
+            normalized.push(id.to_string());
+        }
+    }
+    let default_model = default_model.trim();
+    if !default_model.is_empty() && seen.insert(default_model.to_string()) {
+        normalized.push(default_model.to_string());
+    }
+    normalized
+}
+
+fn pi_provider_models(entry: &serde_json::Value) -> Vec<String> {
+    let Some(entry) = entry.as_object() else {
+        return Vec::new();
+    };
+    let Some(serde_json::Value::Array(models)) = entry.get("models") else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut result = Vec::new();
+    for item in models {
+        let id = item
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if !id.is_empty() && seen.insert(id.to_string()) {
+            result.push(id.to_string());
+        }
+    }
+    result
 }
 
 pub(crate) const PI_TRUST_WORKSPACE_ENV: &str = "PI_ACP_TRUST_WORKSPACE";
@@ -4861,6 +4897,7 @@ async fn sync_pi_model_provider_config(
     update_pi_config_files(PiConfigUpdate {
         provider: provider_key,
         model,
+        models: Some(parse_provider_models_json(&provider.models_json)),
         thinking_level: None,
         api_key: Some(provider.api_key),
         custom_base_url: Some(provider.api_url),
@@ -6326,6 +6363,7 @@ async fn acp_update_agent_env_core_with_enabled_update(
             pi_config_update = Some(PiConfigUpdate {
                 provider: pi_provider_id(&provider),
                 model,
+                models: Some(parse_provider_models_json(&provider.models_json)),
                 thinking_level: None,
                 api_key: Some(provider.api_key.clone()),
                 custom_base_url: Some(provider.api_url.clone()),
@@ -6656,6 +6694,7 @@ pub async fn acp_fetch_kimi_models(
 pub async fn acp_update_pi_config(
     provider: String,
     model: String,
+    models: Option<Vec<String>>,
     thinking_level: Option<String>,
     api_key: Option<String>,
     custom_base_url: Option<String>,
@@ -6668,6 +6707,7 @@ pub async fn acp_update_pi_config(
         PiConfigUpdate {
             provider,
             model,
+            models,
             thinking_level,
             api_key,
             custom_base_url,
@@ -7881,6 +7921,11 @@ mod tests {
             update_pi_config_files(PiConfigUpdate {
                 provider: "houflow".to_string(),
                 model: "gpt-5".to_string(),
+                models: Some(vec![
+                    "gpt-5".to_string(),
+                    "gpt-5-mini".to_string(),
+                    "main:gpt-5-codex".to_string(),
+                ]),
                 thinking_level: Some("medium".to_string()),
                 api_key: Some("sk-test".to_string()),
                 custom_base_url: Some("https://api.houshanai.com/v1".to_string()),
@@ -7912,6 +7957,8 @@ mod tests {
             );
             assert_eq!(models["providers"]["houflow"]["api"], "openai-completions");
             assert_eq!(models["providers"]["houflow"]["models"][0]["id"], "gpt-5");
+            assert_eq!(models["providers"]["houflow"]["models"][1]["id"], "gpt-5-mini");
+            assert_eq!(models["providers"]["houflow"]["models"][2]["id"], "gpt-5-codex");
         });
     }
 

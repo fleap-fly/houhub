@@ -3,6 +3,7 @@ import {
   AgentHubNetworkClient,
   type AgentHubAgent,
   type ConnectedAgent,
+  type ConnectedAgentConnector,
   type PageCursor,
   normalizeBaseUrl,
 } from "@houshan/agent-hub-network-sdk"
@@ -11,6 +12,7 @@ import {
   type HouflowAgentTarget,
   type HouflowAgentTargetCapability,
   type HouflowAuthSecret,
+  type HouflowConnectorSummary,
   type HouflowControlSnapshot,
   type HouflowDesktopSession,
   type HouflowGatewayCatalog,
@@ -74,6 +76,13 @@ export class HouflowControlClient {
   ) {
     return this.sdk.bytes(path, options)
   }
+
+  sse(
+    path: string,
+    options: Parameters<AgentHubNetworkClient["sse"]>[1] = {}
+  ) {
+    return this.sdk.sse(path, options)
+  }
 }
 
 export async function loadHouflowControlSnapshot(
@@ -82,18 +91,19 @@ export async function loadHouflowControlSnapshot(
 ): Promise<HouflowControlSnapshot> {
   assertHouflowSignedIn(session)
   const client = new HouflowControlClient(session, secret)
-  const [workspaces, quota, gateway, targets] = await Promise.all([
+  const [workspaces, quota, gateway, targets, connector] = await Promise.all([
     listWorkspaces(client, session.workspaceId),
     loadWorkspaceQuota(client),
     loadGatewayCatalog(client),
     listTargets(client),
+    loadConnectorSummary(client),
   ])
   return {
     workspaces,
     quota,
     gateway,
     targets,
-    connector: null,
+    connector,
     syncedAt: new Date().toISOString(),
   }
 }
@@ -281,6 +291,46 @@ async function listTargets(
       const kind = kindRank(left.kind) - kindRank(right.kind)
       return kind || left.name.localeCompare(right.name)
     })
+}
+
+async function loadConnectorSummary(
+  client: HouflowControlClient
+): Promise<HouflowConnectorSummary | null> {
+  const page = await client.json<PageCursor<ConnectedAgentConnector>>(
+    "/v1/connected-agent-connectors",
+    { query: { limit: 100 } }
+  )
+  const connectors = Array.isArray(page.data) ? page.data : []
+  if (connectors.length === 0) return null
+  const active =
+    connectors.find((connector) => connector.status === "online") ??
+    connectors[0]
+  const reportedAgents = active.reported_agents ?? []
+  const boundAgents = active.bound_local_agents ?? []
+  const dispatchAgentCount = reportedAgents.filter(
+    (agent) => agent.capabilities.dispatch === true
+  ).length
+  const commandAgentCount = reportedAgents.filter(
+    (agent) =>
+      agent.capabilities.dispatch === true ||
+      agent.capabilities.workspace_message === true
+  ).length
+  return {
+    status: active.status === "online" ? "online" : "offline",
+    installed: true,
+    enrolled: true,
+    running: active.status === "online",
+    connectorId: active.id,
+    connectorVersion: active.connector_version ?? null,
+    reportedAgentCount: reportedAgents.length,
+    dispatchAgentCount,
+    commandAgentCount,
+    boundAgentCount: boundAgents.length,
+    lastHeartbeatAt: active.last_seen_at ?? null,
+    lastError: null,
+    error: null,
+    syncedAt: new Date().toISOString(),
+  }
 }
 
 function workspaceFromDto(

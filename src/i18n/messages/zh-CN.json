@@ -108,7 +108,13 @@
       "ligatures": "启用连字",
       "ligaturesUnavailable": "该字体不含连字",
       "terminalLigaturesHint": "终端连字仅对内置编程字体生效。",
+      "wordWrap": "启用编辑器自动换行",
       "preview": "预览"
+    },
+    "welcomePanel": {
+      "sectionTitle": "欢迎页快捷区",
+      "sectionDescription": "控制新会话输入框上方的“代码开发 / 办公工作”快捷卡片是否显示。",
+      "showQuickActions": "在新会话中显示"
     }
   },
   "SystemSettings": {
@@ -1354,6 +1360,7 @@
       "addSelectionToChatDone": "已将 {label} 加入会话",
       "addFileToChat": "添加文件到会话",
       "addFileToChatDone": "已将 {label} 加入会话",
+      "toggleWordWrap": "切换自动换行",
       "viewDiff": "查看差异",
       "openFile": "打开文件",
       "fileCount": "{count} 个文件",
@@ -1669,6 +1676,7 @@
       "collapseTracked": "折叠已跟踪改动",
       "expandUntracked": "展开未跟踪文件",
       "collapseUntracked": "折叠未跟踪文件",
+      "showRemainingItems": "显示其余 {count} 项",
       "actions": {
         "commitCode": "提交代码",
         "rollback": "回滚",
@@ -1993,7 +2001,7 @@
         "quickMessages": "快捷消息",
         "quickMessagesEmpty": "暂无快捷消息",
         "quickMessagesLoading": "加载中...",
-        "paste": "粘贴",
+        "pasteAsPlainText": "粘贴为纯文本",
         "cut": "剪切",
         "copy": "复制",
         "selectAll": "全选",
@@ -2494,7 +2502,8 @@
       },
       "hunkLabel": "代码块 {index}",
       "loadingHunk": "正在加载代码块...",
-      "noDiffData": "无差异数据"
+      "noDiffData": "无差异数据",
+      "showRemainingLines": "显示剩余 {count} 行"
     },
     "conversationContextBar": {
       "folderTitle": "工作文件夹",
@@ -3388,6 +3397,7 @@
   "HouflowCloud": {
     "hubCloud": "Hub 云端",
     "workspaceFallback": "云端工作区",
+    "projectFallback": "项目空间",
     "refresh": "刷新",
     "loading": "正在加载云端会话…",
     "empty": "暂无云端会话",
@@ -3396,6 +3406,7 @@
     "signedOut": "登录 Houflow 后查看云端会话。",
     "loadingEvents": "正在加载会话事件…",
     "emptyEvents": "暂无事件",
+    "waitingForCloudReply": "等待云端回复…",
     "openConsole": "打开控制台",
     "messagePlaceholder": "向云端智能体发送消息…",
     "send": "发送",
@@ -3418,6 +3429,8 @@
     "targetEmpty": "没有找到云端智能体",
     "targetManaged": "云端智能体",
     "targetHostedResident": "托管常驻",
+    "targetExternalLocal": "本机接入",
+    "targetProjectAgents": "项目智能体",
     "start": "开始",
     "startFailed": "启动云端会话失败",
     "hostedQueued": "托管智能体请求已提交",

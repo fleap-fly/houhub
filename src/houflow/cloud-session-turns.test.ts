@@ -73,7 +73,7 @@ describe("houflowCloudEventsToTurns", () => {
     ])
   })
 
-  it("filters explicit lifecycle events but keeps agent messages intact", () => {
+  it("filters lifecycle and machine artifact status events but keeps user-facing messages", () => {
     const turns = houflowCloudEventsToTurns([
       event({
         id: "evt_idle",
@@ -112,16 +112,8 @@ describe("houflowCloudEventsToTurns", () => {
       }),
     ])
 
-    expect(turns).toHaveLength(3)
+    expect(turns).toHaveLength(1)
     expect(turns[0]).toMatchObject({
-      id: "evt_manifest",
-      role: "assistant",
-    })
-    expect(turns[1]).toMatchObject({
-      id: "evt_check_json",
-      role: "assistant",
-    })
-    expect(turns[2]).toMatchObject({
       id: "evt_real",
       role: "assistant",
       blocks: [{ type: "text", text: "试卷已经生成，可以在右侧查看文件。" }],

@@ -36,6 +36,11 @@ import { MessageInput } from "@/components/chat/message-input"
 import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { useWorkspaceActions } from "@/contexts/workspace-context"
+import {
+  createMessageTurnAdapter,
+  type MessageTurnAdapter,
+} from "@/lib/adapters/ai-elements-adapter"
 import { toErrorMessage } from "@/lib/app-error"
 import type { PromptCapabilitiesInfo, PromptDraft } from "@/lib/types"
 import { useWorkbench, useWorkbenchCloud } from "@/workbench"
@@ -43,9 +48,11 @@ import {
   createWorkbenchAiSession,
   getWorkbenchAiSession,
   sendWorkbenchAiMessage,
+  workbenchAiMessagesToTurns,
   type WorkbenchAiMessage,
   type WorkbenchAssistant,
 } from "@/workbench/ai"
+import { psRootPath } from "@/workbench/space-fs"
 import { cn } from "@/lib/utils"
 
 const WORKBENCH_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
@@ -65,6 +72,10 @@ export function WorkbenchCloudPage() {
   const [selectorOpen, setSelectorOpen] = useState(false)
   const requestRef = useRef(0)
   const linkSafety = useWorkbenchSessionLinkSafety()
+  const sharedT = useTranslations("Folder.chat.shared")
+  const [turnAdapter] = useState<MessageTurnAdapter>(() =>
+    createMessageTurnAdapter()
+  )
 
   const projectId =
     workbench.session.status === "signed_in"
@@ -82,6 +93,17 @@ export function WorkbenchCloudPage() {
       )?.name ?? null
     )
   }, [workbench.session])
+  const adapterText = useMemo(
+    () => ({
+      attachedResources: sharedT("attachedResources"),
+      toolCallFailed: sharedT("toolCallFailed"),
+    }),
+    [sharedT]
+  )
+  const adaptedMessages = useMemo(
+    () => turnAdapter.adapt(workbenchAiMessagesToTurns(messages), adapterText),
+    [adapterText, messages, turnAdapter]
+  )
 
   const refreshMessages = useCallback(async () => {
     const requestId = ++requestRef.current
@@ -143,6 +165,7 @@ export function WorkbenchCloudPage() {
             id: `local-user-${now}`,
             role: "user",
             content: query,
+            blocks: [{ type: "text", text: query }],
             timestamp: now,
           },
         ])
@@ -152,12 +175,14 @@ export function WorkbenchCloudPage() {
           sessionId,
           query,
         })
+        const assistantText = response || t("emptyResponse")
         setMessages((current) => [
           ...current,
           {
             id: `local-assistant-${Date.now()}`,
             role: "assistant",
-            content: response || t("emptyResponse"),
+            content: assistantText,
+            blocks: [{ type: "text", text: assistantText }],
             timestamp: new Date().toISOString(),
           },
         ])
@@ -227,16 +252,16 @@ export function WorkbenchCloudPage() {
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             {messagesError}
           </div>
-        ) : messages.length === 0 ? (
+        ) : adaptedMessages.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             {messagesLoading ? t("loadingMessages") : t("emptyMessages")}
           </div>
         ) : (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
-            {messages.map((message) => (
+            {adaptedMessages.map((message) => (
               <Message
                 key={message.id}
-                from={message.role}
+                from={messageRoleForView(message.role)}
                 className={cn(
                   message.role === "assistant" && "max-w-full",
                   message.role === "system" && "max-w-full opacity-80"
@@ -245,7 +270,7 @@ export function WorkbenchCloudPage() {
                 <MessageContent>
                   <StreamdownLinkSafetyProvider value={linkSafety}>
                     <ContentPartsRenderer
-                      parts={[{ type: "text", text: message.content }]}
+                      parts={message.content}
                       role={message.role}
                     />
                   </StreamdownLinkSafetyProvider>
@@ -292,18 +317,30 @@ export function WorkbenchCloudPage() {
 }
 
 function useWorkbenchSessionLinkSafety(): LinkSafetyConfig {
-  const t = useTranslations("WorkbenchCloud")
+  const workbench = useWorkbench()
+  const { openFilePreview } = useWorkspaceActions()
   const openExternal = useOpenLinkOrFile()
+  const projectId =
+    workbench.session.status === "signed_in"
+      ? workbench.session.activeProjectId
+      : null
 
   const openWorkbenchScopedTarget = useCallback(
     async (url: string) => {
-      if (isProjectSpacePathLike(url)) {
-        toast.info(t("openProjectFileFromTree"))
+      const projectSpaceTarget = toProjectSpaceOpenTarget(url, projectId)
+      if (projectSpaceTarget) {
+        try {
+          await openFilePreview(projectSpaceTarget.path, {
+            line: projectSpaceTarget.line ?? undefined,
+          })
+        } catch (err) {
+          toast.error(toErrorMessage(err))
+        }
         return
       }
       await openExternal(url)
     },
-    [openExternal, t]
+    [openExternal, openFilePreview, projectId]
   )
 
   const renderModal = useCallback(
@@ -323,9 +360,56 @@ function useWorkbenchSessionLinkSafety(): LinkSafetyConfig {
   )
 }
 
+function toProjectSpaceOpenTarget(
+  url: string,
+  projectId: string | null
+): { path: string; line: number | null } | null {
+  const trimmed = url.trim()
+  if (!trimmed) return null
+
+  if (trimmed.startsWith("ps://")) {
+    const parsed = stripQueryAndHash(trimmed)
+    return parsed.path ? parsed : null
+  }
+
+  if (!projectId || !isProjectSpacePathLike(trimmed)) return null
+  const parsed = stripQueryAndHash(trimmed)
+  let path = decodePathComponent(parsed.path)
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/^\/+/, "")
+  if (!path || path === "." || path.startsWith("../") || path.includes("/../")) {
+    return null
+  }
+  path = path.replace(/\/+/g, "/")
+  return { path: `${psRootPath(projectId)}/${path}`, line: parsed.line }
+}
+
+function stripQueryAndHash(raw: string): { path: string; line: number | null } {
+  const hashIndex = raw.indexOf("#")
+  const rawHash = hashIndex >= 0 ? raw.slice(hashIndex) : ""
+  const beforeHash = hashIndex >= 0 ? raw.slice(0, hashIndex) : raw
+  const queryIndex = beforeHash.indexOf("?")
+  const path = queryIndex >= 0 ? beforeHash.slice(0, queryIndex) : beforeHash
+  const lineMatch = rawHash.match(/^#L?(\d+)$/i)
+  return {
+    path: decodePathComponent(path),
+    line: lineMatch ? Number.parseInt(lineMatch[1], 10) : null,
+  }
+}
+
+function decodePathComponent(path: string): string {
+  try {
+    return decodeURIComponent(path)
+  } catch {
+    return path
+  }
+}
+
 function isProjectSpacePathLike(url: string): boolean {
   const trimmed = url.trim()
   if (!trimmed) return false
+  if (trimmed.startsWith("ps://")) return true
   if (trimmed.startsWith("./") || trimmed.startsWith("../")) return true
   if (trimmed.startsWith("/") || trimmed.toLowerCase().startsWith("file://")) {
     return true
@@ -427,4 +511,10 @@ function formatTimestamp(value: string | null): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return ""
   return date.toLocaleString()
+}
+
+function messageRoleForView(
+  role: string
+): "user" | "assistant" | "system" {
+  return role === "user" || role === "system" ? role : "assistant"
 }

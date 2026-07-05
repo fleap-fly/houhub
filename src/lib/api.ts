@@ -13,8 +13,10 @@ import {
   psCreateEntry,
   psDeleteEntry,
   psGetFileTree,
+  psReadFileBase64,
   psReadFileForEdit,
   psReadFilePreview,
+  psReadWorkspaceFileBase64,
   psSaveFileContent,
 } from "@/workbench/space-fs"
 import { getCurrentEffectiveAppLocale } from "./i18n"
@@ -360,12 +362,14 @@ export interface PiConfigProjection {
     id: string
     baseUrl: string
     api: string
+    models: string[]
   }>
 }
 
 export interface PiConfigUpdate {
   provider: string
   model: string
+  models?: string[] | null
   thinkingLevel?: string | null
   apiKey?: string | null
   customBaseUrl?: string | null
@@ -376,6 +380,7 @@ export async function acpUpdatePiConfig(update: PiConfigUpdate): Promise<void> {
   return getTransport().call("acp_update_pi_config", {
     provider: update.provider,
     model: update.model,
+    models: update.models ?? null,
     thinkingLevel: update.thinkingLevel ?? null,
     apiKey: update.apiKey ?? null,
     customBaseUrl: update.customBaseUrl ?? null,
@@ -2668,6 +2673,9 @@ export async function readFileBase64(
   path: string,
   maxBytes?: number
 ): Promise<string> {
+  if (isPsPath(path)) {
+    return psReadFileBase64(path, maxBytes)
+  }
   return getTransport().call("read_file_base64", {
     path,
     maxBytes: maxBytes ?? null,
@@ -2682,6 +2690,9 @@ export async function readWorkspaceFileBase64(
   path: string,
   maxBytes?: number
 ): Promise<string> {
+  if (isPsPath(rootPath)) {
+    return psReadWorkspaceFileBase64(rootPath, path, maxBytes)
+  }
   return getTransport().call("read_workspace_file_base64", {
     rootPath,
     path,
@@ -3131,6 +3142,51 @@ export async function syncHouflowManagedGateway(params: {
     models: params.models,
   }
   return getTransport().call("houflow_sync_managed_gateway", input)
+}
+
+export interface HouflowConnectorLocalAgentSyncInput {
+  localAgentRef: string
+  provider: string
+  name: string
+  runtimeProvider?: string | null
+  runtimeRunner?: boolean | null
+  workingDirectory?: string | null
+  skillsDirectory?: string | null
+  useDefaultSkillsDirectory?: boolean | null
+  capabilities?: string[] | null
+}
+
+export interface HouflowConnectorSyncLocalAgentsResult {
+  agents: unknown[]
+  heartbeat: unknown | null
+  status: unknown
+}
+
+export interface HouflowConnectorStatusResult {
+  installed: boolean
+  executable: string | null
+  version: unknown | null
+  snapshot: unknown | null
+  diagnosis: unknown | null
+  error: string | null
+}
+
+export async function getHouflowConnectorStatus(): Promise<HouflowConnectorStatusResult> {
+  return getTransport().call("houflow_connector_status")
+}
+
+export async function syncHouflowConnectorLocalAgents(params: {
+  agents: HouflowConnectorLocalAgentSyncInput[]
+  heartbeat?: boolean | null
+}): Promise<HouflowConnectorSyncLocalAgentsResult> {
+  return getTransport().call(
+    "houflow_connector_sync_local_agents",
+    {
+      agents: params.agents,
+      heartbeat: params.heartbeat ?? true,
+    },
+    { timeoutMs: 120_000 }
+  )
 }
 
 // ─── Delegation settings ───────────────────────────────────────────────

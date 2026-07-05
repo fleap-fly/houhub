@@ -3,16 +3,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { WorkbenchSpaceListing } from "./space-types"
 
 const listWorkbenchSpace = vi.fn()
+const getWorkbenchSpaceDownloadUrl = vi.fn()
 
 vi.mock("./space", () => ({
   listWorkbenchSpace: (...args: unknown[]) => listWorkbenchSpace(...args),
-  getWorkbenchSpaceDownloadUrl: vi.fn(),
+  getWorkbenchSpaceDownloadUrl: (...args: unknown[]) =>
+    getWorkbenchSpaceDownloadUrl(...args),
   uploadWorkbenchSpaceFile: vi.fn(),
   createWorkbenchSpaceFolder: vi.fn(),
   deleteWorkbenchSpaceFile: vi.fn(),
 }))
 
-import { isPsPath, parsePsPath, psGetFileTree, psRootPath } from "./space-fs"
+import {
+  isPsPath,
+  parsePsPath,
+  psGetFileTree,
+  psReadFileBase64,
+  psReadWorkspaceFileBase64,
+  psRootPath,
+} from "./space-fs"
 
 function entry(name: string, type: "file" | "folder") {
   return {
@@ -100,5 +109,50 @@ describe("psGetFileTree", () => {
         children: [{ kind: "file", name: "q1.xlsx", path: "finance/q1.xlsx" }],
       },
     ])
+  })
+})
+
+describe("project-space file bytes", () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    listWorkbenchSpace.mockReset()
+    getWorkbenchSpaceDownloadUrl.mockReset()
+    fetchMock.mockReset()
+    vi.stubGlobal("fetch", fetchMock)
+  })
+
+  it("reads a ps:// file through a presigned URL as base64", async () => {
+    listWorkbenchSpace.mockResolvedValueOnce(listing([], ["exam.png"]))
+    getWorkbenchSpaceDownloadUrl.mockResolvedValueOnce("https://cdn.test/exam.png")
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Uint8Array([1, 2, 3]), { status: 200 })
+    )
+
+    const result = await psReadFileBase64("ps://proj-1/outputs/exam.png")
+
+    expect(listWorkbenchSpace).toHaveBeenCalledWith("proj-1", "/outputs")
+    expect(getWorkbenchSpaceDownloadUrl).toHaveBeenCalledWith(
+      "proj-1",
+      "file:exam.png",
+      "inline"
+    )
+    expect(result).toBe("AQID")
+  })
+
+  it("reads relative HTML resources from a project-space preview root", async () => {
+    listWorkbenchSpace.mockResolvedValueOnce(listing([], ["cover.png"]))
+    getWorkbenchSpaceDownloadUrl.mockResolvedValueOnce("https://cdn.test/cover.png")
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Uint8Array([4, 5, 6]), { status: 200 })
+    )
+
+    const result = await psReadWorkspaceFileBase64(
+      "ps://proj-1/outputs",
+      "cover.png"
+    )
+
+    expect(listWorkbenchSpace).toHaveBeenCalledWith("proj-1", "/outputs")
+    expect(result).toBe("BAUG")
   })
 })

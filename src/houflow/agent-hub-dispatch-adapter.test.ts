@@ -6,12 +6,11 @@ import { describe, expect, it } from "vitest"
 import {
   dispatchAgentHubTarget,
   type AgentHubDispatchClient,
-  type AgentHubManagedInvocation,
 } from "./agent-hub-dispatch-adapter"
 
 describe("dispatchAgentHubTarget", () => {
-  it("invokes managed agents through Agent Hub session invoke", async () => {
-    const client = fakeClient([managedInvocation()])
+  it("dispatches managed agents through Agent Hub sessions", async () => {
+    const client = fakeClient([managedSession(), managedEventDispatch()])
 
     const result = await dispatchAgentHubTarget(
       client,
@@ -35,21 +34,33 @@ describe("dispatchAgentHubTarget", () => {
       }
     )
 
-    expect(client.calls).toHaveLength(1)
+    expect(client.calls).toHaveLength(2)
     expect(client.calls[0]).toMatchObject({
-      path: "/v1/agents/agt_1/invoke",
+      path: "/v1/sessions",
       options: { method: "POST" },
     })
     expect(client.calls[0].options.body).toEqual({
-      message: "开始分析",
-      content: [{ type: "text", text: "开始分析" }],
+      agent: { id: "agt_1", version: 3 },
       environment_id: "env_1",
       engine_id: "eng_1",
       workspace_id: "ws_1",
       title: "桌面任务",
-      version: 3,
       resources: [{ type: "file", file_id: "file_1" }],
       metadata: { source: "desktop2" },
+    })
+    expect(client.calls[1]).toMatchObject({
+      path: "/v1/sessions/ses_1/events",
+      options: { method: "POST" },
+    })
+    expect(client.calls[1].options.body).toEqual({
+      engine_id: "eng_1",
+      environment_id: "env_1",
+      events: [
+        {
+          type: "user.message",
+          content: [{ type: "text", text: "开始分析" }],
+        },
+      ],
     })
     expect(result).toMatchObject({
       surface: "agent_hub",
@@ -59,12 +70,12 @@ describe("dispatchAgentHubTarget", () => {
       status: "queued",
       sessionId: "ses_1",
       runId: "run_1",
-      interactionId: "int_1",
+      interactionId: "run_1",
     })
   })
 
   it("lets managed agents create a session with the server default environment", async () => {
-    const client = fakeClient([managedInvocation()])
+    const client = fakeClient([managedSession(), managedEventDispatch()])
 
     await dispatchAgentHubTarget(
       client,
@@ -78,9 +89,55 @@ describe("dispatchAgentHubTarget", () => {
       { message: "开始分析" }
     )
 
-    expect(client.calls).toHaveLength(1)
+    expect(client.calls).toHaveLength(2)
     expect(client.calls[0].options.body).toEqual({
-      message: "开始分析",
+      agent: "agt_1",
+    })
+    expect(client.calls[1]).toMatchObject({
+      path: "/v1/sessions/ses_1/events",
+      options: { method: "POST" },
+    })
+    expect(client.calls[1].options.body).toEqual({
+      events: [
+        {
+          type: "user.message",
+          content: [{ type: "text", text: "开始分析" }],
+        },
+      ],
+    })
+  })
+
+  it("sends follow-up managed messages to the existing session events endpoint", async () => {
+    const client = fakeClient([managedEventDispatch()])
+
+    await dispatchAgentHubTarget(
+      client,
+      {
+        surface: "agent_hub",
+        kind: "managed",
+        targetKey: "managed:agt_1",
+        targetId: "agt_1",
+        name: "研究助手",
+      },
+      {
+        sessionId: "ses_existing",
+        message: "继续",
+        content: [{ type: "text", text: "继续" }],
+      }
+    )
+
+    expect(client.calls).toHaveLength(1)
+    expect(client.calls[0]).toMatchObject({
+      path: "/v1/sessions/ses_existing/events",
+      options: { method: "POST" },
+    })
+    expect(client.calls[0].options.body).toEqual({
+      events: [
+        {
+          type: "user.message",
+          content: [{ type: "text", text: "继续" }],
+        },
+      ],
     })
   })
 
@@ -146,25 +203,50 @@ describe("dispatchAgentHubTarget", () => {
     })
   })
 
-  it("keeps external local dispatch disabled for this phase", async () => {
-    const client = fakeClient([])
+  it("dispatches external local agents through connector commands", async () => {
+    const client = fakeClient([externalLocalCommand()])
 
-    await expect(
-      dispatchAgentHubTarget(
-        client,
-        {
-          surface: "agent_hub",
-          kind: "external_local",
-          targetKey: "external_local:cag_2:claude",
-          targetId: "cag_2",
-          name: "本机 Claude",
-          connectorId: "con_1",
-          localAgentRef: "claude",
-        },
-        { message: "开始分析" }
-      )
-    ).rejects.toThrow("external local dispatch is not enabled yet")
-    expect(client.calls).toHaveLength(0)
+    const result = await dispatchAgentHubTarget(
+      client,
+      {
+        surface: "agent_hub",
+        kind: "external_local",
+        targetKey: "external_local:cag_2:claude",
+        targetId: "cag_2",
+        name: "本机 Claude",
+        connectorId: "con_1",
+        localAgentRef: "claude",
+      },
+      {
+        action: "workspace_message",
+        message: "开始分析",
+        channelRef: "houhub/desktop/ws_1",
+        metadata: { source: "houhub" },
+      }
+    )
+
+    expect(client.calls).toHaveLength(1)
+    expect(client.calls[0]).toMatchObject({
+      path: "/v1/connected-agents/cag_2/external-dispatches",
+      options: { method: "POST" },
+    })
+    expect(client.calls[0].options.body).toEqual({
+      action: "workspace_message",
+      message: "开始分析",
+      channel_ref: "houhub/desktop/ws_1",
+      metadata: { source: "houhub" },
+    })
+    expect(result).toMatchObject({
+      surface: "agent_hub",
+      kind: "external_local",
+      targetKey: "external_local:cag_2:claude",
+      targetId: "cag_2",
+      status: "queued",
+      commandId: "ccc_2",
+      action: "workspace_message",
+      connectorId: "con_1",
+      localAgentRef: "claude",
+    })
   })
 })
 
@@ -192,27 +274,35 @@ function fakeClient(
   }
 }
 
-function managedInvocation(): AgentHubManagedInvocation {
+function managedSession() {
   return {
-    interaction: {
-      id: "int_1",
-      type: "interaction",
-      agent_id: "agt_1",
+    id: "ses_1",
+    environment_id: "env_1",
+  }
+}
+
+function managedEventDispatch() {
+  return {
+    data: [],
+    run: {
+      id: "run_1",
       session_id: "ses_1",
-      run_id: "run_1",
-      engine_run_id: null,
       status: "queued",
       created_at: "2026-06-14T00:00:00.000Z",
     },
-    session: { id: "ses_1" },
-    data: [],
-    run: { id: "run_1", status: "queued" },
-  } as unknown as AgentHubManagedInvocation
+  }
 }
 
 function hostedCommand(): ConnectedAgentConnectorCommand {
   return {
     id: "ccc_1",
     status: "running",
+  } as unknown as ConnectedAgentConnectorCommand
+}
+
+function externalLocalCommand(): ConnectedAgentConnectorCommand {
+  return {
+    id: "ccc_2",
+    status: "queued",
   } as unknown as ConnectedAgentConnectorCommand
 }

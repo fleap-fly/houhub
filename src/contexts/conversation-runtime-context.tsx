@@ -1678,8 +1678,7 @@ export function ConversationRuntimeProvider({
       // client id that collided into another namespace — they are kept separately
       // (a recoverable visible duplicate) instead of one silently overwriting the
       // other, which could hide a user prompt.
-      const retainKey = (turn: MessageTurn) =>
-        JSON.stringify([turn.role, turn.id])
+      const retainKey = (turn: MessageTurn) => `${turn.role} ${turn.id}`
       const retainIndexByKey = new Map<string, number>()
       result.forEach((entry, i) => {
         const key = retainKey(entry.turn)

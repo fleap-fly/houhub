@@ -31,6 +31,7 @@ import {
   expandHomePath,
   findOwningFolder,
   isHomeRelativePath,
+  isProjectSpaceFilePath,
   joinRootRel,
   normalizeAbsPath,
   splitAbsPath,
@@ -498,6 +499,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     async (absPath: string): Promise<string | undefined> => {
       const owning = findOwningFolder(absPath, allFoldersRef.current)
       if (!owning) return undefined
+      if (isProjectSpaceFilePath(owning.rootPath)) return undefined
       const tracked = await gitIsTracked(owning.rootPath, owning.relPath).catch(
         () => false
       )

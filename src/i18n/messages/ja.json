@@ -108,7 +108,13 @@
       "ligatures": "合字を有効にする",
       "ligaturesUnavailable": "このフォントには合字がありません",
       "terminalLigaturesHint": "ターミナルの合字は内蔵のコーディングフォントにのみ適用されます。",
+      "wordWrap": "エディタの行折り返しを有効にする",
       "preview": "プレビュー"
+    },
+    "welcomePanel": {
+      "sectionTitle": "ウェルカムパネル",
+      "sectionDescription": "新しい会話の入力欄上にある「コード開発 / オフィスワーク」のクイックアクションカードを表示します。",
+      "showQuickActions": "新しい会話で表示"
     }
   },
   "SystemSettings": {
@@ -1354,6 +1360,7 @@
       "addSelectionToChatDone": "{label} を会話に追加しました",
       "addFileToChat": "ファイルをチャットに追加",
       "addFileToChatDone": "{label} を会話に追加しました",
+      "toggleWordWrap": "行折り返しを切り替え",
       "viewDiff": "差分を見る",
       "openFile": "ファイルを開く",
       "fileCount": "{count, plural, one {# 個のファイル} other {# 個のファイル}}",
@@ -1669,6 +1676,7 @@
       "collapseTracked": "追跡中の変更を折りたたむ",
       "expandUntracked": "未追跡ファイルを展開",
       "collapseUntracked": "未追跡ファイルを折りたたむ",
+      "showRemainingItems": "残り {count} 件を表示",
       "actions": {
         "commitCode": "コードをコミット",
         "rollback": "ロールバック",
@@ -1991,7 +1999,7 @@
         "quickMessages": "クイックメッセージ",
         "quickMessagesEmpty": "クイックメッセージはありません",
         "quickMessagesLoading": "読み込み中...",
-        "paste": "貼り付け",
+        "pasteAsPlainText": "プレーンテキストとして貼り付け",
         "cut": "切り取り",
         "copy": "コピー",
         "selectAll": "すべて選択",
@@ -2494,7 +2502,8 @@
       },
       "hunkLabel": "ハンク {index}",
       "loadingHunk": "Hunk を読み込み中...",
-      "noDiffData": "Diff データがありません"
+      "noDiffData": "Diff データがありません",
+      "showRemainingLines": "残り {count} 行を表示"
     },
     "conversationContextBar": {
       "folderTitle": "作業フォルダ",
@@ -3418,6 +3427,7 @@
     "targetEmpty": "No cloud agents found",
     "targetManaged": "Cloud agent",
     "targetHostedResident": "Hosted resident",
+    "targetExternalLocal": "Local connector",
     "start": "Start",
     "startFailed": "Failed to start cloud session",
     "hostedQueued": "Hosted agent request queued",

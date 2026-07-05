@@ -40,21 +40,15 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
-import { cjk } from "@streamdown/cjk"
-import { code } from "@streamdown/code"
-import { createMathPlugin } from "@streamdown/math"
-import { mermaid } from "@streamdown/mermaid"
 import { Streamdown } from "streamdown"
 import { readFileBase64 } from "@/lib/api"
 import { normalizeMathDelimiters } from "@/components/ai-elements/message"
+import { useStreamdownPlugins } from "@/components/ai-elements/streamdown-plugins"
 import { defineMonacoThemes, useMonacoThemeSync } from "@/lib/monaco-themes"
 import { useZoomLevel, useEditorFont } from "@/hooks/use-appearance"
 import { ScrollArea } from "@/components/ui/scroll-area"
 
 import "@/lib/monaco-local"
-
-const math = createMathPlugin({ singleDollarTextMath: true })
-const previewPlugins = { cjk, code, math, mermaid }
 
 function resolveRelativePath(base: string, relative: string): string {
   // Strip URL fragment (e.g. #gh-light-mode-only) and query string
@@ -239,6 +233,72 @@ function PreviewImage({
 
   // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
   return <img {...props} src={resolvedSrc} />
+}
+
+function MarkdownDocumentPreview({
+  content,
+  fileDir,
+  localRefsEnabled,
+  openFilePreview,
+}: {
+  content: string
+  fileDir: string | null
+  localRefsEnabled: boolean
+  openFilePreview: (path: string) => void
+}) {
+  const plugins = useStreamdownPlugins(content)
+
+  return (
+    <div className="h-full overflow-auto p-6 [&_a_img]:inline">
+      <Streamdown
+        plugins={plugins}
+        components={{
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          img: ({ node, ...imgProps }) => (
+            <PreviewImage
+              {...imgProps}
+              fileDir={localRefsEnabled ? fileDir : null}
+            />
+          ),
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          a: ({ node, href, children, ...aProps }) => {
+            // Protocol-relative "//host/..." is a web URL, not a local path.
+            const isRelative =
+              href && !/^[a-z][a-z0-9+.-]*:|^#|^\/\//i.test(href)
+            if (isRelative && href && localRefsEnabled) {
+              return (
+                <a
+                  {...aProps}
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    const target = href
+                      .replace(/[#?].*$/, "")
+                      .replace(/\/\/+/g, "/")
+                    void openFilePreview(target)
+                  }}
+                >
+                  {children}
+                </a>
+              )
+            }
+            return (
+              <a
+                {...aProps}
+                href={href?.startsWith("//") ? `https:${href}` : href}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {children}
+              </a>
+            )
+          },
+        }}
+      >
+        {content}
+      </Streamdown>
+    </div>
+  )
 }
 
 const AUTO_SAVE_DELAY_MS = 5000
@@ -940,7 +1000,15 @@ export function FileWorkspacePanel() {
   const monacoRef = useRef<Monaco | null>(null)
   const editorTheme = useMonacoThemeSync()
   const { zoomLevel } = useZoomLevel()
-  const { editorFontStack, editorFontSize, editorLigatures } = useEditorFont()
+  const {
+    editorFontStack,
+    editorFontSize,
+    editorLigatures,
+    editorWordWrap,
+    setEditorWordWrap,
+  } = useEditorFont()
+  const editorWordWrapRef = useRef(editorWordWrap)
+  const wordWrapActionRef = useRef<IDisposable | null>(null)
   const [editorMountVersion, setEditorMountVersion] = useState(0)
   const [cursorLine, setCursorLine] = useState(1)
   const [collapsedFiles, setCollapsedFiles] = useState<Record<string, boolean>>(
@@ -1063,6 +1131,25 @@ export function FileWorkspacePanel() {
     [addSelectionToChat, addFileToChat]
   )
 
+  const registerWordWrapAction = useCallback(
+    (
+      editor: MonacoEditorNs.IStandaloneCodeEditor,
+      monaco: Monaco,
+      label: string
+    ) => {
+      wordWrapActionRef.current?.dispose()
+      wordWrapActionRef.current = editor.addAction({
+        id: "houhub.toggleWordWrap",
+        label,
+        keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.KeyZ],
+        contextMenuGroupId: "z_view",
+        contextMenuOrder: 1,
+        run: () => setEditorWordWrap(!editorWordWrapRef.current),
+      })
+    },
+    [setEditorWordWrap]
+  )
+
   // Single teardown for the action, listeners, pill widget, and context key —
   // called from both the editor's onDidDispose and the React unmount effect.
   // `removeContentWidget` guards its view call internally, so it's a safe no-op
@@ -1075,6 +1162,8 @@ export function FileWorkspacePanel() {
       addToChatActionRef.current = null
       addFileToChatActionRef.current?.dispose()
       addFileToChatActionRef.current = null
+      wordWrapActionRef.current?.dispose()
+      wordWrapActionRef.current = null
       selectionListenerRef.current?.dispose()
       selectionListenerRef.current = null
       focusListenerRef.current?.dispose()
@@ -1107,11 +1196,16 @@ export function FileWorkspacePanel() {
     }
   }, [t, activeAbsPath, activeFileTab?.title, activeSessionTabId, isAttachable])
 
+  useEffect(() => {
+    editorWordWrapRef.current = editorWordWrap
+  }, [editorWordWrap])
+
   // Refresh the cached action label when the locale changes. The initial
   // registration happens in handleEditorMount (the editor isn't mounted yet on
   // first render); this only re-fires once the label string actually changes.
   const addSelectionLabel = t("addSelectionToChat")
   const addFileLabel = t("addFileToChat")
+  const toggleWordWrapLabel = t("toggleWordWrap")
   useEffect(() => {
     // The sync effect above runs first, so tRef.current is the fresh locale here
     // — refresh the (registration-cached) action labels and the live pill label.
@@ -1122,9 +1216,20 @@ export function FileWorkspacePanel() {
         addSelectionLabel,
         addFileLabel
       )
+      registerWordWrapAction(
+        editorRef.current,
+        monacoRef.current,
+        toggleWordWrapLabel
+      )
     }
     addToChatPillRef.current?.refreshLabel()
-  }, [addSelectionLabel, addFileLabel, registerAddToChatActions])
+  }, [
+    addSelectionLabel,
+    addFileLabel,
+    toggleWordWrapLabel,
+    registerAddToChatActions,
+    registerWordWrapAction,
+  ])
 
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoSaveGuardRef = useRef({
@@ -1368,6 +1473,11 @@ export function FileWorkspacePanel() {
         tRef.current("addSelectionToChat"),
         tRef.current("addFileToChat")
       )
+      registerWordWrapAction(
+        editorInstance,
+        monaco,
+        tRef.current("toggleWordWrap")
+      )
       const pill = createAddToChatPill(
         monaco,
         () => addSelectionToChat(),
@@ -1421,6 +1531,7 @@ export function FileWorkspacePanel() {
     [
       addSelectionToChat,
       registerAddToChatActions,
+      registerWordWrapAction,
       teardownAddToChat,
       applyGitChangeDecorations,
       applyHiddenAreas,
@@ -1857,65 +1968,12 @@ export function FileWorkspacePanel() {
             {t("loading")}
           </div>
         ) : (
-          <div className="h-full overflow-auto p-6 [&_a_img]:inline">
-            <Streamdown
-              plugins={previewPlugins}
-              components={{
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                img: ({ node, ...imgProps }) => (
-                  <PreviewImage
-                    {...imgProps}
-                    fileDir={localRefsEnabled ? fileDir : null}
-                  />
-                ),
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                a: ({ node, href, children, ...aProps }) => {
-                  // Protocol-relative "//host/…" is a WEB url — exclude it
-                  // from the local branch (^\/\/) so it opens externally
-                  // instead of being collapsed into a local file path.
-                  // localRefsEnabled is false for UNC docs: never route a
-                  // (possibly wrongly-collapsed) local target to the opener.
-                  const isRelative =
-                    href && !/^[a-z][a-z0-9+.-]*:|^#|^\/\//i.test(href)
-                  if (isRelative && href && localRefsEnabled) {
-                    return (
-                      <a
-                        {...aProps}
-                        href="#"
-                        onClick={(e) => {
-                          e.preventDefault()
-                          // After preprocessing (absolute document dir) +
-                          // rehype-harden, local hrefs ARE absolute
-                          // filesystem paths like "/repo/docs/foo.md" —
-                          // open directly; no folder involved.
-                          const target = href
-                            .replace(/[#?].*$/, "")
-                            .replace(/\/\/+/g, "/")
-                          void openFilePreview(target)
-                        }}
-                      >
-                        {children}
-                      </a>
-                    )
-                  }
-                  return (
-                    <a
-                      {...aProps}
-                      // Pin protocol-relative urls to https: the webview's
-                      // own scheme (tauri://) would otherwise hijack them.
-                      href={href?.startsWith("//") ? `https:${href}` : href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      {children}
-                    </a>
-                  )
-                },
-              }}
-            >
-              {preprocessedContent}
-            </Streamdown>
-          </div>
+          <MarkdownDocumentPreview
+            content={preprocessedContent}
+            fileDir={fileDir}
+            localRefsEnabled={localRefsEnabled}
+            openFilePreview={openFilePreview}
+          />
         )}
       </div>
     )
@@ -2100,7 +2158,7 @@ export function FileWorkspacePanel() {
                 fontLigatures: editorLigatures,
                 lineNumbersMinChars,
                 lineDecorationsWidth: 10,
-                wordWrap: "off",
+                wordWrap: editorWordWrap ? "on" : "off",
                 scrollBeyondLastLine: false,
                 scrollBeyondLastColumn: 8,
                 renderLineHighlight: "line",

@@ -108,7 +108,13 @@
       "ligatures": "Ligaturen aktivieren",
       "ligaturesUnavailable": "Diese Schriftart hat keine Ligaturen",
       "terminalLigaturesHint": "Terminal-Ligaturen gelten nur für mitgelieferte Programmierschriftarten.",
+      "wordWrap": "Zeilenumbruch im Editor aktivieren",
       "preview": "Vorschau"
+    },
+    "welcomePanel": {
+      "sectionTitle": "Willkommensbereich",
+      "sectionDescription": "Zeigt die Schnellaktionskarten „Code-Entwicklung / Büroarbeit“ über dem Eingabefeld neuer Konversationen.",
+      "showQuickActions": "In neuen Konversationen anzeigen"
     }
   },
   "SystemSettings": {
@@ -1354,6 +1360,7 @@
       "addSelectionToChatDone": "{label} zur Unterhaltung hinzugefügt",
       "addFileToChat": "Datei zum Chat hinzufügen",
       "addFileToChatDone": "{label} zur Unterhaltung hinzugefügt",
+      "toggleWordWrap": "Zeilenumbruch umschalten",
       "viewDiff": "Diff anzeigen",
       "openFile": "Datei öffnen",
       "fileCount": "{count, plural, one {# Datei} other {# Dateien}}",
@@ -1669,6 +1676,7 @@
       "collapseTracked": "Verfolgte Änderungen einklappen",
       "expandUntracked": "Nicht verfolgte Dateien ausklappen",
       "collapseUntracked": "Nicht verfolgte Dateien einklappen",
+      "showRemainingItems": "{count} weitere Einträge anzeigen",
       "actions": {
         "commitCode": "Code committen",
         "rollback": "Zurücksetzen",
@@ -1991,7 +1999,7 @@
         "quickMessages": "Schnellnachrichten",
         "quickMessagesEmpty": "Noch keine Schnellnachrichten",
         "quickMessagesLoading": "Wird geladen...",
-        "paste": "Einfügen",
+        "pasteAsPlainText": "Als reinen Text einfügen",
         "cut": "Ausschneiden",
         "copy": "Kopieren",
         "selectAll": "Alles auswählen",
@@ -2494,7 +2502,8 @@
       },
       "hunkLabel": "Block {index}",
       "loadingHunk": "Hunk wird geladen...",
-      "noDiffData": "Keine Diff-Daten"
+      "noDiffData": "Keine Diff-Daten",
+      "showRemainingLines": "{count} weitere Zeilen anzeigen"
     },
     "conversationContextBar": {
       "folderTitle": "Arbeitsordner",
@@ -3418,6 +3427,7 @@
     "targetEmpty": "No cloud agents found",
     "targetManaged": "Cloud agent",
     "targetHostedResident": "Hosted resident",
+    "targetExternalLocal": "Local connector",
     "start": "Start",
     "startFailed": "Failed to start cloud session",
     "hostedQueued": "Hosted agent request queued",

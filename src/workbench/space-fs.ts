@@ -121,6 +121,67 @@ async function resolveFileId(
     : null
 }
 
+async function fetchProjectSpaceFileBytes(
+  projectId: string,
+  path: string,
+  maxBytes?: number
+): Promise<ArrayBuffer> {
+  const { folderPath, name } = splitRootRelative(path)
+  const file = await resolveFileId(projectId, folderPath, name)
+  if (!file) throw new Error(`项目空间中找不到文件：${path}`)
+  const url = await getWorkbenchSpaceDownloadUrl(projectId, file.id, "inline")
+  if (!url) throw new Error("项目空间未返回下载地址")
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`读取项目空间文件失败（HTTP ${response.status}）`)
+  }
+  const buffer = await response.arrayBuffer()
+  if (maxBytes != null && maxBytes > 0 && buffer.byteLength > maxBytes) {
+    throw new Error(`项目空间文件超过预览大小限制：${buffer.byteLength} bytes`)
+  }
+  return buffer
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  let binary = ""
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize)
+    binary += String.fromCharCode(...chunk)
+  }
+  if (typeof btoa === "function") return btoa(binary)
+  return Buffer.from(binary, "binary").toString("base64")
+}
+
+export async function psReadFileBase64(
+  path: string,
+  maxBytes?: number
+): Promise<string> {
+  const { projectId, folderPath } = parsePsPath(path)
+  if (folderPath === "/") throw new Error(`项目空间中找不到文件：${path}`)
+  const buffer = await fetchProjectSpaceFileBytes(
+    projectId,
+    folderPath.replace(/^\/+/, ""),
+    maxBytes
+  )
+  return arrayBufferToBase64(buffer)
+}
+
+export async function psReadWorkspaceFileBase64(
+  rootPath: string,
+  path: string,
+  maxBytes?: number
+): Promise<string> {
+  const { projectId, folderPath } = parsePsPath(rootPath)
+  const rootRelative =
+    folderPath === "/"
+      ? path
+      : `${folderPath.replace(/^\/+/, "")}/${path.replace(/^\/+/, "")}`
+  const buffer = await fetchProjectSpaceFileBytes(projectId, rootRelative, maxBytes)
+  return arrayBufferToBase64(buffer)
+}
+
 export async function psReadFileForEdit(
   rootPath: string,
   path: string

@@ -66,7 +66,7 @@ describe("conversationTargetFromHouflowTarget", () => {
       connectorId: "con_1",
       localAgentRef: "claude",
     })
-    expect(target && isAgentHubDispatchableTarget(target)).toBe(false)
+    expect(target && isAgentHubDispatchableTarget(target)).toBe(true)
   })
 
   it("does not expose unbound external local targets as conversation targets", () => {

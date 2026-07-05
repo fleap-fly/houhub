@@ -32,7 +32,7 @@ export interface HouflowCloudSession {
   id: string
   status: HouflowCloudSessionStatus
   title: string | null
-  environmentId: string
+  environmentId: string | null
   agentId: string | null
   agentName: string | null
   createdAt: string | null
@@ -320,6 +320,40 @@ export async function sendHouflowCloudSessionMessage(
   )
 }
 
+export async function streamHouflowCloudSessionMessage(
+  session: HouflowDesktopSession,
+  secret: HouflowAuthSecret | null,
+  cloudSession: HouflowCloudSession,
+  input: HouflowCloudDispatchInput,
+  onEvent: (event: HouflowCloudSessionEvent) => void,
+  clientEventId?: string
+): Promise<void> {
+  assertHouflowSignedIn(session)
+  const draft = normalizeCloudDispatchInput(input)
+  const client = new HouflowControlClient(session, secret)
+  for await (const frame of client.sse(
+    `/v1/sessions/${encodeURIComponent(cloudSession.id)}/messages`,
+    {
+      method: "POST",
+      body: {
+        content:
+          draft.content && draft.content.length > 0
+            ? draft.content
+            : [{ type: "text", text: draft.message }],
+        ...(clientEventId
+          ? { input: { houhub_client_event_id: clientEventId } }
+          : {}),
+      },
+    }
+  )) {
+    if (frame.event === "stream.error") {
+      throw new Error(streamErrorMessage(frame.data))
+    }
+    const event = houflowCloudSessionEventFromDto(frame.data)
+    if (event) onEvent(event)
+  }
+}
+
 export async function startHouflowCloudTargetSession(
   session: HouflowDesktopSession,
   secret: HouflowAuthSecret | null,
@@ -334,6 +368,10 @@ export async function startHouflowCloudTargetSession(
   | {
       kind: "hosted_connected"
       dispatch: Extract<AgentHubDispatchResult, { kind: "hosted_connected" }>
+    }
+  | {
+      kind: "external_local"
+      dispatch: Extract<AgentHubDispatchResult, { kind: "external_local" }>
     }
 > {
   assertHouflowSignedIn(session)
@@ -361,7 +399,10 @@ export async function startHouflowCloudTargetSession(
     return { kind: "managed", session: created, dispatch }
   }
 
-  if (conversationTarget.kind === "hosted_connected") {
+  if (
+    conversationTarget.kind === "hosted_connected" ||
+    conversationTarget.kind === "external_local"
+  ) {
     const dispatch = await dispatchAgentHubTarget(client, conversationTarget, {
       action: "workspace_message",
       message: draft.message,
@@ -369,10 +410,13 @@ export async function startHouflowCloudTargetSession(
       channelRef: `houhub/desktop/${session.workspaceId}`,
       metadata: { source: "houhub" },
     })
-    if (dispatch.kind !== "hosted_connected") {
-      throw new Error("Hosted cloud target returned an unexpected dispatch")
+    if (dispatch.kind !== conversationTarget.kind) {
+      throw new Error("Cloud connected target returned an unexpected dispatch")
     }
-    return { kind: "hosted_connected", dispatch }
+    if (dispatch.kind === "hosted_connected") {
+      return { kind: "hosted_connected", dispatch }
+    }
+    return { kind: "external_local", dispatch }
   }
 
   throw new Error(`Cloud target is not supported yet: ${target.name}`)
@@ -406,19 +450,25 @@ export function isCloudSessionActive(
 
 function sessionFromDto(value: SessionDto): HouflowCloudSession | null {
   const id = stringValue(value.id)
-  const environmentId = stringValue(value.environment_id)
-  if (!id || !environmentId) return null
+  if (!id) return null
   return {
     id,
     status: stringValue(value.status) || "idle",
     title: nullableString(value.title),
-    environmentId,
+    environmentId: nullableString(value.environment_id),
     agentId: stringValue(value.agent?.id) || null,
     agentName: nullableString(value.agent?.name),
     createdAt: nullableString(value.created_at),
     updatedAt: nullableString(value.updated_at),
     archivedAt: nullableString(value.archived_at),
   }
+}
+
+export function houflowCloudSessionEventFromDto(
+  value: unknown
+): HouflowCloudSessionEvent | null {
+  if (!isRecord(value)) return null
+  return eventFromDto(value as SessionEventDto)
 }
 
 function eventFromDto(value: SessionEventDto): HouflowCloudSessionEvent | null {
@@ -434,6 +484,19 @@ function eventFromDto(value: SessionEventDto): HouflowCloudSessionEvent | null {
     createdAt: nullableString(value.created_at),
     raw,
   }
+}
+
+function streamErrorMessage(value: unknown): string {
+  if (isRecord(value)) {
+    const error = value.error
+    if (isRecord(error)) {
+      const message = stringValue(error.message)
+      if (message) return message
+    }
+    const message = stringValue(value.message)
+    if (message) return message
+  }
+  return "Cloud session stream failed"
 }
 
 function outputFromDto(

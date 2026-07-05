@@ -145,6 +145,16 @@ const EMPTY_DELEGATIONS: DelegationCardSource[] = []
 // when a conversation has no user messages.
 const EMPTY_NAV_ENTRIES: MessageNavEntry[] = []
 
+const singletonSourceTurnsCache = new WeakMap<MessageTurn, MessageTurn[]>()
+
+export function singletonSourceTurns(turn: MessageTurn): MessageTurn[] {
+  const cached = singletonSourceTurnsCache.get(turn)
+  if (cached) return cached
+  const turns = [turn]
+  singletonSourceTurnsCache.set(turn, turns)
+  return turns
+}
+
 // Collect the `delegate_to_agent` tool calls within a turn's adapted parts,
 // recursing through tool-groups and goal-runs (a delegate call is normally a
 // standalone part — `isAgentLikeToolName` keeps it out of tool-groups — but we
@@ -630,7 +640,7 @@ export function MessageListView({
         showStats: false,
         isRoleTransition: false,
         previousUserIndex: null,
-        sourceTurns: [allTurns[i]],
+        sourceTurns: singletonSourceTurns(allTurns[i]),
       }
     })
 

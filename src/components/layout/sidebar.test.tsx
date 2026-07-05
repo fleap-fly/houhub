@@ -26,9 +26,6 @@ vi.mock("@/components/conversations/sidebar-conversation-list", () => ({
 vi.mock("@/components/houflow/cloud-sessions-sidebar-section", () => ({
   CloudSessionsSidebarSection: () => null,
 }))
-vi.mock("@/components/workbench/workbench-cloud-sidebar-section", () => ({
-  WorkbenchCloudSidebarSection: () => null,
-}))
 vi.mock("@/contexts/sidebar-context", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
 }))

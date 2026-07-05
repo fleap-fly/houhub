@@ -28,7 +28,6 @@ import {
   useRef,
   useState,
 } from "react"
-import { createHighlighter } from "shiki"
 
 // Shiki uses bitflags for font styles: 1=italic, 2=bold, 4=underline
 // biome-ignore lint/suspicious/noBitwiseOperators: shiki bitflag check
@@ -144,10 +143,12 @@ const getHighlighter = (
     return cached
   }
 
-  const highlighterPromise = createHighlighter({
-    langs: [language],
-    themes: ["github-light", "github-dark"],
-  })
+  const highlighterPromise = import("shiki").then(({ createHighlighter }) =>
+    createHighlighter({
+      langs: [language],
+      themes: ["github-light", "github-dark"],
+    })
+  )
 
   highlighterCache.set(language, highlighterPromise)
   return highlighterPromise

@@ -18,7 +18,10 @@ import type { LinkSafetyConfig, LinkSafetyModalProps } from "streamdown"
 import { toast } from "sonner"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
-import { isHomeRelativePath } from "@/lib/file-open-target"
+import {
+  isHomeRelativePath,
+  isProjectSpaceFilePath,
+} from "@/lib/file-open-target"
 import { isAbsoluteFilePath } from "@/lib/file-path-display"
 import { cn } from "@/lib/utils"
 
@@ -113,6 +116,7 @@ function isLocalPathLike(path: string): boolean {
     path.startsWith("./") ||
     path.startsWith("../") ||
     path.startsWith("~/") ||
+    isProjectSpaceFilePath(path) ||
     WINDOWS_ABSOLUTE_PATH.test(path)
   )
 }
@@ -138,6 +142,22 @@ function parseLocalFileTarget(rawUrl: string): LocalFileTarget | null {
       }
     } catch {
       return null
+    }
+  }
+
+  if (isProjectSpaceFilePath(trimmed)) {
+    const hashIndex = trimmed.indexOf("#")
+    const rawHash = hashIndex >= 0 ? trimmed.slice(hashIndex) : ""
+    const beforeHash = hashIndex >= 0 ? trimmed.slice(0, hashIndex) : trimmed
+    const queryIndex = beforeHash.indexOf("?")
+    const rawPathPart =
+      queryIndex >= 0 ? beforeHash.slice(0, queryIndex) : beforeHash
+    const decodedPath = decodeUriSafely(rawPathPart)
+    const pathAndLine = splitPathAndLine(decodedPath)
+    if (!pathAndLine.path) return null
+    return {
+      path: normalizeSlashPath(pathAndLine.path),
+      line: parseHashLine(rawHash) ?? pathAndLine.line,
     }
   }
 
@@ -240,7 +260,11 @@ function dispatchOsHandlerUrl(url: string): void {
 // `~/` paths are self-locating (openFilePreview expands the home dir and
 // routes them by absolute path — inside a registered folder or not).
 function isSelfLocatingPath(path: string): boolean {
-  return isAbsoluteFilePath(path) || isHomeRelativePath(path)
+  return (
+    isAbsoluteFilePath(path) ||
+    isHomeRelativePath(path) ||
+    isProjectSpaceFilePath(path)
+  )
 }
 
 /**

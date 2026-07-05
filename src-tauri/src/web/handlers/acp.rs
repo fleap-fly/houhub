@@ -711,6 +711,8 @@ pub struct AcpUpdatePiConfigParams {
     pub provider: String,
     pub model: String,
     #[serde(default)]
+    pub models: Option<Vec<String>>,
+    #[serde(default)]
     pub thinking_level: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
@@ -729,6 +731,7 @@ pub async fn acp_update_pi_config(
         acp_commands::PiConfigUpdate {
             provider: params.provider,
             model: params.model,
+            models: params.models,
             thinking_level: params.thinking_level,
             api_key: params.api_key,
             custom_base_url: params.custom_base_url,

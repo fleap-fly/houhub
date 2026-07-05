@@ -562,6 +562,64 @@ describe("Houflow cloud sessions", () => {
     )
   })
 
+  it("starts an external local agent through connector dispatch", async () => {
+    mocks.dispatchAgentHubTarget.mockResolvedValue({
+      surface: "agent_hub",
+      kind: "external_local",
+      targetKey: "external_local:cag_2:codex",
+      targetId: "cag_2",
+      status: "queued",
+      commandId: "cmd_2",
+      action: "workspace_message",
+      connectorId: "con_1",
+      localAgentRef: "codex",
+      raw: { id: "cmd_2", status: "queued" },
+    })
+
+    const result = await startHouflowCloudTargetSession(
+      session(),
+      secret(),
+      {
+        key: "external_local:cag_2:codex",
+        kind: "external_local",
+        id: "cag_2",
+        name: "本机 Codex",
+        provider: "codex",
+        status: "active",
+        capabilities: ["dispatch", "workspace_message"],
+        source: "agent_hub",
+        metadata: {
+          connector_id: "con_1",
+          local_agent_ref: "codex",
+        },
+      },
+      "跑一次本机任务"
+    )
+
+    expect(result).toMatchObject({
+      kind: "external_local",
+      dispatch: { commandId: "cmd_2" },
+    })
+    expect(mocks.dispatchAgentHubTarget).toHaveBeenCalledWith(
+      expect.any(Object),
+      {
+        surface: "agent_hub",
+        kind: "external_local",
+        targetKey: "external_local:cag_2:codex",
+        targetId: "cag_2",
+        name: "本机 Codex",
+        connectorId: "con_1",
+        localAgentRef: "codex",
+      },
+      {
+        action: "workspace_message",
+        message: "跑一次本机任务",
+        channelRef: "houhub/desktop/ws_1",
+        metadata: { source: "houhub" },
+      }
+    )
+  })
+
   it("lists hosted resident commands on demand", async () => {
     mocks.responses.push({
       data: [

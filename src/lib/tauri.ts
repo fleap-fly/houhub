@@ -215,12 +215,14 @@ export interface PiConfigProjection {
     id: string
     baseUrl: string
     api: string
+    models: string[]
   }>
 }
 
 export interface PiConfigUpdate {
   provider: string
   model: string
+  models?: string[] | null
   thinkingLevel?: string | null
   apiKey?: string | null
   customBaseUrl?: string | null
@@ -231,6 +233,7 @@ export async function acpUpdatePiConfig(update: PiConfigUpdate): Promise<void> {
   return invoke("acp_update_pi_config", {
     provider: update.provider,
     model: update.model,
+    models: update.models ?? null,
     thinkingLevel: update.thinkingLevel ?? null,
     apiKey: update.apiKey ?? null,
     customBaseUrl: update.customBaseUrl ?? null,

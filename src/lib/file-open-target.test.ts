@@ -88,9 +88,17 @@ describe("splitAbsPath", () => {
     expect(splitAbsPath("C:/x.ts")).toEqual({ rootPath: "C:/", ioPath: "x.ts" })
   })
 
+  it("splits project-space files against the project root", () => {
+    expect(splitAbsPath("ps://project-1/outputs/exam.png")).toEqual({
+      rootPath: "ps://project-1",
+      ioPath: "outputs/exam.png",
+    })
+  })
+
   it("returns null for non-files and relative paths", () => {
     expect(splitAbsPath("/")).toBeNull()
     expect(splitAbsPath("C:/")).toBeNull()
+    expect(splitAbsPath("ps://project-1")).toBeNull()
     expect(splitAbsPath("src/a.ts")).toBeNull()
     expect(splitAbsPath("")).toBeNull()
   })
@@ -119,6 +127,12 @@ describe("joinRootRel", () => {
     expect(joinRootRel("/repo", "./src/a.ts")).toBe("/repo/src/a.ts")
     expect(joinRootRel("/repo", "/src/a.ts")).toBe("/repo/src/a.ts")
     expect(joinRootRel("/repo", "src\\a.ts")).toBe("/repo/src/a.ts")
+  })
+
+  it("joins project-space roots without collapsing the scheme separator", () => {
+    expect(joinRootRel("ps://project-1", "/outputs/exam.png")).toBe(
+      "ps://project-1/outputs/exam.png"
+    )
   })
 
   it("resolves dot segments inside the relative part", () => {
@@ -204,6 +218,18 @@ describe("findOwningFolder", () => {
       folderId: 7,
       relPath: "Dir/x.ts",
     })
+  })
+
+  it("matches project-space roots as virtual workspace roots", () => {
+    const psFolders = [{ id: 11, path: "ps://project-1" }]
+    expect(
+      findOwningFolder("ps://project-1/outputs/exam.png", psFolders)
+    ).toMatchObject({
+      folderId: 11,
+      rootPath: "ps://project-1",
+      relPath: "outputs/exam.png",
+    })
+    expect(findOwningFolder("ps://project-2/outputs/exam.png", psFolders)).toBeNull()
   })
 })
 

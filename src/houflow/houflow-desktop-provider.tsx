@@ -13,7 +13,10 @@ import {
   signInWithHouflowDesktopOAuth,
   type HouflowSignInOptions,
 } from "./auth"
-import { loadHouflowControlSnapshot } from "./control-client"
+import {
+  loadHouflowControlSnapshot,
+  publishHouflowExternalAgent,
+} from "./control-client"
 import {
   loadHouflowSessionMetadata,
   saveHouflowSessionMetadata,
@@ -32,9 +35,16 @@ import {
   type HouflowControlSnapshot,
   type HouflowDesktopSession,
 } from "./types"
-import { syncHouflowManagedGateway } from "@/lib/api"
+import {
+  acpListAgents,
+  getHouflowConnectorStatus,
+  syncHouflowConnectorLocalAgents,
+  syncHouflowManagedGateway,
+} from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { openUrl } from "@/lib/platform"
+import { isDesktop } from "@/lib/transport"
+import type { AcpAgentInfo, AgentType } from "@/lib/types"
 
 export type HouflowDesktopStatus =
   | "loading"
@@ -89,10 +99,12 @@ export function HouflowDesktopProvider({ children }: { children: ReactNode }) {
           nextSession,
           nextSecret
         )
-        await syncGatewayProvider(nextSnapshot, nextSecret)
+        const syncedSnapshot = shouldSyncLocalShellState()
+          ? await syncLocalShellState(nextSession, nextSecret, nextSnapshot)
+          : nextSnapshot
         setSession(nextSession)
         setSecret(nextSecret)
-        setSnapshot(nextSnapshot)
+        setSnapshot(syncedSnapshot)
         setStatus("ready")
       } catch (err) {
         const message = toErrorMessage(err)
@@ -259,6 +271,113 @@ async function syncGatewayProvider(
       gateway.provider.defaultModel ?? gateway.models[0]?.id ?? null,
     models: gateway.models.map((model) => model.id),
   })
+}
+
+async function syncLocalShellState(
+  session: HouflowDesktopSession,
+  secret: HouflowAuthSecret | null,
+  snapshot: HouflowControlSnapshot
+): Promise<HouflowControlSnapshot> {
+  await syncGatewayProvider(snapshot, secret)
+  return syncLocalConnectorAgents(session, secret, snapshot)
+}
+
+function shouldSyncLocalShellState(): boolean {
+  return isDesktop() || process.env.NODE_ENV !== "development"
+}
+
+async function syncLocalConnectorAgents(
+  session: HouflowDesktopSession,
+  secret: HouflowAuthSecret | null,
+  snapshot: HouflowControlSnapshot
+): Promise<HouflowControlSnapshot> {
+  const connectorId = snapshot.connector?.connectorId?.trim()
+  if (!connectorId || snapshot.connector?.running !== true) return snapshot
+
+  const localConnector = await getHouflowConnectorStatus()
+  const localConnectorId = connectorIdFromStatusSnapshot(localConnector.snapshot)
+  if (localConnectorId !== connectorId) return snapshot
+
+  const localAgents = (await acpListAgents())
+    .filter((agent) => agent.enabled && agent.available)
+    .map(localAgentSyncInput)
+    .filter(
+      (agent): agent is NonNullable<ReturnType<typeof localAgentSyncInput>> =>
+        Boolean(agent)
+    )
+  if (localAgents.length === 0) return snapshot
+
+  await syncHouflowConnectorLocalAgents({
+    agents: localAgents,
+    heartbeat: true,
+  })
+  await Promise.all(
+    localAgents.map((agent) =>
+      publishHouflowExternalAgent(session, secret, {
+        connectorId,
+        localAgentRef: agent.localAgentRef,
+        name: agent.name,
+        provider: agent.provider,
+        capabilities: {
+          dispatch: true,
+          workspace_message: true,
+          lifecycle: true,
+        },
+      })
+    )
+  )
+  return loadHouflowControlSnapshot(session, secret)
+}
+
+function localAgentSyncInput(agent: AcpAgentInfo) {
+  const runtimeProvider = runtimeProviderForAgent(agent.agent_type)
+  if (!runtimeProvider) return null
+  return {
+    localAgentRef: agent.agent_type,
+    provider: agent.agent_type,
+    name: agent.name,
+    runtimeProvider,
+    runtimeRunner: true,
+    useDefaultSkillsDirectory: true,
+    capabilities: ["dispatch", "workspace_message", "lifecycle"],
+  }
+}
+
+function runtimeProviderForAgent(agentType: AgentType): string | null {
+  switch (agentType) {
+    case "claude_code":
+      return "claude"
+    case "codex":
+      return "codex"
+    case "open_code":
+      return "opencode"
+    case "gemini":
+      return "gemini"
+    case "open_claw":
+      return "openclaw"
+    case "hermes":
+      return "hermes"
+    case "kimi_code":
+      return "kimi"
+    case "pi":
+      return "pi"
+    case "cline":
+    case "code_buddy":
+      return null
+  }
+}
+
+function connectorIdFromStatusSnapshot(value: unknown): string | null {
+  const snapshot = objectValue(value)
+  const connector = objectValue(snapshot.connector)
+  const id = connector.id
+  return typeof id === "string" && id.trim() ? id.trim() : null
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
 }
 
 function hasUsableSecret(secret: HouflowAuthSecret | null): boolean {

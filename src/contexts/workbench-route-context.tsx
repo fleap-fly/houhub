@@ -22,7 +22,6 @@ export type WorkbenchRouteId =
   | "conversations"
   | "automations"
   | "cloud"
-  | "workbench_cloud"
 
 interface WorkbenchRouteContextValue {
   routeId: WorkbenchRouteId

@@ -108,7 +108,13 @@
       "ligatures": "Activar ligaduras",
       "ligaturesUnavailable": "Esta fuente no tiene ligaduras",
       "terminalLigaturesHint": "Las ligaduras del terminal solo se aplican a las fuentes de programación incluidas.",
+      "wordWrap": "Activar ajuste de línea del editor",
       "preview": "Vista previa"
+    },
+    "welcomePanel": {
+      "sectionTitle": "Panel de bienvenida",
+      "sectionDescription": "Muestra las tarjetas de acción rápida «Desarrollo de código / Trabajo de oficina» sobre el campo de entrada en conversaciones nuevas.",
+      "showQuickActions": "Mostrar en conversaciones nuevas"
     }
   },
   "SystemSettings": {
@@ -1354,6 +1360,7 @@
       "addSelectionToChatDone": "Se añadió {label} a la conversación",
       "addFileToChat": "Añadir archivo al chat",
       "addFileToChatDone": "Se añadió {label} a la conversación",
+      "toggleWordWrap": "Alternar ajuste de línea",
       "viewDiff": "Ver Diff",
       "openFile": "Abrir archivo",
       "fileCount": "{count, plural, one {# archivo} other {# archivos}}",
@@ -1669,6 +1676,7 @@
       "collapseTracked": "Colapsar cambios rastreados",
       "expandUntracked": "Expandir archivos no rastreados",
       "collapseUntracked": "Colapsar archivos no rastreados",
+      "showRemainingItems": "Mostrar {count} elementos más",
       "actions": {
         "commitCode": "Hacer commit del código",
         "rollback": "Revertir",
@@ -1991,7 +1999,7 @@
         "quickMessages": "Mensajes rápidos",
         "quickMessagesEmpty": "Aún no hay mensajes rápidos",
         "quickMessagesLoading": "Cargando...",
-        "paste": "Pegar",
+        "pasteAsPlainText": "Pegar como texto sin formato",
         "cut": "Cortar",
         "copy": "Copiar",
         "selectAll": "Seleccionar todo",
@@ -2494,7 +2502,8 @@
       },
       "hunkLabel": "Bloque {index}",
       "loadingHunk": "Cargando hunk...",
-      "noDiffData": "Sin datos de diff"
+      "noDiffData": "Sin datos de diff",
+      "showRemainingLines": "Mostrar {count} líneas más"
     },
     "conversationContextBar": {
       "folderTitle": "Carpeta de trabajo",
@@ -3418,6 +3427,7 @@
     "targetEmpty": "No cloud agents found",
     "targetManaged": "Cloud agent",
     "targetHostedResident": "Hosted resident",
+    "targetExternalLocal": "Local connector",
     "start": "Start",
     "startFailed": "Failed to start cloud session",
     "hostedQueued": "Hosted agent request queued",

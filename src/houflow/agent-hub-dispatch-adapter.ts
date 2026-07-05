@@ -52,6 +52,13 @@ export interface AgentHubManagedInvocation {
   engine_run?: unknown
 }
 
+interface AgentHubManagedEventDispatch {
+  data: unknown[]
+  run: SessionRun | null
+  pending?: boolean
+  engine_run?: unknown
+}
+
 export type AgentHubDispatchResult =
   | {
       surface: "agent_hub"
@@ -75,6 +82,18 @@ export type AgentHubDispatchResult =
       action: AgentHubHostedDispatchAction
       raw: ConnectedAgentConnectorCommand
     }
+  | {
+      surface: "agent_hub"
+      kind: "external_local"
+      targetKey: string
+      targetId: string
+      status: ConnectedAgentConnectorCommand["status"]
+      commandId: string
+      action: AgentHubHostedDispatchAction
+      connectorId: string
+      localAgentRef: string
+      raw: ConnectedAgentConnectorCommand
+    }
 
 export async function dispatchAgentHubTarget(
   client: AgentHubDispatchClient,
@@ -89,9 +108,7 @@ export async function dispatchAgentHubTarget(
     return dispatchHostedConnectedAgent(client, target, input)
   }
 
-  throw new Error(
-    `Agent Hub external local dispatch is not enabled yet: ${target.name}`
-  )
+  return dispatchExternalLocalAgent(client, target, input)
 }
 
 export async function dispatchManagedAgent(
@@ -107,24 +124,51 @@ export async function dispatchManagedAgent(
     throw new Error("Managed Agent Hub dispatch requires message or content")
   }
 
-  const invocation = await client.json<AgentHubManagedInvocation>(
-    `/v1/agents/${encodeURIComponent(target.targetId)}/invoke`,
+  const session = sessionId
+    ? ({
+        id: sessionId,
+        environment_id: environmentId,
+      } as unknown as Session)
+    : await client.json<Session>("/v1/sessions", {
+        method: "POST",
+        body: definedBody({
+          agent: finiteNumber(input.version)
+            ? { id: target.targetId, version: finiteNumber(input.version) }
+            : target.targetId,
+          environment_id: environmentId,
+          engine_id: textOrUndefined(input.engineId),
+          workspace_id:
+            input.workspaceId === undefined ? undefined : input.workspaceId,
+          title: textOrUndefined(input.title),
+          resources: nonEmptyArray(input.resources),
+          metadata: nonEmptyMetadata(input.metadata),
+        }),
+      })
+
+  const dispatch = await client.json<AgentHubManagedEventDispatch>(
+    `/v1/sessions/${encodeURIComponent(session.id)}/events`,
     {
       method: "POST",
       body: definedBody({
-        message,
-        content,
-        session_id: sessionId,
-        environment_id: environmentId,
         engine_id: textOrUndefined(input.engineId),
-        workspace_id:
-          input.workspaceId === undefined ? undefined : input.workspaceId,
-        title: textOrUndefined(input.title),
-        version: finiteNumber(input.version),
-        resources: nonEmptyArray(input.resources),
-        metadata: nonEmptyMetadata(input.metadata),
+        environment_id: environmentId,
+        events: [
+          {
+            type: "user.message",
+            content: content ?? [{ type: "text", text: message ?? "" }],
+          },
+        ],
       }),
     }
+  )
+  if (!dispatch.run) {
+    throw new Error("Managed Agent Hub session dispatch did not queue a run")
+  }
+
+  const invocation = managedInvocationFromSessionDispatch(
+    target.targetId,
+    session,
+    dispatch
   )
 
   return {
@@ -138,6 +182,41 @@ export async function dispatchManagedAgent(
     interactionId: invocation.interaction.id,
     engineRunId: invocation.interaction.engine_run_id,
     raw: invocation,
+  }
+}
+
+function managedInvocationFromSessionDispatch(
+  agentId: string,
+  session: Session,
+  dispatch: AgentHubManagedEventDispatch
+): AgentHubManagedInvocation {
+  const run = dispatch.run
+  if (!run) {
+    throw new Error("Managed Agent Hub session dispatch did not include a run")
+  }
+  const engineRunId =
+    isRecord(dispatch.engine_run) && typeof dispatch.engine_run.id === "string"
+      ? dispatch.engine_run.id
+      : null
+  const createdAt =
+    typeof run.created_at === "string"
+      ? run.created_at
+      : new Date(0).toISOString()
+  return {
+    interaction: {
+      id: run.id,
+      type: "interaction",
+      agent_id: agentId,
+      session_id: session.id,
+      run_id: run.id,
+      engine_run_id: engineRunId,
+      status: run.status,
+      created_at: createdAt,
+    },
+    session,
+    data: dispatch.data,
+    run,
+    ...(dispatch.engine_run ? { engine_run: dispatch.engine_run } : {}),
   }
 }
 
@@ -188,6 +267,55 @@ export async function dispatchHostedConnectedAgent(
   }
 }
 
+export async function dispatchExternalLocalAgent(
+  client: AgentHubDispatchClient,
+  target: Extract<AgentHubDispatchableTarget, { kind: "external_local" }>,
+  input: AgentHubDispatchInput
+): Promise<Extract<AgentHubDispatchResult, { kind: "external_local" }>> {
+  const action = input.action ?? "dispatch"
+  const channelRef = textOrUndefined(input.channelRef)
+  const message =
+    textOrUndefined(input.message) ?? textFromContent(input.content)
+  if (!message) {
+    throw new Error("External local Agent Hub dispatch requires message")
+  }
+  if (action === "workspace_message" && !channelRef) {
+    throw new Error(
+      "External local Agent Hub workspace_message dispatch requires channelRef"
+    )
+  }
+
+  const command = await client.json<ConnectedAgentConnectorCommand>(
+    `/v1/connected-agents/${encodeURIComponent(
+      target.targetId
+    )}/external-dispatches`,
+    {
+      method: "POST",
+      body: definedBody({
+        action,
+        message,
+        content: nonEmptyArray(input.content),
+        channel_ref: channelRef,
+        attachments: nonEmptyArray(input.attachments),
+        metadata: nonEmptyMetadata(input.metadata),
+      }),
+    }
+  )
+
+  return {
+    surface: "agent_hub",
+    kind: "external_local",
+    targetKey: target.targetKey,
+    targetId: target.targetId,
+    status: command.status,
+    commandId: command.id,
+    action,
+    connectorId: target.connectorId,
+    localAgentRef: target.localAgentRef,
+    raw: command,
+  }
+}
+
 function definedBody<T extends Record<string, unknown>>(body: T): T {
   return Object.fromEntries(
     Object.entries(body).filter(([, value]) => value !== undefined)
@@ -219,4 +347,8 @@ function textFromContent(
 function textOrUndefined(value: string | undefined | null): string | undefined {
   const text = value?.trim()
   return text ? text : undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }

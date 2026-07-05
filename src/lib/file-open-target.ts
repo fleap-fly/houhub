@@ -15,6 +15,11 @@ import { getHomeDirectory } from "@/lib/api"
 import { isAbsoluteFilePath, normalizeSlashPath } from "@/lib/file-path-display"
 
 const WINDOWS_DRIVE_PREFIX = /^[a-zA-Z]:/
+const PS_SCHEME = "ps://"
+
+export function isProjectSpaceFilePath(path: string): boolean {
+  return normalizeSlashPath(path).startsWith(PS_SCHEME)
+}
 
 /**
  * True for a Windows UNC path (`//server/share/…`). Callers that resolve
@@ -94,6 +99,15 @@ export function splitAbsPath(
   absPath: string
 ): { rootPath: string; ioPath: string } | null {
   const normalized = normalizeAbsPath(absPath)
+  if (isProjectSpaceFilePath(normalized)) {
+    const rest = normalized.slice(PS_SCHEME.length)
+    const slash = rest.indexOf("/")
+    if (slash <= 0) return null
+    const projectId = rest.slice(0, slash)
+    const ioPath = rest.slice(slash + 1)
+    if (!projectId || !ioPath) return null
+    return { rootPath: `${PS_SCHEME}${projectId}`, ioPath }
+  }
   if (!isAbsoluteFilePath(normalized)) return null
 
   const lastSlash = normalized.lastIndexOf("/")
@@ -119,6 +133,12 @@ export function joinRootRel(rootPath: string, relPath: string): string {
   const root = normalizeAbsPath(rootPath)
   const rel = normalizeSlashPath(relPath).replace(/^\.?\/+/, "")
   if (!rel) return root
+  if (isProjectSpaceFilePath(root)) {
+    return `${root.replace(/\/+$/, "")}/${rel}`.replace(
+      /^(ps:\/\/[^/]+)\/+/,
+      "$1/"
+    )
+  }
   // Funnel the join back through normalizeAbsPath so dot segments and
   // duplicate separators inside `rel` cannot mint a second byte-form of
   // the same file.
@@ -143,6 +163,13 @@ export interface OwningFolderMatch {
 export function isPathUnderRoot(absPath: string, rootPath: string): boolean {
   const path = normalizeAbsPath(absPath)
   const root = normalizeAbsPath(rootPath)
+  if (isProjectSpaceFilePath(path) || isProjectSpaceFilePath(root)) {
+    if (!isProjectSpaceFilePath(path) || !isProjectSpaceFilePath(root)) {
+      return false
+    }
+    const prefix = root.endsWith("/") ? root : `${root}/`
+    return path.startsWith(prefix)
+  }
   if (!root || !isAbsoluteFilePath(root)) return false
   const prefix = root.endsWith("/") ? root : `${root}/`
   if (WINDOWS_DRIVE_PREFIX.test(prefix) || prefix.startsWith("//")) {
@@ -164,14 +191,18 @@ export function findOwningFolder(
   folders: ReadonlyArray<{ id: number; path: string }>
 ): OwningFolderMatch | null {
   const normalized = normalizeAbsPath(absPath)
-  if (!isAbsoluteFilePath(normalized)) return null
+  if (!isAbsoluteFilePath(normalized) && !isProjectSpaceFilePath(normalized)) {
+    return null
+  }
 
   let best: OwningFolderMatch | null = null
   let bestRootLength = -1
 
   for (const folder of folders) {
     const root = normalizeAbsPath(folder.path)
-    if (!root || !isAbsoluteFilePath(root)) continue
+    if (!root || (!isAbsoluteFilePath(root) && !isProjectSpaceFilePath(root))) {
+      continue
+    }
     if (!isPathUnderRoot(normalized, root)) continue
     if (root.length <= bestRootLength) continue
 

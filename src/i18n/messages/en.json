@@ -108,7 +108,13 @@
       "ligatures": "Enable font ligatures",
       "ligaturesUnavailable": "This font has no ligatures",
       "terminalLigaturesHint": "Terminal ligatures apply only to bundled coding fonts.",
+      "wordWrap": "Enable editor word wrap",
       "preview": "Preview"
+    },
+    "welcomePanel": {
+      "sectionTitle": "Welcome panel",
+      "sectionDescription": "Show the Code Development / Office Work quick-action cards above the input on new conversations.",
+      "showQuickActions": "Show on new conversations"
     }
   },
   "SystemSettings": {
@@ -1354,6 +1360,7 @@
       "addSelectionToChatDone": "Added {label} to the conversation",
       "addFileToChat": "Add File to Chat",
       "addFileToChatDone": "Added {label} to the conversation",
+      "toggleWordWrap": "Toggle Word Wrap",
       "viewDiff": "View Diff",
       "openFile": "Open File",
       "fileCount": "{count, plural, one {# file} other {# files}}",
@@ -1669,6 +1676,7 @@
       "collapseTracked": "Collapse tracked changes",
       "expandUntracked": "Expand untracked files",
       "collapseUntracked": "Collapse untracked files",
+      "showRemainingItems": "Show {count} more items",
       "actions": {
         "commitCode": "Commit code",
         "rollback": "Rollback",
@@ -1993,7 +2001,7 @@
         "quickMessages": "Quick messages",
         "quickMessagesEmpty": "No quick messages yet",
         "quickMessagesLoading": "Loading...",
-        "paste": "Paste",
+        "pasteAsPlainText": "Paste as plain text",
         "cut": "Cut",
         "copy": "Copy",
         "selectAll": "Select all",
@@ -2494,7 +2502,8 @@
       },
       "hunkLabel": "Hunk {index}",
       "loadingHunk": "Loading hunk...",
-      "noDiffData": "No diff data"
+      "noDiffData": "No diff data",
+      "showRemainingLines": "Show {count} more lines"
     },
     "conversationContextBar": {
       "folderTitle": "Working folder",
@@ -3388,6 +3397,7 @@
   "HouflowCloud": {
     "hubCloud": "Hub Cloud",
     "workspaceFallback": "Cloud workspace",
+    "projectFallback": "Project space",
     "refresh": "Refresh",
     "loading": "Loading cloud sessions...",
     "empty": "No cloud sessions",
@@ -3396,6 +3406,7 @@
     "signedOut": "Sign in to Houflow to view cloud sessions.",
     "loadingEvents": "Loading session events...",
     "emptyEvents": "No events yet",
+    "waitingForCloudReply": "Waiting for cloud reply...",
     "openConsole": "Open console",
     "messagePlaceholder": "Message the cloud agent...",
     "send": "Send",
@@ -3418,6 +3429,8 @@
     "targetEmpty": "No cloud agents found",
     "targetManaged": "Cloud agent",
     "targetHostedResident": "Hosted resident",
+    "targetExternalLocal": "Local connector",
+    "targetProjectAgents": "Project agents",
     "start": "Start",
     "startFailed": "Failed to start cloud session",
     "hostedQueued": "Hosted agent request queued",

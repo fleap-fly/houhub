@@ -1,4 +1,10 @@
+import {
+  houflowCloudContentItemToBlock,
+  houflowCloudEventObjectToBlock,
+  isNonConversationalText,
+} from "@/houflow/cloud-session-turns"
 import { getTransport } from "@/lib/transport"
+import type { ContentBlock, MessageTurn } from "@/lib/types"
 
 export interface WorkbenchAssistant {
   id: string
@@ -19,12 +25,44 @@ export interface WorkbenchAiMessage {
   id: string
   role: "user" | "assistant" | "system"
   content: string
+  blocks: ContentBlock[]
   timestamp: string | null
 }
 
 export interface WorkbenchAiSessionDetail {
   sessionId: string
   messages: WorkbenchAiMessage[]
+}
+
+export function workbenchAiMessagesToTurns(
+  messages: WorkbenchAiMessage[]
+): MessageTurn[] {
+  return messages
+    .map((message) => {
+      const blocks =
+        message.blocks.length > 0
+          ? message.blocks
+          : message.content
+            ? [{ type: "text" as const, text: message.content }]
+            : []
+      if (blocks.length === 0) return null
+      if (
+        blocks.every(
+          (block) =>
+            block.type === "text" && isNonConversationalText(block.text)
+        )
+      ) {
+        return null
+      }
+      return {
+        id: message.id,
+        role: message.role,
+        blocks,
+        timestamp: message.timestamp ?? new Date(0).toISOString(),
+        completed_at: message.timestamp,
+      }
+    })
+    .filter(isPresent)
 }
 
 export async function listWorkbenchAssistants(
@@ -206,10 +244,12 @@ function normalizeSession(
 function normalizeMessage(value: unknown): WorkbenchAiMessage | null {
   const record = asRecord(value)
   if (!record) return null
+  const blocks = blocksFromRecord(record)
   const content =
     stringValue(record.message_content) ||
     stringValue(record.content) ||
-    stringValue(record.text)
+    stringValue(record.text) ||
+    textFromBlocks(blocks)
   if (!content) return null
   const role = stringValue(record.message_type) || stringValue(record.role)
   return {
@@ -219,6 +259,7 @@ function normalizeMessage(value: unknown): WorkbenchAiMessage | null {
         ? role
         : "assistant",
     content,
+    blocks: blocks.length > 0 ? blocks : [{ type: "text", text: content }],
     timestamp: stringValue(record.timestamp) || null,
   }
 }
@@ -226,7 +267,8 @@ function normalizeMessage(value: unknown): WorkbenchAiMessage | null {
 function normalizeHistoryMessage(value: unknown): WorkbenchAiMessage | null {
   const record = asRecord(value)
   if (!record) return null
-  const content = stringValue(record.content)
+  const blocks = blocksFromRecord(record)
+  const content = stringValue(record.content) || textFromBlocks(blocks)
   if (!content) return null
   const type = stringValue(record.type)
   if (type !== "human" && type !== "ai" && type !== "system") return null
@@ -234,8 +276,37 @@ function normalizeHistoryMessage(value: unknown): WorkbenchAiMessage | null {
     id: stringValue(record.id) || content,
     role: type === "human" ? "user" : type === "system" ? "system" : "assistant",
     content,
+    blocks: blocks.length > 0 ? blocks : [{ type: "text", text: content }],
     timestamp: stringValue(record.created_at) || null,
   }
+}
+
+function blocksFromRecord(record: Record<string, unknown>): ContentBlock[] {
+  const eventBlock = houflowCloudEventObjectToBlock(record)
+  if (eventBlock) return [eventBlock]
+
+  const content = record.content
+  if (Array.isArray(content)) {
+    const blocks = content.map(houflowCloudContentItemToBlock).filter(isPresent)
+    if (blocks.length > 0) return blocks
+  }
+
+  const blocks = arrayValue(record.blocks)
+    .map(houflowCloudContentItemToBlock)
+    .filter(isPresent)
+  return blocks
+}
+
+function textFromBlocks(blocks: ContentBlock[]): string {
+  return blocks
+    .map((block) => {
+      if (block.type === "text" || block.type === "thinking") return block.text
+      if (block.type === "tool_use") return block.input_preview ?? ""
+      if (block.type === "tool_result") return block.output_preview ?? ""
+      return ""
+    })
+    .filter(Boolean)
+    .join("\n")
 }
 
 function mergeResponseChunk(current: string, chunk: string): string {

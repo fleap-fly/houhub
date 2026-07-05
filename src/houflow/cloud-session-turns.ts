@@ -77,12 +77,12 @@ function roleFromEvent(event: HouflowCloudSessionEvent): TurnRole {
 }
 
 function blocksFromEvent(event: HouflowCloudSessionEvent): ContentBlock[] {
-  const block = eventObjectToBlock(event.raw)
+  const block = houflowCloudEventObjectToBlock(event.raw)
   if (block) return [block]
 
   const content = event.raw.content
   if (Array.isArray(content)) {
-    const blocks = content.map(contentItemToBlock).filter(isPresent)
+    const blocks = content.map(houflowCloudContentItemToBlock).filter(isPresent)
     if (blocks.length > 0) return blocks
   }
 
@@ -101,10 +101,15 @@ function isNonConversationalTextBlock(block: ContentBlock): boolean {
 export function isNonConversationalText(text: string): boolean {
   const normalized = text.trim().replace(/\s+/g, " ")
   const lower = normalized.toLowerCase()
-  return !lower
+  if (!lower) return true
+  if (isMachineArtifactSummary(normalized)) return true
+  if (isMachineQualityJson(normalized)) return true
+  return false
 }
 
-function contentItemToBlock(item: unknown): ContentBlock | null {
+export function houflowCloudContentItemToBlock(
+  item: unknown
+): ContentBlock | null {
   if (!isRecord(item)) return null
   const type = stringValue(item.type)
   const text = stringValue(item.text) || stringValue(item.content)
@@ -173,7 +178,9 @@ function contentItemToBlock(item: unknown): ContentBlock | null {
   return text ? { type: "text", text } : null
 }
 
-function eventObjectToBlock(raw: Record<string, unknown>): ContentBlock | null {
+export function houflowCloudEventObjectToBlock(
+  raw: Record<string, unknown>
+): ContentBlock | null {
   const type = stringValue(raw.type)
   if (type === "agent.tool_use" || type === "agent.custom_tool_use") {
     const toolName = stringValue(raw.name)
@@ -264,6 +271,46 @@ function previewToolOutput(value: unknown): string | null {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
+}
+
+function isMachineArtifactSummary(text: string): boolean {
+  const tokens = text.split(/\s+/).filter(Boolean)
+  if (tokens.length < 4) return false
+  const pairCount = tokens.filter((token) =>
+    /^[a-z][a-z0-9_]*=.+$/i.test(token)
+  ).length
+  if (pairCount < 4 || pairCount / tokens.length < 0.6) return false
+  return (
+    /\bnormalized_spec=/.test(text) ||
+    /\bpublished_outputs=/.test(text) ||
+    /\binternal_manifest=/.test(text) ||
+    /\binternal_files=/.test(text)
+  )
+}
+
+function isMachineQualityJson(text: string): boolean {
+  if (!text.startsWith("{") || !text.endsWith("}")) return false
+  try {
+    const parsed = JSON.parse(text) as unknown
+    return containsMachineQualityKeys(parsed)
+  } catch {
+    return false
+  }
+}
+
+function containsMachineQualityKeys(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsMachineQualityKeys)
+  if (!isRecord(value)) return false
+  if (
+    "quality_flags" in value ||
+    "raw_text_chars" in value ||
+    "structural_image_ma" in value
+  ) {
+    return true
+  }
+  const checked = value.checked
+  if (Array.isArray(checked)) return checked.some(containsMachineQualityKeys)
+  return false
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

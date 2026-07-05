@@ -40,7 +40,7 @@ export type AgentHubConversationTarget =
 
 export type AgentHubDispatchableTarget = Extract<
   AgentHubConversationTarget,
-  { kind: "managed" | "hosted_connected" }
+  { kind: "managed" | "hosted_connected" | "external_local" }
 >
 
 export function conversationTargetFromHouflowTarget(
@@ -87,5 +87,9 @@ export function conversationTargetFromHouflowTarget(
 export function isAgentHubDispatchableTarget(
   target: AgentHubConversationTarget
 ): target is AgentHubDispatchableTarget {
-  return target.kind === "managed" || target.kind === "hosted_connected"
+  return (
+    target.kind === "managed" ||
+    target.kind === "hosted_connected" ||
+    target.kind === "external_local"
+  )
 }

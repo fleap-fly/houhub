@@ -31,6 +31,7 @@ import { useTaskContext } from "@/contexts/task-context"
 import { cn, copyTextFromMenu, randomUUID } from "@/lib/utils"
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
 import { useMessageQueue, type QueuedMessage } from "@/hooks/use-message-queue"
+import { buildOptimisticUserTurnFromDraft } from "@/lib/optimistic-user-turn"
 import { MessageListView } from "@/components/message/message-list-view"
 import { ConversationShell } from "@/components/chat/conversation-shell"
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
@@ -61,10 +62,7 @@ import {
 import { TurnBusyError } from "@/lib/turn-busy"
 import { useConversationRuntime } from "@/contexts/conversation-runtime-context"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
-import {
-  extractUserImagesFromDraft,
-  getPromptDraftDisplayText,
-} from "@/lib/prompt-draft"
+import { getPromptDraftDisplayText } from "@/lib/prompt-draft"
 import {
   AGENT_LABELS,
   type AgentType,
@@ -119,36 +117,6 @@ interface ConversationTabViewProps {
   reloadSignal: number
 }
 
-function buildOptimisticUserTurnFromDraft(
-  draft: PromptDraft,
-  attachedResourcesFallback: string
-): MessageTurn {
-  // `draft.displayText` is the composer's full Markdown, which already renders
-  // every inline file/resource badge as a `[label](uri)` link (see
-  // `referenceToMarkdown`). Re-appending the resource blocks here would duplicate
-  // each attached file in the optimistic bubble, so the display text is used
-  // as-is — images are the only out-of-band content left to add as blocks.
-  const text = getPromptDraftDisplayText(draft, attachedResourcesFallback)
-
-  const blocks: ContentBlock[] = []
-  for (const image of extractUserImagesFromDraft(draft)) {
-    blocks.push({
-      type: "image",
-      data: image.data,
-      mime_type: image.mime_type,
-      uri: image.uri ?? null,
-    })
-  }
-  blocks.push({ type: "text", text })
-
-  return {
-    id: `optimistic-${randomUUID()}`,
-    role: "user",
-    blocks,
-    timestamp: new Date().toISOString(),
-  }
-}
-
 /** Build a user `MessageTurn` from a broadcast `user_message` (event or
  *  snapshot `pending_user_message`). Used by cross-client VIEWERS to render the
  *  sender's prompt. The turn `id` is the broadcast `message_id` so the runtime
@@ -191,9 +159,7 @@ const ConversationTabView = memo(function ConversationTabView({
   const t = useTranslations("Folder.conversation")
   const tWelcome = useTranslations("Folder.chat.welcomeInputPanel")
   const sharedT = useTranslations("Folder.chat.shared")
-  const { activeFolder: folder, activeFolderId } = useActiveFolder()
-  const { refreshConversations, upsertFolder } = useAppWorkspace()
-  const folderId = activeFolderId ?? 0
+  const { refreshConversations, upsertFolder, getFolder } = useAppWorkspace()
   const {
     tabs,
     bindConversationTab,
@@ -259,16 +225,25 @@ const ConversationTabView = memo(function ConversationTabView({
     useState<ComposerInjectContent | null>(null)
 
   const hasPersistedConversation = dbConversationId != null
+  const ownTab = useMemo(
+    () => tabs.find((tab) => tab.id === tabId) ?? null,
+    [tabs, tabId]
+  )
+  const folderId = ownTab?.folderId ?? 0
+  const folder = useMemo(
+    () => (ownTab ? getFolder(ownTab.folderId) : null),
+    [getFolder, ownTab]
+  )
 
   // A folderless chat draft before its first send (chat tab, not yet persisted).
   // Used to trigger the eager scratch-dir prepare below, which gives the draft a
   // real workingDir so the ACP connection can spawn BEFORE the first send — the
   // composer is gated on `connected` like any normal conversation (no offline
   // compose). Once bound it has a persisted row + workingDir and this is false.
-  const isChatDraft = useMemo(() => {
-    const ownTab = tabs.find((tab) => tab.id === tabId)
-    return ownTab?.isChat === true && !hasPersistedConversation
-  }, [tabs, tabId, hasPersistedConversation])
+  const isChatDraft = useMemo(
+    () => ownTab?.isChat === true && !hasPersistedConversation,
+    [ownTab, hasPersistedConversation]
+  )
 
   // Expose the runtime session key to the tab so the aux panel (Diff sidebar)
   // can look up live turns even before the DB conversation is created.
