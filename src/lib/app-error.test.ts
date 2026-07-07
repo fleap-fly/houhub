@@ -26,4 +26,26 @@ describe("toErrorMessage", () => {
       })
     ).toBe("nested failure")
   })
+
+  it("formats problem detail objects without leaking raw JSON", () => {
+    expect(
+      toErrorMessage({
+        type: "about:blank",
+        title: "Internal Server Error",
+        status: 500,
+        detail: "Internal Error",
+        instance: "urn:nextai:request:req-9",
+      })
+    ).toBe("Internal Error (HTTP 500, req-9)")
+  })
+
+  it("formats problem detail JSON embedded in an Error message", () => {
+    expect(
+      toErrorMessage(
+        new Error(
+          'status 500 Internal Server Error {"type":"about:blank","title":"Internal Server Error","status":500,"detail":"Internal Error","instance":"urn:nextai:request:req-9"}'
+        )
+      )
+    ).toBe("Internal Error (HTTP 500, req-9)")
+  })
 })

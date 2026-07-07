@@ -85,6 +85,10 @@ function blocksFromEvent(event: HouflowCloudSessionEvent): ContentBlock[] {
     const blocks = content.map(houflowCloudContentItemToBlock).filter(isPresent)
     if (blocks.length > 0) return blocks
   }
+  if (isRecord(content)) {
+    const block = houflowCloudContentItemToBlock(content)
+    if (block) return [block]
+  }
 
   return event.text ? [{ type: "text", text: event.text }] : []
 }
@@ -104,6 +108,7 @@ export function isNonConversationalText(text: string): boolean {
   if (!lower) return true
   if (isMachineArtifactSummary(normalized)) return true
   if (isMachineQualityJson(normalized)) return true
+  if (isLifecycleStatusText(lower)) return true
   return false
 }
 
@@ -298,6 +303,10 @@ function isMachineQualityJson(text: string): boolean {
   }
 }
 
+function isLifecycleStatusText(lower: string): boolean {
+  return LIFECYCLE_STATUS_TEXTS.has(lower.replace(/[。.!]+$/, ""))
+}
+
 function containsMachineQualityKeys(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(containsMachineQualityKeys)
   if (!isRecord(value)) return false
@@ -359,4 +368,11 @@ const NON_CONVERSATIONAL_EVENT_TYPES = new Set([
   "channel.inbound_deferred",
   "channel.inbound_dequeued",
   "channel.outbound_intent_created",
+])
+
+const LIFECYCLE_STATUS_TEXTS = new Set([
+  "session is idle",
+  "session run queued",
+  "hosted a2a dispatch started",
+  "runtime plane native message dispatch started",
 ])

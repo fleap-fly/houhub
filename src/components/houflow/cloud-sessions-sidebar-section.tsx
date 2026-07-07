@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState, useTransition } from "react"
+import { useCallback, useMemo, useState, useTransition } from "react"
 import {
   Bot,
   BriefcaseBusiness,
@@ -17,16 +17,14 @@ import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useHouflowDesktop } from "@/houflow"
 import { useHouflowCloudWorkspace } from "@/houflow/cloud-workspace-context"
 import { useWorkbench, useWorkbenchCloud } from "@/workbench"
-import type {
-  WorkbenchAiSession,
-  WorkbenchAssistant,
-} from "@/workbench/ai"
+import type { WorkbenchAiSession, WorkbenchAssistant } from "@/workbench/ai"
 import type {
   HouflowCloudHostedCommand,
   HouflowCloudSession,
 } from "@/houflow/cloud-sessions"
 import { cloudActivityTone } from "@/houflow/cloud-session-display"
 import type { HouflowAgentTarget } from "@/houflow/types"
+import { toErrorMessage } from "@/lib/app-error"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { cn } from "@/lib/utils"
 
@@ -58,7 +56,42 @@ export function CloudSessionsSidebarSection() {
   const [loadedHostedTargets, setLoadedHostedTargets] = useState<
     Record<string, boolean>
   >({})
+  const [hostedCommandErrors, setHostedCommandErrors] = useState<
+    Record<string, string>
+  >({})
   const [isCommandPending, startCommandTransition] = useTransition()
+
+  const loadHostedCommands = useCallback(
+    (target: HouflowAgentTarget) => {
+      startCommandTransition(() => {
+        void cloud
+          .refreshHostedCommands(target.id, 8)
+          .then(() => {
+            setLoadedHostedTargets((loaded) => ({
+              ...loaded,
+              [target.key]: true,
+            }))
+            setHostedCommandErrors((current) => {
+              if (!current[target.key]) return current
+              const next = { ...current }
+              delete next[target.key]
+              return next
+            })
+          })
+          .catch((err) => {
+            setLoadedHostedTargets((loaded) => ({
+              ...loaded,
+              [target.key]: true,
+            }))
+            setHostedCommandErrors((current) => ({
+              ...current,
+              [target.key]: toErrorMessage(err),
+            }))
+          })
+      })
+    },
+    [cloud]
+  )
 
   const targets = useMemo(
     () =>
@@ -164,7 +197,9 @@ export function CloudSessionsSidebarSection() {
             void Promise.all([
               signedIntoHouflow ? cloud.refreshSessions() : Promise.resolve(),
               signedIntoHouflow ? houflow.refresh() : Promise.resolve(),
-              signedIntoWorkbench ? workbenchCloud.refresh() : Promise.resolve(),
+              signedIntoWorkbench
+                ? workbenchCloud.refresh()
+                : Promise.resolve(),
             ])
           }
           title={t("refresh")}
@@ -200,6 +235,7 @@ export function CloudSessionsSidebarSection() {
                 selectedTargetKey={cloud.selectedTargetKey}
                 sessionsByAgent={sessionsByAgent}
                 hostedCommandsByAgent={new Map()}
+                hostedCommandErrors={{}}
                 showAll={showAllManaged}
                 targets={managedTargets}
                 expandedTargets={expandedTargets}
@@ -235,6 +271,7 @@ export function CloudSessionsSidebarSection() {
                 hostedCommandsByAgent={hostedCommandsByAgent(
                   cloud.hostedCommands
                 )}
+                hostedCommandErrors={hostedCommandErrors}
                 showAll={showAllHosted}
                 targets={hostedTargets}
                 expandedTargets={expandedTargets}
@@ -260,16 +297,7 @@ export function CloudSessionsSidebarSection() {
                         (item) => item.key === targetKey
                       )
                       if (target) {
-                        startCommandTransition(() => {
-                          void cloud
-                            .refreshHostedCommands(target.id, 8)
-                            .then(() =>
-                              setLoadedHostedTargets((loaded) => ({
-                                ...loaded,
-                                [targetKey]: true,
-                              }))
-                            )
-                        })
+                        loadHostedCommands(target)
                       }
                     }
                     return {
@@ -286,14 +314,7 @@ export function CloudSessionsSidebarSection() {
                 }}
                 onLoadHostedCommands={(target) => {
                   if (isCommandPending) return
-                  startCommandTransition(() => {
-                    void cloud.refreshHostedCommands(target.id, 8).then(() =>
-                      setLoadedHostedTargets((loaded) => ({
-                        ...loaded,
-                        [target.key]: true,
-                      }))
-                    )
-                  })
+                  loadHostedCommands(target)
                 }}
               />
               <TargetGroup
@@ -305,6 +326,7 @@ export function CloudSessionsSidebarSection() {
                 hostedCommandsByAgent={hostedCommandsByAgent(
                   cloud.hostedCommands
                 )}
+                hostedCommandErrors={hostedCommandErrors}
                 showAll={showAllExternal}
                 targets={externalTargets}
                 expandedTargets={expandedTargets}
@@ -330,16 +352,7 @@ export function CloudSessionsSidebarSection() {
                         (item) => item.key === targetKey
                       )
                       if (target) {
-                        startCommandTransition(() => {
-                          void cloud
-                            .refreshHostedCommands(target.id, 8)
-                            .then(() =>
-                              setLoadedHostedTargets((loaded) => ({
-                                ...loaded,
-                                [targetKey]: true,
-                              }))
-                            )
-                        })
+                        loadHostedCommands(target)
                       }
                     }
                     return {
@@ -356,14 +369,7 @@ export function CloudSessionsSidebarSection() {
                 }}
                 onLoadHostedCommands={(target) => {
                   if (isCommandPending) return
-                  startCommandTransition(() => {
-                    void cloud.refreshHostedCommands(target.id, 8).then(() =>
-                      setLoadedHostedTargets((loaded) => ({
-                        ...loaded,
-                        [target.key]: true,
-                      }))
-                    )
-                  })
+                  loadHostedCommands(target)
                 }}
               />
             </>
@@ -425,6 +431,7 @@ function TargetGroup({
   selectedTargetKey,
   sessionsByAgent,
   hostedCommandsByAgent,
+  hostedCommandErrors,
   showAll,
   targets,
   expandedTargets,
@@ -442,6 +449,7 @@ function TargetGroup({
   selectedTargetKey: string | null
   sessionsByAgent: Map<string, HouflowCloudSession[]>
   hostedCommandsByAgent: Map<string, HouflowCloudHostedCommand[]>
+  hostedCommandErrors: Record<string, string>
   showAll: boolean
   targets: HouflowAgentTarget[]
   expandedTargets: Record<string, boolean>
@@ -488,11 +496,11 @@ function TargetGroup({
           {visibleTargets.map((target) => {
             const sessions = sessionsByAgent.get(target.id) ?? []
             const hostedCommands = hostedCommandsByAgent.get(target.id) ?? []
+            const hostedCommandError = hostedCommandErrors[target.key]
             const connectorTarget = target.kind !== "managed"
-            const childCount =
-              connectorTarget
-                ? hostedCommands.length
-                : sessions.length
+            const childCount = connectorTarget
+              ? hostedCommands.length
+              : sessions.length
             const targetExpanded = expandedTargets[target.key] ?? false
             const visibleSessions = targetExpanded
               ? sessions
@@ -538,8 +546,23 @@ function TargetGroup({
                     </span>
                   </button>
                 </div>
+                {connectorTarget && targetExpanded && hostedCommandError ? (
+                  <div className="ml-6 space-y-1 px-2 py-1">
+                    <div className="line-clamp-2 text-[0.6875rem] text-destructive">
+                      {hostedCommandError}
+                    </div>
+                    <button
+                      type="button"
+                      className="text-[0.6875rem] text-muted-foreground underline-offset-2 hover:text-sidebar-foreground hover:underline"
+                      onClick={() => onLoadHostedCommands(target)}
+                    >
+                      {t("refresh")}
+                    </button>
+                  </div>
+                ) : null}
                 {connectorTarget &&
                 targetExpanded &&
+                !hostedCommandError &&
                 hostedCommands.length === 0 ? (
                   <div className="ml-6 px-2 py-1">
                     <button

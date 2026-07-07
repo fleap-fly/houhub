@@ -77,24 +77,25 @@ export class HouflowControlClient {
     return this.sdk.bytes(path, options)
   }
 
-  sse(
-    path: string,
-    options: Parameters<AgentHubNetworkClient["sse"]>[1] = {}
-  ) {
+  sse(path: string, options: Parameters<AgentHubNetworkClient["sse"]>[1] = {}) {
     return this.sdk.sse(path, options)
   }
 }
 
 export async function loadHouflowControlSnapshot(
   session: HouflowDesktopSession,
-  secret: HouflowAuthSecret | null
+  secret: HouflowAuthSecret | null,
+  options: LoadHouflowControlSnapshotOptions = {}
 ): Promise<HouflowControlSnapshot> {
   assertHouflowSignedIn(session)
   const client = new HouflowControlClient(session, secret)
+  const gatewayCatalogMode = options.gatewayCatalogMode ?? "sync"
   const [workspaces, quota, gateway, targets, connector] = await Promise.all([
     listWorkspaces(client, session.workspaceId),
     loadWorkspaceQuota(client),
-    loadGatewayCatalog(client),
+    gatewayCatalogMode === "skip"
+      ? Promise.resolve(null)
+      : loadGatewayCatalog(client, { sync: gatewayCatalogMode === "sync" }),
     listTargets(client),
     loadConnectorSummary(client),
   ])
@@ -106,6 +107,12 @@ export async function loadHouflowControlSnapshot(
     connector,
     syncedAt: new Date().toISOString(),
   }
+}
+
+export type HouflowGatewayCatalogMode = "sync" | "read" | "skip"
+
+export interface LoadHouflowControlSnapshotOptions {
+  gatewayCatalogMode?: HouflowGatewayCatalogMode
 }
 
 export interface PublishHouflowExternalAgentInput {
@@ -200,7 +207,8 @@ async function loadWorkspaceQuota(
 }
 
 async function loadGatewayCatalog(
-  client: HouflowControlClient
+  client: HouflowControlClient,
+  options: { sync: boolean }
 ): Promise<HouflowGatewayCatalog | null> {
   const providersPage = await client.json<PageCursor<LLMProvider>>(
     "/v1/providers",
@@ -216,10 +224,12 @@ async function loadGatewayCatalog(
     throw new Error("Houflow gateway provider list is empty")
   }
 
-  const syncedProviderDto = await client.json<LLMProvider>(
-    `/v1/providers/${encodeURIComponent(providerDto.id)}/sync-models`,
-    { method: "POST", body: {} }
-  )
+  const syncedProviderDto = options.sync
+    ? await client.json<LLMProvider>(
+        `/v1/providers/${encodeURIComponent(providerDto.id)}/sync-models`,
+        { method: "POST", body: {} }
+      )
+    : providerDto
 
   let syncedProvider = providerFromDto(syncedProviderDto)
 

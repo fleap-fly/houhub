@@ -82,6 +82,28 @@ export interface HouflowCloudApproval {
 
 export type HouflowCloudHostedCommand = ConnectedAgentConnectorCommand
 
+export type HouflowHostedCommandStreamFrame =
+  | {
+      event: "connector_command.snapshot"
+      data: {
+        id: string
+        status: HouflowCloudHostedCommand["status"]
+        error: string | null
+        output: Record<string, unknown> | null
+        updated_at: string
+        completed_at: string | null
+        connected_agent_id: string
+      }
+    }
+  | {
+      event: "connector_command.event"
+      data: NonNullable<HouflowCloudHostedCommand["events"]>[number]
+    }
+  | {
+      event: "stream.error"
+      data: { message?: string }
+    }
+
 export interface HouflowCloudDispatchDraft {
   message: string
   content?: ContentBlock[]
@@ -265,6 +287,61 @@ export async function getHouflowHostedAgentCommand(
     20
   )
   return commands.find((item) => item.id === commandId) ?? null
+}
+
+export async function streamHouflowHostedAgentCommand(
+  session: HouflowDesktopSession,
+  secret: HouflowAuthSecret | null,
+  commandId: string,
+  onFrame: (frame: HouflowHostedCommandStreamFrame) => void
+): Promise<void> {
+  assertHouflowSignedIn(session)
+  const client = new HouflowControlClient(session, secret)
+  for await (const frame of client.sse(
+    `/v1/connected-agent-connector-commands/${encodeURIComponent(
+      commandId
+    )}/stream`
+  )) {
+    const typed = frame as HouflowHostedCommandStreamFrame
+    if (typed.event === "stream.error") {
+      throw new Error(typed.data.message || "Hosted command stream failed")
+    }
+    onFrame(typed)
+  }
+}
+
+export function mergeHouflowHostedCommandStreamFrame(
+  command: HouflowCloudHostedCommand,
+  frame: HouflowHostedCommandStreamFrame
+): HouflowCloudHostedCommand {
+  if (frame.event === "connector_command.snapshot") {
+    if (frame.data.id !== command.id) return command
+    return {
+      ...command,
+      status: frame.data.status,
+      error: frame.data.error,
+      output: frame.data.output,
+      updated_at: frame.data.updated_at,
+      completed_at: frame.data.completed_at,
+    }
+  }
+
+  if (frame.event === "connector_command.event") {
+    if (command.events.some((event) => event.id === frame.data.id)) {
+      return command
+    }
+    return {
+      ...command,
+      events: [...command.events, frame.data].sort((left, right) =>
+        String(left.created_at ?? "").localeCompare(
+          String(right.created_at ?? "")
+        )
+      ),
+      updated_at: frame.data.created_at || command.updated_at,
+    }
+  }
+
+  return command
 }
 
 export async function getHouflowCloudSessionOutputText(

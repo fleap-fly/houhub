@@ -49,6 +49,49 @@ function parseErrorObject(value: unknown): AppCommandError | null {
   }
 }
 
+function parseProblemDetails(value: unknown): string | null {
+  const obj = asObject(value)
+  if (!obj) return null
+
+  const status = typeof obj.status === "number" ? obj.status : null
+  const detail = normalizeString(obj.detail)
+  const title = normalizeString(obj.title)
+  const instance = normalizeString(obj.instance)
+  if (!detail && !title && status === null) return null
+
+  const message = detail || title || (status !== null ? `HTTP ${status}` : null)
+  if (!message) return null
+  const suffixes: string[] = []
+  if (status !== null) suffixes.push(`HTTP ${status}`)
+  const requestId = requestIdFromProblemInstance(instance)
+  if (requestId) suffixes.push(requestId)
+  return suffixes.length > 0 ? `${message} (${suffixes.join(", ")})` : message
+}
+
+function parseProblemDetailsFromString(value: string): string | null {
+  const trimmed = value.trim()
+  const candidates = [trimmed]
+  const jsonStart = trimmed.indexOf("{")
+  if (jsonStart > 0) candidates.push(trimmed.slice(jsonStart))
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate)
+      const message = parseProblemDetails(parsed)
+      if (message) return message
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null
+}
+
+function requestIdFromProblemInstance(instance: string | null): string | null {
+  if (!instance) return null
+  const match = /(?:^|[:/])(req-[A-Za-z0-9_-]+)$/.exec(instance)
+  return match?.[1] ?? null
+}
+
 export function extractAppCommandError(error: unknown): AppCommandError | null {
   const direct = parseErrorObject(error)
   if (direct) return direct
@@ -88,15 +131,21 @@ export function toErrorMessage(error: unknown): string {
   }
 
   if (error instanceof Error) {
-    return error.message.trim()
+    return parseProblemDetailsFromString(error.message) ?? error.message.trim()
   }
 
   if (typeof error === "string") {
-    return error.trim()
+    return parseProblemDetailsFromString(error) ?? error.trim()
   }
 
   const errorObject = asObject(error)
+  const problemMessage = parseProblemDetails(errorObject)
+  if (problemMessage) return problemMessage
+
   const nestedError = asObject(errorObject?.error)
+  const nestedProblemMessage = parseProblemDetails(nestedError)
+  if (nestedProblemMessage) return nestedProblemMessage
+
   const plainMessage =
     normalizeString(errorObject?.detail) ||
     normalizeString(errorObject?.message) ||

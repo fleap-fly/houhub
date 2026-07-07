@@ -81,9 +81,24 @@ describe("houflowCloudEventsToTurns", () => {
         message: "Session is idle.",
       }),
       event({
+        id: "evt_hosted_idle",
+        type: "hosted.event",
+        message: "Session is idle.",
+      }),
+      event({
+        id: "evt_hosted_queued",
+        type: "hosted.event",
+        message: "Session run queued.",
+      }),
+      event({
         id: "evt_dispatch",
         type: "runtime.status",
         message: "Hosted A2A dispatch started",
+      }),
+      event({
+        id: "evt_hosted_dispatch",
+        type: "hosted.event",
+        message: "Runtime Plane native message dispatch started.",
       }),
       event({
         id: "evt_manifest",
@@ -118,6 +133,39 @@ describe("houflowCloudEventsToTurns", () => {
       role: "assistant",
       blocks: [{ type: "text", text: "试卷已经生成，可以在右侧查看文件。" }],
     })
+  })
+
+  it("maps object-form Agent Hub content blocks", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_object_content",
+        type: "agent.message",
+        content: {
+          type: "tool_use",
+          id: "call_1",
+          name: "Read",
+          input: { file_path: "outputs/report.md" },
+        },
+      }),
+    ])
+
+    expect(turns).toEqual([
+      {
+        id: "evt_object_content",
+        role: "assistant",
+        blocks: [
+          {
+            type: "tool_use",
+            tool_use_id: "call_1",
+            tool_name: "Read",
+            input_preview: '{"file_path":"outputs/report.md"}',
+            meta: null,
+          },
+        ],
+        timestamp: "2026-06-28T00:00:00.000Z",
+        completed_at: "2026-06-28T00:00:00.000Z",
+      },
+    ])
   })
 
   it("maps Agent Hub tool events into the local tool/delegation renderer shape", () => {

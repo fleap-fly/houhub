@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react"
@@ -16,6 +17,7 @@ import {
 import {
   loadHouflowControlSnapshot,
   publishHouflowExternalAgent,
+  type HouflowGatewayCatalogMode,
 } from "./control-client"
 import {
   loadHouflowSessionMetadata,
@@ -77,6 +79,7 @@ export function HouflowDesktopProvider({ children }: { children: ReactNode }) {
   )
   const [secret, setSecret] = useState<HouflowAuthSecret | null>(null)
   const [snapshot, setSnapshot] = useState<HouflowControlSnapshot | null>(null)
+  const gatewayRef = useRef<HouflowControlSnapshot["gateway"]>(null)
   const [error, setError] = useState<string | null>(null)
 
   const refreshWith = useCallback(
@@ -84,10 +87,12 @@ export function HouflowDesktopProvider({ children }: { children: ReactNode }) {
       nextSession: HouflowDesktopSession,
       nextSecret: HouflowAuthSecret | null,
       nextStatus: HouflowDesktopStatus = "refreshing",
-      throwOnError = false
+      throwOnError = false,
+      options: RefreshWithOptions = {}
     ) => {
       if (nextSession.status !== "signed_in") {
         setSnapshot(null)
+        gatewayRef.current = null
         setStatus("signed_out")
         return
       }
@@ -97,18 +102,32 @@ export function HouflowDesktopProvider({ children }: { children: ReactNode }) {
         assertHouflowSignedIn(nextSession)
         const nextSnapshot = await loadHouflowControlSnapshot(
           nextSession,
-          nextSecret
+          nextSecret,
+          { gatewayCatalogMode: options.gatewayCatalogMode }
         )
+        const snapshotWithGateway =
+          options.gatewayCatalogMode === "skip" && gatewayRef.current
+            ? { ...nextSnapshot, gateway: gatewayRef.current }
+            : nextSnapshot
         const syncedSnapshot = shouldSyncLocalShellState()
-          ? await syncLocalShellState(nextSession, nextSecret, nextSnapshot)
-          : nextSnapshot
+          ? await syncLocalShellState(
+              nextSession,
+              nextSecret,
+              snapshotWithGateway,
+              {
+                syncGatewayProvider: options.syncGatewayProvider !== false,
+              }
+            )
+          : snapshotWithGateway
         setSession(nextSession)
         setSecret(nextSecret)
         setSnapshot(syncedSnapshot)
+        gatewayRef.current = syncedSnapshot.gateway
         setStatus("ready")
       } catch (err) {
         const message = toErrorMessage(err)
         setSnapshot(null)
+        gatewayRef.current = null
         setError(message)
         setStatus("error")
         if (throwOnError) {
@@ -139,6 +158,7 @@ export function HouflowDesktopProvider({ children }: { children: ReactNode }) {
         setSession(HOUFLOW_SIGNED_OUT_SESSION)
         setSecret(null)
         setSnapshot(null)
+        gatewayRef.current = null
         setStatus("signed_out")
         return
       }
@@ -190,7 +210,10 @@ export function HouflowDesktopProvider({ children }: { children: ReactNode }) {
       if (!nextWorkspaceId || nextWorkspaceId === session.workspaceId) return
       const nextSession = { ...session, workspaceId: nextWorkspaceId }
       saveHouflowSessionMetadata(nextSession)
-      await refreshWith(nextSession, secret, "refreshing")
+      await refreshWith(nextSession, secret, "refreshing", false, {
+        gatewayCatalogMode: "skip",
+        syncGatewayProvider: false,
+      })
     },
     [refreshWith, secret, session]
   )
@@ -201,6 +224,7 @@ export function HouflowDesktopProvider({ children }: { children: ReactNode }) {
     setSession(HOUFLOW_SIGNED_OUT_SESSION)
     setSecret(null)
     setSnapshot(null)
+    gatewayRef.current = null
     setError(null)
     setStatus("signed_out")
   }, [])
@@ -235,6 +259,11 @@ export function HouflowDesktopProvider({ children }: { children: ReactNode }) {
       {children}
     </HouflowDesktopContext.Provider>
   )
+}
+
+interface RefreshWithOptions {
+  gatewayCatalogMode?: HouflowGatewayCatalogMode
+  syncGatewayProvider?: boolean
 }
 
 export function useHouflowDesktop(): HouflowDesktopContextValue {
@@ -276,9 +305,12 @@ async function syncGatewayProvider(
 async function syncLocalShellState(
   session: HouflowDesktopSession,
   secret: HouflowAuthSecret | null,
-  snapshot: HouflowControlSnapshot
+  snapshot: HouflowControlSnapshot,
+  options: { syncGatewayProvider: boolean }
 ): Promise<HouflowControlSnapshot> {
-  await syncGatewayProvider(snapshot, secret)
+  if (options.syncGatewayProvider) {
+    await syncGatewayProvider(snapshot, secret)
+  }
   return syncLocalConnectorAgents(session, secret, snapshot)
 }
 
@@ -295,7 +327,9 @@ async function syncLocalConnectorAgents(
   if (!connectorId || snapshot.connector?.running !== true) return snapshot
 
   const localConnector = await getHouflowConnectorStatus()
-  const localConnectorId = connectorIdFromStatusSnapshot(localConnector.snapshot)
+  const localConnectorId = connectorIdFromStatusSnapshot(
+    localConnector.snapshot
+  )
   if (localConnectorId !== connectorId) return snapshot
 
   const localAgents = (await acpListAgents())
@@ -326,7 +360,12 @@ async function syncLocalConnectorAgents(
       })
     )
   )
-  return loadHouflowControlSnapshot(session, secret)
+  return loadHouflowControlSnapshot(session, secret, {
+    gatewayCatalogMode: "skip",
+  }).then((nextSnapshot) => ({
+    ...nextSnapshot,
+    gateway: snapshot.gateway,
+  }))
 }
 
 function localAgentSyncInput(agent: AcpAgentInfo) {
