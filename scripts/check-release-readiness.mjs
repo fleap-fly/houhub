@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 const root = path.resolve(new URL("..", import.meta.url).pathname)
@@ -59,15 +60,21 @@ function assertEqual(actual, expected, label) {
 }
 
 async function fetchText(url, options = {}) {
+  const timeoutMs = options.timeoutMs || 30000
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const response = await fetch(url, {
       cache: "no-store",
       redirect: options.redirect || "follow",
+      signal: controller.signal,
     })
     const text = await response.text()
     return { response, text, error: null }
   } catch (error) {
     return { response: null, text: "", error }
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -76,6 +83,31 @@ function normalizeJsonText(text) {
 }
 
 async function fetchGitHubReleaseText(url) {
+  const releaseDir = fs.mkdtempSync(path.join(os.tmpdir(), "houhub-release-"))
+  try {
+    tryRun("gh", [
+      "release",
+      "download",
+      `v${expectedVersion}`,
+      "--repo",
+      "fleap-fly/houhub",
+      "-p",
+      "latest.json",
+      "-D",
+      releaseDir,
+    ])
+    const assetPath = path.join(releaseDir, "latest.json")
+    if (fs.existsSync(assetPath)) {
+      return {
+        response: { ok: true, status: 200 },
+        text: fs.readFileSync(assetPath, "utf8"),
+        error: null,
+      }
+    }
+  } finally {
+    fs.rmSync(releaseDir, { force: true, recursive: true })
+  }
+
   const fetched = await fetchText(url)
   if (!fetched.error) return fetched
 
@@ -85,6 +117,8 @@ async function fetchGitHubReleaseText(url) {
     "3",
     "--connect-timeout",
     "20",
+    "--max-time",
+    "60",
     url,
   ])
   if (fallback !== null) {
