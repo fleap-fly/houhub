@@ -2,17 +2,39 @@
 
 import { useCallback, useMemo, useState, useTransition } from "react"
 import {
+  Archive,
   Bot,
   BriefcaseBusiness,
   ChevronDown,
   ChevronRight,
   Cloud,
   Loader2,
+  MoreHorizontal,
   RefreshCw,
   ServerCog,
+  SquarePen,
+  Trash2,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
+import { toast } from "sonner"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useHouflowDesktop } from "@/houflow"
 import { useHouflowCloudWorkspace } from "@/houflow/cloud-workspace-context"
@@ -59,6 +81,9 @@ export function CloudSessionsSidebarSection() {
   const [hostedCommandErrors, setHostedCommandErrors] = useState<
     Record<string, string>
   >({})
+  const [sessionToDelete, setSessionToDelete] =
+    useState<HouflowCloudSession | null>(null)
+  const [isDeletingSession, setIsDeletingSession] = useState(false)
   const [isCommandPending, startCommandTransition] = useTransition()
 
   const loadHostedCommands = useCallback(
@@ -251,6 +276,20 @@ export function CloudSessionsSidebarSection() {
                   cloud.selectSession(sessionId)
                   setRoute("cloud")
                 }}
+                onNewSession={(targetKey) => {
+                  workbenchCloud.selectAssistant(null)
+                  workbenchCloud.selectSession(null)
+                  cloud.selectTarget(targetKey)
+                  setRoute("cloud")
+                }}
+                onArchiveSession={(sessionId) => {
+                  void cloud.archiveSession(sessionId).catch((err) => {
+                    toast.error(t("archiveFailed"), {
+                      description: toErrorMessage(err),
+                    })
+                  })
+                }}
+                onRequestDeleteSession={setSessionToDelete}
                 onShowAllChange={setShowAllManaged}
                 onToggle={() => setManagedExpanded((value) => !value)}
                 onToggleTarget={(targetKey) =>
@@ -287,6 +326,20 @@ export function CloudSessionsSidebarSection() {
                   cloud.selectSession(sessionId)
                   setRoute("cloud")
                 }}
+                onNewSession={(targetKey) => {
+                  workbenchCloud.selectAssistant(null)
+                  workbenchCloud.selectSession(null)
+                  cloud.selectTarget(targetKey)
+                  setRoute("cloud")
+                }}
+                onArchiveSession={(sessionId) => {
+                  void cloud.archiveSession(sessionId).catch((err) => {
+                    toast.error(t("archiveFailed"), {
+                      description: toErrorMessage(err),
+                    })
+                  })
+                }}
+                onRequestDeleteSession={setSessionToDelete}
                 onShowAllChange={setShowAllHosted}
                 onToggle={() => setHostedExpanded((value) => !value)}
                 onToggleTarget={(targetKey) =>
@@ -342,6 +395,20 @@ export function CloudSessionsSidebarSection() {
                   cloud.selectSession(sessionId)
                   setRoute("cloud")
                 }}
+                onNewSession={(targetKey) => {
+                  workbenchCloud.selectAssistant(null)
+                  workbenchCloud.selectSession(null)
+                  cloud.selectTarget(targetKey)
+                  setRoute("cloud")
+                }}
+                onArchiveSession={(sessionId) => {
+                  void cloud.archiveSession(sessionId).catch((err) => {
+                    toast.error(t("archiveFailed"), {
+                      description: toErrorMessage(err),
+                    })
+                  })
+                }}
+                onRequestDeleteSession={setSessionToDelete}
                 onShowAllChange={setShowAllExternal}
                 onToggle={() => setExternalExpanded((value) => !value)}
                 onToggleTarget={(targetKey) =>
@@ -420,6 +487,53 @@ export function CloudSessionsSidebarSection() {
           ) : null}
         </div>
       ) : null}
+      <AlertDialog
+        open={sessionToDelete != null}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingSession) setSessionToDelete(null)
+        }}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("deleteSessionTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("deleteSessionDescription", {
+                title:
+                  formatConversationTitle(sessionToDelete?.title ?? null) ||
+                  t("untitled"),
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingSession}>
+              {t("cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={!sessionToDelete || isDeletingSession}
+              onClick={(event) => {
+                event.preventDefault()
+                const session = sessionToDelete
+                if (!session) return
+                setIsDeletingSession(true)
+                void cloud
+                  .deleteSession(session.id)
+                  .then(() => {
+                    setSessionToDelete(null)
+                  })
+                  .catch((err) => {
+                    toast.error(t("deleteFailed"), {
+                      description: toErrorMessage(err),
+                    })
+                  })
+                  .finally(() => setIsDeletingSession(false))
+              }}
+            >
+              {isDeletingSession ? t("deleting") : t("deleteSession")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   )
 }
@@ -437,6 +551,9 @@ function TargetGroup({
   expandedTargets,
   onChangeTarget,
   onSelectSession,
+  onNewSession,
+  onArchiveSession,
+  onRequestDeleteSession,
   onShowAllChange,
   onToggle,
   onToggleTarget,
@@ -455,6 +572,9 @@ function TargetGroup({
   expandedTargets: Record<string, boolean>
   onChangeTarget: (targetKey: string | null) => void
   onSelectSession: (sessionId: string | null) => void
+  onNewSession: (targetKey: string) => void
+  onArchiveSession: (sessionId: string) => void
+  onRequestDeleteSession: (session: HouflowCloudSession) => void
   onShowAllChange: (showAll: boolean) => void
   onToggle: () => void
   onToggleTarget: (targetKey: string) => void
@@ -508,7 +628,7 @@ function TargetGroup({
             const selected = selectedTargetKey === target.key
             return (
               <div key={target.key}>
-                <div className="flex items-center">
+                <div className="group/target-row flex items-center">
                   <button
                     type="button"
                     className="flex h-8 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
@@ -545,6 +665,17 @@ function TargetGroup({
                       {target.name}
                     </span>
                   </button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground group-hover/target-row:opacity-100 focus-visible:opacity-100"
+                    onClick={() => onNewSession(target.key)}
+                    title={t("newSession")}
+                    aria-label={t("newSession")}
+                  >
+                    <SquarePen className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
                 {connectorTarget && targetExpanded && hostedCommandError ? (
                   <div className="ml-6 space-y-1 px-2 py-1">
@@ -604,24 +735,13 @@ function TargetGroup({
                 {targetExpanded && visibleSessions.length > 0 ? (
                   <div className="ml-6 space-y-0.5">
                     {visibleSessions.map((session) => (
-                      <button
+                      <SessionRow
                         key={session.id}
-                        type="button"
-                        className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
-                        onClick={() => onSelectSession(session.id)}
-                      >
-                        <span
-                          className={cn(
-                            "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50",
-                            activityDotClass(session.status)
-                          )}
-                        />
-                        <span className="min-w-0 flex-1 truncate text-[0.75rem] text-muted-foreground">
-                          {formatConversationTitle(session.title) ||
-                            t("untitled")}{" "}
-                          · {session.status}
-                        </span>
-                      </button>
+                        session={session}
+                        onArchiveSession={onArchiveSession}
+                        onRequestDeleteSession={onRequestDeleteSession}
+                        onSelectSession={onSelectSession}
+                      />
                     ))}
                   </div>
                 ) : null}
@@ -647,6 +767,78 @@ function TargetGroup({
         </div>
       ) : null}
     </div>
+  )
+}
+
+function SessionRow({
+  session,
+  onArchiveSession,
+  onRequestDeleteSession,
+  onSelectSession,
+}: {
+  session: HouflowCloudSession
+  onArchiveSession: (sessionId: string) => void
+  onRequestDeleteSession: (session: HouflowCloudSession) => void
+  onSelectSession: (sessionId: string) => void
+}) {
+  const t = useTranslations("HouflowCloud")
+  const archived = session.archivedAt != null
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div className="group/session-row flex items-center">
+          <button
+            type="button"
+            className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => onSelectSession(session.id)}
+          >
+            <span
+              className={cn(
+                "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50",
+                activityDotClass(session.status)
+              )}
+            />
+            <span className="min-w-0 flex-1 truncate text-[0.75rem] text-muted-foreground">
+              {formatConversationTitle(session.title) || t("untitled")} ·{" "}
+              {archived ? t("archived") : session.status}
+            </span>
+          </button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground group-hover/session-row:opacity-100 focus-visible:opacity-100"
+            onClick={(event) => {
+              event.stopPropagation()
+              if (archived) onRequestDeleteSession(session)
+              else onArchiveSession(session.id)
+            }}
+            title={archived ? t("deleteSession") : t("archiveSession")}
+            aria-label={archived ? t("deleteSession") : t("archiveSession")}
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-40">
+        <ContextMenuItem
+          disabled={archived}
+          onSelect={() => onArchiveSession(session.id)}
+        >
+          <Archive className="h-4 w-4" />
+          {t("archiveSession")}
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          disabled={!archived}
+          variant="destructive"
+          onSelect={() => onRequestDeleteSession(session)}
+        >
+          <Trash2 className="h-4 w-4" />
+          {t("deleteSession")}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 

@@ -281,6 +281,26 @@ describe("AppWorkspaceProvider conversation://changed sync", () => {
     expect(screen.getByTestId("stat-messages")).toHaveTextContent("7")
   })
 
+  it("keeps the stats reference stable for local status patches", async () => {
+    await mountProvider()
+    emit({ kind: "upsert", summary: makeSummary({ id: 1, message_count: 3 }) })
+    emit({ kind: "upsert", summary: makeSummary({ id: 2, message_count: 4 }) })
+    await act(async () => {})
+    const statsBefore = ctx?.stats
+    const conversationsBefore = ctx?.conversations
+
+    act(() => {
+      ctx?.updateConversationLocal(1, { status: "pending_review" })
+    })
+    await act(async () => {})
+
+    expect(ctx?.stats).toBe(statsBefore)
+    expect(ctx?.conversations).not.toBe(conversationsBefore)
+    expect(screen.getByTestId("statuses")).toHaveTextContent(
+      "2:in_progress,1:pending_review"
+    )
+  })
+
   it("re-fetches the full list on transport reconnect (disconnect backstop)", async () => {
     await mountProvider()
     expect(h.listAll).toHaveBeenCalledTimes(1) // initial mount fetch

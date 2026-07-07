@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { RequestOptions } from "@houshan/agent-hub-network-sdk"
 import {
+  archiveHouflowCloudSession,
   decideHouflowCloudSessionApproval,
+  deleteHouflowCloudSession,
   getHouflowCloudSessionOutputBytes,
   getHouflowCloudSessionOutputText,
   listHouflowCloudSessionApprovals,
@@ -107,6 +109,67 @@ describe("Houflow cloud sessions", () => {
         createdAt: "2026-06-28T00:00:00.000Z",
         updatedAt: "2026-06-28T00:01:00.000Z",
         archivedAt: null,
+      },
+    ])
+  })
+
+  it("lists archived Agent Hub sessions when requested", async () => {
+    mocks.responses.push({
+      data: [
+        {
+          id: "ses_archived",
+          status: "terminated",
+          title: "Archived task",
+          environment_id: "env_1",
+          agent: { id: "agt_1", name: "Cloud helper" },
+          archived_at: "2026-06-28T00:02:00.000Z",
+        },
+      ],
+    })
+
+    const sessions = await listHouflowCloudSessions(
+      session(),
+      secret(),
+      50,
+      true
+    )
+
+    expect(mocks.calls).toEqual([
+      {
+        path: "/v1/sessions?limit=50&include_archived=true",
+        options: {},
+      },
+    ])
+    expect(sessions[0]?.archivedAt).toBe("2026-06-28T00:02:00.000Z")
+  })
+
+  it("archives and deletes sessions through Agent Hub session endpoints", async () => {
+    mocks.responses.push({
+      id: "ses_1",
+      status: "terminated",
+      title: "Archived task",
+      environment_id: "env_1",
+      agent: { id: "agt_1", name: "Cloud helper" },
+      archived_at: "2026-06-28T00:02:00.000Z",
+    })
+    mocks.responses.push({ status: "deleted" })
+
+    const archived = await archiveHouflowCloudSession(
+      session(),
+      secret(),
+      "ses_1"
+    )
+    await deleteHouflowCloudSession(session(), secret(), "ses_1")
+
+    expect(archived?.archivedAt).toBe("2026-06-28T00:02:00.000Z")
+    expect(mocks.calls).toEqual([
+      {
+        path: "/v1/sessions/ses_1/archive",
+        options: { method: "POST", body: {} },
+      },
+      {
+        path: "/v1/sessions/ses_1",
+        options: { method: "DELETE" },
       },
     ])
   })

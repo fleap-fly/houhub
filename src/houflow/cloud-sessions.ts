@@ -162,12 +162,17 @@ interface ApprovalDto {
 export async function listHouflowCloudSessions(
   session: HouflowDesktopSession,
   secret: HouflowAuthSecret | null,
-  limit = 50
+  limit = 50,
+  includeArchived = false
 ): Promise<HouflowCloudSession[]> {
   assertHouflowSignedIn(session)
   const client = new HouflowControlClient(session, secret)
+  const params = new URLSearchParams({
+    limit: String(limit),
+  })
+  if (includeArchived) params.set("include_archived", "true")
   const page = await client.json<PageCursor<SessionDto>>(
-    `/v1/sessions?limit=${encodeURIComponent(String(limit))}`
+    `/v1/sessions?${params.toString()}`
   )
   return Array.isArray(page.data)
     ? page.data.map(sessionFromDto).filter(isPresent)
@@ -186,6 +191,33 @@ export async function getHouflowCloudSession(
       `/v1/sessions/${encodeURIComponent(sessionId)}`
     )
   )
+}
+
+export async function archiveHouflowCloudSession(
+  session: HouflowDesktopSession,
+  secret: HouflowAuthSecret | null,
+  sessionId: string
+): Promise<HouflowCloudSession | null> {
+  assertHouflowSignedIn(session)
+  const client = new HouflowControlClient(session, secret)
+  return sessionFromDto(
+    await client.json<SessionDto>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/archive`,
+      { method: "POST", body: {} }
+    )
+  )
+}
+
+export async function deleteHouflowCloudSession(
+  session: HouflowDesktopSession,
+  secret: HouflowAuthSecret | null,
+  sessionId: string
+): Promise<void> {
+  assertHouflowSignedIn(session)
+  const client = new HouflowControlClient(session, secret)
+  await client.json<unknown>(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  })
 }
 
 export async function listHouflowCloudSessionApprovals(

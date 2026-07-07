@@ -12,6 +12,8 @@ import {
 import { toErrorMessage } from "@/lib/app-error"
 import { useHouflowDesktop } from "./houflow-desktop-provider"
 import {
+  archiveHouflowCloudSession,
+  deleteHouflowCloudSession,
   listHouflowHostedAgentCommands,
   listHouflowCloudSessions,
   type HouflowCloudHostedCommand,
@@ -36,6 +38,8 @@ interface HouflowCloudWorkspaceContextValue {
   loading: boolean
   error: string | null
   refreshSessions: () => Promise<void>
+  archiveSession: (sessionId: string) => Promise<void>
+  deleteSession: (sessionId: string) => Promise<void>
   refreshHostedCommands: (
     connectedAgentId: string,
     limit?: number
@@ -99,7 +103,9 @@ export function HouflowCloudWorkspaceProvider({
     try {
       const next = await listHouflowCloudSessions(
         houflow.session,
-        houflow.secret
+        houflow.secret,
+        50,
+        true
       )
       setSessions(next)
       setSelectedSessionId((current) => {
@@ -132,7 +138,9 @@ export function HouflowCloudWorkspaceProvider({
       try {
         const next = await listHouflowCloudSessions(
           houflow.session,
-          houflow.secret
+          houflow.secret,
+          50,
+          true
         )
         if (cancelled) return
         setSessions(next)
@@ -237,6 +245,36 @@ export function HouflowCloudWorkspaceProvider({
     [houflow.session, refreshHostedCommands]
   )
 
+  const archiveSession = useCallback(
+    async (sessionId: string) => {
+      if (houflow.session.status !== "signed_in") return
+      const archived = await archiveHouflowCloudSession(
+        houflow.session,
+        houflow.secret,
+        sessionId
+      )
+      if (archived) {
+        setSessions((current) => mergeSessions(current, [archived]))
+      }
+    },
+    [houflow.secret, houflow.session]
+  )
+
+  const deleteSession = useCallback(
+    async (sessionId: string) => {
+      if (houflow.session.status !== "signed_in") return
+      await deleteHouflowCloudSession(houflow.session, houflow.secret, sessionId)
+      setSessions((current) =>
+        current.filter((session) => session.id !== sessionId)
+      )
+      setSelectedSessionId((current) => (current === sessionId ? null : current))
+      setSelectedOutputRequest((current) =>
+        current?.sessionId === sessionId ? null : current
+      )
+    },
+    [houflow.secret, houflow.session]
+  )
+
   const value = useMemo<HouflowCloudWorkspaceContextValue>(
     () => ({
       sessions,
@@ -250,6 +288,8 @@ export function HouflowCloudWorkspaceProvider({
       loading,
       error,
       refreshSessions,
+      archiveSession,
+      deleteSession,
       refreshHostedCommands,
       selectTarget,
       selectSession,
@@ -260,6 +300,8 @@ export function HouflowCloudWorkspaceProvider({
     }),
     [
       error,
+      archiveSession,
+      deleteSession,
       hostedCommands,
       loading,
       openSessionOutput,
@@ -304,6 +346,20 @@ function mergeHostedCommands(
   return [...byId.values()].sort((left, right) =>
     String(right.updated_at ?? right.created_at ?? "").localeCompare(
       String(left.updated_at ?? left.created_at ?? "")
+    )
+  )
+}
+
+function mergeSessions(
+  current: HouflowCloudSession[],
+  incoming: HouflowCloudSession[]
+): HouflowCloudSession[] {
+  if (incoming.length === 0) return current
+  const byId = new Map(current.map((session) => [session.id, session]))
+  for (const session of incoming) byId.set(session.id, session)
+  return [...byId.values()].sort((left, right) =>
+    String(right.updatedAt ?? right.createdAt ?? "").localeCompare(
+      String(left.updatedAt ?? left.createdAt ?? "")
     )
   )
 }

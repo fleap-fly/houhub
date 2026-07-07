@@ -124,6 +124,48 @@ function computeStats(conversations: DbConversationSummary[]): AgentStats {
   }
 }
 
+interface ConversationStatsInput {
+  agentType: AgentType
+  messageCount: number
+}
+
+function useStableConversationStats(
+  conversations: DbConversationSummary[]
+): AgentStats | null {
+  const previousRef = useRef<{
+    inputs: ConversationStatsInput[]
+    stats: AgentStats | null
+  } | null>(null)
+
+  return useMemo(() => {
+    const inputs = conversations.map((conversation) => ({
+      agentType: conversation.agent_type,
+      messageCount: conversation.message_count,
+    }))
+    const previous = previousRef.current
+    if (previous && statsInputsEqual(previous.inputs, inputs)) {
+      return previous.stats
+    }
+
+    const stats =
+      conversations.length > 0 ? computeStats(conversations) : null
+    previousRef.current = { inputs, stats }
+    return stats
+  }, [conversations])
+}
+
+function statsInputsEqual(
+  left: ConversationStatsInput[],
+  right: ConversationStatsInput[]
+): boolean {
+  if (left.length !== right.length) return false
+  return left.every(
+    (item, index) =>
+      item.agentType === right[index]?.agentType &&
+      item.messageCount === right[index]?.messageCount
+  )
+}
+
 // Bound on the soft-delete tombstone set (see `deletedIdsRef`). The eviction
 // window — 512 deletions — far exceeds any realistic late/out-of-order event
 // delay, so a row can never be resurrected in practice while memory stays
@@ -591,10 +633,7 @@ export function AppWorkspaceProvider({ children }: AppWorkspaceProviderProps) {
     }
   }, [activeFolderId, allFolders])
 
-  const stats = useMemo(
-    () => (conversations.length > 0 ? computeStats(conversations) : null),
-    [conversations]
-  )
+  const stats = useStableConversationStats(conversations)
 
   const value = useMemo<AppWorkspaceContextValue>(
     () => ({
