@@ -23,6 +23,9 @@ import { emitAttachFileToSession } from "@/lib/session-attachment-events"
 // assert where the badge lands.
 const composerHandle = vi.hoisted(() => ({
   current: null as RichComposerHandle | null,
+  props: null as ComponentProps<
+    typeof import("./composer/rich-composer").RichComposer
+  > | null,
 }))
 vi.mock("./composer/rich-composer", async (importOriginal) => {
   const actual =
@@ -37,6 +40,7 @@ vi.mock("./composer/rich-composer", async (importOriginal) => {
       if (typeof ref === "function") ref(handle)
       else if (ref) ref.current = handle
     }
+    composerHandle.props = props
     return React.createElement(actual.RichComposer, { ...props, ref: assign })
   })
   Captured.displayName = "CapturedRichComposer"
@@ -71,6 +75,7 @@ vi.mock("@/lib/platform", () => ({
 }))
 vi.mock("@/lib/transport", () => ({
   getActiveRemoteConnectionId: () => null,
+  getTransport: () => ({ call: vi.fn(async () => []) }),
 }))
 // virtua renders 0 rows under jsdom — render children directly so the large
 // (searchable + virtualized) model list is exercisable here too.
@@ -155,6 +160,44 @@ describe("MessageInput (RichComposer integration)", () => {
     // `.houhub-composer-chrome` rule in globals.css).
     expect(card.className).toContain("houhub-composer-chrome")
     expect(fireEvent.mouseDown(card)).toBe(false)
+  })
+
+  it("does not wire local @ references when embedded context is disabled", async () => {
+    renderInput({
+      promptCapabilities: {
+        image: true,
+        audio: false,
+        embedded_context: false,
+      },
+    })
+    await waitFor(() => expect(composerHandle.props).not.toBeNull(), {
+      timeout: 5000,
+    })
+    expect(composerHandle.props?.referenceSearch).toBeUndefined()
+  })
+
+  it("does not wire local @ references when workspace references are disabled", async () => {
+    renderInput({ enableWorkspaceReferences: false })
+    await waitFor(() => expect(composerHandle.props).not.toBeNull(), {
+      timeout: 5000,
+    })
+    expect(composerHandle.props?.referenceSearch).toBeUndefined()
+  })
+
+  it("hides workspace file browser actions when workspace references are disabled", async () => {
+    const user = userEvent.setup()
+    renderInput({ enableWorkspaceReferences: false })
+    await user.click(
+      await screen.findByRole("button", {
+        name: enMessages.Folder.chat.messageInput.addActions,
+      })
+    )
+    expect(
+      screen.getByText(enMessages.Folder.chat.messageInput.attachLocalUpload)
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(enMessages.Folder.chat.messageInput.attachServerFile)
+    ).toBeNull()
   })
 })
 

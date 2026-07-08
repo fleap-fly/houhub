@@ -191,6 +191,10 @@ interface MessageInputProps {
   agentType?: AgentType | null
   availableCommands?: AvailableCommandInfo[] | null
   promptCapabilities: PromptCapabilitiesInfo
+  /** Enables local workspace references such as @file, folder branch picker,
+   *  server file browser, and direct local file:// path attachment. Cloud
+   *  conversations keep this off so they do not leak the active local folder. */
+  enableWorkspaceReferences?: boolean
   attachmentTabId?: string | null
   draftStorageKey?: string | null
   isActive?: boolean
@@ -478,6 +482,7 @@ export function MessageInput({
   agentType,
   availableCommands,
   promptCapabilities,
+  enableWorkspaceReferences = true,
   attachmentTabId,
   draftStorageKey,
   isActive = false,
@@ -509,8 +514,11 @@ export function MessageInput({
   // would be ENOENT on the remote agent. Only the truly local desktop
   // shows the native Paperclip picker.
   const showNativePaperclip = useMemo(
-    () => desktopMode && getActiveRemoteConnectionId() === null,
-    [desktopMode]
+    () =>
+      enableWorkspaceReferences &&
+      desktopMode &&
+      getActiveRemoteConnectionId() === null,
+    [desktopMode, enableWorkspaceReferences]
   )
   // The `$` prefix autocomplete is Codex-only: Codex advertises very few
   // native slash commands, so we augment the dropdown with the agent's
@@ -629,9 +637,16 @@ export function MessageInput({
   // this composer is the active one (`enabled`). Referentially stable.
   const referenceSearch = useReferenceSearch({
     defaultPath: defaultPath ?? null,
-    enabled: isActive,
+    enabled:
+      isActive &&
+      promptCapabilities.embedded_context &&
+      enableWorkspaceReferences,
     labels: referenceGroupLabels,
   })
+  const composerReferenceSearch =
+    promptCapabilities.embedded_context && enableWorkspaceReferences
+      ? referenceSearch
+      : undefined
 
   // Debounced v2 draft persistence. We snapshot the Tiptap *document* (JSON, not
   // Markdown) ~300ms after the last change so inline reference badges survive a
@@ -2802,7 +2817,7 @@ export function MessageInput({
                 placeholder={resolvedPlaceholder}
                 ariaLabel={resolvedPlaceholder}
                 autoFocus={autoFocus}
-                referenceSearch={referenceSearch}
+                referenceSearch={composerReferenceSearch}
                 mentionUiLabels={mentionUiLabels}
                 tabLabels={referenceGroupLabels}
                 onChange={handleComposerChange}
@@ -2866,12 +2881,14 @@ export function MessageInput({
                             <Upload className="size-4" />
                             {t("attachLocalUpload")}
                           </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setServerFilePickerOpen(true)}
-                          >
-                            <FolderSearch className="size-4" />
-                            {t("attachServerFile")}
-                          </DropdownMenuItem>
+                          {enableWorkspaceReferences ? (
+                            <DropdownMenuItem
+                              onClick={() => setServerFilePickerOpen(true)}
+                            >
+                              <FolderSearch className="size-4" />
+                              {t("attachServerFile")}
+                            </DropdownMenuItem>
+                          ) : null}
                         </>
                       )}
                       <DropdownMenuSub>
@@ -3196,7 +3213,7 @@ export function MessageInput({
           if (!open) setPreviewAttachmentId(null)
         }}
       />
-      {!showNativePaperclip && (
+      {!showNativePaperclip && enableWorkspaceReferences && (
         <ServerFileBrowserDialog
           open={serverFilePickerOpen}
           onOpenChange={setServerFilePickerOpen}

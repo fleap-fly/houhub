@@ -225,10 +225,7 @@ async function loadGatewayCatalog(
   }
 
   const syncedProviderDto = options.sync
-    ? await client.json<LLMProvider>(
-        `/v1/providers/${encodeURIComponent(providerDto.id)}/sync-models`,
-        { method: "POST", body: {} }
-      )
+    ? await syncGatewayProviderModels(client, providerDto)
     : providerDto
 
   let syncedProvider = providerFromDto(syncedProviderDto)
@@ -265,6 +262,21 @@ async function loadGatewayCatalog(
     total,
     hasMore,
     syncedAt: new Date().toISOString(),
+  }
+}
+
+async function syncGatewayProviderModels(
+  client: HouflowControlClient,
+  providerDto: LLMProvider
+): Promise<LLMProvider> {
+  try {
+    return await client.json<LLMProvider>(
+      `/v1/providers/${encodeURIComponent(providerDto.id)}/sync-models`,
+      { method: "POST", body: {} }
+    )
+  } catch {
+    // Refreshing the server-side catalog is best-effort; the read below is authoritative.
+    return providerDto
   }
 }
 

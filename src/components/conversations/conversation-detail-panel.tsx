@@ -1017,7 +1017,11 @@ const ConversationTabView = memo(function ConversationTabView({
         // Backend performs all DB writes in one transaction-shaped call:
         // - current row: external_id=S2, title="[Fork] ..."
         // - sibling row: created with external_id=S1, status=pending_review
-        const { forkedSessionId } = await acpFork(connectionId)
+        const { forkedSessionId } = await acpFork(
+          connectionId,
+          dbConvIdRef.current,
+          folderId
+        )
         // Update runtime session id to S2 (frontend in-memory state only)
         sessionIdRef.current = forkedSessionId
         setExternalId(effectiveConversationId, forkedSessionId)
@@ -1055,6 +1059,7 @@ const ConversationTabView = memo(function ConversationTabView({
       mqGetQueueLength,
       mqEnqueue,
       effectiveConversationId,
+      folderId,
       handleSend,
       refreshConversations,
       setExternalId,

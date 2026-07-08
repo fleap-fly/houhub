@@ -2219,7 +2219,7 @@
         "elapsedHours": "{value}س",
         "elapsedMinutes": "{value}د",
         "elapsedSeconds": "{value}ث",
-        "toolUseCount": "{count} أداة {count, plural, one {use} other {uses}}"
+        "toolUseCount": "{count} استخدام للأداة"
       },
       "tool": {
         "parameters": "المعلمات",
@@ -2809,6 +2809,11 @@
     "apiKey": "مفتاح API",
     "apiKeyPlaceholder": "sk-...",
     "apiKeyKeepCurrent": "اتركه فارغاً للإبقاء على الحالي",
+    "presets": "Presets",
+    "availableModels": "Available models",
+    "fetchModels": "Fetch models",
+    "fetchModelsSuccess": "Models fetched.",
+    "fetchModelsEmpty": "No models returned.",
     "agentTypes": "أنواع الوكلاء",
     "agentTypesRequired": "يجب اختيار نوع وكيل واحد على الأقل.",
     "agentType": "نوع الوكيل",

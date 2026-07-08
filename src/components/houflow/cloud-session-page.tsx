@@ -80,7 +80,7 @@ import { cn, randomUUID } from "@/lib/utils"
 const CLOUD_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
   image: true,
   audio: false,
-  embedded_context: true,
+  embedded_context: false,
 }
 
 function useCloudSessionLinkSafety(sessionId: string | null): LinkSafetyConfig {
@@ -131,6 +131,10 @@ export function CloudSessionPage() {
   const [eventsLoading, setEventsLoading] = useState(false)
   const [eventsError, setEventsError] = useState<string | null>(null)
   const [approvalsError, setApprovalsError] = useState<string | null>(null)
+  const [starterPendingEvent, setStarterPendingEvent] =
+    useState<HouflowCloudSessionEvent | null>(null)
+  const [hostedPendingEvent, setHostedPendingEvent] =
+    useState<HouflowCloudSessionEvent | null>(null)
   const [approvalSubmittingId, setApprovalSubmittingId] = useState<
     string | null
   >(null)
@@ -323,6 +327,10 @@ export function CloudSessionPage() {
     return () => {
       cancelled = true
     }
+    // Intentionally keyed by command id/status only. `rememberHostedCommand`
+    // updates the command object on each stream frame; depending on the whole
+    // object would restart the SSE stream for every received event.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     cloud,
     hostedCommand?.id,
@@ -434,6 +442,11 @@ export function CloudSessionPage() {
       if (!selectedTarget || houflow.session.status !== "signed_in") {
         return
       }
+      const optimisticEvent = optimisticCloudEventFromDraft(
+        draft,
+        sharedT("attachedResources")
+      )
+      setStarterPendingEvent(optimisticEvent)
       setStarting(true)
       try {
         const result = await startHouflowCloudTargetSession(
@@ -444,17 +457,20 @@ export function CloudSessionPage() {
         )
         await cloud.refreshSessions()
         if (result.kind === "managed") {
+          setStarterPendingEvent(null)
           cloud.selectSession(result.session.id)
         } else {
+          setStarterPendingEvent(null)
           cloud.selectHostedCommand(result.dispatch.raw)
         }
       } catch (err) {
         toast.error(t("startFailed"), { description: toErrorMessage(err) })
       } finally {
+        setStarterPendingEvent(null)
         setStarting(false)
       }
     },
-    [cloud, houflow.secret, houflow.session, selectedTarget, t]
+    [cloud, houflow.secret, houflow.session, selectedTarget, sharedT, t]
   )
 
   const handleSendHostedCommand = useCallback(
@@ -469,6 +485,11 @@ export function CloudSessionPage() {
         })
         return
       }
+      const optimisticEvent = optimisticCloudEventFromDraft(
+        draft,
+        sharedT("attachedResources")
+      )
+      setHostedPendingEvent(optimisticEvent)
       setStarting(true)
       try {
         const result = await startHouflowCloudTargetSession(
@@ -481,6 +502,7 @@ export function CloudSessionPage() {
           result.kind === "hosted_connected" ||
           result.kind === "external_local"
         ) {
+          setHostedPendingEvent(null)
           cloud.selectHostedCommand(result.dispatch.raw)
         }
         await cloud.refreshHostedCommand(
@@ -492,10 +514,19 @@ export function CloudSessionPage() {
       } catch (err) {
         toast.error(t("startFailed"), { description: toErrorMessage(err) })
       } finally {
+        setHostedPendingEvent(null)
         setStarting(false)
       }
     },
-    [cloud, cloudTargets, hostedCommand, houflow.secret, houflow.session, t]
+    [
+      cloud,
+      cloudTargets,
+      hostedCommand,
+      houflow.secret,
+      houflow.session,
+      sharedT,
+      t,
+    ]
   )
 
   if (showWorkbenchCloud) {
@@ -514,6 +545,7 @@ export function CloudSessionPage() {
     return (
       <HostedCommandPage
         command={hostedCommand}
+        pendingEvent={hostedPendingEvent}
         sending={starting}
         target={cloudTargets.find(
           (target) => target.id === hostedCommand.connected_agent_id
@@ -533,6 +565,7 @@ export function CloudSessionPage() {
     return (
       <CloudSessionStarter
         loading={cloud.loading}
+        pendingEvent={starterPendingEvent}
         selectedTarget={selectedTarget}
         sending={starting}
         targets={cloudTargets}
@@ -671,6 +704,7 @@ export function CloudSessionPage() {
           <MessageInput
             onSend={(draft) => void handleSend(draft)}
             promptCapabilities={CLOUD_PROMPT_CAPABILITIES}
+            enableWorkspaceReferences={false}
             disabled={sending || !selected.agentId}
             placeholder={t("messagePlaceholder")}
             draftStorageKey={
@@ -779,12 +813,14 @@ function compareCloudEvents(
 
 function HostedCommandPage({
   command,
+  pendingEvent,
   sending,
   target,
   onRefresh,
   onSend,
 }: {
   command: HouflowCloudHostedCommand
+  pendingEvent: HouflowCloudSessionEvent | null
   sending: boolean
   target: HouflowAgentTarget | undefined
   onRefresh: () => void
@@ -797,8 +833,11 @@ function HostedCommandPage({
     createMessageTurnAdapter()
   )
   const hostedEvents = useMemo(
-    () => hostedCommandToCloudEvents(command),
-    [command]
+    () =>
+      pendingEvent
+        ? [...hostedCommandToCloudEvents(command), pendingEvent]
+        : hostedCommandToCloudEvents(command),
+    [command, pendingEvent]
   )
   const adapterText = useMemo(
     () => ({
@@ -860,7 +899,6 @@ function HostedCommandPage({
               {t("emptyEvents")}
             </div>
           ) : null}
-          {active ? <CloudWaitingMessage /> : null}
           {error ? <HostedCommandErrorMessage message={error} /> : null}
           {messages.map((message) => {
             const messageRole =
@@ -904,6 +942,7 @@ function HostedCommandPage({
               </MessageContent>
             </Message>
           ) : null}
+          {sending || active ? <CloudWaitingMessage /> : null}
         </div>
       </div>
 
@@ -912,6 +951,7 @@ function HostedCommandPage({
           <MessageInput
             onSend={onSend}
             promptCapabilities={CLOUD_PROMPT_CAPABILITIES}
+            enableWorkspaceReferences={false}
             disabled={sending || !target}
             placeholder={t("messagePlaceholder")}
             draftStorageKey={`houflow-hosted-command:${command.connected_agent_id}`}
@@ -998,6 +1038,7 @@ function hostedCommandTitle(command: HouflowCloudHostedCommand): string | null {
 
 function CloudSessionStarter({
   loading,
+  pendingEvent,
   selectedTarget,
   sending,
   targets,
@@ -1007,6 +1048,7 @@ function CloudSessionStarter({
   onSend,
 }: {
   loading: boolean
+  pendingEvent: HouflowCloudSessionEvent | null
   selectedTarget: HouflowAgentTarget | null
   sending: boolean
   targets: HouflowAgentTarget[]
@@ -1016,13 +1058,34 @@ function CloudSessionStarter({
   onSend: (draft: PromptDraft) => void
 }) {
   const t = useTranslations("HouflowCloud")
+  const sharedT = useTranslations("Folder.chat.shared")
   const [open, setOpen] = useState(false)
+  const [turnAdapter] = useState<MessageTurnAdapter>(() =>
+    createMessageTurnAdapter()
+  )
   const managedTargets = targets.filter((target) => target.kind === "managed")
   const hostedTargets = targets.filter(
     (target) => target.kind === "hosted_connected"
   )
   const externalTargets = targets.filter(
     (target) => target.kind === "external_local"
+  )
+  const adapterText = useMemo(
+    () => ({
+      attachedResources: sharedT("attachedResources"),
+      toolCallFailed: sharedT("toolCallFailed"),
+    }),
+    [sharedT]
+  )
+  const pendingMessages = useMemo(
+    () =>
+      pendingEvent
+        ? turnAdapter.adapt(
+            houflowCloudEventsToTurns([pendingEvent]),
+            adapterText
+          )
+        : [],
+    [adapterText, pendingEvent, turnAdapter]
   )
 
   return (
@@ -1073,9 +1136,25 @@ function CloudSessionStarter({
               </Button>
             </div>
           </div>
+          {pendingMessages.length > 0 ? (
+            <div className="flex flex-col gap-3">
+              {pendingMessages.map((message) => (
+                <Message key={message.id} from="user">
+                  <MessageContent>
+                    <ContentPartsRenderer
+                      parts={message.content}
+                      role={message.role}
+                    />
+                  </MessageContent>
+                </Message>
+              ))}
+              <CloudWaitingMessage />
+            </div>
+          ) : null}
           <MessageInput
             onSend={onSend}
             promptCapabilities={CLOUD_PROMPT_CAPABILITIES}
+            enableWorkspaceReferences={false}
             disabled={sending || !selectedTarget}
             placeholder={t("messagePlaceholder")}
             draftStorageKey={

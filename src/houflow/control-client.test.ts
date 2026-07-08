@@ -5,6 +5,7 @@ import type { HouflowAuthSecret, HouflowDesktopSession } from "./types"
 
 const mocks = vi.hoisted(() => ({
   calls: [] as Array<{ path: string; options: RequestOptions }>,
+  syncModelsError: null as Error | null,
 }))
 
 vi.mock("@houshan/agent-hub-network-sdk", () => ({
@@ -28,6 +29,7 @@ vi.mock("@houshan/agent-hub-network-sdk", () => ({
 describe("loadHouflowControlSnapshot", () => {
   beforeEach(() => {
     mocks.calls.length = 0
+    mocks.syncModelsError = null
   })
 
   it("syncs the Houflow gateway catalog by default", async () => {
@@ -66,6 +68,24 @@ describe("loadHouflowControlSnapshot", () => {
     expect(paths()).not.toContain("/v1/providers/default/models")
     expect(paths()).not.toContain("/v1/providers/default/sync-models")
   })
+
+  it("keeps the cloud snapshot available when gateway model sync returns a non-JSON response", async () => {
+    mocks.syncModelsError = new Error("Response body is not valid JSON")
+
+    const snapshot = await loadHouflowControlSnapshot(session(), secret())
+
+    expect(snapshot.workspaces.map((workspace) => workspace.id)).toEqual([
+      "workspace_1",
+      "workspace_2",
+    ])
+    expect(snapshot.gateway?.provider.id).toBe("default")
+    expect(snapshot.gateway?.models.map((model) => model.id)).toEqual([
+      "gpt-5",
+      "gpt-5.1",
+    ])
+    expect(paths()).toContain("/v1/providers/default/sync-models")
+    expect(paths()).toContain("/v1/providers/default/models")
+  })
 })
 
 function responseFor(path: string, options: RequestOptions): unknown {
@@ -85,6 +105,7 @@ function responseFor(path: string, options: RequestOptions): unknown {
   }
   if (path === "/v1/providers/default/sync-models") {
     expect(options.method).toBe("POST")
+    if (mocks.syncModelsError) throw mocks.syncModelsError
     return { ...providerDto(), default_model: "gpt-5.1" }
   }
   if (path === "/v1/providers/default/models") {

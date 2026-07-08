@@ -2219,7 +2219,7 @@
         "elapsedHours": "{value} Std",
         "elapsedMinutes": "{value} Min",
         "elapsedSeconds": "{value} Sek",
-        "toolUseCount": "{count} Tool {count, plural, one {use} other {uses}}"
+        "toolUseCount": "{count, plural, one {# Tool-Aufruf} other {# Tool-Aufrufe}}"
       },
       "tool": {
         "parameters": "Parameter",
@@ -2809,6 +2809,11 @@
     "apiKey": "API-Schlüssel",
     "apiKeyPlaceholder": "sk-...",
     "apiKeyKeepCurrent": "Leer lassen, um aktuellen Wert beizubehalten",
+    "presets": "Presets",
+    "availableModels": "Available models",
+    "fetchModels": "Fetch models",
+    "fetchModelsSuccess": "Models fetched.",
+    "fetchModelsEmpty": "No models returned.",
     "agentTypes": "Agententypen",
     "agentTypesRequired": "Mindestens ein Agententyp ist erforderlich.",
     "agentType": "Agententyp",

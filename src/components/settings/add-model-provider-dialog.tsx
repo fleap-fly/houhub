@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useMemo, useState } from "react"
-import { Loader2 } from "lucide-react"
+import { Loader2, Sparkles } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
@@ -19,11 +19,12 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { createModelProvider } from "@/lib/api"
+import { createModelProvider, fetchOpenAiCompatibleModels } from "@/lib/api"
 import {
   MODEL_PROVIDER_AGENT_TYPES,
   AGENT_LABELS,
@@ -66,6 +67,14 @@ function claudeModelValues(model: ClaudeProviderModel): string[] {
   ])
 }
 
+const MODEL_PROVIDER_PRESETS = [
+  {
+    id: "houshan",
+    name: "HouShan",
+    apiUrl: "https://api.houshan.de/v1",
+  },
+] as const
+
 interface AddModelProviderDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -79,6 +88,7 @@ export function AddModelProviderDialog({
 }: AddModelProviderDialogProps) {
   const t = useTranslations("ModelProviderSettings")
   const [loading, setLoading] = useState(false)
+  const [modelsLoading, setModelsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const [name, setName] = useState("")
@@ -128,6 +138,54 @@ export function AddModelProviderDialog({
         : [...current, agentType]
     )
   }, [])
+
+  const handlePresetClick = useCallback(
+    (preset: (typeof MODEL_PROVIDER_PRESETS)[number]) => {
+      setName(preset.name)
+      setApiUrl(preset.apiUrl)
+      setError(null)
+    },
+    []
+  )
+
+  const handleFetchModels = useCallback(async () => {
+    const baseUrl = apiUrl.trim()
+    const key = apiKey.trim()
+    if (!baseUrl) {
+      setError(t("apiUrlRequired"))
+      return
+    }
+    if (!key) {
+      setError(t("apiKeyRequired"))
+      return
+    }
+
+    setModelsLoading(true)
+    setError(null)
+    try {
+      const models = mergeModelList(
+        await fetchOpenAiCompatibleModels({ baseUrl, apiKey: key })
+      )
+      setModelsText(models.join("\n"))
+      if (models.length === 0) {
+        setError(t("fetchModelsEmpty"))
+        return
+      }
+      if (!defaultModel.trim()) setDefaultModel(models[0])
+      toast.success(t("fetchModelsSuccess"))
+    } catch (err: unknown) {
+      const raw = err as Record<string, unknown>
+      const msg =
+        typeof raw?.message === "string"
+          ? raw.message
+          : err instanceof Error
+            ? err.message
+            : String(err)
+      setError(msg)
+    } finally {
+      setModelsLoading(false)
+    }
+  }, [apiUrl, apiKey, defaultModel, t])
 
   const modelPlaceholder = useMemo(() => {
     if (agentTypes.includes("codex") || agentTypes.includes("pi"))
@@ -219,9 +277,31 @@ export function AddModelProviderDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t("addProvider")}</DialogTitle>
+          <DialogDescription className="sr-only">
+            {t("sectionDescription")}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium">{t("presets")}</label>
+            <div className="flex flex-wrap gap-2">
+              {MODEL_PROVIDER_PRESETS.map((preset) => (
+                <Button
+                  key={preset.id}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => handlePresetClick(preset)}
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {preset.name}
+                </Button>
+              ))}
+            </div>
+          </div>
+
           <div className="space-y-1.5">
             <label htmlFor="add-mp-name" className="text-xs font-medium">
               {t("providerName")}
@@ -430,8 +510,23 @@ export function AddModelProviderDialog({
           )}
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium">可用模型列表</label>
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="add-mp-models" className="text-xs font-medium">
+                {t("availableModels")}
+              </label>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={handleFetchModels}
+                disabled={modelsLoading || loading}
+              >
+                {modelsLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+                {t("fetchModels")}
+              </Button>
+            </div>
             <Textarea
+              id="add-mp-models"
               value={modelsText}
               onChange={(e) => setModelsText(e.target.value)}
               className="min-h-24 font-mono text-xs"
@@ -450,11 +545,11 @@ export function AddModelProviderDialog({
           <Button
             variant="outline"
             onClick={() => handleOpenChange(false)}
-            disabled={loading}
+            disabled={loading || modelsLoading}
           >
             {t("cancel")}
           </Button>
-          <Button onClick={handleSubmit} disabled={loading}>
+          <Button onClick={handleSubmit} disabled={loading || modelsLoading}>
             {loading && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />}
             {t("create")}
           </Button>

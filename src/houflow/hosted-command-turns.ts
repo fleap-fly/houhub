@@ -75,6 +75,7 @@ function nestedCloudEventDtos(
   const response = recordValue(payload.response)
   const candidates: unknown[] = []
 
+  if (payload.runtime_event) candidates.push(payload.runtime_event)
   if (Array.isArray(response.events)) candidates.push(...response.events)
   if (Array.isArray(payload.events)) candidates.push(...payload.events)
   if (payload.event) candidates.push(payload.event)

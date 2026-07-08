@@ -58,7 +58,8 @@ export function FolderTitleBar() {
   const { isOpen: auxPanelOpen, toggle: toggleAuxPanel } = useAuxPanelContext()
   const { isOpen: terminalOpen, toggle: toggleTerminal } = useTerminalContext()
   const { openNewConversationTab } = useTabContext()
-  const { openConversations } = useWorkbenchRoute()
+  const { isConversations, openConversations } = useWorkbenchRoute()
+  const showLocalWorkspaceChrome = isConversations
   const isMac = useIsMac()
   const { shortcuts } = useShortcutSettings()
   // Search open-state is shared (see search-dialog-context): the trigger now
@@ -128,6 +129,7 @@ export function FolderTitleBar() {
         return
       }
       if (matchShortcutEvent(e, shortcuts.toggle_terminal)) {
+        if (!showLocalWorkspaceChrome) return
         e.preventDefault()
         toggleTerminal()
         return
@@ -135,12 +137,13 @@ export function FolderTitleBar() {
       if (matchShortcutEvent(e, shortcuts.toggle_aux_panel)) {
         // Chat mode hides the aux panel + its toggle; the shortcut must not
         // re-open it either.
-        if (isChatMode) return
+        if (!showLocalWorkspaceChrome || isChatMode) return
         e.preventDefault()
         toggleAuxPanel()
         return
       }
       if (matchShortcutEvent(e, shortcuts.new_conversation)) {
+        if (!showLocalWorkspaceChrome) return
         if (!activeFolder) return
         e.preventDefault()
         // Return to the conversation workspace if a route (e.g. Automations)
@@ -173,6 +176,7 @@ export function FolderTitleBar() {
     toggleAuxPanel,
     toggleTerminal,
     isChatMode,
+    showLocalWorkspaceChrome,
   ])
 
   const isMobile = useIsMobile()
@@ -194,7 +198,7 @@ export function FolderTitleBar() {
               <RemoteWorkspaceDropdown />
               <HouflowAccountButton />
               <WorkbenchAccountButton />
-              <BranchDropdown />
+              {showLocalWorkspaceChrome ? <BranchDropdown /> : null}
             </div>
           ) : (
             <div className="flex h-8 flex-1 items-center gap-6">
@@ -228,7 +232,7 @@ export function FolderTitleBar() {
                   <PawPrint className="h-3.5 w-3.5" />
                 </Button>
               </div>
-              <BranchDropdown />
+              {showLocalWorkspaceChrome ? <BranchDropdown /> : null}
               <div data-tauri-drag-region className="h-8 flex-1" />
             </div>
           )
@@ -236,7 +240,7 @@ export function FolderTitleBar() {
         right={
           isMobile ? (
             <div className="flex items-center gap-1">
-              <CommandDropdown />
+              {showLocalWorkspaceChrome ? <CommandDropdown /> : null}
               {/* Search lives only in the left sidebar's fixed actions region
                   now (desktop + mobile sheet); no title-bar search entry on any
                   width. The ⌘K shortcut + SearchCommandDialog stay wired here. */}
@@ -251,7 +255,7 @@ export function FolderTitleBar() {
                   {!isChatMode && (
                     <DropdownMenuItem
                       onClick={toggleAuxPanel}
-                      disabled={!activeFolder}
+                      disabled={!showLocalWorkspaceChrome || !activeFolder}
                     >
                       <PanelRight className="h-3.5 w-3.5" />
                       {tTitleBar("toggleAuxPanel")}
@@ -259,7 +263,7 @@ export function FolderTitleBar() {
                   )}
                   <DropdownMenuItem
                     onClick={() => toggleTerminal()}
-                    disabled={!activeFolder}
+                    disabled={!showLocalWorkspaceChrome || !activeFolder}
                   >
                     <SquareTerminal className="h-3.5 w-3.5" />
                     {tTitleBar("toggleTerminal")}
@@ -274,7 +278,7 @@ export function FolderTitleBar() {
           ) : (
             <div className="flex items-center gap-10">
               <div className="flex items-center gap-2">
-                <CommandDropdown />
+                {showLocalWorkspaceChrome ? <CommandDropdown /> : null}
               </div>
               <div className="flex items-center gap-2">
                 <Button
@@ -282,7 +286,7 @@ export function FolderTitleBar() {
                   size="icon"
                   className={`h-6 w-6 hover:text-foreground/80 ${terminalOpen ? "bg-accent" : ""}`}
                   onClick={() => toggleTerminal()}
-                  disabled={!activeFolder}
+                  disabled={!showLocalWorkspaceChrome || !activeFolder}
                   title={tTitleBar("withShortcut", {
                     label: tTitleBar("toggleTerminal"),
                     shortcut: formatShortcutLabel(
@@ -300,7 +304,7 @@ export function FolderTitleBar() {
                     size="icon"
                     className={`h-6 w-6 hover:text-foreground/80 ${auxPanelOpen ? "bg-accent" : ""}`}
                     onClick={toggleAuxPanel}
-                    disabled={!activeFolder}
+                    disabled={!showLocalWorkspaceChrome || !activeFolder}
                     title={tTitleBar("withShortcut", {
                       label: tTitleBar("toggleAuxPanel"),
                       shortcut: formatShortcutLabel(

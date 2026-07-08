@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -23,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { updateModelProvider } from "@/lib/api"
+import { fetchOpenAiCompatibleModels, updateModelProvider } from "@/lib/api"
 import {
   MODEL_PROVIDER_AGENT_TYPES,
   AGENT_LABELS,
@@ -94,6 +95,7 @@ export function EditModelProviderDialog({
 }: EditModelProviderDialogProps) {
   const t = useTranslations("ModelProviderSettings")
   const [loading, setLoading] = useState(false)
+  const [modelsLoading, setModelsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const [name, setName] = useState("")
@@ -161,6 +163,45 @@ export function EditModelProviderDialog({
       return [...current, agentType]
     })
   }, [])
+
+  const handleFetchModels = useCallback(async () => {
+    const baseUrl = apiUrl.trim()
+    const key = apiKey.trim() || provider?.api_key?.trim() || ""
+    if (!baseUrl) {
+      setError(t("apiUrlRequired"))
+      return
+    }
+    if (!key) {
+      setError(t("apiKeyRequired"))
+      return
+    }
+
+    setModelsLoading(true)
+    setError(null)
+    try {
+      const models = mergeModelList(
+        await fetchOpenAiCompatibleModels({ baseUrl, apiKey: key })
+      )
+      setModelsText(models.join("\n"))
+      if (models.length === 0) {
+        setError(t("fetchModelsEmpty"))
+        return
+      }
+      if (!defaultModel.trim()) setDefaultModel(models[0])
+      toast.success(t("fetchModelsSuccess"))
+    } catch (err: unknown) {
+      const raw = err as Record<string, unknown>
+      const msg =
+        typeof raw?.message === "string"
+          ? raw.message
+          : err instanceof Error
+            ? err.message
+            : String(err)
+      setError(msg)
+    } finally {
+      setModelsLoading(false)
+    }
+  }, [apiUrl, apiKey, provider, defaultModel, t])
 
   const handleSubmit = useCallback(async () => {
     if (!provider) return
@@ -262,6 +303,9 @@ export function EditModelProviderDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t("editProvider")}</DialogTitle>
+          <DialogDescription className="sr-only">
+            {t("sectionDescription")}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -473,8 +517,23 @@ export function EditModelProviderDialog({
           )}
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium">可用模型列表</label>
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="edit-mp-models" className="text-xs font-medium">
+                {t("availableModels")}
+              </label>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={handleFetchModels}
+                disabled={modelsLoading || loading}
+              >
+                {modelsLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+                {t("fetchModels")}
+              </Button>
+            </div>
             <Textarea
+              id="edit-mp-models"
               value={modelsText}
               onChange={(e) => setModelsText(e.target.value)}
               className="min-h-24 font-mono text-xs"
@@ -493,11 +552,11 @@ export function EditModelProviderDialog({
           <Button
             variant="outline"
             onClick={() => handleOpenChange(false)}
-            disabled={loading}
+            disabled={loading || modelsLoading}
           >
             {t("cancel")}
           </Button>
-          <Button onClick={handleSubmit} disabled={loading}>
+          <Button onClick={handleSubmit} disabled={loading || modelsLoading}>
             {loading && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />}
             {t("save")}
           </Button>

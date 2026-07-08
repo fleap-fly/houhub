@@ -2219,7 +2219,7 @@
         "elapsedHours": "{value} 小時",
         "elapsedMinutes": "{value} 分鐘",
         "elapsedSeconds": "{value} 秒",
-        "toolUseCount": "{count} 个工具 {count, plural, one {use} other {uses}}"
+        "toolUseCount": "{count} 次工具呼叫"
       },
       "tool": {
         "parameters": "參數",
@@ -2809,6 +2809,11 @@
     "apiKey": "API 金鑰",
     "apiKeyPlaceholder": "sk-...",
     "apiKeyKeepCurrent": "留空則保持不變",
+    "presets": "預設",
+    "availableModels": "可用模型列表",
+    "fetchModels": "拉取模型",
+    "fetchModelsSuccess": "模型列表已拉取。",
+    "fetchModelsEmpty": "介面未返回模型。",
     "agentTypes": "代理類型",
     "agentTypesRequired": "至少選擇一個代理類型。",
     "agentType": "智能體類型",

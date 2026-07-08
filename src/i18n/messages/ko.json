@@ -2219,7 +2219,7 @@
         "elapsedHours": "{value}시간",
         "elapsedMinutes": "{value}분",
         "elapsedSeconds": "{value}초",
-        "toolUseCount": "{count}개 도구 {count, plural, one {use} other {uses}}"
+        "toolUseCount": "도구 {count}회 사용"
       },
       "tool": {
         "parameters": "매개변수",
@@ -2809,6 +2809,11 @@
     "apiKey": "API 키",
     "apiKeyPlaceholder": "sk-...",
     "apiKeyKeepCurrent": "현재 값을 유지하려면 비워두세요",
+    "presets": "Presets",
+    "availableModels": "Available models",
+    "fetchModels": "Fetch models",
+    "fetchModelsSuccess": "Models fetched.",
+    "fetchModelsEmpty": "No models returned.",
     "agentTypes": "에이전트 유형",
     "agentTypesRequired": "최소 하나의 에이전트 유형을 선택하세요.",
     "agentType": "에이전트 유형",

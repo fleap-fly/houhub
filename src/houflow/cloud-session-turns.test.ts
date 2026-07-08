@@ -244,6 +244,33 @@ describe("houflowCloudEventsToTurns", () => {
       output_preview: "task_id=abc. Call get_delegation_status later.",
     })
   })
+
+  it("coalesces consecutive ACP text deltas into one assistant turn", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_delta_1",
+        type: "agent.message.delta",
+        delta: "你好",
+        created_at: "2026-06-28T00:00:01.000Z",
+      }),
+      event({
+        id: "evt_delta_2",
+        type: "agent.message.delta",
+        delta: "，世界",
+        created_at: "2026-06-28T00:00:02.000Z",
+      }),
+    ])
+
+    expect(turns).toEqual([
+      {
+        id: "evt_delta_1",
+        role: "assistant",
+        blocks: [{ type: "text", text: "你好，世界" }],
+        timestamp: "2026-06-28T00:00:01.000Z",
+        completed_at: "2026-06-28T00:00:02.000Z",
+      },
+    ])
+  })
 })
 
 function event(raw: Record<string, unknown>): HouflowCloudSessionEvent {
@@ -252,7 +279,10 @@ function event(raw: Record<string, unknown>): HouflowCloudSessionEvent {
     type: String(raw.type),
     role: null,
     text: null,
-    createdAt: "2026-06-28T00:00:00.000Z",
+    createdAt:
+      typeof raw.created_at === "string"
+        ? raw.created_at
+        : "2026-06-28T00:00:00.000Z",
     raw,
   }
 }

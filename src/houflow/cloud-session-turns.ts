@@ -4,11 +4,62 @@ import type { HouflowCloudSessionEvent } from "./cloud-sessions"
 export function houflowCloudEventsToTurns(
   events: HouflowCloudSessionEvent[]
 ): MessageTurn[] {
-  return mergeAdjacentToolEvents(events.map(eventToTurn).filter(isPresent))
+  return mergeAdjacentToolEvents(
+    mergeAdjacentStreamingDeltas(events.map(eventToTurn).filter(isPresent))
+  ).map(publicTurn)
 }
 
-function mergeAdjacentToolEvents(turns: MessageTurn[]): MessageTurn[] {
-  const merged: MessageTurn[] = []
+type CloudMessageTurn = MessageTurn & { sourceEventType: string }
+
+function mergeAdjacentStreamingDeltas(
+  turns: CloudMessageTurn[]
+): CloudMessageTurn[] {
+  const merged: CloudMessageTurn[] = []
+  for (const turn of turns) {
+    const previous = merged[merged.length - 1]
+    if (previous && canMergeStreamingDelta(previous, turn)) {
+      const previousBlock = previous.blocks[0]
+      const nextBlock = turn.blocks[0]
+      if (previousBlock?.type === "text" && nextBlock?.type === "text") {
+        previous.blocks = [
+          { ...previousBlock, text: previousBlock.text + nextBlock.text },
+        ]
+      } else if (
+        previousBlock?.type === "thinking" &&
+        nextBlock?.type === "thinking"
+      ) {
+        previous.blocks = [
+          { ...previousBlock, text: previousBlock.text + nextBlock.text },
+        ]
+      }
+      previous.completed_at = turn.completed_at ?? previous.completed_at
+      continue
+    }
+    merged.push({ ...turn, blocks: [...turn.blocks] })
+  }
+  return merged
+}
+
+function canMergeStreamingDelta(
+  previous: CloudMessageTurn,
+  next: CloudMessageTurn
+): boolean {
+  if (previous.role !== "assistant" || next.role !== "assistant") return false
+  if (previous.sourceEventType !== next.sourceEventType) return false
+  if (!STREAMING_DELTA_EVENT_TYPES.has(next.sourceEventType)) return false
+  if (previous.blocks.length !== 1 || next.blocks.length !== 1) return false
+  const previousBlock = previous.blocks[0]
+  const nextBlock = next.blocks[0]
+  return (
+    (previousBlock?.type === "text" && nextBlock?.type === "text") ||
+    (previousBlock?.type === "thinking" && nextBlock?.type === "thinking")
+  )
+}
+
+function mergeAdjacentToolEvents(
+  turns: CloudMessageTurn[]
+): CloudMessageTurn[] {
+  const merged: CloudMessageTurn[] = []
   for (const turn of turns) {
     const previous = merged[merged.length - 1]
     if (previous && canMergeToolTurn(previous, turn)) {
@@ -22,7 +73,10 @@ function mergeAdjacentToolEvents(turns: MessageTurn[]): MessageTurn[] {
   return merged
 }
 
-function canMergeToolTurn(previous: MessageTurn, next: MessageTurn): boolean {
+function canMergeToolTurn(
+  previous: CloudMessageTurn,
+  next: CloudMessageTurn
+): boolean {
   if (previous.role !== "assistant" || next.role !== "assistant") return false
   if (!next.blocks.every((block) => block.type === "tool_result")) return false
   const previousToolIds = toolUseIdsForMerge(previous)
@@ -48,7 +102,7 @@ function toolUseIdsForMerge(turn: MessageTurn): Set<string> {
   return ids
 }
 
-function eventToTurn(event: HouflowCloudSessionEvent): MessageTurn | null {
+function eventToTurn(event: HouflowCloudSessionEvent): CloudMessageTurn | null {
   if (isNonConversationalEvent(event)) return null
   const role = roleFromEvent(event)
   const blocks = blocksFromEvent(event)
@@ -60,7 +114,19 @@ function eventToTurn(event: HouflowCloudSessionEvent): MessageTurn | null {
     blocks,
     timestamp: event.createdAt ?? new Date(0).toISOString(),
     completed_at: event.createdAt,
+    sourceEventType: event.type,
   }
+}
+
+function publicTurn(turn: CloudMessageTurn): MessageTurn {
+  const messageTurn: MessageTurn = {
+    id: turn.id,
+    role: turn.role,
+    blocks: turn.blocks,
+    timestamp: turn.timestamp,
+    completed_at: turn.completed_at,
+  }
+  return messageTurn
 }
 
 function roleFromEvent(event: HouflowCloudSessionEvent): TurnRole {
@@ -187,6 +253,14 @@ export function houflowCloudEventObjectToBlock(
   raw: Record<string, unknown>
 ): ContentBlock | null {
   const type = stringValue(raw.type)
+  if (type === "agent.thinking" || type === "agent.thinking_chunk") {
+    const text = rawText(raw)
+    return text ? { type: "thinking", text } : null
+  }
+  if (type === "agent.message.delta" || type === "agent.message_chunk") {
+    const text = rawText(raw)
+    return text ? { type: "text", text } : null
+  }
   if (type === "agent.tool_use" || type === "agent.custom_tool_use") {
     const toolName = stringValue(raw.name)
     if (!toolName) return null
@@ -239,6 +313,27 @@ export function houflowCloudEventObjectToBlock(
     }
   }
   return null
+}
+
+function rawText(raw: Record<string, unknown>): string {
+  const direct =
+    stringValue(raw.text) || stringValue(raw.message) || stringValue(raw.delta)
+  if (direct) return direct
+  const content = raw.content
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (!isRecord(item)) return null
+        return stringValue(item.text) || stringValue(item.content) || null
+      })
+      .filter(isPresent)
+      .join("\n")
+      .trim()
+  }
+  if (isRecord(content)) {
+    return stringValue(content.text) || stringValue(content.content)
+  }
+  return ""
 }
 
 function toolMeta(
@@ -375,4 +470,10 @@ const LIFECYCLE_STATUS_TEXTS = new Set([
   "session run queued",
   "hosted a2a dispatch started",
   "runtime plane native message dispatch started",
+])
+
+const STREAMING_DELTA_EVENT_TYPES = new Set([
+  "agent.message.delta",
+  "agent.message_chunk",
+  "agent.thinking_chunk",
 ])
