@@ -285,6 +285,15 @@ export class WebTransport implements Transport {
     this.setConnState("unauthorized")
   }
 
+  /**
+   * Leave the unauthorized latch after the user has reached the login surface.
+   * The next authenticated request or subscription will open a fresh socket.
+   */
+  clearUnauthorized(): void {
+    if (this.destroyed || this.connState !== "unauthorized") return
+    this.setConnState("connected")
+  }
+
   // Bump the epoch (so a pending probe's post-await guard bails) and abort its
   // fetch. Called whenever the machine transitions out from under a live probe.
   private invalidateProbe() {

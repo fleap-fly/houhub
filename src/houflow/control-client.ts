@@ -1,9 +1,9 @@
 import type { JsonValue, LLMProvider } from "@houshan/agent-hub-sdk"
 import {
   AgentHubNetworkClient,
-  type AgentHubAgent,
   type ConnectedAgent,
   type ConnectedAgentConnector,
+  type AgentHubSessionTarget,
   type PageCursor,
   normalizeBaseUrl,
 } from "@houshan/agent-hub-network-sdk"
@@ -283,31 +283,12 @@ async function syncGatewayProviderModels(
 async function listTargets(
   client: HouflowControlClient
 ): Promise<HouflowAgentTarget[]> {
-  const [managed, hosted, external] = await Promise.all([
-    client.sdk.agents.list({
-      include_archived: false,
-      limit: 100,
-    }),
-    client.sdk.connectedAgents.list({
-      hosting: "hub_hosted",
-      include_archived: false,
-      limit: 100,
-    }),
-    client.sdk.connectedAgents.list({
-      hosting: "external",
-      include_archived: false,
-      limit: 100,
-    }),
-  ])
-  return [
-    ...managed.data.map(managedTargetFromDto),
-    ...hosted.data.map((agent) =>
-      connectedTargetFromDto(agent, "hosted_connected")
-    ),
-    ...external.data.map((agent) =>
-      connectedTargetFromDto(agent, "external_local")
-    ),
-  ]
+  const page = await client.sdk.sessionTargets.list({
+    include_archived: false,
+    limit: 100,
+  })
+  return page.data
+    .map(sessionTargetFromDto)
     .filter((target): target is HouflowAgentTarget => Boolean(target))
     .sort((left, right) => {
       const kind = kindRank(left.kind) - kindRank(right.kind)
@@ -377,6 +358,9 @@ function quotaFromDto(value: unknown): HouflowWorkspaceQuota | null {
   return {
     active: dto.active !== false,
     planTier,
+    gatewayDailyLimitUsd: numberValue(dto.gateway_daily_limit_usd),
+    gatewayDailyUsedUsd: numberValue(dto.gateway_daily_used_usd),
+    gatewayDailyRemainingUsd: numberValue(dto.gateway_daily_remaining_usd),
     runtimeWorkspaceLimit: positiveInteger(dto.runtime_workspace_limit),
     runtimeWorkspaceUsed: positiveInteger(dto.runtime_workspace_used),
     runtimeWorkspaceRemaining: positiveInteger(dto.runtime_workspace_remaining),
@@ -413,24 +397,43 @@ function providerFromDto(value: LLMProvider): HouflowGatewayProvider {
   }
 }
 
-function managedTargetFromDto(value: AgentHubAgent): HouflowAgentTarget | null {
+function sessionTargetFromDto(
+  value: AgentHubSessionTarget
+): HouflowAgentTarget | null {
+  if (value.kind === "managed_agent") {
+    return managedSessionTargetFromDto(value)
+  }
+  if (value.kind === "hosted_connected_agent") {
+    return connectedTargetFromDto(value.connected_agent, "hosted_connected")
+  }
+  if (value.kind === "external_connected_agent") {
+    return connectedTargetFromDto(value.connected_agent, "external_local")
+  }
+  return null
+}
+
+function managedSessionTargetFromDto(
+  value: Extract<AgentHubSessionTarget, { kind: "managed_agent" }>
+): HouflowAgentTarget | null {
   const id = stringValue(value.id)
   if (!id) return null
-  const model = objectValue(value.model)
+  const agent = value.agent
+  const model = objectValue(agent.model)
   return {
     key: `managed:${id}`,
     kind: "managed",
     id,
     name: stringValue(value.name) || id,
-    provider: stringValue(model.id) || stringValue(value.model) || "agent-hub",
-    status: value.archived_at ? "archived" : "active",
+    provider:
+      stringValue(value.provider) || stringValue(model.id) || "agent-hub",
+    status: stringValue(value.status) || "active",
     capabilities: ["chat", "artifact_upload"],
     source: "agent_hub",
     metadata: cleanStringRecord({
-      management_mode: value.management_mode,
-      default_environment_id: value.default_environment_id ?? "",
-      vault_ids: stringListValue((value as { vault_ids?: unknown }).vault_ids),
-      ...stringRecord(value.metadata),
+      management_mode: agent.management_mode,
+      default_environment_id: agent.default_environment_id ?? "",
+      vault_ids: stringListValue((agent as { vault_ids?: unknown }).vault_ids),
+      ...stringRecord(agent.metadata),
     }),
   }
 }
@@ -532,7 +535,7 @@ function externalConnectorCapabilities(
 
 function kindRank(kind: HouflowAgentTarget["kind"]): number {
   if (kind === "managed") return 0
-  if (kind === "hosted_connected") return 1
+  if (kind === "external_local") return 1
   return 2
 }
 
@@ -559,6 +562,12 @@ function stringRecord(value: unknown): Record<string, string> {
 function positiveInteger(value: unknown): number | null {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null
+}
+
+function numberValue(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function requiredString(value: unknown, field: string): string {

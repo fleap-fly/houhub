@@ -796,7 +796,7 @@ packages:
       - '@houshan/agent-hub-network-sdk'
 
   '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.6.tgz':
-    resolution: {integrity: sha512-o6r/nbKCJRc7YONG1+yBO0tFpRAT5sploKyJzAkpKbAtGpEUo8Ijmt1oniV2hFpOjq2biHEmLzGl81PyCQr7Nw==, tarball: file:vendor/houshan-agent-hub-network-sdk-0.1.6.tgz}
+    resolution: {integrity: sha512-9WexzaFrqjM5MD50mIWDL+9G4HObVfr7DCJ+3g3yE78Oi/Pbh5FKPC7mITXNPzu+8pkPpXFEr/Elqax9zBdDzA==, tarball: file:vendor/houshan-agent-hub-network-sdk-0.1.6.tgz}
     version: 0.1.6
     engines: {node: '>=20'}
 

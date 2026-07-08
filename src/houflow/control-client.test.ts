@@ -5,19 +5,33 @@ import type { HouflowAuthSecret, HouflowDesktopSession } from "./types"
 
 const mocks = vi.hoisted(() => ({
   calls: [] as Array<{ path: string; options: RequestOptions }>,
+  sessionTargetListParams: [] as unknown[],
   syncModelsError: null as Error | null,
   agents: [] as unknown[],
+  sessionTargets: [] as unknown[],
 }))
 
 vi.mock("@houshan/agent-hub-network-sdk", () => ({
   normalizeBaseUrl: (value: string) => value.replace(/\/+$/, ""),
   AgentHubNetworkClient: class {
-    agents = {
-      list: async () => ({ data: mocks.agents }),
-    }
-
-    connectedAgents = {
-      list: async () => ({ data: [] }),
+    sessionTargets = {
+      list: async (params: unknown) => {
+        mocks.sessionTargetListParams.push(params)
+        if (mocks.sessionTargets.length > 0) {
+          return { data: mocks.sessionTargets }
+        }
+        return {
+          data: mocks.agents.map((agent) => ({
+            kind: "managed_agent",
+            id: (agent as { id: string }).id,
+            name: (agent as { name: string }).name,
+            provider: "gpt-5",
+            status: "active",
+            session_capable: true,
+            agent,
+          })),
+        }
+      },
     }
 
     async json<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -30,8 +44,10 @@ vi.mock("@houshan/agent-hub-network-sdk", () => ({
 describe("loadHouflowControlSnapshot", () => {
   beforeEach(() => {
     mocks.calls.length = 0
+    mocks.sessionTargetListParams.length = 0
     mocks.syncModelsError = null
     mocks.agents = []
+    mocks.sessionTargets = []
   })
 
   it("syncs the Houflow gateway catalog by default", async () => {
@@ -116,6 +132,80 @@ describe("loadHouflowControlSnapshot", () => {
       }),
     ])
   })
+
+  it("loads targets through the unified Agent Hub session target catalog", async () => {
+    await loadHouflowControlSnapshot(session(), secret(), {
+      gatewayCatalogMode: "skip",
+    })
+
+    expect(mocks.sessionTargetListParams).toEqual([
+      {
+        include_archived: false,
+        limit: 100,
+      },
+    ])
+  })
+
+  it("maps resident ACP connected targets into the hosted resident group", async () => {
+    mocks.sessionTargets = [
+      {
+        kind: "hosted_connected_agent",
+        id: "cag_resident_codex",
+        name: "Codex 常驻",
+        provider: "agent-hub",
+        status: "active",
+        session_capable: true,
+        connected_agent: {
+          id: "cag_resident_codex",
+          type: "connected_agent",
+          name: "Codex 常驻",
+          provider: "agent-hub",
+          status: "active",
+          metadata: { nativeConsoleSupported: "true" },
+          runtime_binding: {
+            runtime_engine: "codex",
+            environment_id: "env_resident",
+            model: "gpt-5",
+            native_console: true,
+          },
+        },
+      },
+    ]
+
+    const snapshot = await loadHouflowControlSnapshot(session(), secret(), {
+      gatewayCatalogMode: "skip",
+    })
+
+    expect(snapshot.targets).toEqual([
+      expect.objectContaining({
+        key: "hosted_connected:cag_resident_codex",
+        id: "cag_resident_codex",
+        kind: "hosted_connected",
+        capabilities: expect.arrayContaining([
+          "dispatch",
+          "workspace_message",
+          "native_console",
+        ]),
+        metadata: expect.objectContaining({
+          runtime_engine: "codex",
+          environment_id: "env_resident",
+          model: "gpt-5",
+        }),
+      }),
+    ])
+  })
+
+  it("maps Houflow gateway daily quota from the workspace quota endpoint", async () => {
+    const snapshot = await loadHouflowControlSnapshot(session(), secret(), {
+      gatewayCatalogMode: "skip",
+    })
+
+    expect(snapshot.quota).toMatchObject({
+      gatewayDailyLimitUsd: 30,
+      gatewayDailyUsedUsd: 12.5,
+      gatewayDailyRemainingUsd: 17.5,
+    })
+  })
 })
 
 function responseFor(path: string, options: RequestOptions): unknown {
@@ -128,7 +218,13 @@ function responseFor(path: string, options: RequestOptions): unknown {
     }
   }
   if (path === "/v1/workspaces/quota") {
-    return { plan_tier: "pro", active: true }
+    return {
+      plan_tier: "pro",
+      active: true,
+      gateway_daily_limit_usd: 30,
+      gateway_daily_used_usd: 12.5,
+      gateway_daily_remaining_usd: 17.5,
+    }
   }
   if (path === "/v1/providers") {
     return { data: [providerDto()] }

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
+  clearWebUnauthorized,
   getWebConnectionServerSnapshot,
   getWebConnectionSnapshot,
   reconnectWebNow,
@@ -120,7 +121,12 @@ export function WebConnectionGuard() {
         </AlertDialogHeader>
         <AlertDialogFooter>
           {showUnauthorized ? (
-            <Button onClick={() => redirectToWebLogin()}>
+            <Button
+              onClick={() => {
+                clearWebUnauthorized()
+                redirectToWebLogin()
+              }}
+            >
               {t("goToLogin")}
             </Button>
           ) : (

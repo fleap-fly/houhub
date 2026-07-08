@@ -13,6 +13,7 @@ import { useLocale } from "next-intl"
 import { toast } from "sonner"
 
 import { HOUFLOW_DEFAULT_CONTROL_BASE_URL, useHouflowDesktop } from "@/houflow"
+import { gatewayDailyQuotaDisplay } from "@/houflow/quota-display"
 import type { HouflowWorkspaceQuota } from "@/houflow/types"
 import { Button } from "@/components/ui/button"
 import {
@@ -45,6 +46,8 @@ interface HouflowAccountCopy {
   workspace: string
   plan: string
   quota: string
+  gatewayQuota: string
+  workspaceQuota: string
   unknownPlan: string
   connector: string
   localAgents: string
@@ -70,6 +73,8 @@ const ZH_COPY: HouflowAccountCopy = {
   workspace: "工作区",
   plan: "套餐",
   quota: "额度",
+  gatewayQuota: "网关额度",
+  workspaceQuota: "工作区额度",
   unknownPlan: "未获取",
   connector: "本机连接",
   localAgents: "本机智能体",
@@ -102,6 +107,8 @@ const EN_COPY: HouflowAccountCopy = {
   workspace: "Workspace",
   plan: "Plan",
   quota: "Quota",
+  gatewayQuota: "Gateway quota",
+  workspaceQuota: "Workspace quota",
   unknownPlan: "Unknown",
   connector: "Local connector",
   localAgents: "Local agents",
@@ -142,7 +149,8 @@ export function HouflowAccountButton() {
     null
   const connector = houflow.snapshot?.connector ?? null
   const quota = houflow.snapshot?.quota ?? null
-  const quotaText = quotaLabel(quota, locale)
+  const workspaceQuotaText = workspaceQuotaLabel(quota, locale)
+  const gatewayQuota = gatewayDailyQuotaDisplay(quota, locale)
   const targetCount = houflow.snapshot?.targets.length ?? 0
   const statusDotClass = isBusy
     ? "bg-amber-500"
@@ -288,11 +296,40 @@ export function HouflowAccountButton() {
               {planLabel(quota?.planTier, locale) ?? copy.unknownPlan}
             </span>
           </div>
-          {quotaText ? (
+          {gatewayQuota ? (
+            <div className="space-y-1 rounded-md border border-border/60 bg-muted/30 px-2 py-1.5">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">
+                  {copy.gatewayQuota}
+                </span>
+                <span className="font-medium tabular-nums">
+                  {gatewayQuota.usedText}
+                </span>
+              </div>
+              {gatewayQuota.percent !== null ? (
+                <div className="relative h-1.5 overflow-hidden rounded-full bg-background/80">
+                  <div
+                    className="absolute inset-y-0 left-0 bg-emerald-500/80"
+                    style={{ width: `${gatewayQuota.percent}%` }}
+                  />
+                </div>
+              ) : null}
+              {gatewayQuota.remainingText ? (
+                <div className="flex items-center justify-between text-[11px] leading-none text-muted-foreground">
+                  <span>{copy.quota}</span>
+                  <span className="tabular-nums">
+                    {gatewayQuota.remainingText}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          ) : workspaceQuotaText ? (
             <div className="rounded-md border border-border/60 bg-muted/30 px-2 py-1">
               <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">{copy.quota}</span>
-                <span className="font-medium">{quotaText}</span>
+                <span className="text-muted-foreground">
+                  {copy.workspaceQuota}
+                </span>
+                <span className="font-medium">{workspaceQuotaText}</span>
               </div>
             </div>
           ) : null}
@@ -387,7 +424,7 @@ function planLabel(
   return `${normalized} 套餐`
 }
 
-function quotaLabel(
+function workspaceQuotaLabel(
   quota: HouflowWorkspaceQuota | null | undefined,
   locale: string
 ): string | null {

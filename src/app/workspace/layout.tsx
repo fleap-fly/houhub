@@ -105,6 +105,12 @@ const DEFAULT_FUSION_LAYOUT: [number, number] = [56, 44]
 const MIN_CENTER_WIDTH_PX = 420
 const MIN_WORKSPACE_HEIGHT_PX = 220
 const LAYOUT_EPSILON = 0.25
+// Slide duration for panel show/hide; must match the CSS transition on
+// `.panel-slide-animating > [data-panel]` in globals.css. The transition class
+// is held a touch past this so the animation finishes before it's removed
+// (removing it mid-transition would snap the final pixels).
+const PANEL_SLIDE_MS = 240
+const PANEL_SLIDE_CLEANUP_MS = PANEL_SLIDE_MS + 60
 
 function TabKeysSync() {
   const { tabs } = useTabContext()
@@ -156,6 +162,36 @@ function resolvePanelSizeRange(
   const minSize = clamp(toPercent(minPixels, safeTotal), 0, 100)
   const maxSize = clamp(toPercent(maxPixels, safeTotal), minSize, 100)
   return { minSize, maxSize }
+}
+
+/**
+ * Returns `true` for a brief window after `open` flips, so the caller can add
+ * the `.panel-slide-animating` class that animates the panel resize on explicit
+ * show/hide toggles only. The first settled `open` value establishes a baseline
+ * without animating, so localStorage hydration and initial mount do not slide.
+ */
+function usePanelSlideOnToggle(open: boolean, ready: boolean): boolean {
+  const [animating, setAnimating] = useState(false)
+  const [slideSeq, setSlideSeq] = useState(0)
+  const [prevOpen, setPrevOpen] = useState<boolean | null>(null)
+
+  if (ready) {
+    if (prevOpen === null) {
+      setPrevOpen(open)
+    } else if (prevOpen !== open) {
+      setPrevOpen(open)
+      setAnimating(true)
+      setSlideSeq((seq) => seq + 1)
+    }
+  }
+
+  useEffect(() => {
+    if (slideSeq === 0) return
+    const timer = setTimeout(() => setAnimating(false), PANEL_SLIDE_CLEANUP_MS)
+    return () => clearTimeout(timer)
+  }, [slideSeq])
+
+  return animating
 }
 
 function WorkspaceContent({ children }: { children: React.ReactNode }) {
@@ -411,6 +447,7 @@ function MobileFolderWorkspaceShell({
 function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
   const {
     isOpen: sidebarOpen,
+    restored: sidebarRestored,
     width: sidebarWidth,
     minWidth: sidebarMinWidth,
     maxWidth: sidebarMaxWidth,
@@ -418,6 +455,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
   } = useSidebarContext()
   const {
     isOpen: auxOpen,
+    restored: auxRestored,
     width: auxWidth,
     minWidth: auxMinWidth,
     maxWidth: auxMaxWidth,
@@ -430,6 +468,11 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     maxHeight: terminalMaxHeight,
     setHeight: setTerminalHeight,
   } = useTerminalContext()
+
+  const sidebarAnimating = usePanelSlideOnToggle(sidebarOpen, sidebarRestored)
+  const auxAnimating = usePanelSlideOnToggle(auxOpen, auxRestored)
+  const terminalAnimating = usePanelSlideOnToggle(terminalOpen, true)
+  const shellSlideAnimating = sidebarAnimating || auxAnimating
 
   const shellGroupRef = useRef<ImperativePanelGroupHandle | null>(null)
   const mainGroupRef = useRef<ImperativePanelGroupHandle | null>(null)
@@ -729,6 +772,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         ref={shellGroupRef}
         direction="horizontal"
         onLayout={handleShellLayout}
+        className={shellSlideAnimating ? "panel-slide-animating" : undefined}
       >
         <ResizablePanel
           id={FOLDER_SHELL_LEFT_PANEL_ID}
@@ -765,6 +809,9 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
               ref={mainGroupRef}
               direction="vertical"
               onLayout={handleMainLayout}
+              className={
+                terminalAnimating ? "panel-slide-animating" : undefined
+              }
             >
               <ResizablePanel
                 id={FOLDER_MAIN_WORKSPACE_PANEL_ID}

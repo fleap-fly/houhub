@@ -57,6 +57,11 @@ export function reconnectWebNow(): void {
   webTransport()?.reconnectNow()
 }
 
+/** Clear the expired-session dialog once the real login page is visible. */
+export function clearWebUnauthorized(): void {
+  webTransport()?.clearUnauthorized()
+}
+
 /**
  * Funnel a definitive HTTP 401 (e.g. from a raw file-upload fetch in
  * `lib/api.ts` that bypasses `WebTransport.call`) into the same unauthorized

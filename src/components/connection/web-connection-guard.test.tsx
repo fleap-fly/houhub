@@ -24,6 +24,7 @@ const store = vi.hoisted(() => {
       listeners.clear()
     },
     reconnectWebNow: vi.fn(),
+    clearWebUnauthorized: vi.fn(),
     redirectToWebLogin: vi.fn(),
   }
 })
@@ -33,6 +34,7 @@ vi.mock("@/lib/transport/web-connection-store", () => ({
   getWebConnectionSnapshot: store.getState,
   getWebConnectionServerSnapshot: () => "connected",
   reconnectWebNow: store.reconnectWebNow,
+  clearWebUnauthorized: store.clearWebUnauthorized,
   notifyWebUnauthorized: vi.fn(),
 }))
 
@@ -56,6 +58,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   store.reset()
   store.reconnectWebNow.mockClear()
+  store.clearWebUnauthorized.mockClear()
   store.redirectToWebLogin.mockClear()
 })
 
@@ -102,6 +105,7 @@ describe("WebConnectionGuard", () => {
     expect(screen.getByText("Session expired")).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "Go to login" }))
+    expect(store.clearWebUnauthorized).toHaveBeenCalledTimes(1)
     expect(store.redirectToWebLogin).toHaveBeenCalledTimes(1)
   })
 

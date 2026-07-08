@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl"
 import { isDesktop } from "@/lib/platform"
 import { browserFetch } from "@/lib/browser-fetch"
 import { WEB_AUTH_TOKEN_KEY } from "@/lib/transport/web-auth"
+import { clearWebUnauthorized } from "@/lib/transport/web-connection-store"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -16,6 +17,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     document.title = t("documentTitle")
+    clearWebUnauthorized()
   }, [t])
 
   // Desktop users skip login entirely

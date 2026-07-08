@@ -42,6 +42,9 @@ export interface HouflowWorkspace {
 export interface HouflowWorkspaceQuota {
   active: boolean
   planTier: string
+  gatewayDailyLimitUsd: number | null
+  gatewayDailyUsedUsd: number | null
+  gatewayDailyRemainingUsd: number | null
   runtimeWorkspaceLimit: number | null
   runtimeWorkspaceUsed: number | null
   runtimeWorkspaceRemaining: number | null
