@@ -97,7 +97,8 @@ function eventContainsAssistantText(
   event: HouflowCloudSessionEvent,
   text: string
 ): boolean {
-  if (event.role !== "assistant") return false
+  if (event.role && event.role !== "assistant") return false
+  if (!event.role && event.type.startsWith("user.")) return false
   return normalizeText(eventText(event)) === normalizeText(text)
 }
 

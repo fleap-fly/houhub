@@ -143,6 +143,40 @@ describe("hostedCommandToCloudEvents", () => {
     ])
   })
 
+  it("does not duplicate command output when an unroled agent event has the same text", () => {
+    const events = hostedCommandToCloudEvents(
+      command({
+        output: { text: "Hi! What can I help you with?" },
+        events: [
+          event({
+            id: "evt_succeeded",
+            type: "succeeded",
+            payload: {
+              response: {
+                events: [
+                  {
+                    id: "agent_evt_1",
+                    type: "agent.message",
+                    content: [
+                      { type: "text", text: "Hi! What can I help you with?" },
+                    ],
+                    created_at: "2026-07-06T15:00:02.000Z",
+                  },
+                ],
+              },
+            },
+          }),
+        ],
+      })
+    )
+
+    expect(
+      houflowCloudEventsToTurns(events).filter(
+        (turn) => turn.role === "assistant"
+      )
+    ).toHaveLength(1)
+  })
+
   it("maps Runtime Plane ACP stream events from connector command payloads", () => {
     const events = hostedCommandToCloudEvents(
       command({

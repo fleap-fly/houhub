@@ -107,6 +107,7 @@ export type HouflowHostedCommandStreamFrame =
 export interface HouflowCloudDispatchDraft {
   message: string
   content?: ContentBlock[]
+  channelRef?: string
 }
 
 export type HouflowCloudDispatchInput = string | HouflowCloudDispatchDraft
@@ -531,7 +532,9 @@ export async function startHouflowCloudTargetSession(
       action: "workspace_message",
       message: draft.message,
       content: draft.content,
-      channelRef: `houhub/desktop/${session.workspaceId}`,
+      channelRef:
+        draft.channelRef ??
+        `houhub/desktop/${session.workspaceId}/target/${target.id}`,
       metadata: { source: "houhub" },
     })
     if (dispatch.kind !== conversationTarget.kind) {
@@ -562,6 +565,7 @@ function normalizeCloudDispatchInput(
     message,
     content:
       input.content && input.content.length > 0 ? input.content : undefined,
+    channelRef: input.channelRef?.trim() || undefined,
   }
 }
 

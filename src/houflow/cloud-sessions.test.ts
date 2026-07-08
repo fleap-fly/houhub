@@ -646,7 +646,51 @@ describe("Houflow cloud sessions", () => {
       {
         action: "workspace_message",
         message: "跑一次检查",
-        channelRef: "houhub/desktop/ws_1",
+        channelRef: "houhub/desktop/ws_1/target/cag_1",
+        metadata: { source: "houhub" },
+      }
+    )
+  })
+
+  it("reuses an explicit hosted resident channel ref for follow-up turns", async () => {
+    mocks.dispatchAgentHubTarget.mockResolvedValue({
+      surface: "agent_hub",
+      kind: "hosted_connected",
+      targetKey: "hosted_connected:cag_1",
+      targetId: "cag_1",
+      status: "queued",
+      commandId: "cmd_2",
+      action: "workspace_message",
+      raw: { id: "cmd_2", status: "queued" },
+    })
+
+    await startHouflowCloudTargetSession(
+      session(),
+      secret(),
+      {
+        key: "hosted_connected:cag_1",
+        kind: "hosted_connected",
+        id: "cag_1",
+        name: "常驻助手",
+        provider: "agent-hub",
+        status: "active",
+        capabilities: ["workspace_message"],
+        source: "agent_hub",
+        metadata: {},
+      },
+      {
+        message: "继续",
+        channelRef: "houhub/desktop/ws_1/target/cag_1/thread/thread_1",
+      }
+    )
+
+    expect(mocks.dispatchAgentHubTarget).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      {
+        action: "workspace_message",
+        message: "继续",
+        channelRef: "houhub/desktop/ws_1/target/cag_1/thread/thread_1",
         metadata: { source: "houhub" },
       }
     )
@@ -704,7 +748,7 @@ describe("Houflow cloud sessions", () => {
       {
         action: "workspace_message",
         message: "跑一次本机任务",
-        channelRef: "houhub/desktop/ws_1",
+        channelRef: "houhub/desktop/ws_1/target/cag_2",
         metadata: { source: "houhub" },
       }
     )

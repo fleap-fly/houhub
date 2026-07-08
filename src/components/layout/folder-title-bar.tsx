@@ -55,16 +55,23 @@ export function FolderTitleBar() {
   const { activeFolder } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
   const { isOpen, toggle } = useSidebarContext()
-  const { isOpen: auxPanelOpen, toggle: toggleAuxPanel } = useAuxPanelContext()
+  const {
+    isOpen: auxPanelOpen,
+    toggle: toggleAuxPanel,
+    openTab: openAuxPanelTab,
+  } = useAuxPanelContext()
   const { isOpen: terminalOpen, toggle: toggleTerminal } = useTerminalContext()
   const { openNewConversationTab } = useTabContext()
-  const { isConversations, openConversations } = useWorkbenchRoute()
+  const { isConversations, openConversations, routeId } = useWorkbenchRoute()
   const showLocalWorkspaceChrome = isConversations
+  const isCloudRoute = routeId === "cloud"
   const isMac = useIsMac()
   const { shortcuts } = useShortcutSettings()
   const localWorkspaceToolDisabled = !showLocalWorkspaceChrome || !activeFolder
   const auxPanelToggleDisabled =
-    !showLocalWorkspaceChrome || (!activeFolder && !auxPanelOpen)
+    !auxPanelOpen &&
+    !isCloudRoute &&
+    (!showLocalWorkspaceChrome || !activeFolder)
   // Search open-state is shared (see search-dialog-context): the trigger now
   // lives in the sidebar, but this always-mounted bar keeps owning the dialog
   // and the ⌘K shortcut so search works even when the sidebar is collapsed.
@@ -119,6 +126,14 @@ export function FolderTitleBar() {
     })
   }, [])
 
+  const handleToggleAuxPanel = useCallback(() => {
+    if (isCloudRoute && !auxPanelOpen) {
+      openAuxPanelTab("cloud_outputs")
+      return
+    }
+    toggleAuxPanel()
+  }, [auxPanelOpen, isCloudRoute, openAuxPanelTab, toggleAuxPanel])
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (matchShortcutEvent(e, shortcuts.toggle_search)) {
@@ -140,9 +155,13 @@ export function FolderTitleBar() {
       if (matchShortcutEvent(e, shortcuts.toggle_aux_panel)) {
         // Chat mode hides the aux panel + its toggle; the shortcut must not
         // re-open it either.
-        if ((isChatMode && !auxPanelOpen) || auxPanelToggleDisabled) return
+        if (
+          (isChatMode && !auxPanelOpen && !isCloudRoute) ||
+          auxPanelToggleDisabled
+        )
+          return
         e.preventDefault()
-        toggleAuxPanel()
+        handleToggleAuxPanel()
         return
       }
       if (matchShortcutEvent(e, shortcuts.new_conversation)) {
@@ -176,7 +195,8 @@ export function FolderTitleBar() {
     setSearchOpen,
     shortcuts,
     toggle,
-    toggleAuxPanel,
+    handleToggleAuxPanel,
+    isCloudRoute,
     toggleTerminal,
     isChatMode,
     auxPanelOpen,
@@ -257,9 +277,9 @@ export function FolderTitleBar() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   {/* Folderless chat conversations hide the aux panel entirely. */}
-                  {(!isChatMode || auxPanelOpen) && (
+                  {(!isChatMode || auxPanelOpen || isCloudRoute) && (
                     <DropdownMenuItem
-                      onClick={toggleAuxPanel}
+                      onClick={handleToggleAuxPanel}
                       disabled={auxPanelToggleDisabled}
                     >
                       <PanelRight className="h-3.5 w-3.5" />
@@ -303,12 +323,12 @@ export function FolderTitleBar() {
                   <SquareTerminal className="h-3.5 w-3.5" />
                 </Button>
                 {/* Folderless chat conversations hide the aux panel entirely. */}
-                {(!isChatMode || auxPanelOpen) && (
+                {(!isChatMode || auxPanelOpen || isCloudRoute) && (
                   <Button
                     variant="ghost"
                     size="icon"
                     className={`h-6 w-6 hover:text-foreground/80 ${auxPanelOpen ? "bg-accent" : ""}`}
-                    onClick={toggleAuxPanel}
+                    onClick={handleToggleAuxPanel}
                     disabled={auxPanelToggleDisabled}
                     title={tTitleBar("withShortcut", {
                       label: tTitleBar("toggleAuxPanel"),

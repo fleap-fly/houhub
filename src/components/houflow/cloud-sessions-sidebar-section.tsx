@@ -83,8 +83,9 @@ export function CloudSessionsSidebarSection() {
   >({})
   const [sessionToDelete, setSessionToDelete] =
     useState<HouflowCloudSession | null>(null)
-  const [commandToDelete, setCommandToDelete] =
-    useState<HouflowCloudHostedCommand | null>(null)
+  const [commandsToDelete, setCommandsToDelete] = useState<
+    HouflowCloudHostedCommand[] | null
+  >(null)
   const [isDeletingSession, setIsDeletingSession] = useState(false)
   const [isDeletingCommand, setIsDeletingCommand] = useState(false)
   const [isCommandPending, startCommandTransition] = useTransition()
@@ -344,7 +345,7 @@ export function CloudSessionsSidebarSection() {
                   })
                 }}
                 onRequestDeleteSession={setSessionToDelete}
-                onRequestDeleteHostedCommand={setCommandToDelete}
+                onRequestDeleteHostedCommand={setCommandsToDelete}
                 onShowAllChange={setShowAllHosted}
                 onToggle={() => setHostedExpanded((value) => !value)}
                 onToggleTarget={(targetKey) =>
@@ -414,7 +415,7 @@ export function CloudSessionsSidebarSection() {
                   })
                 }}
                 onRequestDeleteSession={setSessionToDelete}
-                onRequestDeleteHostedCommand={setCommandToDelete}
+                onRequestDeleteHostedCommand={setCommandsToDelete}
                 onShowAllChange={setShowAllExternal}
                 onToggle={() => setExternalExpanded((value) => !value)}
                 onToggleTarget={(targetKey) =>
@@ -541,9 +542,9 @@ export function CloudSessionsSidebarSection() {
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog
-        open={commandToDelete != null}
+        open={commandsToDelete != null}
         onOpenChange={(open) => {
-          if (!open && !isDeletingCommand) setCommandToDelete(null)
+          if (!open && !isDeletingCommand) setCommandsToDelete(null)
         }}
       >
         <AlertDialogContent size="sm">
@@ -552,7 +553,8 @@ export function CloudSessionsSidebarSection() {
             <AlertDialogDescription>
               {t("deleteSessionDescription", {
                 title:
-                  hostedCommandTitle(commandToDelete ?? null) || t("untitled"),
+                  hostedCommandTitle(commandsToDelete?.[0] ?? null) ||
+                  t("untitled"),
               })}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -562,16 +564,19 @@ export function CloudSessionsSidebarSection() {
             </AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              disabled={!commandToDelete || isDeletingCommand}
+              disabled={!commandsToDelete?.length || isDeletingCommand}
               onClick={(event) => {
                 event.preventDefault()
-                const command = commandToDelete
-                if (!command) return
+                const commands = commandsToDelete
+                if (!commands?.length) return
                 setIsDeletingCommand(true)
-                void cloud
-                  .deleteHostedCommand(command.id)
+                void Promise.all(
+                  commands.map((command) =>
+                    cloud.deleteHostedCommand(command.id)
+                  )
+                )
                   .then(() => {
-                    setCommandToDelete(null)
+                    setCommandsToDelete(null)
                   })
                   .catch((err) => {
                     toast.error(t("deleteFailed"), {
@@ -628,7 +633,7 @@ function TargetGroup({
   onNewSession: (targetKey: string) => void
   onArchiveSession: (sessionId: string) => void
   onRequestDeleteSession: (session: HouflowCloudSession) => void
-  onRequestDeleteHostedCommand: (command: HouflowCloudHostedCommand) => void
+  onRequestDeleteHostedCommand: (commands: HouflowCloudHostedCommand[]) => void
   onShowAllChange: (showAll: boolean) => void
   onToggle: () => void
   onToggleTarget: (targetKey: string) => void
@@ -670,10 +675,14 @@ function TargetGroup({
           {visibleTargets.map((target) => {
             const sessions = sessionsByAgent.get(target.id) ?? []
             const hostedCommands = hostedCommandsByAgent.get(target.id) ?? []
+            const hostedCommandRows =
+              target.kind === "hosted_connected"
+                ? hostedCommandThreads(hostedCommands)
+                : hostedCommands.map((command) => [command])
             const hostedCommandError = hostedCommandErrors[target.key]
             const connectorTarget = target.kind !== "managed"
             const childCount = connectorTarget
-              ? hostedCommands.length
+              ? hostedCommandRows.length
               : sessions.length
             const targetExpanded = expandedTargets[target.key] ?? false
             const visibleSessions = targetExpanded
@@ -761,14 +770,14 @@ function TargetGroup({
                 ) : null}
                 {connectorTarget &&
                 targetExpanded &&
-                hostedCommands.length > 0 ? (
+                hostedCommandRows.length > 0 ? (
                   <div className="ml-6 space-y-0.5">
-                    {hostedCommands
+                    {hostedCommandRows
                       .slice(0, INITIAL_SESSION_COUNT)
-                      .map((command) => (
+                      .map((commands) => (
                         <HostedCommandRow
-                          key={command.id}
-                          command={command}
+                          key={hostedCommandThreadKey(commands)}
+                          commands={commands}
                           onRequestDeleteHostedCommand={
                             onRequestDeleteHostedCommand
                           }
@@ -816,15 +825,16 @@ function TargetGroup({
 }
 
 function HostedCommandRow({
-  command,
+  commands,
   onRequestDeleteHostedCommand,
   onSelectHostedCommand,
 }: {
-  command: HouflowCloudHostedCommand
-  onRequestDeleteHostedCommand: (command: HouflowCloudHostedCommand) => void
+  commands: HouflowCloudHostedCommand[]
+  onRequestDeleteHostedCommand: (commands: HouflowCloudHostedCommand[]) => void
   onSelectHostedCommand: (command: HouflowCloudHostedCommand) => void
 }) {
   const t = useTranslations("HouflowCloud")
+  const command = latestHostedCommand(commands)
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -851,7 +861,7 @@ function HostedCommandRow({
             className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground group-hover/hosted-row:opacity-100 focus-visible:opacity-100"
             onClick={(event) => {
               event.stopPropagation()
-              onRequestDeleteHostedCommand(command)
+              onRequestDeleteHostedCommand(commands)
             }}
             title={t("deleteSession")}
             aria-label={t("deleteSession")}
@@ -863,7 +873,7 @@ function HostedCommandRow({
       <ContextMenuContent className="w-40">
         <ContextMenuItem
           variant="destructive"
-          onSelect={() => onRequestDeleteHostedCommand(command)}
+          onSelect={() => onRequestDeleteHostedCommand(commands)}
         >
           <Trash2 className="h-4 w-4" />
           {t("deleteSession")}
@@ -1106,6 +1116,40 @@ function hostedCommandsByAgent(commands: HouflowCloudHostedCommand[]) {
   return map
 }
 
+function hostedCommandThreads(
+  commands: HouflowCloudHostedCommand[]
+): HouflowCloudHostedCommand[][] {
+  const threadMap = new Map<string, HouflowCloudHostedCommand[]>()
+  for (const command of commands) {
+    const key = hostedCommandThreadKey([command])
+    const thread = threadMap.get(key) ?? []
+    thread.push(command)
+    threadMap.set(key, thread)
+  }
+  return Array.from(threadMap.values())
+    .map((thread) => thread.sort(compareHostedCommands))
+    .sort((left, right) =>
+      compareHostedCommands(
+        latestHostedCommand(right),
+        latestHostedCommand(left)
+      )
+    )
+}
+
+function hostedCommandThreadKey(commands: HouflowCloudHostedCommand[]): string {
+  const command = commands[0]
+  if (!command) return "empty"
+  const channelRef = hostedCommandChannelRef(command)
+  return channelRef ? `${command.connected_agent_id}:${channelRef}` : command.id
+}
+
+function latestHostedCommand(
+  commands: HouflowCloudHostedCommand[]
+): HouflowCloudHostedCommand {
+  const sorted = [...commands].sort(compareHostedCommands)
+  return sorted[sorted.length - 1] ?? commands[0]!
+}
+
 function hostedCommandTitle(
   command: HouflowCloudHostedCommand | null
 ): string | null {
@@ -1113,6 +1157,22 @@ function hostedCommandTitle(
   if (command.action !== "workspace_message") return command.action
   const message = stringValue(command.input.message)
   return formatConversationTitle(message) || command.action
+}
+
+function hostedCommandChannelRef(
+  command: HouflowCloudHostedCommand
+): string | null {
+  if (command.action !== "workspace_message") return null
+  return stringValue(command.input.channel_ref) || null
+}
+
+function compareHostedCommands(
+  left: HouflowCloudHostedCommand,
+  right: HouflowCloudHostedCommand
+): number {
+  return String(left.created_at ?? "").localeCompare(
+    String(right.created_at ?? "")
+  )
 }
 
 function activityDotClass(status: string): string {
