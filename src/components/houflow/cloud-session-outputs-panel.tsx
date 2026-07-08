@@ -25,6 +25,7 @@ import { useHouflowCloudWorkspace } from "@/houflow/cloud-workspace-context"
 import {
   getHouflowCloudSessionOutputBytes,
   getHouflowCloudSessionOutputText,
+  houflowHostedCommandOutputSessionId,
   listHouflowCloudSessionOutputs,
   type HouflowCloudSessionOutput,
 } from "@/houflow/cloud-sessions"
@@ -48,7 +49,9 @@ export function CloudSessionOutputsPanel() {
   const [selectionError, setSelectionError] = useState<string | null>(null)
   const requestRef = useRef(0)
 
-  const selectedSessionId = cloud.selectedSession?.id ?? null
+  const selectedSessionId =
+    cloud.selectedSession?.id ??
+    houflowHostedCommandOutputSessionId(cloud.selectedHostedCommand)
   const selectedOutputRequest = cloud.selectedOutputRequest
   const selectedOutput = useMemo(
     () =>

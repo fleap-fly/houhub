@@ -13,6 +13,7 @@ import { useLocale } from "next-intl"
 import { toast } from "sonner"
 
 import { HOUFLOW_DEFAULT_CONTROL_BASE_URL, useHouflowDesktop } from "@/houflow"
+import type { HouflowWorkspaceQuota } from "@/houflow/types"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -43,6 +44,7 @@ interface HouflowAccountCopy {
   unknownUser: string
   workspace: string
   plan: string
+  quota: string
   unknownPlan: string
   connector: string
   localAgents: string
@@ -67,6 +69,7 @@ const ZH_COPY: HouflowAccountCopy = {
   unknownUser: "当前账号",
   workspace: "工作区",
   plan: "套餐",
+  quota: "额度",
   unknownPlan: "未获取",
   connector: "本机连接",
   localAgents: "本机智能体",
@@ -98,6 +101,7 @@ const EN_COPY: HouflowAccountCopy = {
   unknownUser: "Current account",
   workspace: "Workspace",
   plan: "Plan",
+  quota: "Quota",
   unknownPlan: "Unknown",
   connector: "Local connector",
   localAgents: "Local agents",
@@ -137,6 +141,8 @@ export function HouflowAccountButton() {
     ) ??
     null
   const connector = houflow.snapshot?.connector ?? null
+  const quota = houflow.snapshot?.quota ?? null
+  const quotaText = quotaLabel(quota, locale)
   const targetCount = houflow.snapshot?.targets.length ?? 0
   const statusDotClass = isBusy
     ? "bg-amber-500"
@@ -279,10 +285,17 @@ export function HouflowAccountButton() {
           <div className="flex items-center justify-between gap-3">
             <span className="text-muted-foreground">{copy.plan}</span>
             <span className="font-medium">
-              {planLabel(houflow.snapshot?.quota?.planTier, locale) ??
-                copy.unknownPlan}
+              {planLabel(quota?.planTier, locale) ?? copy.unknownPlan}
             </span>
           </div>
+          {quotaText ? (
+            <div className="rounded-md border border-border/60 bg-muted/30 px-2 py-1">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">{copy.quota}</span>
+                <span className="font-medium">{quotaText}</span>
+              </div>
+            </div>
+          ) : null}
           <div className="flex items-center justify-between gap-3">
             <span className="text-muted-foreground">{copy.cloudTargets}</span>
             <span className="font-medium">{targetCount}</span>
@@ -372,4 +385,22 @@ function planLabel(
   if (normalized === "business") return "商业版"
   if (normalized === "enterprise") return "企业版"
   return `${normalized} 套餐`
+}
+
+function quotaLabel(
+  quota: HouflowWorkspaceQuota | null | undefined,
+  locale: string
+): string | null {
+  if (!quota?.active) return null
+  const used = quota.runtimeWorkspaceUsed
+  const limit = quota.runtimeWorkspaceLimit
+  const remaining = quota.runtimeWorkspaceRemaining
+  const zh = locale.toLowerCase().startsWith("zh")
+  if (used !== null && limit !== null) {
+    return zh ? `已用 ${used}/${limit}` : `${used}/${limit} used`
+  }
+  if (remaining !== null) {
+    return zh ? `剩余 ${remaining}` : `${remaining} remaining`
+  }
+  return null
 }

@@ -6,13 +6,14 @@ import type { HouflowAuthSecret, HouflowDesktopSession } from "./types"
 const mocks = vi.hoisted(() => ({
   calls: [] as Array<{ path: string; options: RequestOptions }>,
   syncModelsError: null as Error | null,
+  agents: [] as unknown[],
 }))
 
 vi.mock("@houshan/agent-hub-network-sdk", () => ({
   normalizeBaseUrl: (value: string) => value.replace(/\/+$/, ""),
   AgentHubNetworkClient: class {
     agents = {
-      list: async () => ({ data: [] }),
+      list: async () => ({ data: mocks.agents }),
     }
 
     connectedAgents = {
@@ -30,6 +31,7 @@ describe("loadHouflowControlSnapshot", () => {
   beforeEach(() => {
     mocks.calls.length = 0
     mocks.syncModelsError = null
+    mocks.agents = []
   })
 
   it("syncs the Houflow gateway catalog by default", async () => {
@@ -85,6 +87,34 @@ describe("loadHouflowControlSnapshot", () => {
     ])
     expect(paths()).toContain("/v1/providers/default/sync-models")
     expect(paths()).toContain("/v1/providers/default/models")
+  })
+
+  it("maps managed agent vault ids into target metadata", async () => {
+    mocks.agents = [
+      {
+        id: "agt_poetry",
+        name: "诗歌智能体",
+        model: { id: "gpt-5" },
+        default_environment_id: "env_poetry",
+        vault_ids: ["vlt_ocr", "vlt_files"],
+        metadata: { management_mode: "hub_managed" },
+      },
+    ]
+
+    const snapshot = await loadHouflowControlSnapshot(session(), secret(), {
+      gatewayCatalogMode: "skip",
+    })
+
+    expect(snapshot.targets).toEqual([
+      expect.objectContaining({
+        id: "agt_poetry",
+        kind: "managed",
+        metadata: expect.objectContaining({
+          default_environment_id: "env_poetry",
+          vault_ids: "vlt_ocr,vlt_files",
+        }),
+      }),
+    ])
   })
 })
 

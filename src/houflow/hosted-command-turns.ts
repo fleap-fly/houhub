@@ -8,10 +8,10 @@ import {
 export function hostedCommandToCloudEvents(
   command: HouflowCloudHostedCommand
 ): HouflowCloudSessionEvent[] {
-  const events = [
+  const events = dedupeAssistantEventsByText([
     hostedCommandInputToCloudEvent(command),
     ...hostedCommandAgentEvents(command),
-  ].filter(isPresent)
+  ].filter(isPresent))
   const outputEvent = hostedCommandOutputToCloudEvent(command, events)
   return outputEvent ? [...events, outputEvent] : events
 }
@@ -100,6 +100,21 @@ function eventContainsAssistantText(
   if (event.role && event.role !== "assistant") return false
   if (!event.role && event.type.startsWith("user.")) return false
   return normalizeText(eventText(event)) === normalizeText(text)
+}
+
+function dedupeAssistantEventsByText(
+  events: HouflowCloudSessionEvent[]
+): HouflowCloudSessionEvent[] {
+  const seen = new Set<string>()
+  return events.filter((event) => {
+    if (event.role && event.role !== "assistant") return true
+    if (!event.role && event.type.startsWith("user.")) return true
+    const text = normalizeText(eventText(event))
+    if (!text) return true
+    if (seen.has(text)) return false
+    seen.add(text)
+    return true
+  })
 }
 
 function eventText(event: HouflowCloudSessionEvent): string {

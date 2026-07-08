@@ -177,6 +177,55 @@ describe("hostedCommandToCloudEvents", () => {
     ).toHaveLength(1)
   })
 
+  it("does not duplicate assistant events with the same rendered text in one command", () => {
+    const events = hostedCommandToCloudEvents(
+      command({
+        events: [
+          event({
+            id: "evt_runtime_message",
+            type: "step",
+            payload: {
+              runtime_event: {
+                id: "rt_message",
+                type: "agent.message",
+                role: "assistant",
+                content: [
+                  { type: "text", text: "Hi! What can I help you with?" },
+                ],
+                created_at: "2026-07-06T15:00:02.000Z",
+              },
+            },
+          }),
+          event({
+            id: "evt_response_message",
+            type: "succeeded",
+            payload: {
+              response: {
+                events: [
+                  {
+                    id: "agent_evt_1",
+                    type: "agent.message",
+                    role: "assistant",
+                    content: [
+                      { type: "text", text: "Hi! What can I help you with?" },
+                    ],
+                    created_at: "2026-07-06T15:00:03.000Z",
+                  },
+                ],
+              },
+            },
+          }),
+        ],
+      })
+    )
+
+    expect(
+      houflowCloudEventsToTurns(events).filter(
+        (turn) => turn.role === "assistant"
+      )
+    ).toHaveLength(1)
+  })
+
   it("maps Runtime Plane ACP stream events from connector command payloads", () => {
     const events = hostedCommandToCloudEvents(
       command({

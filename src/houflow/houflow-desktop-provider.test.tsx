@@ -8,6 +8,7 @@ import type { HouflowControlSnapshot, HouflowDesktopSession } from "./types"
 
 const mocks = vi.hoisted(() => ({
   loadHouflowControlSnapshot: vi.fn(),
+  fetchOpenAiCompatibleModels: vi.fn(),
   saveHouflowSessionMetadata: vi.fn(),
   syncHouflowManagedGateway: vi.fn(),
 }))
@@ -39,6 +40,7 @@ vi.mock("./auth", () => ({
 
 vi.mock("@/lib/api", () => ({
   acpListAgents: vi.fn(),
+  fetchOpenAiCompatibleModels: mocks.fetchOpenAiCompatibleModels,
   getHouflowConnectorStatus: vi.fn(),
   syncHouflowConnectorLocalAgents: vi.fn(),
   syncHouflowManagedGateway: mocks.syncHouflowManagedGateway,
@@ -55,8 +57,13 @@ vi.mock("@/lib/transport", () => ({
 describe("HouflowDesktopProvider workspace selection", () => {
   beforeEach(() => {
     mocks.loadHouflowControlSnapshot.mockReset()
+    mocks.fetchOpenAiCompatibleModels.mockReset()
     mocks.saveHouflowSessionMetadata.mockReset()
     mocks.syncHouflowManagedGateway.mockReset()
+    mocks.fetchOpenAiCompatibleModels.mockResolvedValue([
+      "houshan-gpt-5",
+      "houshan-gpt-5-mini",
+    ])
     mocks.loadHouflowControlSnapshot.mockImplementation(
       async (nextSession: HouflowDesktopSession, _secret, options) =>
         snapshot(
@@ -74,7 +81,29 @@ describe("HouflowDesktopProvider workspace selection", () => {
     )
 
     await screen.findByText("ready:workspace_1:default")
-    expect(mocks.syncHouflowManagedGateway).toHaveBeenCalledTimes(1)
+    expect(mocks.syncHouflowManagedGateway).toHaveBeenCalledTimes(2)
+    expect(mocks.syncHouflowManagedGateway).toHaveBeenNthCalledWith(1, {
+      providerName: "Houflow Gateway",
+      providerType: "openai_compatible",
+      apiUrl: "https://api.houshanai.com/v1",
+      apiKey: "gateway-key",
+      defaultModel: "gpt-5",
+      bindAgents: true,
+      models: ["gpt-5"],
+    })
+    expect(mocks.syncHouflowManagedGateway).toHaveBeenNthCalledWith(2, {
+      providerName: "HouShan",
+      providerType: "openai_compatible",
+      apiUrl: "https://api.houshan.de/v1",
+      apiKey: "gateway-key",
+      defaultModel: "houshan-gpt-5",
+      bindAgents: false,
+      models: ["houshan-gpt-5", "houshan-gpt-5-mini"],
+    })
+    expect(mocks.fetchOpenAiCompatibleModels).toHaveBeenCalledWith({
+      baseUrl: "https://api.houshan.de/v1",
+      apiKey: "gateway-key",
+    })
 
     await act(async () => {
       screen.getByRole("button", { name: "workspace_2" }).click()
@@ -88,7 +117,7 @@ describe("HouflowDesktopProvider workspace selection", () => {
       expect.anything(),
       { gatewayCatalogMode: "skip" }
     )
-    expect(mocks.syncHouflowManagedGateway).toHaveBeenCalledTimes(1)
+    expect(mocks.syncHouflowManagedGateway).toHaveBeenCalledTimes(2)
     expect(mocks.saveHouflowSessionMetadata).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: "workspace_2" })
     )

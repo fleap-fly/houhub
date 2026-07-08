@@ -30,6 +30,7 @@ describe("dispatchAgentHubTarget", () => {
         title: "桌面任务",
         version: 3,
         resources: [{ type: "file", file_id: "file_1" }],
+        vaultIds: ["vlt_ocr"],
         metadata: { source: "desktop2" },
       }
     )
@@ -46,6 +47,7 @@ describe("dispatchAgentHubTarget", () => {
       workspace_id: "ws_1",
       title: "桌面任务",
       resources: [{ type: "file", file_id: "file_1" }],
+      vault_ids: ["vlt_ocr"],
       metadata: { source: "desktop2" },
     })
     expect(client.calls[1]).toMatchObject({

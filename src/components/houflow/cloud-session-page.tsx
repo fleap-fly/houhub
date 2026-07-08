@@ -49,6 +49,7 @@ import {
   listHouflowCloudSessionApprovals,
   listHouflowCloudSessionEvents,
   mergeHouflowHostedCommandStreamFrame,
+  houflowHostedCommandOutputSessionId,
   startHouflowCloudTargetSession,
   streamHouflowHostedAgentCommand,
   streamHouflowCloudSessionMessage,
@@ -491,6 +492,7 @@ export function CloudSessionPage() {
           setStarterPendingEvent(null)
           cloud.selectSession(result.session.id)
         } else {
+          cloud.rememberHostedCommand(result.dispatch.raw)
           setStarterPendingEvent(null)
           cloud.selectHostedCommand(result.dispatch.raw)
         }
@@ -856,12 +858,13 @@ function HostedCommandPage({
 }) {
   const t = useTranslations("HouflowCloud")
   const sharedT = useTranslations("Folder.chat.shared")
-  const commandLinkSafety = useCloudSessionLinkSafety(null)
   const [turnAdapter] = useState<MessageTurnAdapter>(() =>
     createMessageTurnAdapter()
   )
   const threadCommands = commands.length > 0 ? commands : [command]
   const latestCommand = threadCommands[threadCommands.length - 1] ?? command
+  const outputSessionId = houflowHostedCommandOutputSessionId(latestCommand)
+  const commandLinkSafety = useCloudSessionLinkSafety(outputSessionId)
   const hostedEvents = useMemo(
     () =>
       pendingEvent

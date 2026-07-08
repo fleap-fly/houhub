@@ -131,11 +131,19 @@ export function toErrorMessage(error: unknown): string {
   }
 
   if (error instanceof Error) {
-    return parseProblemDetailsFromString(error.message) ?? error.message.trim()
+    return (
+      parseProblemDetailsFromString(error.message) ??
+      normalizeCommonTransportError(error.message) ??
+      error.message.trim()
+    )
   }
 
   if (typeof error === "string") {
-    return parseProblemDetailsFromString(error) ?? error.trim()
+    return (
+      parseProblemDetailsFromString(error) ??
+      normalizeCommonTransportError(error) ??
+      error.trim()
+    )
   }
 
   const errorObject = asObject(error)
@@ -161,6 +169,14 @@ export function toErrorMessage(error: unknown): string {
   } catch {
     return String(error)
   }
+}
+
+function normalizeCommonTransportError(value: string): string | null {
+  const message = value.trim()
+  if (/response body is not valid json/i.test(message)) {
+    return "The server returned a non-JSON response. Check your login session, quota, or the service status, then try again."
+  }
+  return null
 }
 
 /** Translator callable shape compatible with next-intl's scoped translator. */

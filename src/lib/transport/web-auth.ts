@@ -12,7 +12,7 @@ export function getWebAuthToken(): string {
 }
 
 export function redirectToWebLogin(): void {
-  if (window.location.pathname.startsWith("/login")) return
   localStorage.removeItem(WEB_AUTH_TOKEN_KEY)
+  if (window.location.pathname.startsWith("/login")) return
   window.location.href = "/login"
 }

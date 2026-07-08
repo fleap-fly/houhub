@@ -459,4 +459,19 @@ describe("withSandboxCsp", () => {
     )
     expect(metas.length).toBe(1)
   })
+
+  it("pins the base URL so in-page fragment links stay in the document", () => {
+    const out = withSandboxCsp(base)
+    expect(out).toContain('<base href="about:srcdoc">')
+    expect(out).toContain("base-uri about:")
+    expect(out).not.toContain("base-uri 'none'")
+  })
+
+  it("emits the CSP meta before the <base> so base-uri applies to it", () => {
+    const out = withSandboxCsp(base)
+    const metaIdx = out.indexOf('http-equiv="Content-Security-Policy"')
+    const baseIdx = out.indexOf('<base href="about:srcdoc">')
+    expect(metaIdx).toBeGreaterThanOrEqual(0)
+    expect(baseIdx).toBeGreaterThan(metaIdx)
+  })
 })

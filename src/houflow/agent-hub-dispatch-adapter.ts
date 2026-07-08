@@ -30,6 +30,7 @@ export interface AgentHubDispatchInput {
   title?: string
   version?: number
   resources?: SessionResourceInput[]
+  vaultIds?: string[]
   attachments?: ConnectedAgentCommandAttachment[]
   action?: AgentHubHostedDispatchAction
   channelRef?: string
@@ -120,6 +121,7 @@ export async function dispatchManagedAgent(
   const content = nonEmptyArray(input.content)
   const sessionId = textOrUndefined(input.sessionId)
   const environmentId = textOrUndefined(input.environmentId)
+  const vaultIds = nonEmptyTextArray(input.vaultIds)
   if (!message && !content) {
     throw new Error("Managed Agent Hub dispatch requires message or content")
   }
@@ -141,6 +143,7 @@ export async function dispatchManagedAgent(
             input.workspaceId === undefined ? undefined : input.workspaceId,
           title: textOrUndefined(input.title),
           resources: nonEmptyArray(input.resources),
+          vault_ids: vaultIds,
           metadata: nonEmptyMetadata(input.metadata),
         }),
       })
@@ -328,6 +331,13 @@ function finiteNumber(value: number | undefined): number | undefined {
 
 function nonEmptyArray<T>(value: T[] | undefined): T[] | undefined {
   return value && value.length > 0 ? value : undefined
+}
+
+function nonEmptyTextArray(value: string[] | undefined): string[] | undefined {
+  const items = value
+    ?.map((item) => textOrUndefined(item))
+    .filter((item): item is string => Boolean(item))
+  return items && items.length > 0 ? Array.from(new Set(items)) : undefined
 }
 
 function nonEmptyMetadata(value: Metadata | undefined): Metadata | undefined {

@@ -3146,6 +3146,7 @@ export async function syncHouflowManagedGateway(params: {
   apiUrl: string
   apiKey: string
   defaultModel?: string | null
+  bindAgents?: boolean | null
   models: string[]
 }): Promise<HouflowManagedGatewaySyncResult> {
   const input = {
@@ -3154,6 +3155,7 @@ export async function syncHouflowManagedGateway(params: {
     apiUrl: params.apiUrl,
     apiKey: params.apiKey,
     defaultModel: params.defaultModel ?? null,
+    bindAgents: params.bindAgents ?? null,
     models: params.models,
   }
   return getTransport().call("houflow_sync_managed_gateway", input)

@@ -71,6 +71,17 @@ interface ConversationManageDialogProps {
   folderName: string
 }
 
+export function getConversationManageQueryFolderIds(
+  folderId: number,
+  allFolders: Array<{ id: number; parent_id?: number | null }>
+): number[] {
+  const ids = [folderId]
+  for (const folder of allFolders) {
+    if (folder.parent_id === folderId) ids.push(folder.id)
+  }
+  return ids
+}
+
 function parseTimestamp(value: string): number {
   const ts = Date.parse(value)
   return Number.isNaN(ts) ? 0 : ts
@@ -103,8 +114,12 @@ export function ConversationManageDialog({
   const tCommon = useTranslations("Folder.common")
   const tStatus = useTranslations("Folder.statusLabels")
 
-  const { refreshConversations } = useAppWorkspace()
+  const { allFolders, refreshConversations } = useAppWorkspace()
   const { closeConversationTab } = useTabContext()
+  const queryFolderIds = useMemo(
+    () => getConversationManageQueryFolderIds(folderId, allFolders),
+    [allFolders, folderId]
+  )
 
   const [search, setSearch] = useState("")
   const [agentFilter, setAgentFilter] = useState<AgentType | "all">("all")
@@ -138,7 +153,7 @@ export function ConversationManageDialog({
       setLoading(true)
       try {
         const data = await listAllConversations({
-          folder_ids: [folderId],
+          folder_ids: queryFolderIds,
           search: search.trim() || null,
           agent_type: agentFilter === "all" ? null : agentFilter,
           status: statusFilter === "all" ? null : statusFilter,
@@ -155,7 +170,7 @@ export function ConversationManageDialog({
       }
     }, 300)
     return () => clearTimeout(timer)
-  }, [open, folderId, search, agentFilter, statusFilter, refreshKey])
+  }, [open, queryFolderIds, search, agentFilter, statusFilter, refreshKey])
 
   const toggleOne = useCallback((id: number) => {
     setSelected((prev) => {

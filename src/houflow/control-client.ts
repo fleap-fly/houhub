@@ -429,6 +429,7 @@ function managedTargetFromDto(value: AgentHubAgent): HouflowAgentTarget | null {
     metadata: cleanStringRecord({
       management_mode: value.management_mode,
       default_environment_id: value.default_environment_id ?? "",
+      vault_ids: stringListValue((value as { vault_ids?: unknown }).vault_ids),
       ...stringRecord(value.metadata),
     }),
   }
@@ -579,6 +580,14 @@ function scalarStringValue(value: unknown): string {
   if (typeof value === "number" && Number.isFinite(value)) return String(value)
   if (typeof value === "boolean") return String(value)
   return stringValue(value)
+}
+
+function stringListValue(value: unknown): string {
+  if (!Array.isArray(value)) return ""
+  const items = value
+    .map((item) => stringValue(item))
+    .filter((item) => item.length > 0)
+  return Array.from(new Set(items)).join(",")
 }
 
 function stringValue(value: unknown): string {

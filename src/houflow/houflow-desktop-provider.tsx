@@ -39,6 +39,7 @@ import {
 } from "./types"
 import {
   acpListAgents,
+  fetchOpenAiCompatibleModels,
   getHouflowConnectorStatus,
   syncHouflowConnectorLocalAgents,
   syncHouflowManagedGateway,
@@ -71,6 +72,8 @@ export interface HouflowDesktopContextValue {
 const HouflowDesktopContext = createContext<HouflowDesktopContextValue | null>(
   null
 )
+const HOUSHAN_PROVIDER_NAME = "HouShan"
+const HOUSHAN_PROVIDER_API_URL = "https://api.houshan.de/v1"
 
 export function HouflowDesktopProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<HouflowDesktopStatus>("loading")
@@ -291,14 +294,38 @@ async function syncGatewayProvider(
     throw new Error("Houflow gateway API key is missing")
   }
 
+  const defaultModel =
+    gateway.provider.defaultModel ?? gateway.models[0]?.id ?? null
+  const models = gateway.models.map((model) => model.id)
+
   await syncHouflowManagedGateway({
     providerName: gateway.provider.name,
     providerType: gateway.provider.type,
     apiUrl,
     apiKey,
-    defaultModel:
-      gateway.provider.defaultModel ?? gateway.models[0]?.id ?? null,
-    models: gateway.models.map((model) => model.id),
+    defaultModel,
+    bindAgents: true,
+    models,
+  })
+  const houshanModels = await fetchOpenAiCompatibleModels({
+    baseUrl: HOUSHAN_PROVIDER_API_URL,
+    apiKey,
+  })
+  if (houshanModels.length === 0) {
+    throw new Error("HouShan model gateway returned no models")
+  }
+  const houshanDefaultModel =
+    defaultModel && houshanModels.includes(defaultModel)
+      ? defaultModel
+      : houshanModels[0]
+  await syncHouflowManagedGateway({
+    providerName: HOUSHAN_PROVIDER_NAME,
+    providerType: gateway.provider.type,
+    apiUrl: HOUSHAN_PROVIDER_API_URL,
+    apiKey,
+    defaultModel: houshanDefaultModel,
+    bindAgents: false,
+    models: houshanModels,
   })
 }
 

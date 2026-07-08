@@ -354,6 +354,7 @@ pub struct HouflowManagedGatewaySyncInput {
     pub api_url: String,
     pub api_key: String,
     pub default_model: Option<String>,
+    pub bind_agents: Option<bool>,
     #[serde(default)]
     pub models: Vec<String>,
 }
@@ -523,30 +524,34 @@ pub async fn houflow_sync_managed_gateway_core(
         }
     };
 
+    let bind_agents = input.bind_agents.unwrap_or(true);
     let mut bound_agent_types = Vec::new();
     let skipped_agent_types = Vec::new();
 
-    for agent_type in agent_types {
-        let setting = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
+    if bind_agents {
+        for agent_type in agent_types {
+            let setting =
+                agent_setting_service::get_by_agent_type(&db.conn, agent_type)
+                    .await
+                    .map_err(AppCommandError::from)?;
+            let env = setting
+                .as_ref()
+                .and_then(|row| row.env_json.as_deref())
+                .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(raw).ok())
+                .unwrap_or_default();
+            acp::acp_update_agent_env_preserving_enabled_and_refresh(
+                agent_type,
+                env,
+                Some(provider.id),
+                db,
+                manager,
+                data_dir,
+                emitter,
+            )
             .await
-            .map_err(AppCommandError::from)?;
-        let env = setting
-            .as_ref()
-            .and_then(|row| row.env_json.as_deref())
-            .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(raw).ok())
-            .unwrap_or_default();
-        acp::acp_update_agent_env_preserving_enabled_and_refresh(
-            agent_type,
-            env,
-            Some(provider.id),
-            db,
-            manager,
-            data_dir,
-            emitter,
-        )
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-        bound_agent_types.push(agent_type);
+            .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+            bound_agent_types.push(agent_type);
+        }
     }
 
     Ok(HouflowManagedGatewaySyncResult {
@@ -741,6 +746,7 @@ pub async fn houflow_sync_managed_gateway(
     api_url: String,
     api_key: String,
     default_model: Option<String>,
+    bind_agents: Option<bool>,
     models: Vec<String>,
 ) -> Result<HouflowManagedGatewaySyncResult, AppCommandError> {
     use tauri::Manager;
@@ -756,6 +762,7 @@ pub async fn houflow_sync_managed_gateway(
         api_url,
         api_key,
         default_model,
+        bind_agents,
         models,
     };
     houflow_sync_managed_gateway_core(&db, &manager, &app_data_dir, &emitter, input).await

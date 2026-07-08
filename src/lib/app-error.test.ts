@@ -48,4 +48,12 @@ describe("toErrorMessage", () => {
       )
     ).toBe("Internal Error (HTTP 500, req-9)")
   })
+
+  it("rewords invalid JSON API responses without exposing parser internals", () => {
+    expect(
+      toErrorMessage(new Error("Response body is not valid JSON"))
+    ).toBe(
+      "The server returned a non-JSON response. Check your login session, quota, or the service status, then try again."
+    )
+  })
 })

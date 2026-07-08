@@ -12,6 +12,7 @@ import {
   listHouflowCloudSessionEvents,
   listHouflowCloudSessionOutputs,
   listHouflowCloudSessions,
+  houflowHostedCommandOutputSessionId,
   sendHouflowCloudSessionMessage,
   startHouflowCloudTargetSession,
 } from "./cloud-sessions"
@@ -549,6 +550,53 @@ describe("Houflow cloud sessions", () => {
     expect(mocks.calls).toEqual([])
   })
 
+  it("passes managed target vault ids when starting a cloud session", async () => {
+    mocks.dispatchManagedAgent.mockResolvedValue({
+      surface: "agent_hub",
+      kind: "managed",
+      status: "queued",
+      sessionId: "ses_new",
+      runId: "run_1",
+      interactionId: "int_1",
+      engineRunId: null,
+      raw: {
+        session: {
+          id: "ses_new",
+          status: "queued",
+          title: "识别试卷",
+          environment_id: "env_default",
+          agent: { id: "agt_1", name: "诗歌智能体" },
+          created_at: "2026-06-28T00:00:00.000Z",
+          updated_at: "2026-06-28T00:00:00.000Z",
+          archived_at: null,
+        },
+      },
+    })
+
+    await startHouflowCloudTargetSession(
+      session(),
+      secret(),
+      {
+        ...managedTarget(),
+        name: "诗歌智能体",
+        metadata: {
+          default_environment_id: "env_default",
+          vault_ids: "vlt_ocr,vlt_files",
+        },
+      },
+      "识别试卷"
+    )
+
+    expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({
+        environmentId: "env_default",
+        vaultIds: ["vlt_ocr", "vlt_files"],
+      })
+    )
+  })
+
   it("starts a managed cloud session through the server default environment", async () => {
     const target = {
       ...managedTarget(),
@@ -786,6 +834,33 @@ describe("Houflow cloud sessions", () => {
     )
     expect(commands).toHaveLength(1)
     expect(commands[0]?.id).toBe("cmd_1")
+  })
+
+  it("reads hosted resident output files from the explicit runtime session id", () => {
+    expect(
+      houflowHostedCommandOutputSessionId({
+        output: {
+          runtime_response: {
+            evidence: {
+              session_id: "cag_resident_1",
+            },
+          },
+        },
+      } as never)
+    ).toBe("cag_resident_1")
+  })
+
+  it("does not infer hosted output files from the command channel ref", () => {
+    expect(
+      houflowHostedCommandOutputSessionId({
+        input: {
+          channel_ref: "houhub/desktop/ws_1/target/cag_1/thread/t1",
+        },
+        output: {
+          text: "done",
+        },
+      } as never)
+    ).toBeNull()
   })
 })
 

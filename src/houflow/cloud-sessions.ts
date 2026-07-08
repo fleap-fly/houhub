@@ -392,6 +392,35 @@ export function mergeHouflowHostedCommandStreamFrame(
   return command
 }
 
+export function houflowHostedCommandOutputSessionId(
+  command: HouflowCloudHostedCommand | null | undefined
+): string | null {
+  if (!command?.output) return null
+  const output = command.output
+  const direct =
+    stringValue(output.session_id) || stringValue(output.agent_hub_session_id)
+  if (direct) return direct
+
+  const runtimeResponse = isRecord(output.runtime_response)
+    ? output.runtime_response
+    : null
+  if (!runtimeResponse) return null
+  const runtimeDirect =
+    stringValue(runtimeResponse.session_id) ||
+    stringValue(runtimeResponse.agent_hub_session_id)
+  if (runtimeDirect) return runtimeDirect
+
+  const evidence = isRecord(runtimeResponse.evidence)
+    ? runtimeResponse.evidence
+    : null
+  if (!evidence) return null
+  return (
+    stringValue(evidence.session_id) ||
+    stringValue(evidence.agent_hub_session_id) ||
+    null
+  )
+}
+
 export async function getHouflowCloudSessionOutputText(
   session: HouflowDesktopSession,
   secret: HouflowAuthSecret | null,
@@ -510,8 +539,10 @@ export async function startHouflowCloudTargetSession(
   if (conversationTarget.kind === "managed") {
     const title = draft.message.trim().slice(0, 80) || target.name
     const environmentId = target.metadata.default_environment_id?.trim()
+    const vaultIds = targetMetadataList(target.metadata.vault_ids)
     const dispatch = await dispatchManagedAgent(client, conversationTarget, {
       environmentId: environmentId || undefined,
+      vaultIds,
       workspaceId: session.workspaceId,
       message: draft.message,
       content: draft.content,
@@ -567,6 +598,14 @@ function normalizeCloudDispatchInput(
       input.content && input.content.length > 0 ? input.content : undefined,
     channelRef: input.channelRef?.trim() || undefined,
   }
+}
+
+function targetMetadataList(value: string | undefined): string[] | undefined {
+  const items = value
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+  return items && items.length > 0 ? Array.from(new Set(items)) : undefined
 }
 
 export function isCloudSessionActive(
