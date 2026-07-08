@@ -60,10 +60,9 @@ describe("HouflowDesktopProvider workspace selection", () => {
     mocks.fetchOpenAiCompatibleModels.mockReset()
     mocks.saveHouflowSessionMetadata.mockReset()
     mocks.syncHouflowManagedGateway.mockReset()
-    mocks.fetchOpenAiCompatibleModels.mockResolvedValue([
-      "houshan-gpt-5",
-      "houshan-gpt-5-mini",
-    ])
+    mocks.fetchOpenAiCompatibleModels.mockRejectedValue(
+      new Error("401 Unauthorized: request rejected")
+    )
     mocks.loadHouflowControlSnapshot.mockImplementation(
       async (nextSession: HouflowDesktopSession, _secret, options) =>
         snapshot(
@@ -96,14 +95,11 @@ describe("HouflowDesktopProvider workspace selection", () => {
       providerType: "openai_compatible",
       apiUrl: "https://api.houshan.de/v1",
       apiKey: "gateway-key",
-      defaultModel: "houshan-gpt-5",
+      defaultModel: "gpt-5",
       bindAgents: false,
-      models: ["houshan-gpt-5", "houshan-gpt-5-mini"],
+      models: ["gpt-5"],
     })
-    expect(mocks.fetchOpenAiCompatibleModels).toHaveBeenCalledWith({
-      baseUrl: "https://api.houshan.de/v1",
-      apiKey: "gateway-key",
-    })
+    expect(mocks.fetchOpenAiCompatibleModels).not.toHaveBeenCalled()
 
     await act(async () => {
       screen.getByRole("button", { name: "workspace_2" }).click()

@@ -39,7 +39,6 @@ import {
 } from "./types"
 import {
   acpListAgents,
-  fetchOpenAiCompatibleModels,
   getHouflowConnectorStatus,
   syncHouflowConnectorLocalAgents,
   syncHouflowManagedGateway,
@@ -307,25 +306,14 @@ async function syncGatewayProvider(
     bindAgents: true,
     models,
   })
-  const houshanModels = await fetchOpenAiCompatibleModels({
-    baseUrl: HOUSHAN_PROVIDER_API_URL,
-    apiKey,
-  })
-  if (houshanModels.length === 0) {
-    throw new Error("HouShan model gateway returned no models")
-  }
-  const houshanDefaultModel =
-    defaultModel && houshanModels.includes(defaultModel)
-      ? defaultModel
-      : houshanModels[0]
   await syncHouflowManagedGateway({
     providerName: HOUSHAN_PROVIDER_NAME,
     providerType: gateway.provider.type,
     apiUrl: HOUSHAN_PROVIDER_API_URL,
     apiKey,
-    defaultModel: houshanDefaultModel,
+    defaultModel,
     bindAgents: false,
-    models: houshanModels,
+    models,
   })
 }
 
