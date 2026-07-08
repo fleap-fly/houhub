@@ -1019,10 +1019,6 @@ fn codex_home_dir() -> PathBuf {
     }
 }
 
-pub(crate) fn codex_home_dir_for_launch() -> PathBuf {
-    codex_home_dir()
-}
-
 pub(crate) fn default_codex_home_dir_for_launch() -> PathBuf {
     home_dir_or_default().join(".codex")
 }
@@ -4964,23 +4960,6 @@ pub(crate) fn parse_provider_model(
     out
 }
 
-/// Action to apply to the Codex `config.toml` root `model` key.
-pub(crate) enum CodexModelAction {
-    /// Not a Codex agent — leave the toml untouched.
-    NoOp,
-    /// Set the `model` key to this value.
-    Set(String),
-    /// Remove the `model` key.
-    Clear,
-}
-
-pub(crate) fn provider_codex_model_action(
-    _agent_type: AgentType,
-    _raw: Option<&str>,
-) -> CodexModelAction {
-    CodexModelAction::NoOp
-}
-
 /// Update on-disk config files for a single agent when model provider credentials change.
 /// Uses `agent_env_keys` to determine the correct env var names per agent type.
 ///
@@ -4992,7 +4971,6 @@ fn cascade_update_agent_config(
     api_url: &str,
     api_key: &str,
     model_env: &BTreeMap<String, Option<String>>,
-    codex_model: &CodexModelAction,
 ) -> Result<(), AcpError> {
     let (url_key, key_key, _) = agent_env_keys(agent_type);
     match agent_type {
@@ -5109,15 +5087,6 @@ fn cascade_update_agent_config(
                     toml::Value::Boolean(true),
                 );
             }
-            match codex_model {
-                CodexModelAction::Set(model) => {
-                    table.insert("model".to_string(), toml::Value::String(model.to_string()));
-                }
-                CodexModelAction::Clear => {
-                    table.remove("model");
-                }
-                CodexModelAction::NoOp => {}
-            }
             let toml_str = toml::to_string_pretty(&toml_value)
                 .map_err(|e| AcpError::protocol(e.to_string()))?;
 
@@ -5225,14 +5194,9 @@ pub(crate) async fn cascade_update_model_provider(
             .map_err(|e| AcpError::protocol(e.to_string()))?;
 
         // 2. Update on-disk config files
-        let codex_action = provider_codex_model_action(agent_type, new_model);
-        if let Err(e) = cascade_update_agent_config(
-            agent_type,
-            new_api_url,
-            new_api_key,
-            &model_env,
-            &codex_action,
-        ) {
+        if let Err(e) =
+            cascade_update_agent_config(agent_type, new_api_url, new_api_key, &model_env)
+        {
             tracing::warn!(
                 "[ModelProvider] cascade_update_agent_config({agent_type}) failed: {e}, skipping config update"
             );
@@ -6309,7 +6273,6 @@ async fn acp_update_agent_env_core_with_enabled_update(
     // treats provider.model as authoritative runtime model data; other agents
     // keep their model in their own engine-specific config.
     let mut merged_env = env;
-    let mut codex_action = CodexModelAction::NoOp;
     // When a Claude provider is bound, capture the inputs to also rewrite the
     // on-disk config.env below. Claude's model fields live in config.env, which
     // the runtime overlays OVER db env_json (see `build_runtime_env_from_setting`),
@@ -6353,10 +6316,8 @@ async fn acp_update_agent_env_core_with_enabled_update(
                 }
             }
         }
-        codex_action = provider_codex_model_action(agent_type, provider.model.as_deref());
-        // Codex's on-disk config is handled by `apply_codex_root_model_action`
-        // below; Gemini's analogous config.env gap is pre-existing and out of
-        // scope here. Only Claude needs the local-config cascade on bind.
+        // Gemini's analogous config.env gap is pre-existing and out of scope
+        // here. Only Claude needs the local-config cascade on bind.
         if agent_type == AgentType::ClaudeCode {
             claude_local_cascade =
                 Some((provider.api_url.clone(), provider.api_key.clone(), model_env));
@@ -6394,7 +6355,6 @@ async fn acp_update_agent_env_core_with_enabled_update(
             &api_url,
             &api_key,
             &model_env,
-            &CodexModelAction::NoOp,
         ) {
             eprintln!("[acp_update_agent_env] cascade_update_agent_config({agent_type}) failed: {e}");
         }
@@ -6403,45 +6363,7 @@ async fn acp_update_agent_env_core_with_enabled_update(
         update_pi_config_files(update)?;
     }
 
-    if let Err(e) = apply_codex_root_model_action(&codex_action) {
-        tracing::error!("[acp_update_agent_env] apply_codex_root_model_action failed: {e}");
-    }
-
     emit_acp_agents_updated(emitter, "env_updated", Some(agent_type));
-    Ok(())
-}
-
-/// Apply a `CodexModelAction` to the `model` field at the root of
-/// `~/.codex/config.toml`, preserving everything else.
-fn apply_codex_root_model_action(action: &CodexModelAction) -> Result<(), AcpError> {
-    if matches!(action, CodexModelAction::NoOp) {
-        return Ok(());
-    }
-    let config_path = codex_config_toml_path();
-    let mut toml_value = if config_path.exists() {
-        fs::read_to_string(&config_path)
-            .ok()
-            .and_then(|raw| raw.parse::<toml::Value>().ok())
-            .filter(|v| v.is_table())
-            .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new()))
-    } else {
-        toml::Value::Table(toml::map::Map::new())
-    };
-    let table = toml_value
-        .as_table_mut()
-        .ok_or_else(|| AcpError::protocol("codex config root must be a TOML table"))?;
-    match action {
-        CodexModelAction::Set(model) => {
-            table.insert("model".to_string(), toml::Value::String(model.clone()));
-        }
-        CodexModelAction::Clear => {
-            table.remove("model");
-        }
-        CodexModelAction::NoOp => unreachable!(),
-    }
-    let toml_str =
-        toml::to_string_pretty(&toml_value).map_err(|e| AcpError::protocol(e.to_string()))?;
-    persist_codex_native_config_files(None, Some(&toml_str))?;
     Ok(())
 }
 
@@ -9874,11 +9796,6 @@ wire_api = "chat"
                 "{agent_type} must keep its model in the agent config"
             );
         }
-
-        assert!(matches!(
-            provider_codex_model_action(AgentType::Codex, Some("gpt-5")),
-            CodexModelAction::NoOp
-        ));
     }
 
     #[test]
