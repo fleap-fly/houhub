@@ -1,7 +1,15 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Loader2, Pencil, Play, Plus, Server, Trash2 } from "lucide-react"
+import {
+  Loader2,
+  Pencil,
+  Play,
+  Plus,
+  Server,
+  Sparkles,
+  Trash2,
+} from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
 import { toast } from "sonner"
 
@@ -43,6 +51,10 @@ const MODEL_PROVIDER_COPY = {
     localProviders: "供应商",
     localProvidersDescription:
       "保存 API 地址、密钥和可用模型；智能体运行时只绑定并投影配置。",
+    presets: "预设供应商",
+    presetsDescription:
+      "内置网关入口在这里统一配置，保存后会出现在下方供应商列表。",
+    configure: "配置",
   },
   en: {
     sectionDescription:
@@ -50,7 +62,16 @@ const MODEL_PROVIDER_COPY = {
     localProviders: "Providers",
     localProvidersDescription:
       "Store API URL, key, and available models; agent runtimes bind and project their own config.",
+    presets: "Preset providers",
+    presetsDescription:
+      "Built-in gateway entries are configured here, then saved into the provider list below.",
+    configure: "Configure",
   },
+} as const
+
+const HOUSHAN_PROVIDER_PRESET = {
+  name: "HouShan",
+  apiUrl: "https://api.houshan.de/v1",
 } as const
 
 function providerSupportsAgent(
@@ -78,6 +99,9 @@ export function ModelProviderSettings() {
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<AgentType | null>(null)
   const [addDialogOpen, setAddDialogOpen] = useState(false)
+  const [addPreset, setAddPreset] = useState<
+    typeof HOUSHAN_PROVIDER_PRESET | null
+  >(null)
   const [editTarget, setEditTarget] = useState<ModelProviderInfo | null>(null)
   const [testTarget, setTestTarget] = useState<ModelProviderInfo | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ModelProviderInfo | null>(
@@ -137,6 +161,44 @@ export function ModelProviderSettings() {
           <p className="text-sm text-muted-foreground">
             {copy.sectionDescription}
           </p>
+        </div>
+      </section>
+
+      <section className="mt-4 space-y-2 px-3 md:px-4">
+        <div>
+          <h2 className="text-sm font-medium">{copy.presets}</h2>
+          <p className="text-xs text-muted-foreground">
+            {copy.presetsDescription}
+          </p>
+        </div>
+        <div className="rounded-md border px-3 py-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0 flex items-center gap-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                <Sparkles className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 space-y-0.5">
+                <div className="truncate text-sm font-medium">
+                  {HOUSHAN_PROVIDER_PRESET.name}
+                </div>
+                <div className="truncate font-mono text-xs text-muted-foreground">
+                  {HOUSHAN_PROVIDER_PRESET.apiUrl}
+                </div>
+              </div>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8 shrink-0 text-xs"
+              onClick={() => {
+                setAddPreset(HOUSHAN_PROVIDER_PRESET)
+                setAddDialogOpen(true)
+              }}
+            >
+              {copy.configure}
+            </Button>
+          </div>
         </div>
       </section>
 
@@ -249,7 +311,12 @@ export function ModelProviderSettings() {
 
       <AddModelProviderDialog
         open={addDialogOpen}
-        onOpenChange={setAddDialogOpen}
+        initialName={addPreset?.name}
+        initialApiUrl={addPreset?.apiUrl}
+        onOpenChange={(open) => {
+          setAddDialogOpen(open)
+          if (!open) setAddPreset(null)
+        }}
         onProviderAdded={loadProviders}
       />
 

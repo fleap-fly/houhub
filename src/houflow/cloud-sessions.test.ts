@@ -4,6 +4,7 @@ import {
   archiveHouflowCloudSession,
   decideHouflowCloudSessionApproval,
   deleteHouflowCloudSession,
+  deleteHouflowHostedAgentCommand,
   getHouflowCloudSessionOutputBytes,
   getHouflowCloudSessionOutputText,
   listHouflowCloudSessionApprovals,
@@ -170,6 +171,32 @@ describe("Houflow cloud sessions", () => {
       {
         path: "/v1/sessions/ses_1",
         options: { method: "DELETE" },
+      },
+    ])
+  })
+
+  it("deletes hosted connector commands through Agent Hub command endpoints", async () => {
+    mocks.responses.push({
+      id: "cmd_1",
+      type: "connected_agent_connector_command",
+      connected_agent_id: "cag_1",
+      local_agent_ref: "resident",
+      action: "workspace_message",
+      status: "deleted",
+      input: { message: "继续" },
+      output: null,
+      error: null,
+      events: [],
+      created_at: "2026-06-28T00:00:00.000Z",
+      updated_at: "2026-06-28T00:00:01.000Z",
+    })
+
+    await deleteHouflowHostedAgentCommand(session(), secret(), "cmd_1")
+
+    expect(mocks.calls).toEqual([
+      {
+        path: "/v1/connected-agent-connector-commands/cmd_1/delete",
+        options: { method: "POST", body: {} },
       },
     ])
   })

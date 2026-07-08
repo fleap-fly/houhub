@@ -1,7 +1,7 @@
 "use client"
 
-import { useCallback, useMemo, useState } from "react"
-import { Loader2, Sparkles } from "lucide-react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { Loader2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
@@ -67,32 +67,28 @@ function claudeModelValues(model: ClaudeProviderModel): string[] {
   ])
 }
 
-const MODEL_PROVIDER_PRESETS = [
-  {
-    id: "houshan",
-    name: "HouShan",
-    apiUrl: "https://api.houshan.de/v1",
-  },
-] as const
-
 interface AddModelProviderDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onProviderAdded: () => void
+  initialName?: string
+  initialApiUrl?: string
 }
 
 export function AddModelProviderDialog({
   open,
   onOpenChange,
   onProviderAdded,
+  initialName = "",
+  initialApiUrl = "",
 }: AddModelProviderDialogProps) {
   const t = useTranslations("ModelProviderSettings")
   const [loading, setLoading] = useState(false)
   const [modelsLoading, setModelsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const [name, setName] = useState("")
-  const [apiUrl, setApiUrl] = useState("")
+  const [name, setName] = useState(initialName)
+  const [apiUrl, setApiUrl] = useState(initialApiUrl)
   const [apiKey, setApiKey] = useState("")
   const [agentTypes, setAgentTypes] = useState<AgentType[]>([
     ...MODEL_PROVIDER_AGENT_TYPES,
@@ -113,15 +109,15 @@ export function AddModelProviderDialog({
   }, [defaultModel, modelOptions])
 
   const resetForm = useCallback(() => {
-    setName("")
-    setApiUrl("")
+    setName(initialName)
+    setApiUrl(initialApiUrl)
     setApiKey("")
     setAgentTypes([...MODEL_PROVIDER_AGENT_TYPES])
     setDefaultModel("")
     setModelsText("")
     setClaudeModel({})
     setError(null)
-  }, [])
+  }, [initialApiUrl, initialName])
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
@@ -131,6 +127,13 @@ export function AddModelProviderDialog({
     [onOpenChange, resetForm]
   )
 
+  useEffect(() => {
+    if (!open) return
+    setName(initialName)
+    setApiUrl(initialApiUrl)
+    setError(null)
+  }, [initialApiUrl, initialName, open])
+
   const handleAgentTypeToggle = useCallback((agentType: AgentType) => {
     setAgentTypes((current) =>
       current.includes(agentType)
@@ -138,15 +141,6 @@ export function AddModelProviderDialog({
         : [...current, agentType]
     )
   }, [])
-
-  const handlePresetClick = useCallback(
-    (preset: (typeof MODEL_PROVIDER_PRESETS)[number]) => {
-      setName(preset.name)
-      setApiUrl(preset.apiUrl)
-      setError(null)
-    },
-    []
-  )
 
   const handleFetchModels = useCallback(async () => {
     const baseUrl = apiUrl.trim()
@@ -283,25 +277,6 @@ export function AddModelProviderDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium">{t("presets")}</label>
-            <div className="flex flex-wrap gap-2">
-              {MODEL_PROVIDER_PRESETS.map((preset) => (
-                <Button
-                  key={preset.id}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 text-xs"
-                  onClick={() => handlePresetClick(preset)}
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  {preset.name}
-                </Button>
-              ))}
-            </div>
-          </div>
-
           <div className="space-y-1.5">
             <label htmlFor="add-mp-name" className="text-xs font-medium">
               {t("providerName")}

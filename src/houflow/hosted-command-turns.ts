@@ -8,10 +8,12 @@ import {
 export function hostedCommandToCloudEvents(
   command: HouflowCloudHostedCommand
 ): HouflowCloudSessionEvent[] {
-  return [
+  const events = [
     hostedCommandInputToCloudEvent(command),
     ...hostedCommandAgentEvents(command),
   ].filter(isPresent)
+  const outputEvent = hostedCommandOutputToCloudEvent(command, events)
+  return outputEvent ? [...events, outputEvent] : events
 }
 
 export function hostedCommandError(
@@ -57,6 +59,65 @@ function hostedCommandAgentEvents(
 ): HouflowCloudSessionEvent[] {
   if (!Array.isArray(command.events)) return []
   return command.events.flatMap(hostedCommandEventToCloudEvents)
+}
+
+function hostedCommandOutputToCloudEvent(
+  command: HouflowCloudHostedCommand,
+  events: HouflowCloudSessionEvent[]
+): HouflowCloudSessionEvent | null {
+  const output = recordValue(command.output)
+  const text = stringValue(output.text)
+  if (!text) return null
+  if (events.some((event) => eventContainsAssistantText(event, text))) {
+    return null
+  }
+  const createdAt =
+    stringValue(command.completed_at) ||
+    stringValue(command.updated_at) ||
+    stringValue(command.created_at) ||
+    null
+  const raw = {
+    id: `${command.id}:output`,
+    type: "agent.message",
+    role: "assistant",
+    content: [{ type: "text", text }],
+    created_at: createdAt,
+  }
+  return {
+    id: raw.id,
+    type: raw.type,
+    role: raw.role,
+    text,
+    createdAt,
+    raw,
+  }
+}
+
+function eventContainsAssistantText(
+  event: HouflowCloudSessionEvent,
+  text: string
+): boolean {
+  if (event.role !== "assistant") return false
+  return normalizeText(eventText(event)) === normalizeText(text)
+}
+
+function eventText(event: HouflowCloudSessionEvent): string {
+  const direct = stringValue(event.text)
+  if (direct) return direct
+  const content = event.raw.content
+  if (Array.isArray(content)) {
+    return content.map(contentItemText).filter(Boolean).join("\n")
+  }
+  return contentItemText(content)
+}
+
+function contentItemText(value: unknown): string {
+  const item = recordValue(value)
+  return stringValue(item.text)
+}
+
+function normalizeText(value: string): string {
+  return value.trim().replace(/\s+/g, " ")
 }
 
 function hostedCommandEventToCloudEvents(

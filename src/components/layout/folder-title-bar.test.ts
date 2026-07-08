@@ -15,6 +15,14 @@ describe("FolderTitleBar route chrome", () => {
     expect(source).toContain(
       "{showLocalWorkspaceChrome ? <CommandDropdown /> : null}"
     )
-    expect(source).toContain("!showLocalWorkspaceChrome || !activeFolder")
+    expect(source).toContain(
+      "const auxPanelToggleDisabled =\n    !showLocalWorkspaceChrome || (!activeFolder && !auxPanelOpen)"
+    )
+    expect(source).toContain("if ((isChatMode && !auxPanelOpen)")
+    expect(source).toContain("{(!isChatMode || auxPanelOpen) &&")
+    expect(source).toContain("disabled={auxPanelToggleDisabled}")
+    expect(source).toContain(
+      "const localWorkspaceToolDisabled = !showLocalWorkspaceChrome || !activeFolder"
+    )
   })
 })

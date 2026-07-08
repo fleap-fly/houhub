@@ -18,13 +18,16 @@ import { createModelProvider, fetchOpenAiCompatibleModels } from "@/lib/api"
 const mockCreateModelProvider = vi.mocked(createModelProvider)
 const mockFetchModels = vi.mocked(fetchOpenAiCompatibleModels)
 
-function renderDialog() {
+function renderDialog(
+  props: Partial<React.ComponentProps<typeof AddModelProviderDialog>> = {}
+) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <AddModelProviderDialog
         open
         onOpenChange={vi.fn()}
         onProviderAdded={vi.fn()}
+        {...props}
       />
     </NextIntlClientProvider>
   )
@@ -36,11 +39,41 @@ beforeEach(() => {
 })
 
 describe("AddModelProviderDialog", () => {
-  it("prefills the HouShan preset and imports fetched models", async () => {
-    mockFetchModels.mockResolvedValue(["gpt-5.5", "gpt-5.5-mini"])
-    renderDialog()
+  it("applies preset values when an already-mounted dialog opens", () => {
+    const { rerender } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AddModelProviderDialog
+          open={false}
+          onOpenChange={vi.fn()}
+          onProviderAdded={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
 
-    fireEvent.click(screen.getByRole("button", { name: "HouShan" }))
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AddModelProviderDialog
+          open
+          initialName="HouShan"
+          initialApiUrl="https://api.houshan.de/v1"
+          onOpenChange={vi.fn()}
+          onProviderAdded={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+
+    expect(screen.getByLabelText("Name")).toHaveValue("HouShan")
+    expect(screen.getByLabelText("API URL")).toHaveValue(
+      "https://api.houshan.de/v1"
+    )
+  })
+
+  it("prefills provider values supplied by the settings page and imports fetched models", async () => {
+    mockFetchModels.mockResolvedValue(["gpt-5.5", "gpt-5.5-mini"])
+    renderDialog({
+      initialName: "HouShan",
+      initialApiUrl: "https://api.houshan.de/v1",
+    })
 
     expect(screen.getByLabelText("Name")).toHaveValue("HouShan")
     expect(screen.getByLabelText("API URL")).toHaveValue(

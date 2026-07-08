@@ -340,11 +340,6 @@ export function CloudSessionPage() {
     t,
   ])
 
-  useEffect(() => {
-    if (!selectedId || hostedCommand || showWorkbenchCloud) return
-    openTab("cloud_outputs")
-  }, [hostedCommand, openTab, selectedId, showWorkbenchCloud])
-
   const handleSend = useCallback(
     async (draft: PromptDraft) => {
       if (!selected || houflow.session.status !== "signed_in") return
@@ -851,14 +846,13 @@ function HostedCommandPage({
       turnAdapter.adapt(houflowCloudEventsToTurns(hostedEvents), adapterText),
     [adapterText, hostedEvents, turnAdapter]
   )
-  const outputText =
-    command.output && typeof command.output.text === "string"
-      ? command.output.text
-      : null
   const title = hostedCommandTitle(command) || t("untitled")
   const toneClass = statusBadgeClass(command.status)
   const error = hostedCommandError(command)
   const active = isHostedCommandActive(command.status)
+  const hasAssistantReply = messages.some(
+    (message) => message.role === "assistant"
+  )
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
@@ -894,7 +888,7 @@ function HostedCommandPage({
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
-          {messages.length === 0 && !outputText && !active && !error ? (
+          {messages.length === 0 && !active && !error ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               {t("emptyEvents")}
             </div>
@@ -930,19 +924,9 @@ function HostedCommandPage({
               </Message>
             )
           })}
-          {outputText ? (
-            <Message from="assistant" className="max-w-full">
-              <MessageContent>
-                <StreamdownLinkSafetyProvider value={commandLinkSafety}>
-                  <ContentPartsRenderer
-                    parts={[{ type: "text", text: outputText }]}
-                    role="assistant"
-                  />
-                </StreamdownLinkSafetyProvider>
-              </MessageContent>
-            </Message>
+          {sending || (active && !hasAssistantReply) ? (
+            <CloudWaitingMessage />
           ) : null}
-          {sending || active ? <CloudWaitingMessage /> : null}
         </div>
       </div>
 

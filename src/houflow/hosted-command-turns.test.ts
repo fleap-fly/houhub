@@ -91,6 +91,58 @@ describe("hostedCommandToCloudEvents", () => {
     ])
   })
 
+  it("uses command output as the assistant reply only when no matching event was emitted", () => {
+    const withEvent = hostedCommandToCloudEvents(
+      command({
+        output: { text: "Hi! What can I help you with?" },
+        events: [
+          event({
+            id: "evt_succeeded",
+            type: "succeeded",
+            payload: {
+              response: {
+                events: [
+                  {
+                    id: "agent_evt_1",
+                    type: "agent.message",
+                    role: "assistant",
+                    content: [
+                      { type: "text", text: "Hi! What can I help you with?" },
+                    ],
+                    created_at: "2026-07-06T15:00:02.000Z",
+                  },
+                ],
+              },
+            },
+          }),
+        ],
+      })
+    )
+
+    expect(houflowCloudEventsToTurns(withEvent)).toMatchObject([
+      { role: "user" },
+      {
+        role: "assistant",
+        blocks: [{ type: "text", text: "Hi! What can I help you with?" }],
+      },
+    ])
+
+    const outputOnly = hostedCommandToCloudEvents(
+      command({
+        status: "succeeded",
+        output: { text: "Done from output" },
+      })
+    )
+
+    expect(houflowCloudEventsToTurns(outputOnly)).toMatchObject([
+      { role: "user" },
+      {
+        role: "assistant",
+        blocks: [{ type: "text", text: "Done from output" }],
+      },
+    ])
+  })
+
   it("maps Runtime Plane ACP stream events from connector command payloads", () => {
     const events = hostedCommandToCloudEvents(
       command({

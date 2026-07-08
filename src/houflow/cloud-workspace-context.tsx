@@ -14,6 +14,7 @@ import { useHouflowDesktop } from "./houflow-desktop-provider"
 import {
   archiveHouflowCloudSession,
   deleteHouflowCloudSession,
+  deleteHouflowHostedAgentCommand,
   listHouflowHostedAgentCommands,
   listHouflowCloudSessions,
   type HouflowCloudHostedCommand,
@@ -40,6 +41,7 @@ interface HouflowCloudWorkspaceContextValue {
   refreshSessions: () => Promise<void>
   archiveSession: (sessionId: string) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
+  deleteHostedCommand: (commandId: string) => Promise<void>
   refreshHostedCommands: (
     connectedAgentId: string,
     limit?: number
@@ -263,13 +265,37 @@ export function HouflowCloudWorkspaceProvider({
   const deleteSession = useCallback(
     async (sessionId: string) => {
       if (houflow.session.status !== "signed_in") return
-      await deleteHouflowCloudSession(houflow.session, houflow.secret, sessionId)
+      await deleteHouflowCloudSession(
+        houflow.session,
+        houflow.secret,
+        sessionId
+      )
       setSessions((current) =>
         current.filter((session) => session.id !== sessionId)
       )
-      setSelectedSessionId((current) => (current === sessionId ? null : current))
+      setSelectedSessionId((current) =>
+        current === sessionId ? null : current
+      )
       setSelectedOutputRequest((current) =>
         current?.sessionId === sessionId ? null : current
+      )
+    },
+    [houflow.secret, houflow.session]
+  )
+
+  const deleteHostedCommand = useCallback(
+    async (commandId: string) => {
+      if (houflow.session.status !== "signed_in") return
+      await deleteHouflowHostedAgentCommand(
+        houflow.session,
+        houflow.secret,
+        commandId
+      )
+      setHostedCommands((current) =>
+        current.filter((command) => command.id !== commandId)
+      )
+      setSelectedHostedCommandId((current) =>
+        current === commandId ? null : current
       )
     },
     [houflow.secret, houflow.session]
@@ -290,6 +316,7 @@ export function HouflowCloudWorkspaceProvider({
       refreshSessions,
       archiveSession,
       deleteSession,
+      deleteHostedCommand,
       refreshHostedCommands,
       selectTarget,
       selectSession,
@@ -302,6 +329,7 @@ export function HouflowCloudWorkspaceProvider({
       error,
       archiveSession,
       deleteSession,
+      deleteHostedCommand,
       hostedCommands,
       loading,
       openSessionOutput,

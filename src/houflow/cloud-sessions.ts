@@ -321,6 +321,21 @@ export async function getHouflowHostedAgentCommand(
   return commands.find((item) => item.id === commandId) ?? null
 }
 
+export async function deleteHouflowHostedAgentCommand(
+  session: HouflowDesktopSession,
+  secret: HouflowAuthSecret | null,
+  commandId: string
+): Promise<void> {
+  assertHouflowSignedIn(session)
+  const client = new HouflowControlClient(session, secret)
+  await client.json<unknown>(
+    `/v1/connected-agent-connector-commands/${encodeURIComponent(
+      commandId
+    )}/delete`,
+    { method: "POST", body: {} }
+  )
+}
+
 export async function streamHouflowHostedAgentCommand(
   session: HouflowDesktopSession,
   secret: HouflowAuthSecret | null,

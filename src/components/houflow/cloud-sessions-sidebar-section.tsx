@@ -83,7 +83,10 @@ export function CloudSessionsSidebarSection() {
   >({})
   const [sessionToDelete, setSessionToDelete] =
     useState<HouflowCloudSession | null>(null)
+  const [commandToDelete, setCommandToDelete] =
+    useState<HouflowCloudHostedCommand | null>(null)
   const [isDeletingSession, setIsDeletingSession] = useState(false)
+  const [isDeletingCommand, setIsDeletingCommand] = useState(false)
   const [isCommandPending, startCommandTransition] = useTransition()
 
   const loadHostedCommands = useCallback(
@@ -290,6 +293,7 @@ export function CloudSessionsSidebarSection() {
                   })
                 }}
                 onRequestDeleteSession={setSessionToDelete}
+                onRequestDeleteHostedCommand={() => undefined}
                 onShowAllChange={setShowAllManaged}
                 onToggle={() => setManagedExpanded((value) => !value)}
                 onToggleTarget={(targetKey) =>
@@ -340,6 +344,7 @@ export function CloudSessionsSidebarSection() {
                   })
                 }}
                 onRequestDeleteSession={setSessionToDelete}
+                onRequestDeleteHostedCommand={setCommandToDelete}
                 onShowAllChange={setShowAllHosted}
                 onToggle={() => setHostedExpanded((value) => !value)}
                 onToggleTarget={(targetKey) =>
@@ -409,6 +414,7 @@ export function CloudSessionsSidebarSection() {
                   })
                 }}
                 onRequestDeleteSession={setSessionToDelete}
+                onRequestDeleteHostedCommand={setCommandToDelete}
                 onShowAllChange={setShowAllExternal}
                 onToggle={() => setExternalExpanded((value) => !value)}
                 onToggleTarget={(targetKey) =>
@@ -534,6 +540,52 @@ export function CloudSessionsSidebarSection() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <AlertDialog
+        open={commandToDelete != null}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingCommand) setCommandToDelete(null)
+        }}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("deleteSessionTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("deleteSessionDescription", {
+                title:
+                  hostedCommandTitle(commandToDelete ?? null) || t("untitled"),
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingCommand}>
+              {t("cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={!commandToDelete || isDeletingCommand}
+              onClick={(event) => {
+                event.preventDefault()
+                const command = commandToDelete
+                if (!command) return
+                setIsDeletingCommand(true)
+                void cloud
+                  .deleteHostedCommand(command.id)
+                  .then(() => {
+                    setCommandToDelete(null)
+                  })
+                  .catch((err) => {
+                    toast.error(t("deleteFailed"), {
+                      description: toErrorMessage(err),
+                    })
+                  })
+                  .finally(() => setIsDeletingCommand(false))
+              }}
+            >
+              {isDeletingCommand ? t("deleting") : t("deleteSession")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   )
 }
@@ -554,6 +606,7 @@ function TargetGroup({
   onNewSession,
   onArchiveSession,
   onRequestDeleteSession,
+  onRequestDeleteHostedCommand,
   onShowAllChange,
   onToggle,
   onToggleTarget,
@@ -575,6 +628,7 @@ function TargetGroup({
   onNewSession: (targetKey: string) => void
   onArchiveSession: (sessionId: string) => void
   onRequestDeleteSession: (session: HouflowCloudSession) => void
+  onRequestDeleteHostedCommand: (command: HouflowCloudHostedCommand) => void
   onShowAllChange: (showAll: boolean) => void
   onToggle: () => void
   onToggleTarget: (targetKey: string) => void
@@ -712,23 +766,14 @@ function TargetGroup({
                     {hostedCommands
                       .slice(0, INITIAL_SESSION_COUNT)
                       .map((command) => (
-                        <button
+                        <HostedCommandRow
                           key={command.id}
-                          type="button"
-                          className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
-                          onClick={() => onSelectHostedCommand(command)}
-                        >
-                          <span
-                            className={cn(
-                              "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50",
-                              activityDotClass(command.status)
-                            )}
-                          />
-                          <span className="min-w-0 flex-1 truncate text-[0.75rem] text-muted-foreground">
-                            {hostedCommandTitle(command) || t("untitled")} ·{" "}
-                            {command.status}
-                          </span>
-                        </button>
+                          command={command}
+                          onRequestDeleteHostedCommand={
+                            onRequestDeleteHostedCommand
+                          }
+                          onSelectHostedCommand={onSelectHostedCommand}
+                        />
                       ))}
                   </div>
                 ) : null}
@@ -767,6 +812,64 @@ function TargetGroup({
         </div>
       ) : null}
     </div>
+  )
+}
+
+function HostedCommandRow({
+  command,
+  onRequestDeleteHostedCommand,
+  onSelectHostedCommand,
+}: {
+  command: HouflowCloudHostedCommand
+  onRequestDeleteHostedCommand: (command: HouflowCloudHostedCommand) => void
+  onSelectHostedCommand: (command: HouflowCloudHostedCommand) => void
+}) {
+  const t = useTranslations("HouflowCloud")
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div className="group/hosted-row flex items-center">
+          <button
+            type="button"
+            className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => onSelectHostedCommand(command)}
+          >
+            <span
+              className={cn(
+                "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50",
+                activityDotClass(command.status)
+              )}
+            />
+            <span className="min-w-0 flex-1 truncate text-[0.75rem] text-muted-foreground">
+              {hostedCommandTitle(command) || t("untitled")} · {command.status}
+            </span>
+          </button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground group-hover/hosted-row:opacity-100 focus-visible:opacity-100"
+            onClick={(event) => {
+              event.stopPropagation()
+              onRequestDeleteHostedCommand(command)
+            }}
+            title={t("deleteSession")}
+            aria-label={t("deleteSession")}
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-40">
+        <ContextMenuItem
+          variant="destructive"
+          onSelect={() => onRequestDeleteHostedCommand(command)}
+        >
+          <Trash2 className="h-4 w-4" />
+          {t("deleteSession")}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 
@@ -1003,7 +1106,10 @@ function hostedCommandsByAgent(commands: HouflowCloudHostedCommand[]) {
   return map
 }
 
-function hostedCommandTitle(command: HouflowCloudHostedCommand): string | null {
+function hostedCommandTitle(
+  command: HouflowCloudHostedCommand | null
+): string | null {
+  if (!command) return null
   if (command.action !== "workspace_message") return command.action
   const message = stringValue(command.input.message)
   return formatConversationTitle(message) || command.action
