@@ -3,14 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ContentBlock as AgentHubContentBlock } from "@houshan/agent-hub-sdk"
 import {
-  Bot,
   Check,
   ChevronDown,
   Cloud,
   ExternalLink,
   Loader2,
   RefreshCw,
-  ServerCog,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -22,6 +20,11 @@ import {
 } from "@/components/ai-elements/link-safety"
 import { Message, MessageContent } from "@/components/ai-elements/message"
 import { MessageInput } from "@/components/chat/message-input"
+import {
+  CloudTargetCapabilityBadges,
+  CloudTargetIcon,
+  CloudTargetStatusDot,
+} from "@/components/houflow/cloud-target-status"
 import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -45,6 +48,7 @@ import {
 } from "@/components/ui/popover"
 import {
   decideHouflowCloudSessionApproval,
+  createHouflowManagedCloudSession,
   isCloudSessionActive,
   listHouflowCloudSessionApprovals,
   listHouflowCloudSessionEvents,
@@ -59,7 +63,10 @@ import {
   type HouflowCloudSessionEvent,
 } from "@/houflow/cloud-sessions"
 import { normalizeCloudOutputTarget } from "@/houflow/cloud-session-output-links"
-import type { HouflowAgentTarget } from "@/houflow/types"
+import type {
+  HouflowAgentTarget,
+  HouflowConnectorSummary,
+} from "@/houflow/types"
 import { houflowCloudEventsToTurns } from "@/houflow/cloud-session-turns"
 import {
   hostedCommandError,
@@ -70,6 +77,7 @@ import {
   createMessageTurnAdapter,
   type MessageTurnAdapter,
 } from "@/lib/adapters/ai-elements-adapter"
+import { isHouflowCloudWorkspaceTarget } from "@/houflow/agent-hub-conversation-target"
 import { toErrorMessage } from "@/lib/app-error"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { buildOptimisticUserTurnFromDraft } from "@/lib/optimistic-user-turn"
@@ -171,10 +179,7 @@ export function CloudSessionPage() {
     () =>
       (houflow.snapshot?.targets ?? []).filter(
         (target) =>
-          (target.kind === "managed" ||
-            target.kind === "hosted_connected" ||
-            target.kind === "external_local") &&
-          target.status !== "archived"
+          isHouflowCloudWorkspaceTarget(target) && target.status !== "archived"
       ),
     [houflow.snapshot?.targets]
   )
@@ -187,6 +192,17 @@ export function CloudSessionPage() {
         : null,
     [cloud.selectedTargetKey, cloudTargets]
   )
+  const selectedSessionTarget = useMemo(
+    () =>
+      selected
+        ? (cloudTargets.find(
+            (target) =>
+              target.kind === "managed" && target.id === selected.agentId
+          ) ?? null)
+        : null,
+    [cloudTargets, selected]
+  )
+  const connector = houflow.snapshot?.connector ?? null
   const adapterText = useMemo(
     () => ({
       attachedResources: sharedT("attachedResources"),
@@ -194,9 +210,17 @@ export function CloudSessionPage() {
     }),
     [sharedT]
   )
+  const visibleEvents = useMemo(
+    () =>
+      selected && starterPendingEvent
+        ? mergeCloudSessionEvents(events, [starterPendingEvent])
+        : events,
+    [events, selected, starterPendingEvent]
+  )
   const messages = useMemo(
-    () => turnAdapter.adapt(houflowCloudEventsToTurns(events), adapterText),
-    [adapterText, events, turnAdapter]
+    () =>
+      turnAdapter.adapt(houflowCloudEventsToTurns(visibleEvents), adapterText),
+    [adapterText, turnAdapter, visibleEvents]
   )
   const consoleUrl = useMemo(() => {
     if (!selected || houflow.session.status !== "signed_in") return null
@@ -469,23 +493,70 @@ export function CloudSessionPage() {
         draft,
         sharedT("attachedResources")
       )
+      const dispatchDraft = cloudDispatchDraftFromPromptDraft(draft)
       setStarterPendingEvent(optimisticEvent)
       setStarting(true)
       try {
+        if (selectedTarget.kind === "managed") {
+          const created = await createHouflowManagedCloudSession(
+            houflow.session,
+            houflow.secret,
+            selectedTarget,
+            dispatchDraft
+          )
+          cloud.rememberSession(created)
+          cloud.selectSession(created.id)
+          setStarting(false)
+          setSending(true)
+          const streamId = randomUUID()
+          activeStreamRef.current = streamId
+          try {
+            await streamHouflowCloudSessionMessage(
+              houflow.session,
+              houflow.secret,
+              created,
+              dispatchDraft,
+              (event) => {
+                if (activeStreamRef.current !== streamId) return
+                setStarterPendingEvent(null)
+                setEvents((current) =>
+                  mergeCloudSessionEvents(current, [event], {
+                    removeOptimisticEventId: optimisticEvent.id,
+                  })
+                )
+              },
+              optimisticEvent.id
+            )
+            await Promise.all([
+              cloud.refreshSessions(),
+              refreshEvents(),
+              refreshApprovals(),
+            ])
+          } catch (err) {
+            toast.error(t("sendFailed"), { description: toErrorMessage(err) })
+          } finally {
+            if (activeStreamRef.current === streamId) {
+              activeStreamRef.current = null
+            }
+            setStarterPendingEvent(null)
+            setSending(false)
+          }
+          return
+        }
+
         const result = await startHouflowCloudTargetSession(
           houflow.session,
           houflow.secret,
           selectedTarget,
-          selectedTarget.kind === "hosted_connected" ||
-            selectedTarget.kind === "external_local"
+          selectedTarget.kind === "hosted_connected"
             ? {
-                ...cloudDispatchDraftFromPromptDraft(draft),
+                ...dispatchDraft,
                 channelRef: newHostedCommandChannelRef(
                   workspaceId,
                   selectedTarget.id
                 ),
               }
-            : cloudDispatchDraftFromPromptDraft(draft)
+            : dispatchDraft
         )
         await cloud.refreshSessions()
         if (result.kind === "managed") {
@@ -503,7 +574,16 @@ export function CloudSessionPage() {
         setStarting(false)
       }
     },
-    [cloud, houflow.secret, houflow.session, selectedTarget, sharedT, t]
+    [
+      cloud,
+      houflow.secret,
+      houflow.session,
+      refreshApprovals,
+      refreshEvents,
+      selectedTarget,
+      sharedT,
+      t,
+    ]
   )
 
   const handleSendHostedCommand = useCallback(
@@ -534,16 +614,13 @@ export function CloudSessionPage() {
             channelRef: hostedCommandChannelRef(hostedCommand) ?? undefined,
           }
         )
-        if (
-          result.kind === "hosted_connected" ||
-          result.kind === "external_local"
-        ) {
+        if (result.kind === "hosted_connected") {
           setHostedPendingEvent(null)
           cloud.rememberHostedCommand(result.dispatch.raw)
         }
         await cloud.refreshHostedCommand(
           target.id,
-          result.kind === "hosted_connected" || result.kind === "external_local"
+          result.kind === "hosted_connected"
             ? result.dispatch.commandId
             : hostedCommand.id
         )
@@ -582,6 +659,7 @@ export function CloudSessionPage() {
       <HostedCommandPage
         command={hostedCommand}
         commands={hostedThreadCommands}
+        connector={connector}
         pendingEvent={hostedPendingEvent}
         sending={starting}
         target={cloudTargets.find(
@@ -602,6 +680,7 @@ export function CloudSessionPage() {
   if (!selected) {
     return (
       <CloudSessionStarter
+        connector={connector}
         loading={cloud.loading}
         pendingEvent={starterPendingEvent}
         selectedTarget={selectedTarget}
@@ -627,6 +706,12 @@ export function CloudSessionPage() {
             <span className="truncate">
               {selected.agentName || selected.agentId || t("unknownAgent")}
             </span>
+            {selectedSessionTarget ? (
+              <CloudTargetStatusDot
+                target={selectedSessionTarget}
+                connector={connector}
+              />
+            ) : null}
             <Badge
               variant="outline"
               className={cn(
@@ -842,6 +927,7 @@ function compareCloudEvents(
 function HostedCommandPage({
   command,
   commands,
+  connector,
   pendingEvent,
   sending,
   target,
@@ -850,6 +936,7 @@ function HostedCommandPage({
 }: {
   command: HouflowCloudHostedCommand
   commands: HouflowCloudHostedCommand[]
+  connector: HouflowConnectorSummary | null
   pendingEvent: HouflowCloudSessionEvent | null
   sending: boolean
   target: HouflowAgentTarget | undefined
@@ -901,11 +988,18 @@ function HostedCommandPage({
     <section className="flex h-full min-h-0 flex-col bg-background">
       <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-border px-4">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-          <ServerCog className="h-4 w-4" />
+          {target ? (
+            <CloudTargetIcon target={target} connector={connector} />
+          ) : (
+            <Cloud className="h-4 w-4" />
+          )}
         </div>
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-semibold">{title}</h2>
           <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+            {target ? (
+              <CloudTargetStatusDot target={target} connector={connector} />
+            ) : null}
             <span className="truncate">
               {target?.name || command.local_agent_ref || t("unknownAgent")}
             </span>
@@ -915,6 +1009,9 @@ function HostedCommandPage({
             >
               {latestCommand.status}
             </Badge>
+            {target ? (
+              <CloudTargetCapabilityBadges target={target} limit={3} />
+            ) : null}
           </div>
         </div>
         <Button
@@ -1137,6 +1234,7 @@ function compareHostedCommands(
 }
 
 function CloudSessionStarter({
+  connector,
   loading,
   pendingEvent,
   selectedTarget,
@@ -1147,6 +1245,7 @@ function CloudSessionStarter({
   onRefresh,
   onSend,
 }: {
+  connector: HouflowConnectorSummary | null
   loading: boolean
   pendingEvent: HouflowCloudSessionEvent | null
   selectedTarget: HouflowAgentTarget | null
@@ -1166,9 +1265,6 @@ function CloudSessionStarter({
   const managedTargets = targets.filter((target) => target.kind === "managed")
   const hostedTargets = targets.filter(
     (target) => target.kind === "hosted_connected"
-  )
-  const externalTargets = targets.filter(
-    (target) => target.kind === "external_local"
   )
   const adapterText = useMemo(
     () => ({
@@ -1207,11 +1303,11 @@ function CloudSessionStarter({
           <div className="flex justify-center">
             <div className="flex min-w-0 max-w-full items-center gap-2">
               <CloudTargetSelector
+                connector={connector}
                 open={open}
                 selectedTarget={selectedTarget}
                 managedTargets={managedTargets}
                 hostedTargets={hostedTargets}
-                externalTargets={externalTargets}
                 targetKey={targetKey}
                 onOpenChange={setOpen}
                 onChange={(key) => {
@@ -1280,20 +1376,20 @@ function CloudSessionStarter({
 }
 
 function CloudTargetSelector({
+  connector,
   open,
   selectedTarget,
   managedTargets,
   hostedTargets,
-  externalTargets,
   targetKey,
   onOpenChange,
   onChange,
 }: {
+  connector: HouflowConnectorSummary | null
   open: boolean
   selectedTarget: HouflowAgentTarget | null
   managedTargets: HouflowAgentTarget[]
   hostedTargets: HouflowAgentTarget[]
-  externalTargets: HouflowAgentTarget[]
   targetKey: string | null
   onOpenChange: (open: boolean) => void
   onChange: (key: string) => void
@@ -1301,7 +1397,6 @@ function CloudTargetSelector({
   const t = useTranslations("HouflowCloud")
   const managedLabel = t("targetManaged")
   const hostedLabel = t("targetHostedResident")
-  const externalLabel = t("targetExternalLocal")
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
@@ -1313,7 +1408,7 @@ function CloudTargetSelector({
         >
           <span className="flex min-w-0 items-center gap-2">
             {selectedTarget ? (
-              targetIcon(selectedTarget.kind)
+              <CloudTargetIcon target={selectedTarget} connector={connector} />
             ) : (
               <Cloud className="h-4 w-4 shrink-0" />
             )}
@@ -1328,10 +1423,12 @@ function CloudTargetSelector({
                 {targetKindLabel(
                   selectedTarget.kind,
                   managedLabel,
-                  hostedLabel,
-                  externalLabel
+                  hostedLabel
                 )}
               </Badge>
+            ) : null}
+            {selectedTarget ? (
+              <CloudTargetCapabilityBadges target={selectedTarget} limit={2} />
             ) : null}
           </span>
           <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -1346,20 +1443,16 @@ function CloudTargetSelector({
           <CommandList>
             <CommandEmpty>{t("targetEmpty")}</CommandEmpty>
             <CloudTargetGroup
+              connector={connector}
               label={t("targetManaged")}
               targets={managedTargets}
               targetKey={targetKey}
               onChange={onChange}
             />
             <CloudTargetGroup
+              connector={connector}
               label={t("targetHostedResident")}
               targets={hostedTargets}
-              targetKey={targetKey}
-              onChange={onChange}
-            />
-            <CloudTargetGroup
-              label={t("targetExternalLocal")}
-              targets={externalTargets}
               targetKey={targetKey}
               onChange={onChange}
             />
@@ -1371,11 +1464,13 @@ function CloudTargetSelector({
 }
 
 function CloudTargetGroup({
+  connector,
   label,
   targets,
   targetKey,
   onChange,
 }: {
+  connector: HouflowConnectorSummary | null
   label: string
   targets: HouflowAgentTarget[]
   targetKey: string | null
@@ -1392,11 +1487,12 @@ function CloudTargetGroup({
           onSelect={() => onChange(target.key)}
           className="min-h-11"
         >
-          {targetIcon(target.kind)}
+          <CloudTargetIcon target={target} connector={connector} />
           <span className="min-w-0 flex-1">
             <span className="block truncate">{target.name}</span>
-            <span className="block truncate text-xs text-muted-foreground">
-              {target.provider}
+            <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="truncate">{target.provider}</span>
+              <CloudTargetCapabilityBadges target={target} limit={3} />
             </span>
           </span>
           {targetKey === target.key ? (
@@ -1406,13 +1502,6 @@ function CloudTargetGroup({
       ))}
     </CommandGroup>
   )
-}
-
-function targetIcon(kind: HouflowAgentTarget["kind"]) {
-  if (kind === "hosted_connected" || kind === "external_local") {
-    return <ServerCog className="h-4 w-4 shrink-0 text-muted-foreground" />
-  }
-  return <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
 }
 
 function cloudDispatchDraftFromPromptDraft(
@@ -1463,11 +1552,9 @@ function cloudDispatchDraftFromPromptDraft(
 function targetKindLabel(
   kind: HouflowAgentTarget["kind"],
   managedLabel: string,
-  hostedLabel: string,
-  externalLabel: string
+  hostedLabel: string
 ): string {
   if (kind === "hosted_connected") return hostedLabel
-  if (kind === "external_local") return externalLabel
   return managedLabel
 }
 

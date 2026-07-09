@@ -11,11 +11,15 @@ const mocks = vi.hoisted(() => ({
   fetchOpenAiCompatibleModels: vi.fn(),
   saveHouflowSessionMetadata: vi.fn(),
   syncHouflowManagedGateway: vi.fn(),
+  syncHouflowConnectorLocalAgents: vi.fn(),
+  getHouflowConnectorStatus: vi.fn(),
+  acpListAgents: vi.fn(),
+  publishHouflowExternalAgent: vi.fn(),
 }))
 
 vi.mock("./control-client", () => ({
   loadHouflowControlSnapshot: mocks.loadHouflowControlSnapshot,
-  publishHouflowExternalAgent: vi.fn(),
+  publishHouflowExternalAgent: mocks.publishHouflowExternalAgent,
 }))
 
 vi.mock("./storage", () => ({
@@ -39,10 +43,10 @@ vi.mock("./auth", () => ({
 }))
 
 vi.mock("@/lib/api", () => ({
-  acpListAgents: vi.fn(),
+  acpListAgents: mocks.acpListAgents,
   fetchOpenAiCompatibleModels: mocks.fetchOpenAiCompatibleModels,
-  getHouflowConnectorStatus: vi.fn(),
-  syncHouflowConnectorLocalAgents: vi.fn(),
+  getHouflowConnectorStatus: mocks.getHouflowConnectorStatus,
+  syncHouflowConnectorLocalAgents: mocks.syncHouflowConnectorLocalAgents,
   syncHouflowManagedGateway: mocks.syncHouflowManagedGateway,
 }))
 
@@ -60,9 +64,30 @@ describe("HouflowDesktopProvider workspace selection", () => {
     mocks.fetchOpenAiCompatibleModels.mockReset()
     mocks.saveHouflowSessionMetadata.mockReset()
     mocks.syncHouflowManagedGateway.mockReset()
+    mocks.syncHouflowConnectorLocalAgents.mockReset()
+    mocks.getHouflowConnectorStatus.mockReset()
+    mocks.acpListAgents.mockReset()
+    mocks.publishHouflowExternalAgent.mockReset()
     mocks.fetchOpenAiCompatibleModels.mockRejectedValue(
       new Error("401 Unauthorized: request rejected")
     )
+    mocks.getHouflowConnectorStatus.mockResolvedValue({
+      installed: true,
+      executable: "/usr/local/bin/hou-agent-connector",
+      version: "0.1.5",
+      snapshot: {
+        connector: { id: "cac_desktop" },
+      },
+      diagnosis: null,
+      error: null,
+    })
+    mocks.acpListAgents.mockResolvedValue([])
+    mocks.syncHouflowConnectorLocalAgents.mockResolvedValue({
+      agents: [],
+      heartbeat: null,
+      status: {},
+    })
+    mocks.publishHouflowExternalAgent.mockResolvedValue({})
     mocks.loadHouflowControlSnapshot.mockImplementation(
       async (nextSession: HouflowDesktopSession, _secret, options) =>
         snapshot(
@@ -118,6 +143,99 @@ describe("HouflowDesktopProvider workspace selection", () => {
       expect.objectContaining({ workspaceId: "workspace_2" })
     )
   })
+
+  it("publishes local connector agents with Agent Hub canonical refs", async () => {
+    mocks.loadHouflowControlSnapshot.mockImplementation(
+      async (nextSession: HouflowDesktopSession, _secret, options) =>
+        snapshot(
+          nextSession.workspaceId ?? "workspace_1",
+          options?.gatewayCatalogMode === "skip" ? null : gatewayCatalog(),
+          connectorSummary()
+        )
+    )
+    mocks.acpListAgents.mockResolvedValue([
+      {
+        agent_type: "claude_code",
+        name: "Claude Code",
+        enabled: true,
+        available: true,
+      },
+      {
+        agent_type: "codex",
+        name: "OpenAI Codex CLI",
+        enabled: true,
+        available: true,
+      },
+      {
+        agent_type: "pi",
+        name: "Pi Coding Agent",
+        enabled: true,
+        available: true,
+      },
+      {
+        agent_type: "cline",
+        name: "Cline",
+        enabled: true,
+        available: true,
+      },
+    ])
+
+    render(
+      <HouflowDesktopProvider>
+        <Probe />
+      </HouflowDesktopProvider>
+    )
+
+    await screen.findByText("ready:workspace_1:default")
+    expect(mocks.syncHouflowConnectorLocalAgents).toHaveBeenCalledWith({
+      heartbeat: true,
+      agents: [
+        expect.objectContaining({
+          localAgentRef: "claude:cli",
+          provider: "claude",
+          runtimeProvider: "claude",
+        }),
+        expect.objectContaining({
+          localAgentRef: "codex:cli",
+          provider: "codex",
+          runtimeProvider: "codex",
+        }),
+        expect.objectContaining({
+          localAgentRef: "pi:cli",
+          provider: "pi",
+          runtimeProvider: "pi",
+        }),
+      ],
+    })
+    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "workspace_1" }),
+      expect.anything(),
+      expect.objectContaining({
+        connectorId: "cac_desktop",
+        localAgentRef: "claude:cli",
+        provider: "claude",
+      })
+    )
+    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "workspace_1" }),
+      expect.anything(),
+      expect.objectContaining({
+        connectorId: "cac_desktop",
+        localAgentRef: "codex:cli",
+        provider: "codex",
+      })
+    )
+    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "workspace_1" }),
+      expect.anything(),
+      expect.objectContaining({
+        connectorId: "cac_desktop",
+        localAgentRef: "pi:cli",
+        provider: "pi",
+      })
+    )
+    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledTimes(3)
+  })
 })
 
 function Probe() {
@@ -148,7 +266,8 @@ function session(workspaceId: string): HouflowDesktopSession {
 
 function snapshot(
   workspaceId: string,
-  gateway: HouflowControlSnapshot["gateway"]
+  gateway: HouflowControlSnapshot["gateway"],
+  connector: HouflowControlSnapshot["connector"] = null
 ): HouflowControlSnapshot {
   return {
     workspaces: [
@@ -170,8 +289,27 @@ function snapshot(
     quota: null,
     gateway,
     targets: [],
-    connector: null,
+    connector,
     syncedAt: "2026-07-06T00:00:00.000Z",
+  }
+}
+
+function connectorSummary(): NonNullable<HouflowControlSnapshot["connector"]> {
+  return {
+    status: "online",
+    installed: true,
+    enrolled: true,
+    running: true,
+    connectorId: "cac_desktop",
+    connectorVersion: "0.1.5",
+    reportedAgentCount: 3,
+    dispatchAgentCount: 3,
+    commandAgentCount: 3,
+    boundAgentCount: 0,
+    lastHeartbeatAt: "2026-07-09T00:00:00.000Z",
+    lastError: null,
+    error: null,
+    syncedAt: "2026-07-09T00:00:00.000Z",
   }
 }
 

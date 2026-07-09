@@ -86,9 +86,12 @@ export type HouflowAgentTargetCapability =
   | "chat"
   | "dispatch"
   | "workspace_message"
+  | "stream"
   | "native_console"
   | "log_tail"
   | "artifact_upload"
+  | "media"
+  | "voice"
   | "runtime_management"
 
 export interface HouflowAgentTarget {

@@ -384,37 +384,71 @@ async function syncLocalConnectorAgents(
 }
 
 function localAgentSyncInput(agent: AcpAgentInfo) {
-  const runtimeProvider = runtimeProviderForAgent(agent.agent_type)
-  if (!runtimeProvider) return null
+  const runtime = connectorRuntimeForAgent(agent.agent_type)
+  if (!runtime) return null
   return {
-    localAgentRef: agent.agent_type,
-    provider: agent.agent_type,
+    localAgentRef: runtime.localAgentRef,
+    provider: runtime.provider,
     name: agent.name,
-    runtimeProvider,
+    runtimeProvider: runtime.runtimeProvider,
     runtimeRunner: true,
     useDefaultSkillsDirectory: true,
     capabilities: ["dispatch", "workspace_message", "lifecycle"],
   }
 }
 
-function runtimeProviderForAgent(agentType: AgentType): string | null {
+function connectorRuntimeForAgent(
+  agentType: AgentType
+): { localAgentRef: string; provider: string; runtimeProvider: string } | null {
   switch (agentType) {
     case "claude_code":
-      return "claude"
+      return {
+        localAgentRef: "claude:cli",
+        provider: "claude",
+        runtimeProvider: "claude",
+      }
     case "codex":
-      return "codex"
+      return {
+        localAgentRef: "codex:cli",
+        provider: "codex",
+        runtimeProvider: "codex",
+      }
     case "open_code":
-      return "opencode"
+      return {
+        localAgentRef: "opencode:cli",
+        provider: "opencode",
+        runtimeProvider: "opencode",
+      }
     case "gemini":
-      return "gemini"
+      return {
+        localAgentRef: "gemini:cli",
+        provider: "gemini",
+        runtimeProvider: "gemini",
+      }
     case "open_claw":
-      return "openclaw"
+      return {
+        localAgentRef: "openclaw:cli",
+        provider: "openclaw",
+        runtimeProvider: "openclaw",
+      }
     case "hermes":
-      return "hermes"
+      return {
+        localAgentRef: "hermes:cli",
+        provider: "hermes",
+        runtimeProvider: "hermes",
+      }
     case "kimi_code":
-      return "kimi"
+      return {
+        localAgentRef: "kimi:api",
+        provider: "kimi",
+        runtimeProvider: "kimi",
+      }
     case "pi":
-      return "pi"
+      return {
+        localAgentRef: "pi:cli",
+        provider: "pi",
+        runtimeProvider: "pi",
+      }
     case "cline":
     case "code_buddy":
       return null

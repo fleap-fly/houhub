@@ -80,6 +80,18 @@ export class HouflowControlClient {
   sse(path: string, options: Parameters<AgentHubNetworkClient["sse"]>[1] = {}) {
     return this.sdk.sse(path, options)
   }
+
+  streamConnectorCommandRealtime(
+    commandId: string,
+    params?: Parameters<
+      AgentHubNetworkClient["connectedAgents"]["streamConnectorCommandRealtime"]
+    >[1]
+  ) {
+    return this.sdk.connectedAgents.streamConnectorCommandRealtime(
+      commandId,
+      params
+    )
+  }
 }
 
 export async function loadHouflowControlSnapshot(
@@ -460,7 +472,7 @@ function connectedTargetFromDto(
     capabilities:
       kind === "hosted_connected"
         ? hostedConnectedCapabilities(value)
-        : externalConnectorCapabilities(binding?.capabilities ?? {}),
+        : externalConnectorCapabilities(binding?.capabilities ?? {}, value),
     source: "agent_hub",
     metadata: cleanStringRecord({
       ...stringRecord(value.metadata),
@@ -508,6 +520,9 @@ function hostedConnectedCapabilities(
     "dispatch",
     "workspace_message",
   ]
+  if (value.native_capabilities?.stream === true) {
+    capabilities.push("stream")
+  }
   if (value.runtime_binding?.native_console) {
     capabilities.push("native_console")
   }
@@ -515,11 +530,13 @@ function hostedConnectedCapabilities(
 }
 
 function externalConnectorCapabilities(
-  value: Record<string, unknown>
+  value: Record<string, unknown>,
+  agent?: ConnectedAgent
 ): HouflowAgentTargetCapability[] {
   const capabilities: HouflowAgentTargetCapability[] = []
   if (value.dispatch === true) capabilities.push("dispatch")
   if (value.workspace_message === true) capabilities.push("workspace_message")
+  if (agent?.native_capabilities?.stream === true) capabilities.push("stream")
   if (value.log_tail === true) capabilities.push("log_tail")
   if (value.artifact_upload === true) capabilities.push("artifact_upload")
   if (

@@ -35,6 +35,10 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
+import {
+  CloudTargetCapabilityBadges,
+  CloudTargetIcon,
+} from "@/components/houflow/cloud-target-status"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useHouflowDesktop } from "@/houflow"
 import { useHouflowCloudWorkspace } from "@/houflow/cloud-workspace-context"
@@ -44,8 +48,9 @@ import type {
   HouflowCloudHostedCommand,
   HouflowCloudSession,
 } from "@/houflow/cloud-sessions"
+import { isHouflowCloudWorkspaceTarget } from "@/houflow/agent-hub-conversation-target"
 import { cloudActivityTone } from "@/houflow/cloud-session-display"
-import type { HouflowAgentTarget } from "@/houflow/types"
+import type { HouflowAgentTarget, HouflowConnectorSummary } from "@/houflow/types"
 import { toErrorMessage } from "@/lib/app-error"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { cn } from "@/lib/utils"
@@ -63,11 +68,9 @@ export function CloudSessionsSidebarSection() {
   const [sectionExpanded, setSectionExpanded] = useState(true)
   const [managedExpanded, setManagedExpanded] = useState(true)
   const [hostedExpanded, setHostedExpanded] = useState(false)
-  const [externalExpanded, setExternalExpanded] = useState(false)
   const [projectExpanded, setProjectExpanded] = useState(false)
   const [showAllManaged, setShowAllManaged] = useState(false)
   const [showAllHosted, setShowAllHosted] = useState(false)
-  const [showAllExternal, setShowAllExternal] = useState(false)
   const [showAllProjectAgents, setShowAllProjectAgents] = useState(false)
   const [expandedTargets, setExpandedTargets] = useState<
     Record<string, boolean>
@@ -126,19 +129,13 @@ export function CloudSessionsSidebarSection() {
     () =>
       (houflow.snapshot?.targets ?? []).filter(
         (target) =>
-          (target.kind === "managed" ||
-            target.kind === "hosted_connected" ||
-            target.kind === "external_local") &&
-          target.status !== "archived"
+          isHouflowCloudWorkspaceTarget(target) && target.status !== "archived"
       ),
     [houflow.snapshot?.targets]
   )
   const managedTargets = targets.filter((target) => target.kind === "managed")
   const hostedTargets = targets.filter(
     (target) => target.kind === "hosted_connected"
-  )
-  const externalTargets = targets.filter(
-    (target) => target.kind === "external_local"
   )
   const sessionsByAgent = useMemo(() => {
     const map = new Map<string, HouflowCloudSession[]>()
@@ -258,6 +255,7 @@ export function CloudSessionsSidebarSection() {
           {signedIntoHouflow ? (
             <>
               <TargetGroup
+                connector={houflow.snapshot?.connector ?? null}
                 expanded={managedExpanded}
                 icon="managed"
                 label={t("targetManaged")}
@@ -307,6 +305,7 @@ export function CloudSessionsSidebarSection() {
                 onLoadHostedCommands={() => undefined}
               />
               <TargetGroup
+                connector={houflow.snapshot?.connector ?? null}
                 expanded={hostedExpanded}
                 icon="hosted"
                 label={t("targetHostedResident")}
@@ -353,76 +352,6 @@ export function CloudSessionsSidebarSection() {
                     const nextExpanded = !(current[targetKey] ?? false)
                     if (nextExpanded && !loadedHostedTargets[targetKey]) {
                       const target = hostedTargets.find(
-                        (item) => item.key === targetKey
-                      )
-                      if (target) {
-                        loadHostedCommands(target)
-                      }
-                    }
-                    return {
-                      ...current,
-                      [targetKey]: nextExpanded,
-                    }
-                  })
-                }
-                onSelectHostedCommand={(command) => {
-                  workbenchCloud.selectAssistant(null)
-                  workbenchCloud.selectSession(null)
-                  cloud.selectHostedCommand(command)
-                  setRoute("cloud")
-                }}
-                onLoadHostedCommands={(target) => {
-                  if (isCommandPending) return
-                  loadHostedCommands(target)
-                }}
-              />
-              <TargetGroup
-                expanded={externalExpanded}
-                icon="hosted"
-                label={t("targetExternalLocal")}
-                selectedTargetKey={cloud.selectedTargetKey}
-                sessionsByAgent={sessionsByAgent}
-                hostedCommandsByAgent={hostedCommandsByAgent(
-                  cloud.hostedCommands
-                )}
-                hostedCommandErrors={hostedCommandErrors}
-                showAll={showAllExternal}
-                targets={externalTargets}
-                expandedTargets={expandedTargets}
-                onChangeTarget={(targetKey) => {
-                  workbenchCloud.selectAssistant(null)
-                  workbenchCloud.selectSession(null)
-                  cloud.selectTarget(targetKey)
-                  setRoute("cloud")
-                }}
-                onSelectSession={(sessionId) => {
-                  workbenchCloud.selectAssistant(null)
-                  workbenchCloud.selectSession(null)
-                  cloud.selectSession(sessionId)
-                  setRoute("cloud")
-                }}
-                onNewSession={(targetKey) => {
-                  workbenchCloud.selectAssistant(null)
-                  workbenchCloud.selectSession(null)
-                  cloud.selectTarget(targetKey)
-                  setRoute("cloud")
-                }}
-                onArchiveSession={(sessionId) => {
-                  void cloud.archiveSession(sessionId).catch((err) => {
-                    toast.error(t("archiveFailed"), {
-                      description: toErrorMessage(err),
-                    })
-                  })
-                }}
-                onRequestDeleteSession={setSessionToDelete}
-                onRequestDeleteHostedCommand={setCommandsToDelete}
-                onShowAllChange={setShowAllExternal}
-                onToggle={() => setExternalExpanded((value) => !value)}
-                onToggleTarget={(targetKey) =>
-                  setExpandedTargets((current) => {
-                    const nextExpanded = !(current[targetKey] ?? false)
-                    if (nextExpanded && !loadedHostedTargets[targetKey]) {
-                      const target = externalTargets.find(
                         (item) => item.key === targetKey
                       )
                       if (target) {
@@ -596,6 +525,7 @@ export function CloudSessionsSidebarSection() {
 }
 
 function TargetGroup({
+  connector,
   expanded,
   icon,
   label,
@@ -618,6 +548,7 @@ function TargetGroup({
   onSelectHostedCommand,
   onLoadHostedCommands,
 }: {
+  connector: HouflowConnectorSummary | null
   expanded: boolean
   icon: "managed" | "hosted"
   label: string
@@ -719,13 +650,23 @@ function TargetGroup({
                     )}
                     onClick={() => onChangeTarget(target.key)}
                   >
-                    {connectorTarget ? (
-                      <ServerCog className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    )}
-                    <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-sidebar-foreground">
-                      {target.name}
+                    <CloudTargetIcon
+                      target={target}
+                      connector={connector}
+                      size="sm"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[0.8125rem] text-sidebar-foreground">
+                        {target.name}
+                      </span>
+                      <span className="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted-foreground">
+                        <span className="truncate">{target.provider}</span>
+                        <CloudTargetCapabilityBadges
+                          target={target}
+                          limit={2}
+                          compact
+                        />
+                      </span>
                     </span>
                   </button>
                   <Button

@@ -48,6 +48,7 @@ interface HouflowCloudWorkspaceContextValue {
   ) => Promise<HouflowCloudHostedCommand[]>
   selectTarget: (targetKey: string | null) => void
   selectSession: (sessionId: string | null) => void
+  rememberSession: (session: HouflowCloudSession) => void
   openSessionOutput: (sessionId: string, target: string) => void
   selectHostedCommand: (command: HouflowCloudHostedCommand | null) => void
   rememberHostedCommand: (command: HouflowCloudHostedCommand) => void
@@ -187,6 +188,10 @@ export function HouflowCloudWorkspaceProvider({
     setSelectedOutputRequest(null)
   }, [])
 
+  const rememberSession = useCallback((session: HouflowCloudSession) => {
+    setSessions((current) => mergeSessions(current, [session]))
+  }, [])
+
   const selectTarget = useCallback((targetKey: string | null) => {
     setSelectedTargetKey(targetKey)
     setSelectedSessionId(null)
@@ -320,6 +325,7 @@ export function HouflowCloudWorkspaceProvider({
       refreshHostedCommands,
       selectTarget,
       selectSession,
+      rememberSession,
       openSessionOutput,
       selectHostedCommand,
       rememberHostedCommand,
@@ -336,6 +342,7 @@ export function HouflowCloudWorkspaceProvider({
       refreshHostedCommand,
       refreshHostedCommands,
       refreshSessions,
+      rememberSession,
       rememberHostedCommand,
       selectTarget,
       selectHostedCommand,

@@ -345,11 +345,7 @@ export async function streamHouflowHostedAgentCommand(
 ): Promise<void> {
   assertHouflowSignedIn(session)
   const client = new HouflowControlClient(session, secret)
-  for await (const frame of client.sse(
-    `/v1/connected-agent-connector-commands/${encodeURIComponent(
-      commandId
-    )}/stream`
-  )) {
+  for await (const frame of client.streamConnectorCommandRealtime(commandId)) {
     const typed = frame as HouflowHostedCommandStreamFrame
     if (typed.event === "stream.error") {
       throw new Error(typed.data.message || "Hosted command stream failed")
@@ -474,6 +470,41 @@ export async function sendHouflowCloudSessionMessage(
   )
 }
 
+export async function createHouflowManagedCloudSession(
+  session: HouflowDesktopSession,
+  secret: HouflowAuthSecret | null,
+  target: HouflowAgentTarget,
+  input: HouflowCloudDispatchInput
+): Promise<HouflowCloudSession> {
+  assertHouflowSignedIn(session)
+  const draft = normalizeCloudDispatchInput(input)
+  const conversationTarget = conversationTargetFromHouflowTarget(target)
+  if (!conversationTarget || conversationTarget.kind !== "managed") {
+    throw new Error("Cloud target is not a managed Agent Hub target")
+  }
+
+  const client = new HouflowControlClient(session, secret)
+  const title = draft.message.trim().slice(0, 80) || target.name
+  const environmentId = target.metadata.default_environment_id?.trim()
+  const vaultIds = targetMetadataList(target.metadata.vault_ids)
+  const created = sessionFromDto(
+    await client.json<SessionDto>("/v1/sessions", {
+      method: "POST",
+      body: definedSessionBody({
+        agent: conversationTarget.targetId,
+        environment_id: environmentId || undefined,
+        workspace_id: session.workspaceId,
+        title,
+        vault_ids: vaultIds,
+      }),
+    })
+  )
+  if (!created) {
+    throw new Error("Cloud managed agent returned an invalid session")
+  }
+  return created
+}
+
 export async function streamHouflowCloudSessionMessage(
   session: HouflowDesktopSession,
   secret: HouflowAuthSecret | null,
@@ -559,8 +590,10 @@ export async function startHouflowCloudTargetSession(
     conversationTarget.kind === "hosted_connected" ||
     conversationTarget.kind === "external_local"
   ) {
+    const environmentId = target.metadata.environment_id?.trim()
     const dispatch = await dispatchAgentHubTarget(client, conversationTarget, {
       action: "workspace_message",
+      environmentId: environmentId || undefined,
       message: draft.message,
       content: draft.content,
       channelRef:
@@ -606,6 +639,12 @@ function targetMetadataList(value: string | undefined): string[] | undefined {
     .map((item) => item.trim())
     .filter(Boolean)
   return items && items.length > 0 ? Array.from(new Set(items)) : undefined
+}
+
+function definedSessionBody<T extends Record<string, unknown>>(body: T): T {
+  return Object.fromEntries(
+    Object.entries(body).filter(([, value]) => value !== undefined)
+  ) as T
 }
 
 export function isCloudSessionActive(

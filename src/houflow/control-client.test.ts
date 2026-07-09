@@ -161,6 +161,9 @@ describe("loadHouflowControlSnapshot", () => {
           name: "Codex 常驻",
           provider: "agent-hub",
           status: "active",
+          native_capabilities: {
+            stream: true,
+          },
           metadata: { nativeConsoleSupported: "true" },
           runtime_binding: {
             runtime_engine: "codex",
@@ -184,12 +187,75 @@ describe("loadHouflowControlSnapshot", () => {
         capabilities: expect.arrayContaining([
           "dispatch",
           "workspace_message",
+          "stream",
           "native_console",
         ]),
         metadata: expect.objectContaining({
           runtime_engine: "codex",
           environment_id: "env_resident",
           model: "gpt-5",
+        }),
+      }),
+    ])
+  })
+
+  it("maps external connector targets with streaming and artifact capabilities", async () => {
+    mocks.sessionTargets = [
+      {
+        kind: "external_connected_agent",
+        id: "cag_local_pi",
+        name: "Pi 本机",
+        provider: "agent-hub",
+        status: "active",
+        session_capable: true,
+        connected_agent: {
+          id: "cag_local_pi",
+          type: "connected_agent",
+          name: "Pi 本机",
+          provider: "pi",
+          status: "active",
+          native_capabilities: {
+            stream: true,
+          },
+          external_connector_binding: {
+            connector_id: "cac_desktop",
+            local_agent_ref: "pi:cli",
+            bound_at: "2026-07-09T00:00:00.000Z",
+            capabilities: {
+              lifecycle: true,
+              dispatch: true,
+              workspace_message: true,
+              runtime_install: false,
+              runtime_uninstall: false,
+              skill_install: false,
+              skill_uninstall: false,
+              log_tail: true,
+              artifact_upload: true,
+              runtime_provider_projection: true,
+            },
+          },
+        },
+      },
+    ]
+
+    const snapshot = await loadHouflowControlSnapshot(session(), secret(), {
+      gatewayCatalogMode: "skip",
+    })
+
+    expect(snapshot.targets).toEqual([
+      expect.objectContaining({
+        key: "external_local:cag_local_pi:pi:cli",
+        kind: "external_local",
+        capabilities: expect.arrayContaining([
+          "dispatch",
+          "workspace_message",
+          "stream",
+          "log_tail",
+          "artifact_upload",
+        ]),
+        metadata: expect.objectContaining({
+          connector_id: "cac_desktop",
+          local_agent_ref: "pi:cli",
         }),
       }),
     ])

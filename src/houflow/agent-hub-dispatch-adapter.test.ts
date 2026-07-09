@@ -157,6 +157,7 @@ describe("dispatchAgentHubTarget", () => {
       },
       {
         action: "workspace_message",
+        environmentId: "env_resident",
         message: "同步到频道",
         content: [{ type: "text", text: "同步到频道" }],
         channelRef: "workspace/main",
@@ -182,6 +183,7 @@ describe("dispatchAgentHubTarget", () => {
       action: "workspace_message",
       message: "同步到频道",
       content: [{ type: "text", text: "同步到频道" }],
+      environment_id: "env_resident",
       channel_ref: "workspace/main",
       attachments: [
         {
@@ -221,6 +223,7 @@ describe("dispatchAgentHubTarget", () => {
       },
       {
         action: "workspace_message",
+        environmentId: "env_external",
         message: "开始分析",
         channelRef: "houhub/desktop/ws_1",
         metadata: { source: "houhub" },
@@ -235,6 +238,7 @@ describe("dispatchAgentHubTarget", () => {
     expect(client.calls[0].options.body).toEqual({
       action: "workspace_message",
       message: "开始分析",
+      environment_id: "env_external",
       channel_ref: "houhub/desktop/ws_1",
       metadata: { source: "houhub" },
     })

@@ -12,6 +12,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { RemoteWorkspaceConnection } from "@/lib/types"
 import { isDesktop } from "@/lib/platform"
 import { useHouflowDesktop } from "@/houflow"
+import { isHouflowCloudWorkspaceTarget } from "@/houflow/agent-hub-conversation-target"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -32,7 +33,6 @@ const ZH_COPY = {
   houflowSwitchFailed: "切换 Houflow 工作区失败",
   houflowActive: "当前",
   houflowTargets: "云端目标",
-  houflowLocalExternal: "本机接入",
 } as const
 
 type RemoteWorkspaceCopy = Record<keyof typeof ZH_COPY, string>
@@ -46,7 +46,6 @@ const EN_COPY: RemoteWorkspaceCopy = {
   houflowSwitchFailed: "Failed to switch Houflow workspace",
   houflowActive: "Active",
   houflowTargets: "cloud targets",
-  houflowLocalExternal: "local external",
 }
 
 export function RemoteWorkspaceDropdown() {
@@ -82,17 +81,12 @@ export function RemoteWorkspaceDropdown() {
       (workspace) => workspace.id === houflow.session.workspaceId
     ) ??
     null
-  const houflowTargets = houflow.snapshot?.targets ?? []
-  const houflowExternalCount = houflowTargets.filter(
-    (target) => target.kind === "external_local"
-  ).length
+  const houflowTargets = (houflow.snapshot?.targets ?? []).filter(
+    isHouflowCloudWorkspaceTarget
+  )
   const activeHouflowSummary =
     houflowTargets.length > 0
-      ? `${houflowTargets.length} ${copy.houflowTargets}${
-          houflowExternalCount > 0
-            ? ` · ${houflowExternalCount} ${copy.houflowLocalExternal}`
-            : ""
-        }`
+      ? `${houflowTargets.length} ${copy.houflowTargets}`
       : activeHouflowWorkspace?.slug || activeHouflowWorkspace?.id || ""
   const houflowBusy =
     houflow.status === "loading" ||

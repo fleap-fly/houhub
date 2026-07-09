@@ -788,7 +788,7 @@ packages:
       hono: ^4
 
   '@houflow/agent-connector@file:vendor/houflow-agent-connector-0.1.5.tgz':
-    resolution: {integrity: sha512-06bkOhHgWAFh+bptYQAbE7UL0Ubux8C8cCSgFuK/ftLFXQdi4+KXxoaNGoWO9aGl+pTcH2gq2XTd9EetX9rWKQ==, tarball: file:vendor/houflow-agent-connector-0.1.5.tgz}
+    resolution: {integrity: sha512-7+YtCS1g/qD7ls4pwngyNzXlqkdQxylUYjuYKP2NRIuWaAm3ce40LWIG5HBk3lUjqcr29jwiUv9S5E4WETeHig==, tarball: file:vendor/houflow-agent-connector-0.1.5.tgz}
     version: 0.1.5
     engines: {node: '>=20'}
     hasBin: true
@@ -796,7 +796,7 @@ packages:
       - '@houshan/agent-hub-network-sdk'
 
   '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.6.tgz':
-    resolution: {integrity: sha512-9WexzaFrqjM5MD50mIWDL+9G4HObVfr7DCJ+3g3yE78Oi/Pbh5FKPC7mITXNPzu+8pkPpXFEr/Elqax9zBdDzA==, tarball: file:vendor/houshan-agent-hub-network-sdk-0.1.6.tgz}
+    resolution: {integrity: sha512-1ZNZZKkeMy4dfxdSDM7xFeIRDY3Bf+3ylkkgOzlEhDV9Hc3PpQQPQlj3h3YbR0swJ6cUEe7sbeYsBFpnlszTFg==, tarball: file:vendor/houshan-agent-hub-network-sdk-0.1.6.tgz}
     version: 0.1.6
     engines: {node: '>=20'}
 

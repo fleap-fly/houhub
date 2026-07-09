@@ -230,6 +230,7 @@ export async function dispatchHostedConnectedAgent(
 ): Promise<Extract<AgentHubDispatchResult, { kind: "hosted_connected" }>> {
   const action = input.action ?? "dispatch"
   const channelRef = textOrUndefined(input.channelRef)
+  const environmentId = textOrUndefined(input.environmentId)
   const message =
     textOrUndefined(input.message) ?? textFromContent(input.content)
   if (!message) {
@@ -251,6 +252,7 @@ export async function dispatchHostedConnectedAgent(
         action,
         message,
         content: nonEmptyArray(input.content),
+        environment_id: environmentId,
         channel_ref: channelRef,
         attachments: nonEmptyArray(input.attachments),
         metadata: nonEmptyMetadata(input.metadata),
@@ -277,6 +279,7 @@ export async function dispatchExternalLocalAgent(
 ): Promise<Extract<AgentHubDispatchResult, { kind: "external_local" }>> {
   const action = input.action ?? "dispatch"
   const channelRef = textOrUndefined(input.channelRef)
+  const environmentId = textOrUndefined(input.environmentId)
   const message =
     textOrUndefined(input.message) ?? textFromContent(input.content)
   if (!message) {
@@ -298,6 +301,7 @@ export async function dispatchExternalLocalAgent(
         action,
         message,
         content: nonEmptyArray(input.content),
+        environment_id: environmentId,
         channel_ref: channelRef,
         attachments: nonEmptyArray(input.attachments),
         metadata: nonEmptyMetadata(input.metadata),

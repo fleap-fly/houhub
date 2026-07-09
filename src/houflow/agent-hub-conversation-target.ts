@@ -93,3 +93,9 @@ export function isAgentHubDispatchableTarget(
     target.kind === "external_local"
   )
 }
+
+export function isHouflowCloudWorkspaceTarget(
+  target: HouflowAgentTarget
+): target is HouflowAgentTarget & { kind: "managed" | "hosted_connected" } {
+  return target.kind === "managed" || target.kind === "hosted_connected"
+}

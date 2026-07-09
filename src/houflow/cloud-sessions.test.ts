@@ -12,6 +12,7 @@ import {
   listHouflowCloudSessionEvents,
   listHouflowCloudSessionOutputs,
   listHouflowCloudSessions,
+  createHouflowManagedCloudSession,
   houflowHostedCommandOutputSessionId,
   sendHouflowCloudSessionMessage,
   startHouflowCloudTargetSession,
@@ -24,7 +25,9 @@ import type {
 
 const mocks = vi.hoisted(() => ({
   calls: [] as Array<{ path: string; options: RequestOptions }>,
+  realtimeCalls: [] as Array<{ commandId: string; params: unknown }>,
   responses: [] as unknown[],
+  streamFrames: [] as unknown[],
   dispatchAgentHubTarget: vi.fn(),
   dispatchManagedAgent: vi.fn(),
 }))
@@ -57,6 +60,13 @@ vi.mock("./control-client", () => ({
       }
       return mocks.responses.shift() as Uint8Array
     }
+
+    async *streamConnectorCommandRealtime(commandId: string, params?: unknown) {
+      mocks.realtimeCalls.push({ commandId, params })
+      while (mocks.streamFrames.length > 0) {
+        yield mocks.streamFrames.shift()
+      }
+    }
   },
 }))
 
@@ -73,7 +83,9 @@ vi.mock("./agent-hub-dispatch-adapter", async (importOriginal) => {
 describe("Houflow cloud sessions", () => {
   beforeEach(() => {
     mocks.calls.length = 0
+    mocks.realtimeCalls.length = 0
     mocks.responses.length = 0
+    mocks.streamFrames.length = 0
     mocks.dispatchAgentHubTarget.mockReset()
     mocks.dispatchManagedAgent.mockReset()
   })
@@ -550,6 +562,44 @@ describe("Houflow cloud sessions", () => {
     expect(mocks.calls).toEqual([])
   })
 
+  it("creates a managed cloud session before dispatching the first message", async () => {
+    mocks.responses.push({
+      id: "ses_created",
+      status: "idle",
+      title: "开始写卷",
+      environment_id: "env_default",
+      agent: { id: "agt_1", name: "云端助手" },
+      created_at: "2026-06-28T00:00:00.000Z",
+      updated_at: "2026-06-28T00:00:00.000Z",
+      archived_at: null,
+    })
+
+    const created = await createHouflowManagedCloudSession(
+      session(),
+      secret(),
+      managedTarget(),
+      "开始写卷"
+    )
+
+    expect(created).toMatchObject({
+      id: "ses_created",
+      title: "开始写卷",
+      environmentId: "env_default",
+      agentId: "agt_1",
+    })
+    expect(mocks.calls).toHaveLength(1)
+    expect(mocks.calls[0]).toMatchObject({
+      path: "/v1/sessions",
+      options: { method: "POST" },
+    })
+    expect(mocks.calls[0]?.options.body).toEqual({
+      agent: "agt_1",
+      environment_id: "env_default",
+      workspace_id: "ws_1",
+      title: "开始写卷",
+    })
+  })
+
   it("passes managed target vault ids when starting a cloud session", async () => {
     mocks.dispatchManagedAgent.mockResolvedValue({
       surface: "agent_hub",
@@ -673,7 +723,7 @@ describe("Houflow cloud sessions", () => {
         status: "active",
         capabilities: ["dispatch"],
         source: "agent_hub",
-        metadata: {},
+        metadata: { environment_id: "env_resident" },
       },
       "跑一次检查"
     )
@@ -693,10 +743,47 @@ describe("Houflow cloud sessions", () => {
       },
       {
         action: "workspace_message",
+        environmentId: "env_resident",
         message: "跑一次检查",
         channelRef: "houhub/desktop/ws_1/target/cag_1",
         metadata: { source: "houhub" },
       }
+    )
+  })
+
+  it("passes hosted resident runtime environment when dispatching", async () => {
+    mocks.dispatchAgentHubTarget.mockResolvedValue({
+      surface: "agent_hub",
+      kind: "hosted_connected",
+      targetKey: "hosted_connected:cag_1",
+      targetId: "cag_1",
+      status: "queued",
+      commandId: "cmd_1",
+      action: "workspace_message",
+      raw: { id: "cmd_1", status: "queued" },
+    })
+
+    await startHouflowCloudTargetSession(
+      session(),
+      secret(),
+      {
+        key: "hosted_connected:cag_1",
+        kind: "hosted_connected",
+        id: "cag_1",
+        name: "常驻助手",
+        provider: "agent-hub",
+        status: "active",
+        capabilities: ["workspace_message"],
+        source: "agent_hub",
+        metadata: { environment_id: "env_resident" },
+      },
+      "跑一次检查"
+    )
+
+    expect(mocks.dispatchAgentHubTarget).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({ environmentId: "env_resident" })
     )
   })
 

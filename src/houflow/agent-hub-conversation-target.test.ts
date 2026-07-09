@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   conversationTargetFromHouflowTarget,
   isAgentHubDispatchableTarget,
+  isHouflowCloudWorkspaceTarget,
 } from "./agent-hub-conversation-target"
 import type { HouflowAgentTarget } from "./types"
 
@@ -80,6 +81,30 @@ describe("conversationTargetFromHouflowTarget", () => {
         })
       )
     ).toBeNull()
+  })
+})
+
+describe("isHouflowCloudWorkspaceTarget", () => {
+  it("keeps local external connector agents out of the Hub Cloud surface", () => {
+    expect(
+      isHouflowCloudWorkspaceTarget(houflowTarget({ kind: "managed" }))
+    ).toBe(true)
+    expect(
+      isHouflowCloudWorkspaceTarget(
+        houflowTarget({ kind: "hosted_connected" })
+      )
+    ).toBe(true)
+    expect(
+      isHouflowCloudWorkspaceTarget(
+        houflowTarget({
+          kind: "external_local",
+          metadata: {
+            connector_id: "con_1",
+            local_agent_ref: "codex",
+          },
+        })
+      )
+    ).toBe(false)
   })
 })
 
