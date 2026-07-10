@@ -125,9 +125,13 @@ export async function loadHouflowControlSnapshot(
     loadWorkspaceQuota(client),
     gatewayCatalogMode === "skip"
       ? Promise.resolve(null)
-      : loadGatewayCatalog(client, { sync: gatewayCatalogMode === "sync" }),
-    listTargets(client),
-    loadConnectorSummary(client),
+      : loadOptional(
+          () =>
+            loadGatewayCatalog(client, { sync: gatewayCatalogMode === "sync" }),
+          null
+        ),
+    loadOptional(() => listTargets(client), []),
+    loadOptional(() => loadConnectorSummary(client), null),
   ])
   return {
     workspaces,
@@ -136,6 +140,17 @@ export async function loadHouflowControlSnapshot(
     targets,
     connector,
     syncedAt: new Date().toISOString(),
+  }
+}
+
+async function loadOptional<T>(
+  loader: () => Promise<T>,
+  fallback: T
+): Promise<T> {
+  try {
+    return await loader()
+  } catch {
+    return fallback
   }
 }
 

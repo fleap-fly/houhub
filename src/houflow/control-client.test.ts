@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
   calls: [] as Array<{ path: string; options: RequestOptions }>,
   sessionTargetListParams: [] as unknown[],
   syncModelsError: null as Error | null,
+  providersError: null as Error | null,
+  sessionTargetsError: null as Error | null,
+  connectorsError: null as Error | null,
   agents: [] as unknown[],
   sessionTargets: [] as unknown[],
 }))
@@ -17,6 +20,7 @@ vi.mock("@houshan/agent-hub-network-sdk", () => ({
     sessionTargets = {
       list: async (params: unknown) => {
         mocks.sessionTargetListParams.push(params)
+        if (mocks.sessionTargetsError) throw mocks.sessionTargetsError
         if (mocks.sessionTargets.length > 0) {
           return { data: mocks.sessionTargets }
         }
@@ -46,6 +50,9 @@ describe("loadHouflowControlSnapshot", () => {
     mocks.calls.length = 0
     mocks.sessionTargetListParams.length = 0
     mocks.syncModelsError = null
+    mocks.providersError = null
+    mocks.sessionTargetsError = null
+    mocks.connectorsError = null
     mocks.agents = []
     mocks.sessionTargets = []
   })
@@ -103,6 +110,23 @@ describe("loadHouflowControlSnapshot", () => {
     ])
     expect(paths()).toContain("/v1/providers/default/sync-models")
     expect(paths()).toContain("/v1/providers/default/models")
+  })
+
+  it("keeps account sync ready when optional cloud catalogs are unavailable", async () => {
+    mocks.providersError = new Error("resource not found")
+    mocks.sessionTargetsError = new Error("resource not found")
+    mocks.connectorsError = new Error("resource not found")
+
+    const snapshot = await loadHouflowControlSnapshot(session(), secret())
+
+    expect(snapshot.workspaces.map((workspace) => workspace.id)).toEqual([
+      "workspace_1",
+      "workspace_2",
+    ])
+    expect(snapshot.quota?.planTier).toBe("pro")
+    expect(snapshot.gateway).toBeNull()
+    expect(snapshot.targets).toEqual([])
+    expect(snapshot.connector).toBeNull()
   })
 
   it("maps managed agent vault ids into target metadata", async () => {
@@ -329,6 +353,7 @@ function responseFor(path: string, options: RequestOptions): unknown {
     }
   }
   if (path === "/v1/providers") {
+    if (mocks.providersError) throw mocks.providersError
     return { data: [providerDto()] }
   }
   if (path === "/v1/providers/default/sync-models") {
@@ -345,6 +370,7 @@ function responseFor(path: string, options: RequestOptions): unknown {
     }
   }
   if (path === "/v1/connected-agent-connectors") {
+    if (mocks.connectorsError) throw mocks.connectorsError
     return { data: [] }
   }
   throw new Error(`Unexpected test request: ${path}`)
