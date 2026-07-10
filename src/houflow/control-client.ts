@@ -38,17 +38,12 @@ interface ProviderModelsPage {
   has_more?: unknown
 }
 
-type HouflowManagedSessionTargetDto = Omit<AgentHubSessionTarget, "kind"> & {
+type HouflowManagedSessionTargetDto = AgentHubSessionTarget & {
   kind: "managed_agent"
-  agent?: Partial<AgentHubAgent> & Record<string, unknown>
-  provider?: unknown
-  default_environment_id?: unknown
-  environment_id?: unknown
 }
 
-type HouflowConnectedSessionTargetDto = Omit<AgentHubSessionTarget, "kind"> & {
+type HouflowConnectedSessionTargetDto = AgentHubSessionTarget & {
   kind: "hosted_connected_agent" | "external_connected_agent"
-  connected_agent?: ConnectedAgent
 }
 
 type HouflowSessionTargetDto =
@@ -332,8 +327,28 @@ async function listTargets(
     include_archived: false,
     limit: 100,
   })
-  return (page.data as HouflowSessionTargetDto[])
-    .map(sessionTargetFromDto)
+  const targets = page.data as HouflowSessionTargetDto[]
+  const [agentsPage, connectedAgentsPage] = await Promise.all([
+    targets.some((target) => target.kind === "managed_agent")
+      ? client.sdk.agents.list({ include_archived: false, limit: 100 })
+      : Promise.resolve(null),
+    targets.some((target) => target.kind !== "managed_agent")
+      ? client.sdk.connectedAgents.list({
+          include_archived: false,
+          limit: 100,
+        })
+      : Promise.resolve(null),
+  ])
+  const agentsById = new Map(
+    (agentsPage?.data ?? []).map((agent) => [agent.id, agent])
+  )
+  const connectedAgentsById = new Map(
+    (connectedAgentsPage?.data ?? []).map((agent) => [agent.id, agent])
+  )
+  return targets
+    .map((target) =>
+      sessionTargetFromDto(target, agentsById, connectedAgentsById)
+    )
     .filter((target): target is HouflowAgentTarget => Boolean(target))
     .sort((left, right) => {
       const kind = kindRank(left.kind) - kindRank(right.kind)
@@ -443,54 +458,91 @@ function providerFromDto(value: LLMProvider): HouflowGatewayProvider {
 }
 
 function sessionTargetFromDto(
-  value: HouflowSessionTargetDto
+  value: HouflowSessionTargetDto,
+  agentsById: Map<string, AgentHubAgent>,
+  connectedAgentsById: Map<string, ConnectedAgent>
 ): HouflowAgentTarget | null {
   if (value.kind === "managed_agent") {
-    return managedSessionTargetFromDto(value)
+    const agentId = stringValue(value.agent_id)
+    if (!agentId) {
+      throw new Error(
+        `Managed Agent Hub target ${value.id} is missing agent_id`
+      )
+    }
+    const agent = agentsById.get(agentId)
+    if (!agent) {
+      throw new Error(
+        `Managed Agent Hub target ${value.id} references missing agent ${agentId}`
+      )
+    }
+    return managedSessionTargetFromDto(value, agent)
   }
   if (value.kind === "hosted_connected_agent") {
-    if (!value.connected_agent) return null
-    return connectedTargetFromDto(value.connected_agent, "hosted_connected")
+    return connectedSessionTargetFromDto(
+      value,
+      connectedAgentsById,
+      "hosted_connected"
+    )
   }
   if (value.kind === "external_connected_agent") {
-    if (!value.connected_agent) return null
-    return connectedTargetFromDto(value.connected_agent, "external_local")
+    return connectedSessionTargetFromDto(
+      value,
+      connectedAgentsById,
+      "external_local"
+    )
   }
   return null
 }
 
 function managedSessionTargetFromDto(
-  value: HouflowManagedSessionTargetDto
+  value: HouflowManagedSessionTargetDto,
+  agent: AgentHubAgent
 ): HouflowAgentTarget | null {
-  const id = stringValue(value.id)
+  const id = stringValue(value.agent_id)
   if (!id) return null
-  const agent = objectValue(value.agent)
-  const model = objectValue(agent.model)
-  const targetFields = objectValue(value)
+  const agentDto = objectValue(agent)
+  const model = objectValue(agentDto.model)
   const agentMetadata = stringRecord(agent.metadata)
   const defaultEnvironmentId =
-    stringValue(targetFields.default_environment_id) ||
-    stringValue(targetFields.environment_id) ||
-    stringValue(agent.default_environment_id) ||
+    stringValue(agentDto.default_environment_id) ||
     stringValue(agentMetadata.default_environment_id) ||
     stringValue(agentMetadata.environment_id)
   return {
     key: `managed:${id}`,
     kind: "managed",
     id,
-    name: stringValue(value.name) || id,
-    provider:
-      stringValue(value.provider) || stringValue(model.id) || "agent-hub",
+    name: stringValue(value.name) || stringValue(agent.name) || id,
+    provider: stringValue(model.id) || "agent-hub",
     status: stringValue(value.status) || "active",
     capabilities: ["chat", "artifact_upload"],
     source: "agent_hub",
     metadata: cleanStringRecord({
-      management_mode: stringValue(agent.management_mode),
+      management_mode: stringValue(agentDto.management_mode),
       default_environment_id: defaultEnvironmentId,
-      vault_ids: stringListValue(agent.vault_ids),
+      vault_ids: stringListValue(agentDto.vault_ids),
       ...agentMetadata,
     }),
   }
+}
+
+function connectedSessionTargetFromDto(
+  value: HouflowConnectedSessionTargetDto,
+  connectedAgentsById: Map<string, ConnectedAgent>,
+  kind: "hosted_connected" | "external_local"
+): HouflowAgentTarget | null {
+  const connectedAgentId = stringValue(value.connected_agent_id)
+  if (!connectedAgentId) {
+    throw new Error(
+      `Connected Agent Hub target ${value.id} is missing connected_agent_id`
+    )
+  }
+  const connectedAgent = connectedAgentsById.get(connectedAgentId)
+  if (!connectedAgent) {
+    throw new Error(
+      `Connected Agent Hub target ${value.id} references missing connected agent ${connectedAgentId}`
+    )
+  }
+  return connectedTargetFromDto(connectedAgent, kind)
 }
 
 function connectedTargetFromDto(

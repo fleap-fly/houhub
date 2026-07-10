@@ -11,12 +11,21 @@ const mocks = vi.hoisted(() => ({
   sessionTargetsError: null as Error | null,
   connectorsError: null as Error | null,
   agents: [] as unknown[],
+  connectedAgents: [] as unknown[],
   sessionTargets: [] as unknown[],
 }))
 
 vi.mock("@houshan/agent-hub-network-sdk", () => ({
   normalizeBaseUrl: (value: string) => value.replace(/\/+$/, ""),
   AgentHubNetworkClient: class {
+    agents = {
+      list: async () => ({ data: mocks.agents }),
+    }
+
+    connectedAgents = {
+      list: async () => ({ data: mocks.connectedAgents }),
+    }
+
     sessionTargets = {
       list: async (params: unknown) => {
         mocks.sessionTargetListParams.push(params)
@@ -26,13 +35,19 @@ vi.mock("@houshan/agent-hub-network-sdk", () => ({
         }
         return {
           data: mocks.agents.map((agent) => ({
+            id: `agent:${(agent as { id: string }).id}`,
             kind: "managed_agent",
-            id: (agent as { id: string }).id,
+            agent_id: (agent as { id: string }).id,
+            connected_agent_id: null,
+            connector_id: null,
+            local_agent_ref: null,
             name: (agent as { name: string }).name,
-            provider: "gpt-5",
+            description: null,
             status: "active",
-            session_capable: true,
-            agent,
+            workspace_id: "workspace_1",
+            dispatch_mode: "session",
+            created_at: "2026-07-10T00:00:00.000Z",
+            updated_at: "2026-07-10T00:00:00.000Z",
           })),
         }
       },
@@ -54,6 +69,7 @@ describe("loadHouflowControlSnapshot", () => {
     mocks.sessionTargetsError = null
     mocks.connectorsError = null
     mocks.agents = []
+    mocks.connectedAgents = []
     mocks.sessionTargets = []
   })
 
@@ -158,22 +174,30 @@ describe("loadHouflowControlSnapshot", () => {
   })
 
   it("maps managed session target environment fields into target metadata", async () => {
+    mocks.agents = [
+      {
+        id: "agt_poetry",
+        name: "诗歌智能体",
+        model: { id: "gpt-5" },
+        default_environment_id: null,
+        metadata: { environment_id: "env_agent_metadata" },
+      },
+    ]
     mocks.sessionTargets = [
       {
         kind: "managed_agent",
-        id: "agt_poetry",
+        id: "agent:agt_poetry",
+        agent_id: "agt_poetry",
+        connected_agent_id: null,
+        connector_id: null,
+        local_agent_ref: null,
         name: "诗歌智能体",
-        provider: "gpt-5",
+        description: null,
         status: "active",
-        session_capable: true,
-        default_environment_id: "env_target_default",
-        agent: {
-          id: "agt_poetry",
-          name: "诗歌智能体",
-          model: { id: "gpt-5" },
-          default_environment_id: null,
-          metadata: { environment_id: "env_agent_metadata" },
-        },
+        workspace_id: "workspace_1",
+        dispatch_mode: "session",
+        created_at: "2026-07-10T00:00:00.000Z",
+        updated_at: "2026-07-10T00:00:00.000Z",
       },
     ]
 
@@ -186,7 +210,7 @@ describe("loadHouflowControlSnapshot", () => {
         id: "agt_poetry",
         kind: "managed",
         metadata: expect.objectContaining({
-          default_environment_id: "env_target_default",
+          default_environment_id: "env_agent_metadata",
           environment_id: "env_agent_metadata",
         }),
       }),
@@ -210,27 +234,36 @@ describe("loadHouflowControlSnapshot", () => {
     mocks.sessionTargets = [
       {
         kind: "hosted_connected_agent",
+        id: "connected:cag_resident_codex",
+        agent_id: null,
+        connected_agent_id: "cag_resident_codex",
+        connector_id: null,
+        local_agent_ref: "codex:resident",
+        name: "Codex 常驻",
+        description: null,
+        status: "active",
+        workspace_id: "workspace_1",
+        dispatch_mode: "hosted_dispatch",
+        created_at: "2026-07-10T00:00:00.000Z",
+        updated_at: "2026-07-10T00:00:00.000Z",
+      },
+    ]
+    mocks.connectedAgents = [
+      {
         id: "cag_resident_codex",
+        type: "connected_agent",
         name: "Codex 常驻",
         provider: "agent-hub",
         status: "active",
-        session_capable: true,
-        connected_agent: {
-          id: "cag_resident_codex",
-          type: "connected_agent",
-          name: "Codex 常驻",
-          provider: "agent-hub",
-          status: "active",
-          native_capabilities: {
-            stream: true,
-          },
-          metadata: { nativeConsoleSupported: "true" },
-          runtime_binding: {
-            runtime_engine: "codex",
-            environment_id: "env_resident",
-            model: "gpt-5",
-            native_console: true,
-          },
+        native_capabilities: {
+          stream: true,
+        },
+        metadata: { nativeConsoleSupported: "true" },
+        runtime_binding: {
+          runtime_engine: "codex",
+          environment_id: "env_resident",
+          model: "gpt-5",
+          native_console: true,
         },
       },
     ]
@@ -263,36 +296,45 @@ describe("loadHouflowControlSnapshot", () => {
     mocks.sessionTargets = [
       {
         kind: "external_connected_agent",
-        id: "cag_local_pi",
+        id: "connected:cag_local_pi",
+        agent_id: null,
+        connected_agent_id: "cag_local_pi",
+        connector_id: "cac_desktop",
+        local_agent_ref: "pi:cli",
         name: "Pi 本机",
-        provider: "agent-hub",
+        description: null,
         status: "active",
-        session_capable: true,
-        connected_agent: {
-          id: "cag_local_pi",
-          type: "connected_agent",
-          name: "Pi 本机",
-          provider: "pi",
-          status: "active",
-          native_capabilities: {
-            stream: true,
-          },
-          external_connector_binding: {
-            connector_id: "cac_desktop",
-            local_agent_ref: "pi:cli",
-            bound_at: "2026-07-09T00:00:00.000Z",
-            capabilities: {
-              lifecycle: true,
-              dispatch: true,
-              workspace_message: true,
-              runtime_install: false,
-              runtime_uninstall: false,
-              skill_install: false,
-              skill_uninstall: false,
-              log_tail: true,
-              artifact_upload: true,
-              runtime_provider_projection: true,
-            },
+        workspace_id: "workspace_1",
+        dispatch_mode: "external_command",
+        created_at: "2026-07-10T00:00:00.000Z",
+        updated_at: "2026-07-10T00:00:00.000Z",
+      },
+    ]
+    mocks.connectedAgents = [
+      {
+        id: "cag_local_pi",
+        type: "connected_agent",
+        name: "Pi 本机",
+        provider: "pi",
+        status: "active",
+        native_capabilities: {
+          stream: true,
+        },
+        external_connector_binding: {
+          connector_id: "cac_desktop",
+          local_agent_ref: "pi:cli",
+          bound_at: "2026-07-09T00:00:00.000Z",
+          capabilities: {
+            lifecycle: true,
+            dispatch: true,
+            workspace_message: true,
+            runtime_install: false,
+            runtime_uninstall: false,
+            skill_install: false,
+            skill_uninstall: false,
+            log_tail: true,
+            artifact_upload: true,
+            runtime_provider_projection: true,
           },
         },
       },
