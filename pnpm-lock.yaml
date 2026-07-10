@@ -796,12 +796,12 @@ packages:
       - '@houshan/agent-hub-network-sdk'
 
   '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.6.tgz':
-    resolution: {integrity: sha512-1ZNZZKkeMy4dfxdSDM7xFeIRDY3Bf+3ylkkgOzlEhDV9Hc3PpQQPQlj3h3YbR0swJ6cUEe7sbeYsBFpnlszTFg==, tarball: file:vendor/houshan-agent-hub-network-sdk-0.1.6.tgz}
+    resolution: {integrity: sha512-MjhcWT13B+W2EFV5TUI6wYh8QQ/jg5nzes7b1YNRpr2vxK4iNbcQUrxZUaF5DaukhJm2tBw5bTpsjA8OsoYHhA==, tarball: file:vendor/houshan-agent-hub-network-sdk-0.1.6.tgz}
     version: 0.1.6
     engines: {node: '>=20'}
 
   '@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.0.tgz':
-    resolution: {integrity: sha512-RMxxL/VR2uLBcoQgC4E1yo0riAsnOFHKnb3D5d7N8osa7FM/0pHgpa/QpAxtq+rQzWUHSzBXvVM0oEAG/i15lg==, tarball: file:vendor/houshan-agent-hub-sdk-0.1.0.tgz}
+    resolution: {integrity: sha512-N7/WNDPJCsc6R/pxui5epuz7tgaMMB/Ffv5lDN6z4Um0fBczZJAmRHXKtzMvOFt7INDY2XuEQCi9/Puda+eU4w==, tarball: file:vendor/houshan-agent-hub-sdk-0.1.0.tgz}
     version: 0.1.0
 
   '@humanfs/core@0.19.1':

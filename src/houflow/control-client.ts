@@ -1,6 +1,7 @@
 import type { JsonValue, LLMProvider } from "@houshan/agent-hub-sdk"
 import {
   AgentHubNetworkClient,
+  type AgentHubAgent,
   type ConnectedAgent,
   type ConnectedAgentConnector,
   type AgentHubSessionTarget,
@@ -36,6 +37,23 @@ interface ProviderModelsPage {
   total?: unknown
   has_more?: unknown
 }
+
+type HouflowManagedSessionTargetDto = Omit<AgentHubSessionTarget, "kind"> & {
+  kind: "managed_agent"
+  agent?: Partial<AgentHubAgent> & Record<string, unknown>
+  provider?: unknown
+  default_environment_id?: unknown
+  environment_id?: unknown
+}
+
+type HouflowConnectedSessionTargetDto = Omit<AgentHubSessionTarget, "kind"> & {
+  kind: "hosted_connected_agent" | "external_connected_agent"
+  connected_agent?: ConnectedAgent
+}
+
+type HouflowSessionTargetDto =
+  | HouflowManagedSessionTargetDto
+  | HouflowConnectedSessionTargetDto
 
 export class HouflowControlClient {
   readonly sdk: AgentHubNetworkClient
@@ -299,7 +317,7 @@ async function listTargets(
     include_archived: false,
     limit: 100,
   })
-  return page.data
+  return (page.data as HouflowSessionTargetDto[])
     .map(sessionTargetFromDto)
     .filter((target): target is HouflowAgentTarget => Boolean(target))
     .sort((left, right) => {
@@ -410,27 +428,37 @@ function providerFromDto(value: LLMProvider): HouflowGatewayProvider {
 }
 
 function sessionTargetFromDto(
-  value: AgentHubSessionTarget
+  value: HouflowSessionTargetDto
 ): HouflowAgentTarget | null {
   if (value.kind === "managed_agent") {
     return managedSessionTargetFromDto(value)
   }
   if (value.kind === "hosted_connected_agent") {
+    if (!value.connected_agent) return null
     return connectedTargetFromDto(value.connected_agent, "hosted_connected")
   }
   if (value.kind === "external_connected_agent") {
+    if (!value.connected_agent) return null
     return connectedTargetFromDto(value.connected_agent, "external_local")
   }
   return null
 }
 
 function managedSessionTargetFromDto(
-  value: Extract<AgentHubSessionTarget, { kind: "managed_agent" }>
+  value: HouflowManagedSessionTargetDto
 ): HouflowAgentTarget | null {
   const id = stringValue(value.id)
   if (!id) return null
-  const agent = value.agent
+  const agent = objectValue(value.agent)
   const model = objectValue(agent.model)
+  const targetFields = objectValue(value)
+  const agentMetadata = stringRecord(agent.metadata)
+  const defaultEnvironmentId =
+    stringValue(targetFields.default_environment_id) ||
+    stringValue(targetFields.environment_id) ||
+    stringValue(agent.default_environment_id) ||
+    stringValue(agentMetadata.default_environment_id) ||
+    stringValue(agentMetadata.environment_id)
   return {
     key: `managed:${id}`,
     kind: "managed",
@@ -442,10 +470,10 @@ function managedSessionTargetFromDto(
     capabilities: ["chat", "artifact_upload"],
     source: "agent_hub",
     metadata: cleanStringRecord({
-      management_mode: agent.management_mode,
-      default_environment_id: agent.default_environment_id ?? "",
-      vault_ids: stringListValue((agent as { vault_ids?: unknown }).vault_ids),
-      ...stringRecord(agent.metadata),
+      management_mode: stringValue(agent.management_mode),
+      default_environment_id: defaultEnvironmentId,
+      vault_ids: stringListValue(agent.vault_ids),
+      ...agentMetadata,
     }),
   }
 }
@@ -557,11 +585,13 @@ function kindRank(kind: HouflowAgentTarget["kind"]): number {
 }
 
 function cleanStringRecord(
-  record: Record<string, string>
+  record: Record<string, string | undefined>
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(record).filter(([, value]) => value.trim().length > 0)
-  )
+    Object.entries(record).filter(
+      ([, value]) => typeof value === "string" && value.trim().length > 0
+    )
+  ) as Record<string, string>
 }
 
 function stringRecord(value: unknown): Record<string, string> {

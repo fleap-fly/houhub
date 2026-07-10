@@ -35,10 +35,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
-import {
-  CloudTargetCapabilityBadges,
-  CloudTargetIcon,
-} from "@/components/houflow/cloud-target-status"
+import { CloudTargetIcon } from "@/components/houflow/cloud-target-status"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useHouflowDesktop } from "@/houflow"
 import { useHouflowCloudWorkspace } from "@/houflow/cloud-workspace-context"
@@ -655,18 +652,8 @@ function TargetGroup({
                       connector={connector}
                       size="sm"
                     />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[0.8125rem] text-sidebar-foreground">
-                        {target.name}
-                      </span>
-                      <span className="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted-foreground">
-                        <span className="truncate">{target.provider}</span>
-                        <CloudTargetCapabilityBadges
-                          target={target}
-                          limit={2}
-                          compact
-                        />
-                      </span>
+                    <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-sidebar-foreground">
+                      {target.name}
                     </span>
                   </button>
                   <Button

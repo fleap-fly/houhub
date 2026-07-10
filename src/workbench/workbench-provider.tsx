@@ -11,8 +11,9 @@ import {
   type ReactNode,
 } from "react"
 
-import { openUrl } from "@/lib/platform"
+import { isDesktop, openUrl } from "@/lib/platform"
 import { toErrorMessage } from "@/lib/app-error"
+import { getWebAuthToken } from "@/lib/transport/web-auth"
 import {
   beginWorkbenchDeviceAuth,
   getWorkbenchSession,
@@ -69,6 +70,14 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false
     const cached = loadWorkbenchSessionMetadata()
+    if (!isDesktop() && !getWebAuthToken()) {
+      clearWorkbenchSessionMetadata()
+      setSession(WORKBENCH_SIGNED_OUT_SESSION)
+      setStatus("signed_out")
+      return () => {
+        cancelled = true
+      }
+    }
     if (cached.status === "signed_in") {
       setSession(cached)
     }

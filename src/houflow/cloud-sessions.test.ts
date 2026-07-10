@@ -647,11 +647,47 @@ describe("Houflow cloud sessions", () => {
     )
   })
 
-  it("starts a managed cloud session through the server default environment", async () => {
+  it("rejects managed cloud session starts when the target has no default environment", async () => {
     const target = {
       ...managedTarget(),
       metadata: {},
     }
+
+    await expect(
+      startHouflowCloudTargetSession(
+        session(),
+        secret(),
+        target,
+        "开始"
+      )
+    ).rejects.toThrow(
+      "Cloud managed agent 云端助手 is missing default environment"
+    )
+
+    expect(mocks.dispatchManagedAgent).not.toHaveBeenCalled()
+  })
+
+  it("rejects managed cloud session creates when the target has no default environment", async () => {
+    const target = {
+      ...managedTarget(),
+      metadata: {},
+    }
+
+    await expect(
+      createHouflowManagedCloudSession(
+        session(),
+        secret(),
+        target,
+        "开始"
+      )
+    ).rejects.toThrow(
+      "Cloud managed agent 云端助手 is missing default environment"
+    )
+
+    expect(mocks.calls).toEqual([])
+  })
+
+  it("accepts managed target environment_id metadata as the launch environment", async () => {
     mocks.dispatchManagedAgent.mockResolvedValue({
       surface: "agent_hub",
       kind: "managed",
@@ -665,7 +701,7 @@ describe("Houflow cloud sessions", () => {
           id: "ses_new",
           status: "queued",
           title: "开始",
-          environment_id: "env_server_default",
+          environment_id: "env_metadata",
           agent: { id: "agt_1", name: "云端助手" },
           created_at: "2026-06-28T00:00:00.000Z",
           updated_at: "2026-06-28T00:00:00.000Z",
@@ -674,28 +710,20 @@ describe("Houflow cloud sessions", () => {
       },
     })
 
-    const result = await startHouflowCloudTargetSession(
+    await startHouflowCloudTargetSession(
       session(),
       secret(),
-      target,
+      {
+        ...managedTarget(),
+        metadata: { environment_id: "env_metadata" },
+      },
       "开始"
     )
 
-    expect(result).toMatchObject({
-      kind: "managed",
-      session: {
-        id: "ses_new",
-        environmentId: "env_server_default",
-      },
-    })
     expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
       expect.any(Object),
       expect.any(Object),
-      {
-        workspaceId: "ws_1",
-        message: "开始",
-        title: "开始",
-      }
+      expect.objectContaining({ environmentId: "env_metadata" })
     )
   })
 

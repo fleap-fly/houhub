@@ -558,7 +558,6 @@ export function CloudSessionPage() {
               }
             : dispatchDraft
         )
-        await cloud.refreshSessions()
         if (result.kind === "managed") {
           setStarterPendingEvent(null)
           cloud.selectSession(result.session.id)

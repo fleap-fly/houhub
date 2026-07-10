@@ -485,14 +485,14 @@ export async function createHouflowManagedCloudSession(
 
   const client = new HouflowControlClient(session, secret)
   const title = draft.message.trim().slice(0, 80) || target.name
-  const environmentId = target.metadata.default_environment_id?.trim()
+  const environmentId = managedTargetEnvironmentId(target)
   const vaultIds = targetMetadataList(target.metadata.vault_ids)
   const created = sessionFromDto(
     await client.json<SessionDto>("/v1/sessions", {
       method: "POST",
       body: definedSessionBody({
         agent: conversationTarget.targetId,
-        environment_id: environmentId || undefined,
+        environment_id: environmentId,
         workspace_id: session.workspaceId,
         title,
         vault_ids: vaultIds,
@@ -569,10 +569,10 @@ export async function startHouflowCloudTargetSession(
 
   if (conversationTarget.kind === "managed") {
     const title = draft.message.trim().slice(0, 80) || target.name
-    const environmentId = target.metadata.default_environment_id?.trim()
+    const environmentId = managedTargetEnvironmentId(target)
     const vaultIds = targetMetadataList(target.metadata.vault_ids)
     const dispatch = await dispatchManagedAgent(client, conversationTarget, {
-      environmentId: environmentId || undefined,
+      environmentId,
       vaultIds,
       workspaceId: session.workspaceId,
       message: draft.message,
@@ -611,6 +611,18 @@ export async function startHouflowCloudTargetSession(
   }
 
   throw new Error(`Cloud target is not supported yet: ${target.name}`)
+}
+
+function managedTargetEnvironmentId(target: HouflowAgentTarget): string {
+  const environmentId =
+    target.metadata.default_environment_id?.trim() ||
+    target.metadata.environment_id?.trim()
+  if (!environmentId) {
+    throw new Error(
+      `Cloud managed agent ${target.name} is missing default environment`
+    )
+  }
+  return environmentId
 }
 
 function normalizeCloudDispatchInput(

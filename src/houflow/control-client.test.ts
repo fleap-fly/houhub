@@ -133,6 +133,42 @@ describe("loadHouflowControlSnapshot", () => {
     ])
   })
 
+  it("maps managed session target environment fields into target metadata", async () => {
+    mocks.sessionTargets = [
+      {
+        kind: "managed_agent",
+        id: "agt_poetry",
+        name: "诗歌智能体",
+        provider: "gpt-5",
+        status: "active",
+        session_capable: true,
+        default_environment_id: "env_target_default",
+        agent: {
+          id: "agt_poetry",
+          name: "诗歌智能体",
+          model: { id: "gpt-5" },
+          default_environment_id: null,
+          metadata: { environment_id: "env_agent_metadata" },
+        },
+      },
+    ]
+
+    const snapshot = await loadHouflowControlSnapshot(session(), secret(), {
+      gatewayCatalogMode: "skip",
+    })
+
+    expect(snapshot.targets).toEqual([
+      expect.objectContaining({
+        id: "agt_poetry",
+        kind: "managed",
+        metadata: expect.objectContaining({
+          default_environment_id: "env_target_default",
+          environment_id: "env_agent_metadata",
+        }),
+      }),
+    ])
+  })
+
   it("loads targets through the unified Agent Hub session target catalog", async () => {
     await loadHouflowControlSnapshot(session(), secret(), {
       gatewayCatalogMode: "skip",
