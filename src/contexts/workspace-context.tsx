@@ -86,6 +86,7 @@ export interface FileWorkspaceTab {
   etag?: string | null
   mtimeMs?: number | null
   readonly?: boolean
+  resourceKind?: "readonly"
   lineEnding?: LineEnding
   saveState?: FileSaveState
   saveError?: string | null
@@ -120,6 +121,7 @@ interface WorkspaceActionsValue {
     path: string,
     options?: { line?: number; reload?: boolean; folderId?: number }
   ) => Promise<void>
+  openReadonlyFilePreview: (resource: ReadonlyFilePreviewResource) => void
   // Refetch the open tab matching the absolute `path` without changing
   // activeFileTabId. No-op when no tab matches or when the tab has unsaved
   // local edits (use markTabsStale for that case).
@@ -177,6 +179,16 @@ interface WorkspaceActionsValue {
   reloadActiveFile: () => Promise<void>
   toggleFileTabPreview: (tabId: string) => void
   toggleFilesMaximized: () => void
+}
+
+export interface ReadonlyFilePreviewResource {
+  id: string
+  title: string
+  description?: string | null
+  path: string
+  language: string
+  content: string
+  preview?: boolean
 }
 
 interface WorkspaceViewValue {
@@ -651,6 +663,40 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       activateFilePane()
     },
     [activateFilePane]
+  )
+
+  const openReadonlyFilePreview = useCallback(
+    (resource: ReadonlyFilePreviewResource) => {
+      const tabId = `readonly:${encodeURIComponent(resource.id)}`
+      replaceTabContent({
+        id: tabId,
+        kind: "file",
+        folderId: null,
+        title: resource.title,
+        description: resource.description ?? resource.path,
+        path: resource.path,
+        language: resource.language,
+        content: resource.content,
+        loading: false,
+        savedContent: resource.content,
+        isDirty: false,
+        etag: null,
+        mtimeMs: null,
+        readonly: true,
+        resourceKind: "readonly",
+        lineEnding: "none",
+        saveState: "idle",
+        saveError: null,
+        stale: false,
+      })
+      setPreviewFileTabIds((current) => {
+        const next = new Set(current)
+        if (resource.preview) next.add(tabId)
+        else next.delete(tabId)
+        return next
+      })
+    },
+    [replaceTabContent]
   )
 
   // Orchestrates the "I want to start (or restart) a load for this tab" flow.
@@ -1990,7 +2036,13 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       const tab = fileTabsRef.current.find(
         (candidate) => candidate.id === tabId
       )
-      if (!tab || tab.kind !== "file" || !tab.path) return
+      if (
+        !tab ||
+        tab.kind !== "file" ||
+        tab.resourceKind === "readonly" ||
+        !tab.path
+      )
+        return
       const tabPath = tab.path
       const io = splitAbsPath(tabPath)
       if (!io) return
@@ -2169,7 +2221,10 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     [fileTabs, activeFileTabId]
   )
 
-  const activeFilePath = activeFileTab?.path ?? null
+  const activeFilePath =
+    activeFileTab?.resourceKind === "readonly"
+      ? null
+      : (activeFileTab?.path ?? null)
 
   useEffect(() => {
     if (!activeFileTabId) return
@@ -2192,6 +2247,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       .filter(
         (tab) =>
           tab.kind === "file" &&
+          tab.resourceKind !== "readonly" &&
           tab.id !== activeFileTabId &&
           !tab.isDirty &&
           !tab.loading &&
@@ -2304,6 +2360,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       closeAllFileTabs,
       reorderFileTabs,
       openFilePreview,
+      openReadonlyFilePreview,
       reloadOpenFileBackground,
       applyExternalReload,
       markTabsStale,
@@ -2330,6 +2387,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       closeAllFileTabs,
       reorderFileTabs,
       openFilePreview,
+      openReadonlyFilePreview,
       reloadOpenFileBackground,
       applyExternalReload,
       markTabsStale,

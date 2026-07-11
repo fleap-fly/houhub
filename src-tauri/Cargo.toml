@@ -1,8 +1,8 @@
 [package]
 name = "houhub"
-version = "0.19.5"
+version = "0.20.0"
 description = "Agent Code Generation App"
-authors = ["feitao"]
+authors = ["fleap.fly"]
 edition = "2021"
 default-run = "houhub"
 

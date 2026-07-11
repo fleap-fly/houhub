@@ -207,7 +207,10 @@ export function FileWorkspaceTabBar() {
         <button
           type="button"
           onClick={() => {
-            // File tab paths are absolute — hand the path straight to the OS.
+            if (activeTab.resourceKind === "readonly") {
+              openReadonlyHtmlInBrowser(activeTab.content)
+              return
+            }
             openPath(activeTab.path as string).catch(() => {})
           }}
           className="shrink-0 flex items-center justify-center w-10 border-b border-border hover:bg-primary/8 transition-colors"
@@ -238,6 +241,16 @@ export function FileWorkspaceTabBar() {
       )}
     </div>
   )
+}
+
+function openReadonlyHtmlInBrowser(content: string) {
+  const url = URL.createObjectURL(new Blob([content], { type: "text/html" }))
+  const opened = window.open(url, "_blank", "noreferrer")
+  if (!opened) {
+    URL.revokeObjectURL(url)
+    return
+  }
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
 interface FileWorkspaceTabItemProps {

@@ -1,7 +1,7 @@
 "use client"
 
-import { useCallback, useState } from "react"
-import { FileText, Folder, FolderPen, GitCommit } from "lucide-react"
+import { useCallback, useEffect, useState } from "react"
+import { Folder, FolderPen, GitCommit } from "lucide-react"
 import { useTranslations } from "next-intl"
 import {
   useAuxPanelContext,
@@ -12,17 +12,15 @@ import { FileTreeTab } from "./aux-panel-file-tree-tab"
 import { CloudSessionOutputsPanel } from "../houflow/cloud-session-outputs-panel"
 import { GitChangesTab } from "./aux-panel-git-changes-tab"
 import { GitLogTab } from "./aux-panel-git-log-tab"
+import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 
-const LAZY_TABS: AuxPanelTab[] = [
-  "file_tree",
-  "cloud_outputs",
-  "changes",
-  "git_log",
-]
+const LAZY_TABS: AuxPanelTab[] = ["file_tree", "changes", "git_log"]
 
 export function AuxPanel() {
   const t = useTranslations("Folder.auxPanel.tabs")
   const { isOpen, activeTab, setActiveTab } = useAuxPanelContext()
+  const { routeId } = useWorkbenchRoute()
+  const isCloudRoute = routeId === "cloud"
   const [mountedTabs, setMountedTabs] = useState<Set<AuxPanelTab>>(
     () => new Set(LAZY_TABS.filter((tab) => tab === activeTab))
   )
@@ -38,6 +36,12 @@ export function AuxPanel() {
     },
     [setActiveTab]
   )
+
+  useEffect(() => {
+    if (isCloudRoute && activeTab !== "file_tree") {
+      setActiveTab("file_tree")
+    }
+  }, [activeTab, isCloudRoute, setActiveTab])
 
   if (!isOpen) return null
 
@@ -59,27 +63,24 @@ export function AuxPanel() {
           >
             <Folder className="h-3.5 w-3.5" />
           </TabsTrigger>
-          <TabsTrigger
-            value="cloud_outputs"
-            title={t("cloudFiles")}
-            aria-label={t("cloudFiles")}
-          >
-            <FileText className="h-3.5 w-3.5" />
-          </TabsTrigger>
-          <TabsTrigger
-            value="changes"
-            title={t("changes")}
-            aria-label={t("changes")}
-          >
-            <FolderPen className="h-3.5 w-3.5" />
-          </TabsTrigger>
-          <TabsTrigger
-            value="git_log"
-            title={t("commits")}
-            aria-label={t("commits")}
-          >
-            <GitCommit className="h-3.5 w-3.5" />
-          </TabsTrigger>
+          {!isCloudRoute ? (
+            <>
+              <TabsTrigger
+                value="changes"
+                title={t("changes")}
+                aria-label={t("changes")}
+              >
+                <FolderPen className="h-3.5 w-3.5" />
+              </TabsTrigger>
+              <TabsTrigger
+                value="git_log"
+                title={t("commits")}
+                aria-label={t("commits")}
+              >
+                <GitCommit className="h-3.5 w-3.5" />
+              </TabsTrigger>
+            </>
+          ) : null}
         </TabsList>
 
         <TabsContent
@@ -87,15 +88,12 @@ export function AuxPanel() {
           forceMount
           className="mt-0 flex-1 min-h-0 overflow-hidden"
         >
-          {mountedTabs.has("file_tree") ? <FileTreeTab /> : null}
-        </TabsContent>
-        <TabsContent
-          value="cloud_outputs"
-          forceMount
-          className="mt-0 flex-1 min-h-0 overflow-hidden"
-        >
-          {mountedTabs.has("cloud_outputs") ? (
-            <CloudSessionOutputsPanel />
+          {mountedTabs.has("file_tree") ? (
+            isCloudRoute ? (
+              <CloudSessionOutputsPanel />
+            ) : (
+              <FileTreeTab />
+            )
           ) : null}
         </TabsContent>
         <TabsContent

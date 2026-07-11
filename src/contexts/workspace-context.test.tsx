@@ -500,6 +500,73 @@ interface CapturedTab {
   saveState?: string
 }
 
+function ReadonlyFilePreviewProbe() {
+  const { openReadonlyFilePreview } = useWorkspaceActions()
+  const { activeFileTab, previewFileTabIds } = useWorkspaceFileTabs()
+
+  return (
+    <div>
+      <output data-testid="readonly-content">
+        {activeFileTab?.content ?? ""}
+      </output>
+      <output data-testid="readonly-resource-kind">
+        {activeFileTab?.resourceKind ?? "filesystem"}
+      </output>
+      <output data-testid="readonly-state">
+        {String(activeFileTab?.readonly ?? false)}
+      </output>
+      <output data-testid="readonly-preview-state">
+        {String(
+          activeFileTab ? previewFileTabIds.has(activeFileTab.id) : false
+        )}
+      </output>
+      <button
+        onClick={() =>
+          openReadonlyFilePreview({
+            id: "cloud:session-1:output-1",
+            title: "report.html",
+            description: "outputs/report.html",
+            path: "outputs/report.html",
+            language: "html",
+            content: "<h1>Cloud report</h1>",
+            preview: true,
+          })
+        }
+      >
+        open readonly
+      </button>
+    </div>
+  )
+}
+
+describe("openReadonlyFilePreview", () => {
+  it("opens prefetched cloud content in the shared read-only preview model", () => {
+    mockedApi.readFileForEdit.mockReset()
+
+    render(
+      <WorkspaceProvider>
+        <ReadonlyFilePreviewProbe />
+      </WorkspaceProvider>
+    )
+
+    act(() => {
+      screen.getByRole("button", { name: "open readonly" }).click()
+    })
+
+    expect(screen.getByTestId("readonly-content")).toHaveTextContent(
+      "Cloud report"
+    )
+    expect(screen.getByTestId("readonly-resource-kind")).toHaveTextContent(
+      "readonly"
+    )
+    expect(screen.getByTestId("readonly-state")).toHaveTextContent("true")
+    expect(screen.getByTestId("readonly-preview-state")).toHaveTextContent(
+      "true"
+    )
+    expect(mockedApi.readFileForEdit).not.toHaveBeenCalled()
+  })
+})
+
 function FilePreviewProbe({
   onCapture,
 }: {

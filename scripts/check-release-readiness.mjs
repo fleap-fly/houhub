@@ -137,6 +137,7 @@ function forbiddenNeedles() {
     join("co", "deg"),
     join("Co", "deG"),
     join("xin", "taofei"),
+    join("fei", "tao"),
     join("cursor", "agent"),
     join("release", "-bot"),
     join("github.com/", "xin", "taofei"),

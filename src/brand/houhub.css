@@ -1,0 +1,25 @@
+/*
+ * HouHub brand contract.
+ *
+ * Product components consume semantic application tokens from globals.css.
+ * Brand-specific visual decisions belong here and may remap those semantics
+ * without coupling upstream feature code to a logo, palette, or campaign.
+ * The initial contract is intentionally appearance-neutral while the visual
+ * identity is being redesigned.
+ */
+[data-brand="houhub"] {
+  --brand-canvas: var(--background);
+  --brand-surface: var(--card);
+  --brand-panel: var(--sidebar);
+  --brand-ink: var(--foreground);
+  --brand-muted-ink: var(--muted-foreground);
+  --brand-action: var(--primary);
+  --brand-action-ink: var(--primary-foreground);
+  --brand-divider: var(--border);
+  --brand-focus: var(--ring);
+
+  --brand-radius-control: min(var(--radius), 0.5rem);
+  --brand-radius-panel: min(var(--radius), 0.5rem);
+  --brand-motion-fast: 120ms;
+  --brand-motion-panel: 240ms;
+}

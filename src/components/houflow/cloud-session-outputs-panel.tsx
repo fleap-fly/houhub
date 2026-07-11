@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Download,
-  ExternalLink,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -11,9 +10,8 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import { MessageResponse } from "@/components/ai-elements/message"
 import { Button } from "@/components/ui/button"
-import { ImagePreviewDialog } from "@/components/ui/image-preview-dialog"
+import { useWorkspaceActions } from "@/contexts/workspace-context"
 import { useHouflowDesktop } from "@/houflow"
 import {
   isCloudImageOutput,
@@ -30,24 +28,23 @@ import {
   type HouflowCloudSessionOutput,
 } from "@/houflow/cloud-sessions"
 import { toErrorMessage } from "@/lib/app-error"
+import { languageFromPath } from "@/lib/language-detect"
 import { cn } from "@/lib/utils"
 
 export function CloudSessionOutputsPanel() {
   const t = useTranslations("HouflowCloud")
   const houflow = useHouflowDesktop()
   const cloud = useHouflowCloudWorkspace()
+  const { openReadonlyFilePreview } = useWorkspaceActions()
   const [outputs, setOutputs] = useState<HouflowCloudSessionOutput[]>([])
   const [loading, setLoading] = useState(false)
   const [outputsLoaded, setOutputsLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedOutputId, setSelectedOutputId] = useState<string | null>(null)
-  const [previewText, setPreviewText] = useState<string | null>(null)
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [imageDialogOpen, setImageDialogOpen] = useState(false)
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [openingOutputId, setOpeningOutputId] = useState<string | null>(null)
   const [selectionError, setSelectionError] = useState<string | null>(null)
   const requestRef = useRef(0)
+  const openedSelectionNonceRef = useRef<number | null>(null)
 
   const selectedSessionId =
     cloud.selectedSession?.id ??
@@ -86,7 +83,7 @@ export function CloudSessionOutputsPanel() {
         if (current && next.some((output) => output.id === current)) {
           return current
         }
-        return next[0]?.id ?? null
+        return null
       })
     } catch (err) {
       if (requestRef.current === requestId) setError(toErrorMessage(err))
@@ -98,104 +95,71 @@ export function CloudSessionOutputsPanel() {
     }
   }, [houflow.secret, houflow.session, selectedSessionId])
 
-  useEffect(() => {
-    ++requestRef.current
-    setOutputs([])
-    setError(null)
-    setLoading(false)
-    setOutputsLoaded(false)
-    setSelectedOutputId(null)
-    setPreviewText(null)
-    setPreviewError(null)
-    setSelectionError(null)
-    setPreviewLoading(false)
-    setImageDialogOpen(false)
-  }, [houflow.session.status, houflow.session.workspaceId, selectedSessionId])
-
-  useEffect(() => {
-    void refreshOutputs()
-  }, [refreshOutputs])
-
-  useEffect(() => {
-    if (
-      !selectedOutputRequest ||
-      selectedOutputRequest.sessionId !== selectedSessionId
-    ) {
-      return
-    }
-    const matchingOutput = outputs.find((output) =>
-      outputMatchesTarget(output, selectedOutputRequest.target)
-    )
-    if (matchingOutput) {
-      setSelectionError(null)
-      setSelectedOutputId(matchingOutput.id)
-      return
-    }
-    if (outputsLoaded) {
-      setSelectedOutputId(null)
-      setSelectionError(t("outputNotFound"))
-    }
-  }, [outputs, outputsLoaded, selectedOutputRequest, selectedSessionId, t])
-
-  useEffect(() => {
-    if (!previewUrl) return
-    return () => URL.revokeObjectURL(previewUrl)
-  }, [previewUrl])
-
-  useEffect(() => {
-    let cancelled = false
-    async function loadPreview() {
-      setPreviewText(null)
-      setPreviewError(null)
-      setPreviewUrl((current) => {
-        if (current) URL.revokeObjectURL(current)
-        return null
-      })
-      setImageDialogOpen(false)
-      if (
-        houflow.session.status !== "signed_in" ||
-        !selectedSessionId ||
-        !selectedOutput ||
-        !canPreviewOutput(selectedOutput)
-      ) {
-        setPreviewLoading(false)
-        return
-      }
-      setPreviewLoading(true)
+  const openOutput = useCallback(
+    async (output: HouflowCloudSessionOutput) => {
+      if (houflow.session.status !== "signed_in" || !selectedSessionId) return
+      setSelectedOutputId(output.id)
+      setOpeningOutputId(output.id)
       try {
-        if (isImageOutput(selectedOutput)) {
+        const displayPath = output.relativePath || output.filename
+        const image = isCloudImageOutput(output)
+        let content: string
+        let language: string
+
+        if (image) {
+          if (!canPreviewOutput(output)) {
+            throw new Error(t("previewUnavailable"))
+          }
           const bytes = await getHouflowCloudSessionOutputBytes(
             houflow.session,
             houflow.secret,
             selectedSessionId,
-            selectedOutput.filename
+            output.filename
           )
-          if (cancelled) return
-          const blob = new Blob([bytes], {
-            type: mediaTypeForCloudOutputBlob(selectedOutput),
-          })
-          setPreviewUrl(URL.createObjectURL(blob))
-          return
+          content = await blobToDataUrl(
+            new Blob([bytes], { type: mediaTypeForCloudOutputBlob(output) })
+          )
+          language = "image"
+        } else {
+          if (!canPreviewOutput(output)) {
+            throw new Error(t("previewUnavailable"))
+          }
+          content = await getHouflowCloudSessionOutputText(
+            houflow.session,
+            houflow.secret,
+            selectedSessionId,
+            output.filename
+          )
+          language = languageFromPath(displayPath)
         }
 
-        const text = await getHouflowCloudSessionOutputText(
-          houflow.session,
-          houflow.secret,
-          selectedSessionId,
-          selectedOutput.filename
-        )
-        if (!cancelled) setPreviewText(text)
+        openReadonlyFilePreview({
+          id: `houflow:${selectedSessionId}:${output.id}`,
+          title: displayPath.split(/[\\/]/).pop() || output.filename,
+          description: displayPath,
+          path: displayPath,
+          language,
+          content,
+          preview: language === "markdown" || language === "html",
+        })
       } catch (err) {
-        if (!cancelled) setPreviewError(toErrorMessage(err))
+        toast.error(t("previewUnavailable"), {
+          description: toErrorMessage(err),
+        })
       } finally {
-        if (!cancelled) setPreviewLoading(false)
+        setOpeningOutputId((current) =>
+          current === output.id ? null : current
+        )
       }
-    }
-    void loadPreview()
-    return () => {
-      cancelled = true
-    }
-  }, [houflow.secret, houflow.session, selectedOutput, selectedSessionId])
+    },
+    [
+      houflow.secret,
+      houflow.session,
+      openReadonlyFilePreview,
+      selectedSessionId,
+      t,
+    ]
+  )
 
   const downloadOutput = useCallback(
     async (output: HouflowCloudSessionOutput) => {
@@ -214,6 +178,53 @@ export function CloudSessionOutputsPanel() {
     },
     [houflow.secret, houflow.session, selectedSessionId, t]
   )
+
+  useEffect(() => {
+    ++requestRef.current
+    openedSelectionNonceRef.current = null
+    setOutputs([])
+    setError(null)
+    setLoading(false)
+    setOutputsLoaded(false)
+    setSelectedOutputId(null)
+    setOpeningOutputId(null)
+    setSelectionError(null)
+  }, [houflow.session.status, houflow.session.workspaceId, selectedSessionId])
+
+  useEffect(() => {
+    void refreshOutputs()
+  }, [refreshOutputs])
+
+  useEffect(() => {
+    if (
+      !selectedOutputRequest ||
+      selectedOutputRequest.sessionId !== selectedSessionId ||
+      openedSelectionNonceRef.current === selectedOutputRequest.nonce
+    ) {
+      return
+    }
+    const matchingOutput = outputs.find((output) =>
+      outputMatchesTarget(output, selectedOutputRequest.target)
+    )
+    if (matchingOutput) {
+      openedSelectionNonceRef.current = selectedOutputRequest.nonce
+      setSelectionError(null)
+      void openOutput(matchingOutput)
+      return
+    }
+    if (outputsLoaded) {
+      openedSelectionNonceRef.current = selectedOutputRequest.nonce
+      setSelectedOutputId(null)
+      setSelectionError(t("outputNotFound"))
+    }
+  }, [
+    openOutput,
+    outputs,
+    outputsLoaded,
+    selectedOutputRequest,
+    selectedSessionId,
+    t,
+  ])
 
   if (houflow.session.status !== "signed_in") {
     return <SidebarMessage>{t("signedOut")}</SidebarMessage>
@@ -264,104 +275,31 @@ export function CloudSessionOutputsPanel() {
         </div>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="max-h-56 shrink-0 overflow-y-auto border-b border-border p-2">
-          {outputs.length > 0 ? (
-            <div className="space-y-1">
-              {outputs.map((output) => (
-                <OutputRow
-                  key={output.id}
-                  output={output}
-                  active={output.id === selectedOutputId}
-                  onSelect={() => setSelectedOutputId(output.id)}
-                />
-              ))}
-            </div>
-          ) : loading ? (
-            <div className="px-2 py-3 text-xs text-muted-foreground">
-              {t("loadingOutputs")}
-            </div>
-          ) : (
-            <div className="px-2 py-3 text-xs text-muted-foreground">
-              {t("emptyOutputs")}
-            </div>
-          )}
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-auto">
-          {selectedOutput ? (
-            <div className="flex min-h-full flex-col">
-              <div className="flex items-center gap-1.5 border-b border-border px-3 py-2">
-                <span className="min-w-0 flex-1 truncate text-xs font-medium">
-                  {displayName(selectedOutput)}
-                </span>
-                {isHtmlOutput(selectedOutput) && previewText ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    title={t("openPreview")}
-                    aria-label={t("openPreview")}
-                    onClick={() => openHtmlPreview(selectedOutput, previewText)}
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </Button>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  title={t("downloadOutput")}
-                  aria-label={t("downloadOutput")}
-                  onClick={() => void downloadOutput(selectedOutput)}
-                >
-                  <Download className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-              {previewLoading ? (
-                <div className="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  {t("loadingPreview")}
-                </div>
-              ) : previewError ? (
-                <div className="px-3 py-3 text-xs text-destructive">
-                  {previewError}
-                </div>
-              ) : previewUrl && isImageOutput(selectedOutput) ? (
-                <button
-                  type="button"
-                  className="flex min-h-48 flex-1 items-center justify-center bg-muted/30 p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onClick={() => setImageDialogOpen(true)}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={previewUrl}
-                    alt={selectedOutput.filename}
-                    className="max-h-full max-w-full rounded-md object-contain"
-                  />
-                </button>
-              ) : canTextPreviewOutput(selectedOutput) && previewText ? (
-                <OutputPreview output={selectedOutput} text={previewText} />
-              ) : (
-                <div className="px-3 py-3 text-xs text-muted-foreground">
-                  {t("previewUnavailable")}
-                </div>
-              )}
-            </div>
-          ) : null}
-        </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        {outputs.length > 0 ? (
+          <div className="space-y-1">
+            {outputs.map((output) => (
+              <OutputRow
+                key={output.id}
+                output={output}
+                active={output.id === selectedOutput?.id}
+                opening={output.id === openingOutputId}
+                onOpen={() => void openOutput(output)}
+                onDownload={() => void downloadOutput(output)}
+                downloadLabel={t("downloadOutput")}
+              />
+            ))}
+          </div>
+        ) : loading ? (
+          <div className="px-2 py-3 text-xs text-muted-foreground">
+            {t("loadingOutputs")}
+          </div>
+        ) : (
+          <div className="px-2 py-3 text-xs text-muted-foreground">
+            {t("emptyOutputs")}
+          </div>
+        )}
       </div>
-
-      {previewUrl && selectedOutput ? (
-        <ImagePreviewDialog
-          src={previewUrl}
-          alt={selectedOutput.filename}
-          open={imageDialogOpen}
-          onOpenChange={setImageDialogOpen}
-          onDownload={() => void downloadOutput(selectedOutput)}
-          downloadLabel={t("downloadOutput")}
-        />
-      ) : null}
     </section>
   )
 }
@@ -377,100 +315,66 @@ function SidebarMessage({ children }: { children: React.ReactNode }) {
 function OutputRow({
   output,
   active,
-  onSelect,
+  opening,
+  onOpen,
+  onDownload,
+  downloadLabel,
 }: {
   output: HouflowCloudSessionOutput
   active: boolean
-  onSelect: () => void
+  opening: boolean
+  onOpen: () => void
+  onDownload: () => void
+  downloadLabel: string
 }) {
   return (
-    <button
-      type="button"
+    <div
       className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left outline-none",
-        "transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring",
+        "group flex items-center rounded-md transition-colors hover:bg-sidebar-accent",
         active && "bg-sidebar-primary/8"
       )}
-      onClick={onSelect}
     >
-      {isImageOutput(output) ? (
-        <ImageIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-      ) : (
-        <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-      )}
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-xs font-medium">
-          {displayName(output)}
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={onOpen}
+      >
+        {opening ? (
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+        ) : isCloudImageOutput(output) ? (
+          <ImageIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+        )}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-medium">
+            {displayName(output)}
+          </span>
+          <span className="block truncate text-[0.6875rem] text-muted-foreground">
+            {output.mediaType} · {formatBytes(output.sizeBytes)}
+          </span>
         </span>
-        <span className="block truncate text-[0.6875rem] text-muted-foreground">
-          {output.mediaType} · {formatBytes(output.sizeBytes)}
-        </span>
-      </span>
-    </button>
-  )
-}
-
-function OutputPreview({
-  output,
-  text,
-}: {
-  output: HouflowCloudSessionOutput
-  text: string
-}) {
-  if (isHtmlOutput(output)) {
-    return (
-      <iframe
-        title={output.filename}
-        srcDoc={text}
-        sandbox=""
-        className="h-full min-h-80 w-full flex-1 bg-white"
-      />
-    )
-  }
-
-  if (isMarkdownOutput(output)) {
-    return (
-      <div className="overflow-auto px-3 py-3 text-sm">
-        <MessageResponse>{text}</MessageResponse>
-      </div>
-    )
-  }
-
-  return (
-    <pre className="overflow-auto whitespace-pre-wrap px-3 py-3 font-mono text-xs leading-5">
-      {text}
-    </pre>
+      </button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        className="mr-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        onClick={onDownload}
+        title={downloadLabel}
+        aria-label={downloadLabel}
+      >
+        <Download className="h-3.5 w-3.5" />
+      </Button>
+    </div>
   )
 }
 
 export function canPreviewOutput(output: HouflowCloudSessionOutput): boolean {
-  if (isImageOutput(output)) {
+  if (isCloudImageOutput(output)) {
     return output.sizeBytes <= 25 * 1024 * 1024
   }
-  return canTextPreviewOutput(output)
-}
-
-function canTextPreviewOutput(output: HouflowCloudSessionOutput): boolean {
-  if (output.sizeBytes > 512 * 1024) return false
-  return isCloudTextOutput(output)
-}
-
-function isImageOutput(output: HouflowCloudSessionOutput): boolean {
-  return isCloudImageOutput(output)
-}
-
-function isMarkdownOutput(output: HouflowCloudSessionOutput): boolean {
-  const name = output.filename.toLowerCase()
-  return (
-    output.mediaType === "text/markdown" ||
-    name.endsWith(".md") ||
-    name.endsWith(".markdown")
-  )
-}
-
-function isHtmlOutput(output: HouflowCloudSessionOutput): boolean {
-  const name = output.filename.toLowerCase()
-  return output.mediaType === "text/html" || name.endsWith(".html")
+  return output.sizeBytes <= 512 * 1024 && isCloudTextOutput(output)
 }
 
 function displayName(output: HouflowCloudSessionOutput): string {
@@ -495,17 +399,13 @@ function downloadBytes(output: HouflowCloudSessionOutput, bytes: Uint8Array) {
   URL.revokeObjectURL(url)
 }
 
-function openHtmlPreview(output: HouflowCloudSessionOutput, text: string) {
-  const blob = new Blob([text], {
-    type: mediaTypeForCloudOutputBlob(output) || "text/html",
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error("read failed"))
+    reader.onload = () => resolve(String(reader.result ?? ""))
+    reader.readAsDataURL(blob)
   })
-  const url = URL.createObjectURL(blob)
-  const opened = window.open(url, "_blank", "noreferrer")
-  if (!opened) {
-    URL.revokeObjectURL(url)
-    return
-  }
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
 function formatBytes(value: number): string {

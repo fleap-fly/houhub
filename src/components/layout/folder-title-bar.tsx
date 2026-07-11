@@ -128,7 +128,7 @@ export function FolderTitleBar() {
 
   const handleToggleAuxPanel = useCallback(() => {
     if (isCloudRoute && !auxPanelOpen) {
-      openAuxPanelTab("cloud_outputs")
+      openAuxPanelTab("file_tree")
       return
     }
     toggleAuxPanel()

@@ -101,7 +101,7 @@ function useCloudSessionLinkSafety(sessionId: string | null): LinkSafetyConfig {
       const outputTarget = normalizeCloudOutputTarget(url)
       if (outputTarget && sessionId) {
         cloud.openSessionOutput(sessionId, url)
-        openTab("cloud_outputs")
+        openTab("file_tree")
         return
       }
       await openExternal(url)

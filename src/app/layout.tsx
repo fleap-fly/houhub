@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next"
 import "katex/dist/katex.min.css"
 import "./globals.css"
+import "@/brand/houhub.css"
 import { NextIntlClientProvider } from "next-intl"
 import { AppI18nProvider } from "@/components/i18n-provider"
 import { getMessagesForLocale } from "@/i18n/messages"
@@ -41,7 +42,7 @@ export default async function RootLayout({
   const initialMessages = await getMessagesForLocale(appLocale)
 
   return (
-    <html lang={initialLocale} suppressHydrationWarning>
+    <html lang={initialLocale} data-brand="houhub" suppressHydrationWarning>
       <body>
         {/* CSS-only dark background: applies before JS executes, preventing white flash in dark mode */}
         <style

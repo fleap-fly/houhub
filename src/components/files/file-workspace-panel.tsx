@@ -958,7 +958,9 @@ export function FileWorkspacePanel() {
   // one) is derived here ONLY to pick the preview root — reads never need
   // a folder.
   const activeAbsPath =
-    activeFileTab?.kind === "file" ? (activeFileTab.path ?? null) : null
+    activeFileTab?.kind === "file" && activeFileTab.resourceKind !== "readonly"
+      ? (activeFileTab.path ?? null)
+      : null
   const activeIo = useMemo(
     () => (activeAbsPath ? splitAbsPath(activeAbsPath) : null),
     [activeAbsPath]

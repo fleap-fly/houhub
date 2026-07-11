@@ -314,8 +314,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "Kimi Code",
             description: "Moonshot AI's official CLI coding assistant (ACP)",
             distribution: AgentDistribution::Npx {
-                version: "0.23.4",
-                package: "@moonshot-ai/kimi-code@0.23.4",
+                version: "0.23.5",
+                package: "@moonshot-ai/kimi-code@0.23.5",
                 cmd: "kimi",
                 args: &["acp"],
                 env: &[],
@@ -361,6 +361,13 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 version: "0.2.94",
                 package: "@xai-official/grok@0.2.94",
                 cmd: "grok",
+                // Only the ACP subcommand lives here. Grok's ROOT-level launch
+                // flags (`--no-auto-update` always, `--always-approve` only when
+                // the user picked that permission mode) MUST precede this
+                // subcommand — `grok agent stdio` itself rejects them (verified
+                // against 0.2.94: it only accepts --debug/--debug-file/
+                // --leader-socket) — so `build_agent` inserts them ahead of these
+                // args rather than appending after.
                 args: &["agent", "stdio"],
                 env: &[],
                 // `@xai-official/grok@0.2.94` declares `engines.node: ">=20"`;
@@ -495,8 +502,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::KimiCode,
-            "0.23.4",
-            "@moonshot-ai/kimi-code@0.23.4",
+            "0.23.5",
+            "@moonshot-ai/kimi-code@0.23.5",
             Some("22.19.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.31", "pi-acp@0.0.31", Some("22.0.0"));

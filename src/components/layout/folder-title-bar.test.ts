@@ -16,6 +16,8 @@ describe("FolderTitleBar route chrome", () => {
       "{showLocalWorkspaceChrome ? <CommandDropdown /> : null}"
     )
     expect(source).toContain('const isCloudRoute = routeId === "cloud"')
+    expect(source).toContain('openAuxPanelTab("file_tree")')
+    expect(source).not.toContain('openAuxPanelTab("cloud_outputs")')
     expect(source).toContain(
       "const auxPanelToggleDisabled =\n    !auxPanelOpen &&\n    !isCloudRoute &&\n    (!showLocalWorkspaceChrome || !activeFolder)"
     )
