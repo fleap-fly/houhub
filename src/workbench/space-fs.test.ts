@@ -40,10 +40,7 @@ function entry(name: string, type: "file" | "folder") {
   }
 }
 
-function listing(
-  folders: string[],
-  files: string[]
-): WorkbenchSpaceListing {
+function listing(folders: string[], files: string[]): WorkbenchSpaceListing {
   return {
     folders: folders.map((n) => entry(n, "folder")),
     files: files.map((n) => entry(n, "file")),
@@ -63,7 +60,10 @@ describe("isPsPath / psRootPath", () => {
 
 describe("parsePsPath", () => {
   it("parses the root and nested folder paths", () => {
-    expect(parsePsPath("ps://proj-1")).toEqual({ projectId: "proj-1", folderPath: "/" })
+    expect(parsePsPath("ps://proj-1")).toEqual({
+      projectId: "proj-1",
+      folderPath: "/",
+    })
     expect(parsePsPath("ps://proj-1/finance")).toEqual({
       projectId: "proj-1",
       folderPath: "/finance",
@@ -81,7 +81,9 @@ describe("psGetFileTree", () => {
   })
 
   it("lists the root with depth 1 (no recursion) and folder-then-file order", async () => {
-    listWorkbenchSpace.mockResolvedValueOnce(listing(["finance"], ["readme.md"]))
+    listWorkbenchSpace.mockResolvedValueOnce(
+      listing(["finance"], ["readme.md"])
+    )
 
     const tree = await psGetFileTree("ps://proj-1", 1)
 
@@ -124,7 +126,9 @@ describe("project-space file bytes", () => {
 
   it("reads a ps:// file through a presigned URL as base64", async () => {
     listWorkbenchSpace.mockResolvedValueOnce(listing([], ["exam.png"]))
-    getWorkbenchSpaceDownloadUrl.mockResolvedValueOnce("https://cdn.test/exam.png")
+    getWorkbenchSpaceDownloadUrl.mockResolvedValueOnce(
+      "https://cdn.test/exam.png"
+    )
     fetchMock.mockResolvedValueOnce(
       new Response(new Uint8Array([1, 2, 3]), { status: 200 })
     )
@@ -142,7 +146,9 @@ describe("project-space file bytes", () => {
 
   it("reads relative HTML resources from a project-space preview root", async () => {
     listWorkbenchSpace.mockResolvedValueOnce(listing([], ["cover.png"]))
-    getWorkbenchSpaceDownloadUrl.mockResolvedValueOnce("https://cdn.test/cover.png")
+    getWorkbenchSpaceDownloadUrl.mockResolvedValueOnce(
+      "https://cdn.test/cover.png"
+    )
     fetchMock.mockResolvedValueOnce(
       new Response(new Uint8Array([4, 5, 6]), { status: 200 })
     )

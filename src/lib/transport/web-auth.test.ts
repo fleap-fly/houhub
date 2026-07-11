@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import {
-  redirectToWebLogin,
-  WEB_AUTH_TOKEN_KEY,
-} from "./web-auth"
+import { redirectToWebLogin, WEB_AUTH_TOKEN_KEY } from "./web-auth"
 import { WebTransport } from "./web-transport"
 
 describe("redirectToWebLogin", () => {

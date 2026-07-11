@@ -65,7 +65,10 @@ export async function deleteWorkbenchSpaceFile(
   projectId: string,
   fileId: string
 ): Promise<void> {
-  await getTransport().call("workbench_space_delete_file", { projectId, fileId })
+  await getTransport().call("workbench_space_delete_file", {
+    projectId,
+    fileId,
+  })
 }
 
 async function presignWorkbenchSpaceUpload(

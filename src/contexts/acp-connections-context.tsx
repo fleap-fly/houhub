@@ -33,6 +33,10 @@ import {
 } from "@/lib/api"
 import { denormalizeSnapshot } from "@/lib/snapshot-denormalize"
 import { buildDelegationSeedEnvelopes } from "@/lib/delegation-seed"
+import {
+  getConversationIdByExternalIdFromStore,
+  useConversationRuntimeStore,
+} from "@/stores/conversation-runtime-store"
 import type {
   AgentType,
   AcpAgentStatus,
@@ -245,6 +249,12 @@ export interface ConnectionState {
   configStale: boolean
   /** Which settings surface drifted, for the banner's wording. `null` when not stale. */
   configStaleKind: ConfigStaleKind | null
+  /** Launched-but-unresolved background tasks mirrored from background_activity. */
+  backgroundOutstanding: number
+  /** Recent settlement bridge while background results are being folded in. */
+  backgroundSettleSyncingSince: number | null
+  /** Bounded registry for out-of-turn tool calls used by background permissions. */
+  outOfTurnToolCalls: ReadonlyMap<string, ToolCallInfo> | null
   /**
    * Client-local: the user dismissed (X) the stale banner for the CURRENT
    * drift. Hides the banner without touching the underlying `configStale`
@@ -299,6 +309,13 @@ type Action =
       type: "STATUS_CHANGED"
       contextKey: string
       status: ConnectionStatus
+    }
+  | {
+      type: "SET_BACKGROUND_OUTSTANDING"
+      contextKey: string
+      outstanding: number
+      settledCount: number
+      turnsCount: number
     }
   | StreamingAction
   | { type: "STREAM_BATCH"; actions: StreamingAction[] }
@@ -943,6 +960,10 @@ function applyStreamingAction(
   conn: ConnectionState,
   action: StreamingAction
 ): ConnectionState | null {
+  if (conn.status !== "prompting") {
+    return null
+  }
+
   // CONTENT_DELTA with empty text is a true no-op. THINKING with empty text
   // is allowed to create the initial placeholder block so the UI can show
   // a "Thinking..." indicator immediately (and for newer Claude models that
@@ -988,6 +1009,26 @@ function applyStreamingAction(
   }
 }
 
+const OUT_OF_TURN_TOOL_CALL_CAP = 8
+const OVERLAY_FOLD_THRESHOLD = 60
+const OVERLAY_FOLD_MIN_INTERVAL_MS = 30_000
+const overlayFoldRefetchAt = new Map<number, number>()
+
+function recordOutOfTurnToolCall(
+  existing: ReadonlyMap<string, ToolCallInfo> | null,
+  info: ToolCallInfo
+): ReadonlyMap<string, ToolCallInfo> {
+  const next = new Map(existing ?? [])
+  next.delete(info.tool_call_id)
+  next.set(info.tool_call_id, info)
+  while (next.size > OUT_OF_TURN_TOOL_CALL_CAP) {
+    const oldest = next.keys().next().value
+    if (oldest === undefined) break
+    next.delete(oldest)
+  }
+  return next
+}
+
 function connectionsReducer(
   state: ConnectionsMap,
   action: Action
@@ -1028,6 +1069,9 @@ function connectionsReducer(
         isViewer: action.isViewer ?? false,
         configStale: false,
         configStaleKind: null,
+        backgroundOutstanding: 0,
+        backgroundSettleSyncingSince: null,
+        outOfTurnToolCalls: null,
         configStaleDismissed: false,
       })
       return next
@@ -1081,6 +1125,9 @@ function connectionsReducer(
         isViewer: false,
         configStale: false,
         configStaleKind: null,
+        backgroundOutstanding: 0,
+        backgroundSettleSyncingSince: null,
+        outOfTurnToolCalls: null,
         configStaleDismissed: false,
       })
       return next
@@ -1183,6 +1230,7 @@ function connectionsReducer(
         // preserved via `...current`.
         configStale: action.patch.configStale,
         configStaleKind: action.patch.configStaleKind,
+        backgroundOutstanding: action.patch.backgroundOutstanding,
         lastAppliedSeq: action.patch.eventSeq,
       })
       return next
@@ -1236,6 +1284,7 @@ function connectionsReducer(
         updated.pendingQuestion = null
         updated.claudeApiRetry = null
         updated.error = null
+        updated.outOfTurnToolCalls = null
       } else if (conn.status === "prompting") {
         // Prompt cycle ended: clear in-flight Claude API retry banner.
         updated.claudeApiRetry = null
@@ -1245,6 +1294,30 @@ function connectionsReducer(
         updated.pendingAskQuestion = null
       }
       next.set(action.contextKey, updated)
+      return next
+    }
+
+    case "SET_BACKGROUND_OUTSTANDING": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const syncingSince =
+        action.settledCount > 0
+          ? Date.now()
+          : action.turnsCount > 0
+            ? null
+            : conn.backgroundSettleSyncingSince
+      if (
+        conn.backgroundOutstanding === action.outstanding &&
+        conn.backgroundSettleSyncingSince === syncingSince
+      ) {
+        return state
+      }
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        backgroundOutstanding: action.outstanding,
+        backgroundSettleSyncingSince: syncingSince,
+      })
       return next
     }
 
@@ -1300,6 +1373,27 @@ function connectionsReducer(
     case "TOOL_CALL": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
+      if (conn.status !== "prompting") {
+        const next = new Map(state)
+        next.set(action.contextKey, {
+          ...conn,
+          outOfTurnToolCalls: recordOutOfTurnToolCall(conn.outOfTurnToolCalls, {
+            tool_call_id: action.tool_call_id,
+            title: action.title,
+            kind: action.kind,
+            status: action.status,
+            content: action.content,
+            raw_input: action.raw_input,
+            raw_output_chunks:
+              action.raw_output !== null ? [action.raw_output] : [],
+            raw_output_total_bytes: action.raw_output?.length ?? 0,
+            locations: action.locations,
+            meta: action.meta,
+            images: action.images ?? [],
+          }),
+        })
+        return next
+      }
       const prev = ensureLiveMessage(conn.liveMessage)
       const existingIndex = prev.content.findIndex(
         (b) =>
@@ -1377,6 +1471,46 @@ function connectionsReducer(
     case "TOOL_CALL_UPDATE": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
+      if (conn.status !== "prompting") {
+        const existing = conn.outOfTurnToolCalls?.get(action.tool_call_id)
+        const merged: ToolCallInfo = existing
+          ? {
+              ...existing,
+              title: action.title ?? existing.title,
+              status: action.status ?? existing.status,
+              content: action.content ?? existing.content,
+              raw_input: action.raw_input ?? existing.raw_input,
+              locations: action.locations ?? existing.locations,
+              meta: action.meta ?? existing.meta,
+              images: action.images !== null ? action.images : existing.images,
+            }
+          : {
+              tool_call_id: action.tool_call_id,
+              title: action.title ?? action.fallback_title,
+              kind: action.fallback_kind,
+              status: action.status ?? "pending",
+              content: action.content,
+              raw_input: action.raw_input,
+              raw_output_chunks: [],
+              raw_output_total_bytes: 0,
+              locations: action.locations,
+              meta: action.meta,
+              images: action.images ?? [],
+            }
+        const next = new Map(state)
+        next.set(action.contextKey, {
+          ...conn,
+          outOfTurnToolCalls: recordOutOfTurnToolCall(
+            conn.outOfTurnToolCalls,
+            merged
+          ),
+          pendingPermission: mergePendingPermissionWithLiveInfo(
+            conn.pendingPermission,
+            merged
+          ),
+        })
+        return next
+      }
       const prev = ensureLiveMessage(conn.liveMessage)
       const existingIndex = prev.content.findIndex(
         (b) =>
@@ -1502,9 +1636,13 @@ function connectionsReducer(
       if (!conn) return state
       let updatedLiveMessage = conn.liveMessage
       const permissionCallId = extractPermissionToolCallId(action.tool_call)
-      const existingInfo = updatedLiveMessage
-        ? findLiveToolCallInfo(updatedLiveMessage.content, permissionCallId)
-        : null
+      const existingInfo =
+        (updatedLiveMessage
+          ? findLiveToolCallInfo(updatedLiveMessage.content, permissionCallId)
+          : null) ??
+        (permissionCallId
+          ? (conn.outOfTurnToolCalls?.get(permissionCallId) ?? null)
+          : null)
       const permissionToolCall = mergePermissionToolCallWithLiveInfo(
         action.tool_call,
         existingInfo
@@ -1972,6 +2110,21 @@ export function useConnectionStore(): ConnectionStoreApi {
 
 // ── Actions context (unchanged interface) ──
 
+/**
+ * Sink that mirrors a connection's `liveMessage` into the conversation-runtime
+ * store OUTSIDE React. Registered per `contextKey` by the conversation panel and
+ * invoked synchronously from `dispatch` whenever that connection's `liveMessage`
+ * reference changes (streaming deltas, tool updates, the prompt-start reset).
+ * Moving this write out of a React effect lets the keep-alive panel stop
+ * re-rendering on every streaming token — only the runtime-store subscriber (the
+ * message list) re-renders. `isLive` is `status === "prompting"`, which the
+ * runtime reducer uses to bypass its stale-reconnect-replay guard.
+ */
+export type LiveMessageSink = (
+  liveMessage: LiveMessage,
+  isLive: boolean
+) => void
+
 export interface AcpActionsValue {
   connect(
     contextKey: string,
@@ -2011,6 +2164,12 @@ export interface AcpActionsValue {
   setActiveKey(key: string | null): void
   touchActivity(contextKey: string): void
   registerOpenTabKeys(keys: Set<string>): void
+  /**
+   * Register a sink that mirrors this contextKey's `liveMessage` into the
+   * conversation-runtime store from `dispatch` (outside React), replacing the
+   * panel's per-token mirror effect. Returns an unregister fn.
+   */
+  registerLiveMessageSink(contextKey: string, sink: LiveMessageSink): () => void
   /**
    * Clear `loadError` set by a `session/load` failure so the next auto-connect
    * attempt isn't gated by stale failure state. Wired to the Reload button in
@@ -2260,6 +2419,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     [t]
   )
 
+  // Per-contextKey liveMessage sinks. Fired synchronously from `dispatch` when a
+  // connection's liveMessage reference changes.
+  const liveMessageSinksRef = useRef(new Map<string, LiveMessageSink>())
+
   // Activity tracking (no re-renders)
   const lastActivityRef = useRef(new Map<string, number>())
   const streamingQueueRef = useRef<StreamingAction[]>([])
@@ -2302,24 +2465,39 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
 
       storeRef.current.connections = next
 
+      const mirrorLiveMessage = (key: string) => {
+        const sink = liveMessageSinksRef.current.get(key)
+        if (!sink) return
+        const nextConn = next.get(key)
+        if (!nextConn || nextConn.liveMessage == null) return
+        if (nextConn.liveMessage === prev.get(key)?.liveMessage) return
+        sink(nextConn.liveMessage, nextConn.status === "prompting")
+      }
+
       if (action.type === "REMOVE_ALL") {
         notifyAllKeyListeners()
       } else if (action.type === "STREAM_BATCH") {
         const keys = new Set(action.actions.map((item) => item.contextKey))
         for (const key of keys) {
+          mirrorLiveMessage(key)
           notifyKeyListeners(key)
         }
       } else if (action.type === "BATCH_TOOL_CALL_UPDATES") {
         const keys = new Set(action.actions.map((item) => item.contextKey))
         for (const key of keys) {
+          mirrorLiveMessage(key)
           notifyKeyListeners(key)
         }
       } else if (action.type === "REKEY_CONNECTION") {
+        mirrorLiveMessage(action.toKey)
         notifyKeyListeners(action.fromKey)
         notifyKeyListeners(action.toKey)
       } else {
         const key = getAffectedKey(action)
-        if (key) notifyKeyListeners(key)
+        if (key) {
+          mirrorLiveMessage(key)
+          notifyKeyListeners(key)
+        }
       }
     },
     [notifyKeyListeners, notifyAllKeyListeners]
@@ -2375,6 +2553,22 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   const registerOpenTabKeys = useCallback((keys: Set<string>) => {
     openTabKeysRef.current = keys
   }, [])
+
+  const registerLiveMessageSink = useCallback(
+    (contextKey: string, sink: LiveMessageSink) => {
+      liveMessageSinksRef.current.set(contextKey, sink)
+      const conn = storeRef.current.connections.get(contextKey)
+      if (conn?.liveMessage != null) {
+        sink(conn.liveMessage, conn.status === "prompting")
+      }
+      return () => {
+        if (liveMessageSinksRef.current.get(contextKey) === sink) {
+          liveMessageSinksRef.current.delete(contextKey)
+        }
+      }
+    },
+    []
+  )
 
   const clearAcpLoadError = useCallback(
     (contextKey: string) => {
@@ -2869,6 +3063,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 return t("backendErrors.turnFailedEmpty", {
                   agent: agentLabel,
                 })
+              case "grok_model_switch_incompatible_agent":
+                return t("backendErrors.grokModelSwitchIncompatibleAgent", {
+                  agent: agentLabel,
+                })
               default:
                 return e.message
             }
@@ -2934,6 +3132,74 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             },
           })
           break
+        case "background_activity": {
+          dispatch({
+            type: "SET_BACKGROUND_OUTSTANDING",
+            contextKey,
+            outstanding: e.outstanding,
+            settledCount: e.settled?.length ?? 0,
+            turnsCount: e.turns?.length ?? 0,
+          })
+
+          if (e.turns && e.turns.length > 0) {
+            const conversationId = getConversationIdByExternalIdFromStore(
+              e.session_id
+            )
+            if (conversationId != null) {
+              const runtime = useConversationRuntimeStore.getState()
+              runtime.actions.applyBackgroundActivity(
+                conversationId,
+                e.turns,
+                e.watermark
+              )
+              const session = useConversationRuntimeStore
+                .getState()
+                .byConversationId.get(conversationId)
+              const now = Date.now()
+              const lastAt = overlayFoldRefetchAt.get(conversationId) ?? 0
+              if (
+                session &&
+                session.backgroundTurns.length > OVERLAY_FOLD_THRESHOLD &&
+                !session.detailLoading &&
+                now - lastAt > OVERLAY_FOLD_MIN_INTERVAL_MS
+              ) {
+                overlayFoldRefetchAt.set(conversationId, now)
+                const activeConn = storeRef.current.connections.get(contextKey)
+                runtime.actions.refetchDetail(conversationId, {
+                  preserveLive: activeConn?.status === "prompting",
+                })
+              }
+            }
+          }
+
+          if (e.settled && e.settled.length > 0) {
+            const nc = storeRef.current.connections.get(contextKey)
+            const agentLabel = nc ? AGENT_LABELS[nc.agentType] : "Agent"
+            const fn = folderNameRef.current
+            const title = fn ? `${fn} - houhub` : "houhub"
+            for (const settled of e.settled) {
+              const body =
+                settled.summary ??
+                tChat("backgroundTasks.settledFallback", {
+                  status: settled.status,
+                })
+              sendSystemNotification(title, `${agentLabel}: ${body}`).catch(
+                () => {}
+              )
+            }
+            const conversationId = getConversationIdByExternalIdFromStore(
+              e.session_id
+            )
+            if (conversationId != null) {
+              useConversationRuntimeStore
+                .getState()
+                .actions.refetchDetail(conversationId, {
+                  preserveLive: nc?.status === "prompting",
+                })
+            }
+          }
+          break
+        }
       }
     },
     [
@@ -3266,6 +3532,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // would kill another client's agent. The viewer is torn down when its
         // tab unmounts (disconnect's isViewer branch detaches it).
         if (conn.isViewer) continue
+        if (conn.backgroundOutstanding > 0) continue
         const lastActive = lastActivityRef.current.get(contextKey) ?? 0
         if (now - lastActive > CONNECTION_IDLE_TIMEOUT_MS) {
           toDisconnect.push({
@@ -4105,6 +4372,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       setActiveKey,
       touchActivity,
       registerOpenTabKeys,
+      registerLiveMessageSink,
       clearAcpLoadError,
       attachDelegationChild,
       detachDelegationChild,
@@ -4124,6 +4392,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       setActiveKey,
       touchActivity,
       registerOpenTabKeys,
+      registerLiveMessageSink,
       clearAcpLoadError,
       attachDelegationChild,
       detachDelegationChild,

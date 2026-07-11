@@ -947,7 +947,10 @@ function HostedCommandPage({
   const [turnAdapter] = useState<MessageTurnAdapter>(() =>
     createMessageTurnAdapter()
   )
-  const threadCommands = commands.length > 0 ? commands : [command]
+  const threadCommands = useMemo(
+    () => (commands.length > 0 ? commands : [command]),
+    [command, commands]
+  )
   const latestCommand = threadCommands[threadCommands.length - 1] ?? command
   const outputSessionId = houflowHostedCommandOutputSessionId(latestCommand)
   const commandLinkSafety = useCloudSessionLinkSafety(outputSessionId)

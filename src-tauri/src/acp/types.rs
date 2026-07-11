@@ -215,6 +215,23 @@ pub enum AcpEvent {
     AvailableCommands { commands: Vec<AvailableCommandInfo> },
     /// Session usage/context window updated during conversation
     UsageUpdate { used: u64, size: u64 },
+    /// Out-of-turn activity surfaced from the agent's own session transcript
+    /// by the background watcher. Covers async sub-agent/background-shell
+    /// completions and autonomous turns that do not have a reliable ACP wire
+    /// settlement event.
+    BackgroundActivity {
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        turns: Vec<crate::models::message::MessageTurn>,
+        /// Launched-but-unresolved background tasks accounted from transcript
+        /// acks. Mirrored into `SessionState` to keep the connection alive while
+        /// that work is still running.
+        outstanding: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        settled: Vec<BackgroundSettledInfo>,
+        /// Transcript byte offset parsed through at emission.
+        watermark: u64,
+    },
     /// A `delegate_to_agent` MCP tool call from the parent agent has spawned a
     /// child sub-session and the child's prompt is in flight. Emitted as soon
     /// as the broker registers the pending call. The frontend uses this to
@@ -306,6 +323,16 @@ pub enum AcpEvent {
         stale: bool,
         kind: ConfigStaleKind,
     },
+}
+
+/// One transcript-accounted background task settlement carried on
+/// [`AcpEvent::BackgroundActivity`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundSettledInfo {
+    pub task_id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// Which settings surface drifted, so the frontend can word the
@@ -509,7 +536,43 @@ pub struct AcpAgentInfo {
     /// Raw `~/.hermes/config.yaml` text, attached for the Hermes settings panel's
     /// advanced editor. Only populated for `AgentType::Hermes`.
     pub hermes_config_yaml: Option<String>,
+    /// Raw `~/.grok/config.toml` text, attached for the Grok settings panel's
+    /// config-file editor. Only populated for `AgentType::Grok`.
+    pub grok_config_toml: Option<String>,
+    /// Parsed scalar settings from `~/.grok/config.toml` that back the Grok
+    /// settings panel's structured controls (permission mode / reasoning
+    /// effort). Only populated for `AgentType::Grok`. `None` fields mean the key
+    /// is absent from the config. Derived from `grok_config_toml`.
+    pub grok_settings: Option<GrokSettings>,
     pub model_provider_id: Option<i32>,
+}
+
+/// The subset of `~/.grok/config.toml` scalar keys surfaced as structured
+/// controls in the Grok settings panel. Each field mirrors one documented key
+/// (see docs.x.ai/build/settings/reference); `None` means the key is absent.
+///
+/// The default *model* is deliberately NOT surfaced here: it is chosen per
+/// session from the composer, and a persistent `[models].default` is overridden
+/// at launch by the `GROK_DEFAULT_MODEL` env var, so a settings control could
+/// silently have no effect.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GrokSettings {
+    /// `[models].default_reasoning_effort` — one of low/medium/high/xhigh.
+    pub default_reasoning_effort: Option<String>,
+    /// `[ui].permission_mode` — one of ask/always-approve.
+    pub permission_mode: Option<String>,
+}
+
+/// The structured-control values the Grok settings panel sends on save. Each
+/// `Some(value)` sets the corresponding key; each `None` removes it. Merged
+/// (format-preserving, via `toml_edit`) onto the current on-disk config.toml so
+/// unmanaged keys/comments are preserved. camelCase on the wire to match the
+/// enclosing request body (`AcpUpdateAgentConfigParams`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrokStructuredConfig {
+    pub default_reasoning_effort: Option<String>,
+    pub permission_mode: Option<String>,
 }
 
 /// Lightweight status info for a single agent, used by connect() pre-check.

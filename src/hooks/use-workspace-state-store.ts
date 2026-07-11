@@ -84,7 +84,10 @@ function normalizeComparePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "")
 }
 
-function toWorkspaceErrorMessage(error: unknown, isProjectSpace = false): string {
+function toWorkspaceErrorMessage(
+  error: unknown,
+  isProjectSpace = false
+): string {
   const message = formatAppErrorMessage(error)
   if (!isProjectSpace) return message
 

@@ -3,6 +3,7 @@ pub mod cline;
 pub mod codebuddy;
 pub mod codex;
 pub mod gemini;
+pub mod grok;
 pub mod hermes;
 pub mod kimi_code;
 pub mod openclaw;
@@ -115,6 +116,12 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             root: kimi_code::resolve_kimi_code_home_dir(),
             is_file: false,
             include_top: Some(&["sessions", "session_index.jsonl"]),
+        },
+        ExternalSource {
+            agent: "grok",
+            root: grok::resolve_grok_home_dir().join("sessions"),
+            is_file: false,
+            include_top: None,
         },
         ExternalSource {
             agent: "pi",

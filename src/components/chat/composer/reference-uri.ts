@@ -11,7 +11,7 @@ const AGENT_URI = /^houhub:\/\/agent\/(.+)$/i
 const SESSION_URI = /^houhub:\/\/session\/(.+)$/i
 const COMMIT_URI = /^houhub:\/\/commit\/.*@(.+)$/i
 // command / skill / expert tokens, surfaced as badges in transcript user messages
-// (rehype-command-badges.ts). The label carries the literal `/`·`$` prefix.
+// (message/user-message-segments.ts). The label carries the literal `/`·`$` prefix.
 const SKILL_URI = /^houhub:\/\/skill\/(.+)$/i
 
 // A path-less attached file (local-desktop paste/drop of inline bytes — an

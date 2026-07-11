@@ -499,6 +499,9 @@ impl ConnectionManager {
                 if state.pending_permission.is_some() {
                     continue;
                 }
+                if state.has_active_background_work(now) {
+                    continue;
+                }
                 let elapsed = now.signed_duration_since(state.last_activity_at);
                 if elapsed >= timeout {
                     victims.push(id.clone());

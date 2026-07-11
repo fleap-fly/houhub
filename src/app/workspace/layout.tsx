@@ -932,12 +932,12 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                   <ConversationRuntimeProvider>
                     <WorkspaceProvider>
                       <TabProvider>
-                      <WorkspaceDocumentTitle />
-                      <TabKeysSync />
-                      <HeavyPluginsWarmup />
-                      <DeepLinkBootstrap />
-                      <PetFocusBridge />
-                      {/* Always mounted: external-change conflicts must be
+                        <WorkspaceDocumentTitle />
+                        <TabKeysSync />
+                        <HeavyPluginsWarmup />
+                        <DeepLinkBootstrap />
+                        <PetFocusBridge />
+                        {/* Always mounted: external-change conflicts must be
                             resolvable even with the aux file tree closed. */}
                         <ExternalConflictDialog />
                         <SessionStatsProvider>

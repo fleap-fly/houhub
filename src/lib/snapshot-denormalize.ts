@@ -61,6 +61,8 @@ export interface SnapshotPatch {
    *  that the one-shot `session_config_stale` event won't replay. */
   configStale: boolean
   configStaleKind: ConfigStaleKind | null
+  /** Launched-but-unresolved background tasks carried by the snapshot. */
+  backgroundOutstanding: number
   eventSeq: number
   /** Live sub-agent delegations carried by the snapshot. Consumed directly at
    *  the attach call sites to re-seed `DelegationProvider` bindings (see
@@ -117,6 +119,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     supportsFork: wire.fork_supported,
     configStale: wire.config_stale ?? false,
     configStaleKind: wire.config_stale_kind ?? null,
+    backgroundOutstanding: wire.background_outstanding ?? 0,
     eventSeq: wire.event_seq,
     activeDelegations: wire.active_delegations ?? [],
   }

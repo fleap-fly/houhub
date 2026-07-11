@@ -122,7 +122,11 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
         expiresInSeconds: start.expiresInSeconds,
         signal: options.signal ?? abort.signal,
       })
-      if (result.status !== "approved" || !result.user || !result.activeProjectId) {
+      if (
+        result.status !== "approved" ||
+        !result.user ||
+        !result.activeProjectId
+      ) {
         throw new Error(signInFailureMessage(result.status))
       }
       const next: WorkbenchSession = {

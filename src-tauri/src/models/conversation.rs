@@ -77,6 +77,10 @@ pub struct ConversationDetail {
     pub turns: Vec<MessageTurn>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_stats: Option<SessionStats>,
+    /// Byte length of the source transcript this parse consumed. The frontend
+    /// uses it to retire background-overlay turns once persisted detail catches up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_watermark: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,6 +89,9 @@ pub struct DbConversationDetail {
     pub turns: Vec<MessageTurn>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_stats: Option<SessionStats>,
+    /// See [`ConversationDetail::transcript_watermark`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript_watermark: Option<u64>,
     /// Id of the persisted user turn the live-correlation pass identified as the
     /// in-flight prompt (only present while a turn is running on this
     /// conversation's connection; `None` otherwise). The frontend uses it to

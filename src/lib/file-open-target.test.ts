@@ -229,7 +229,9 @@ describe("findOwningFolder", () => {
       rootPath: "ps://project-1",
       relPath: "outputs/exam.png",
     })
-    expect(findOwningFolder("ps://project-2/outputs/exam.png", psFolders)).toBeNull()
+    expect(
+      findOwningFolder("ps://project-2/outputs/exam.png", psFolders)
+    ).toBeNull()
   })
 })
 

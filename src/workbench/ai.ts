@@ -72,9 +72,10 @@ export async function listWorkbenchAssistants(
     projectId,
   })
   const record = asRecord(raw) ?? {}
-  const list = arrayValue(record.agents).length > 0
-    ? arrayValue(record.agents)
-    : arrayValue(record.items)
+  const list =
+    arrayValue(record.agents).length > 0
+      ? arrayValue(record.agents)
+      : arrayValue(record.items)
   return {
     items: list.map(normalizeAssistant).filter(isPresent),
     defaultAssistantId: stringValue(record.defaultAssistantId) || null,
@@ -146,7 +147,9 @@ export async function getWorkbenchAiSession(
   const id = stringValue(record.session_id) || sessionId
   return {
     sessionId: id,
-    messages: arrayValue(record.messages).map(normalizeMessage).filter(isPresent),
+    messages: arrayValue(record.messages)
+      .map(normalizeMessage)
+      .filter(isPresent),
   }
 }
 
@@ -200,7 +203,9 @@ function parseNdjsonText(value: string): string {
       continue
     }
     if (status === "error") {
-      throw new Error(stringValue(parsed.error_message) || "Workbench assistant failed")
+      throw new Error(
+        stringValue(parsed.error_message) || "Workbench assistant failed"
+      )
     }
     const text = rawStringValue(parsed.text) || rawStringValue(parsed.message)
     if (text) merged = mergeResponseChunk(merged, text)
@@ -253,7 +258,8 @@ function normalizeMessage(value: unknown): WorkbenchAiMessage | null {
   if (!content) return null
   const role = stringValue(record.message_type) || stringValue(record.role)
   return {
-    id: stringValue(record.id) || stringValue(record.message_sequence) || content,
+    id:
+      stringValue(record.id) || stringValue(record.message_sequence) || content,
     role:
       role === "user" || role === "assistant" || role === "system"
         ? role
@@ -274,7 +280,8 @@ function normalizeHistoryMessage(value: unknown): WorkbenchAiMessage | null {
   if (type !== "human" && type !== "ai" && type !== "system") return null
   return {
     id: stringValue(record.id) || content,
-    role: type === "human" ? "user" : type === "system" ? "system" : "assistant",
+    role:
+      type === "human" ? "user" : type === "system" ? "system" : "assistant",
     content,
     blocks: blocks.length > 0 ? blocks : [{ type: "text", text: content }],
     timestamp: stringValue(record.created_at) || null,

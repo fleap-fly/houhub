@@ -80,7 +80,10 @@ export function CloudTargetCapabilityBadges({
   limit: number
   compact?: boolean
 }) {
-  const labels = cloudTargetCapabilityLabels(target.capabilities).slice(0, limit)
+  const labels = cloudTargetCapabilityLabels(target.capabilities).slice(
+    0,
+    limit
+  )
   if (labels.length === 0) return null
   return (
     <span className="flex min-w-0 shrink-0 items-center gap-1">

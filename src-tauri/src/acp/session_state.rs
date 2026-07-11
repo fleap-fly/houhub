@@ -210,6 +210,10 @@ pub struct SessionState {
     pub connection_id: String,
     pub conversation_id: Option<i32>,
     pub external_id: Option<String>,
+    /// Wall-clock instant `external_id` last changed. The transcript watcher
+    /// uses this as its re-arm epoch so fork/load records appended before the
+    /// next poll still belong to the current session.
+    pub external_id_changed_at: Option<std::time::SystemTime>,
     pub agent_type: AgentType,
     pub working_dir: Option<PathBuf>,
     pub owner_window_label: String,
@@ -250,6 +254,13 @@ pub struct SessionState {
     /// pending notes the one-shot `FeedbackSubmitted` event won't replay for it.
     /// Size is human-bounded (one entry per note the user types this turn).
     pub feedback: Vec<FeedbackItem>,
+
+    /// Launched-but-unresolved background tasks mirrored from
+    /// `AcpEvent::BackgroundActivity`. Non-zero keeps the ACP connection alive
+    /// while background work is still owned by the agent process.
+    pub background_outstanding: u32,
+    /// Last watcher heartbeat that updated `background_outstanding`.
+    pub background_activity_at: Option<DateTime<Utc>>,
 
     // ACP 协商出的能力
     pub modes: Option<SessionModeStateInfo>,
@@ -382,6 +393,7 @@ impl SessionState {
             connection_id,
             conversation_id: None,
             external_id: None,
+            external_id_changed_at: None,
             agent_type,
             working_dir,
             owner_window_label,
@@ -393,6 +405,8 @@ impl SessionState {
             pending_question: None,
             active_delegations: BTreeMap::new(),
             feedback: Vec::new(),
+            background_outstanding: 0,
+            background_activity_at: None,
             modes: None,
             current_mode: None,
             config_options: None,
@@ -461,6 +475,9 @@ impl SessionState {
     pub fn apply_event(&mut self, payload: &AcpEvent) {
         match payload {
             AcpEvent::SessionStarted { session_id } => {
+                if self.external_id.as_deref() != Some(session_id.as_str()) {
+                    self.external_id_changed_at = Some(std::time::SystemTime::now());
+                }
                 self.external_id = Some(session_id.clone());
                 self.status = ConnectionStatus::Connected;
                 // Fire the dedup waiter (if any). Take()-and-send is
@@ -816,6 +833,10 @@ impl SessionState {
                     }
                 }
             }
+            AcpEvent::BackgroundActivity { outstanding, .. } => {
+                self.background_outstanding = *outstanding;
+                self.background_activity_at = Some(Utc::now());
+            }
             AcpEvent::ClaudeSdkMessage { .. }
             | AcpEvent::SessionLoadFailed { .. }
             | AcpEvent::UserPromptSent { .. } => {
@@ -824,6 +845,18 @@ impl SessionState {
             }
         }
         self.last_activity_at = Utc::now();
+    }
+
+    /// Whether background work is still active enough that idle sweeps must not
+    /// disconnect this ACP process.
+    pub fn has_active_background_work(&self, now: DateTime<Utc>) -> bool {
+        if self.background_outstanding == 0 {
+            return false;
+        }
+        match self.background_activity_at {
+            Some(at) => now.signed_duration_since(at) < background_keepalive_max_age(),
+            None => false,
+        }
     }
 
     /// A single-line "what the sub-agent is doing right now" hint, used by the
@@ -1075,6 +1108,7 @@ impl SessionState {
             pending_user_message: self.pending_user_message.clone(),
             active_delegations: self.active_delegations.values().cloned().collect(),
             feedback: self.feedback.clone(),
+            background_outstanding: self.background_outstanding,
             feedback_tool_available: self.feedback_tool_available,
             modes: self.modes.clone(),
             current_mode: self.current_mode.clone(),
@@ -1089,6 +1123,20 @@ impl SessionState {
             event_seq: self.event_seq,
         }
     }
+}
+
+/// Max age after the last background watcher heartbeat before the idle-sweep
+/// exemption lapses. `0` disables the exemption.
+pub(crate) fn background_keepalive_max_age() -> chrono::Duration {
+    static SECS: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    let secs = *SECS.get_or_init(|| {
+        std::env::var("HOUHUB_ACP_BACKGROUND_KEEPALIVE_MAX_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .filter(|v| *v >= 0)
+            .unwrap_or(3600)
+    });
+    chrono::Duration::seconds(secs)
 }
 
 /// `to_snapshot()` 的输出——前端可消费的 wire shape。
@@ -1127,6 +1175,9 @@ pub struct LiveSessionSnapshot {
     /// wire so every snapshot stays byte-identical with the pre-feature shape.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub feedback: Vec<FeedbackItem>,
+    /// Launched-but-unresolved background tasks accounted from the transcript.
+    #[serde(default, skip_serializing_if = "u32_is_zero")]
+    pub background_outstanding: u32,
     /// Whether this agent has the `check_user_feedback` tool (see
     /// `SessionState.feedback_tool_available`). `#[serde(default)]` so older
     /// payloads deserialize to `false`; the frontend gates the feedback bar on
@@ -1153,6 +1204,10 @@ pub struct LiveSessionSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_stale_kind: Option<ConfigStaleKind>,
     pub event_seq: u64,
+}
+
+fn u32_is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 /// Last non-empty line of `s`, trimmed. `None` if every line is blank.

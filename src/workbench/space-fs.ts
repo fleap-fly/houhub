@@ -11,7 +11,12 @@
 // - read/save/delete receive `rootPath = ps://<projectId>` plus a path that is
 //   relative to the root (e.g. "finance/q1/report.xlsx").
 
-import type { FileEditContent, FilePreviewContent, FileSaveResult, FileTreeNode } from "@/lib/types"
+import type {
+  FileEditContent,
+  FilePreviewContent,
+  FileSaveResult,
+  FileTreeNode,
+} from "@/lib/types"
 
 import {
   createWorkbenchSpaceFolder,
@@ -89,12 +94,21 @@ async function buildTree(
     const rel = joinRel(relPrefix, folder.name)
     const children =
       depth > 1
-        ? await buildTree(projectId, joinFolder(folderPath, folder.name), rel, depth - 1)
+        ? await buildTree(
+            projectId,
+            joinFolder(folderPath, folder.name),
+            rel,
+            depth - 1
+          )
         : []
     nodes.push({ kind: "dir", name: folder.name, path: rel, children })
   }
   for (const file of listing.files) {
-    nodes.push({ kind: "file", name: file.name, path: joinRel(relPrefix, file.name) })
+    nodes.push({
+      kind: "file",
+      name: file.name,
+      path: joinRel(relPrefix, file.name),
+    })
   }
   return nodes
 }
@@ -111,7 +125,11 @@ async function resolveFileId(
   projectId: string,
   folderPath: string,
   name: string
-): Promise<{ id: string; mimeType: string | null; updatedAt: string | null } | null> {
+): Promise<{
+  id: string
+  mimeType: string | null
+  updatedAt: string | null
+} | null> {
   const listing = await listWorkbenchSpace(projectId, folderPath)
   const match =
     listing.files.find((f) => f.name === name) ??
@@ -178,7 +196,11 @@ export async function psReadWorkspaceFileBase64(
     folderPath === "/"
       ? path
       : `${folderPath.replace(/^\/+/, "")}/${path.replace(/^\/+/, "")}`
-  const buffer = await fetchProjectSpaceFileBytes(projectId, rootRelative, maxBytes)
+  const buffer = await fetchProjectSpaceFileBytes(
+    projectId,
+    rootRelative,
+    maxBytes
+  )
   return arrayBufferToBase64(buffer)
 }
 
@@ -268,7 +290,10 @@ export async function psCreateEntry(
   return joinRel(path, name)
 }
 
-export async function psDeleteEntry(rootPath: string, path: string): Promise<void> {
+export async function psDeleteEntry(
+  rootPath: string,
+  path: string
+): Promise<void> {
   const { projectId } = parsePsPath(rootPath)
   const { folderPath, name } = splitRootRelative(path)
   const entry = await resolveFileId(projectId, folderPath, name)

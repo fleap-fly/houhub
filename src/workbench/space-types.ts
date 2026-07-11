@@ -76,12 +76,19 @@ export function normalizeSpaceEntry(raw: unknown): WorkbenchSpaceEntry | null {
 }
 
 export function normalizeSpaceListing(raw: unknown): WorkbenchSpaceListing {
-  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<
+    string,
+    unknown
+  >
   const folders = Array.isArray(r.folders)
-    ? r.folders.map(normalizeSpaceEntry).filter((x): x is WorkbenchSpaceEntry => x !== null)
+    ? r.folders
+        .map(normalizeSpaceEntry)
+        .filter((x): x is WorkbenchSpaceEntry => x !== null)
     : []
   const files = Array.isArray(r.files)
-    ? r.files.map(normalizeSpaceEntry).filter((x): x is WorkbenchSpaceEntry => x !== null)
+    ? r.files
+        .map(normalizeSpaceEntry)
+        .filter((x): x is WorkbenchSpaceEntry => x !== null)
     : []
   return {
     folders,
@@ -91,7 +98,10 @@ export function normalizeSpaceListing(raw: unknown): WorkbenchSpaceListing {
 }
 
 export function normalizeSpaceUsage(raw: unknown): WorkbenchSpaceUsage {
-  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<
+    string,
+    unknown
+  >
   return {
     used: asNumber(r.used) ?? 0,
     total: asNumber(r.total) ?? 0,
@@ -100,7 +110,10 @@ export function normalizeSpaceUsage(raw: unknown): WorkbenchSpaceUsage {
 }
 
 export function normalizeSpacePresign(raw: unknown): WorkbenchSpacePresign {
-  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<
+    string,
+    unknown
+  >
   return {
     fileId: asString(r.file_id) ?? "",
     uploadUrl: asString(r.upload_url) ?? "",

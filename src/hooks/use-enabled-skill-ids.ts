@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react"
 import {
   expertsListAllInstallStatuses,
   officecliSkillListAllInstallStatuses,
+  scienceListAllInstallStatuses,
 } from "@/lib/api"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { piUsesCustomAgentDir } from "@/lib/pi-config"
@@ -23,9 +24,10 @@ let generation = 0
 const subscribers = new Set<(snapshot: ExpertInstallStatus[]) => void>()
 
 /**
- * Load the experts + office-tools install-status snapshots and merge them.
+ * Load the experts + office-tools + science install-status snapshots and merge
+ * them.
  *
- * Fails *open*: if either request rejects, we keep (and return) the previous
+ * Fails *open*: if any request rejects, we keep (and return) the previous
  * cached snapshot rather than substituting an empty list. That matters because
  * a locked card blocks injection — turning a transient backend error into an
  * empty snapshot would make every skill look "not enabled" and wrongly block
@@ -39,13 +41,14 @@ async function loadSnapshot(): Promise<ExpertInstallStatus[] | null> {
   inflight = Promise.all([
     expertsListAllInstallStatuses(),
     officecliSkillListAllInstallStatuses(),
+    scienceListAllInstallStatuses(),
   ])
-    .then(([experts, office]) => {
+    .then(([experts, office, science]) => {
       inflight = null
       // A newer invalidation superseded this request while it was in flight —
       // discard its result so it can't clobber the fresher snapshot.
       if (myGeneration !== generation) return cached
-      const merged = [...experts, ...office]
+      const merged = [...experts, ...office, ...science]
       cached = merged
       for (const notify of subscribers) notify(merged)
       return merged
@@ -59,7 +62,8 @@ async function loadSnapshot(): Promise<ExpertInstallStatus[] | null> {
 }
 
 /**
- * Returns the set of skill ids (built-in experts + office tools) currently
+ * Returns the set of skill ids (built-in experts + office tools + science)
+ * currently
  * enabled — i.e. symlinked into the given agent's skill directory — for the
  * passed agent. Mirrors the settings page's "enabled" definition: a
  * `(skillId, agentType)` pair counts as enabled only when its install status is

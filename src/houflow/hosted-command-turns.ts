@@ -8,10 +8,12 @@ import {
 export function hostedCommandToCloudEvents(
   command: HouflowCloudHostedCommand
 ): HouflowCloudSessionEvent[] {
-  const events = dedupeAssistantEventsByText([
-    hostedCommandInputToCloudEvent(command),
-    ...hostedCommandAgentEvents(command),
-  ].filter(isPresent))
+  const events = dedupeAssistantEventsByText(
+    [
+      hostedCommandInputToCloudEvent(command),
+      ...hostedCommandAgentEvents(command),
+    ].filter(isPresent)
+  )
   const outputEvent = hostedCommandOutputToCloudEvent(command, events)
   return outputEvent ? [...events, outputEvent] : events
 }

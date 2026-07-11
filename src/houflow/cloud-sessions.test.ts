@@ -654,12 +654,7 @@ describe("Houflow cloud sessions", () => {
     }
 
     await expect(
-      startHouflowCloudTargetSession(
-        session(),
-        secret(),
-        target,
-        "开始"
-      )
+      startHouflowCloudTargetSession(session(), secret(), target, "开始")
     ).rejects.toThrow(
       "Cloud managed agent 云端助手 is missing default environment"
     )
@@ -674,12 +669,7 @@ describe("Houflow cloud sessions", () => {
     }
 
     await expect(
-      createHouflowManagedCloudSession(
-        session(),
-        secret(),
-        target,
-        "开始"
-      )
+      createHouflowManagedCloudSession(session(), secret(), target, "开始")
     ).rejects.toThrow(
       "Cloud managed agent 云端助手 is missing default environment"
     )

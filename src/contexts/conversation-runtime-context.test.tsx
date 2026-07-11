@@ -38,6 +38,7 @@ import { useEffect, type ReactNode } from "react"
 import {
   buildStreamingTurnsFromLiveMessage,
   ConversationRuntimeProvider,
+  resetConversationRuntimeStore,
   useConversationRuntime,
 } from "@/contexts/conversation-runtime-context"
 import type {
@@ -156,6 +157,10 @@ function renderProvider(children: ReactNode = <Probe />) {
     <ConversationRuntimeProvider>{children}</ConversationRuntimeProvider>
   )
 }
+
+beforeEach(() => {
+  resetConversationRuntimeStore()
+})
 
 describe("ConversationRuntimeProvider fetch-generation guard", () => {
   let originalConsoleError: typeof console.error

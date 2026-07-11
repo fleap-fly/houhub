@@ -54,7 +54,10 @@ describe("normalizeSpaceEntry", () => {
   })
 
   it("treats preview_available === false as not previewable", () => {
-    expect(normalizeSpaceEntry({ id: "x", preview_available: false })?.previewAvailable).toBe(false)
+    expect(
+      normalizeSpaceEntry({ id: "x", preview_available: false })
+        ?.previewAvailable
+    ).toBe(false)
   })
 })
 
@@ -82,12 +85,18 @@ describe("normalizeSpaceListing", () => {
 
 describe("normalizeSpaceUsage", () => {
   it("coerces missing fields to zero", () => {
-    expect(normalizeSpaceUsage({ used: 10, total: 100, percentage: 10 })).toEqual({
+    expect(
+      normalizeSpaceUsage({ used: 10, total: 100, percentage: 10 })
+    ).toEqual({
       used: 10,
       total: 100,
       percentage: 10,
     })
-    expect(normalizeSpaceUsage(null)).toEqual({ used: 0, total: 0, percentage: 0 })
+    expect(normalizeSpaceUsage(null)).toEqual({
+      used: 0,
+      total: 0,
+      percentage: 0,
+    })
   })
 })
 

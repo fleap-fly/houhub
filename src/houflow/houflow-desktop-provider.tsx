@@ -449,6 +449,12 @@ function connectorRuntimeForAgent(
         provider: "pi",
         runtimeProvider: "pi",
       }
+    case "grok":
+      return {
+        localAgentRef: "grok:cli",
+        provider: "grok",
+        runtimeProvider: "grok",
+      }
     case "cline":
     case "code_buddy":
       return null

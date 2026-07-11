@@ -119,7 +119,8 @@ export function WorkbenchCloudPage() {
       const detail = await getWorkbenchAiSession(projectId, selectedSessionId)
       if (requestRef.current === requestId) setMessages(detail.messages)
     } catch (err) {
-      if (requestRef.current === requestId) setMessagesError(toErrorMessage(err))
+      if (requestRef.current === requestId)
+        setMessagesError(toErrorMessage(err))
     } finally {
       if (requestRef.current === requestId) setMessagesLoading(false)
     }
@@ -378,7 +379,12 @@ function toProjectSpaceOpenTarget(
     .replace(/\\/g, "/")
     .replace(/^\.\/+/, "")
     .replace(/^\/+/, "")
-  if (!path || path === "." || path.startsWith("../") || path.includes("/../")) {
+  if (
+    !path ||
+    path === "." ||
+    path.startsWith("../") ||
+    path.includes("/../")
+  ) {
     return null
   }
   path = path.replace(/\/+/g, "/")
@@ -498,7 +504,9 @@ function promptDraftToWorkbenchQuery(draft: PromptDraft): string {
     } else if (block.type === "resource") {
       notes.push(block.uri)
     } else if (block.type === "image") {
-      notes.push(block.uri ? `image: ${block.uri}` : `image: ${block.mime_type}`)
+      notes.push(
+        block.uri ? `image: ${block.uri}` : `image: ${block.mime_type}`
+      )
     }
   }
   return [draft.displayText.trim(), notes.map((item) => `- ${item}`).join("\n")]
@@ -513,8 +521,6 @@ function formatTimestamp(value: string | null): string {
   return date.toLocaleString()
 }
 
-function messageRoleForView(
-  role: string
-): "user" | "assistant" | "system" {
+function messageRoleForView(role: string): "user" | "assistant" | "system" {
   return role === "user" || role === "system" ? role : "assistant"
 }

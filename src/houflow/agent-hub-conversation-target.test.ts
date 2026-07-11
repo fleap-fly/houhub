@@ -90,9 +90,7 @@ describe("isHouflowCloudWorkspaceTarget", () => {
       isHouflowCloudWorkspaceTarget(houflowTarget({ kind: "managed" }))
     ).toBe(true)
     expect(
-      isHouflowCloudWorkspaceTarget(
-        houflowTarget({ kind: "hosted_connected" })
-      )
+      isHouflowCloudWorkspaceTarget(houflowTarget({ kind: "hosted_connected" }))
     ).toBe(true)
     expect(
       isHouflowCloudWorkspaceTarget(

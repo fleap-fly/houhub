@@ -124,45 +124,22 @@ function computeStats(conversations: DbConversationSummary[]): AgentStats {
   }
 }
 
-interface ConversationStatsInput {
-  agentType: AgentType
-  messageCount: number
-}
-
 function useStableConversationStats(
   conversations: DbConversationSummary[]
 ): AgentStats | null {
-  const previousRef = useRef<{
-    inputs: ConversationStatsInput[]
-    stats: AgentStats | null
-  } | null>(null)
+  const statsKey = conversations
+    .map(
+      (conversation) =>
+        `${conversation.agent_type}:${conversation.message_count}`
+    )
+    .join("|")
 
-  return useMemo(() => {
-    const inputs = conversations.map((conversation) => ({
-      agentType: conversation.agent_type,
-      messageCount: conversation.message_count,
-    }))
-    const previous = previousRef.current
-    if (previous && statsInputsEqual(previous.inputs, inputs)) {
-      return previous.stats
-    }
-
-    const stats =
-      conversations.length > 0 ? computeStats(conversations) : null
-    previousRef.current = { inputs, stats }
-    return stats
-  }, [conversations])
-}
-
-function statsInputsEqual(
-  left: ConversationStatsInput[],
-  right: ConversationStatsInput[]
-): boolean {
-  if (left.length !== right.length) return false
-  return left.every(
-    (item, index) =>
-      item.agentType === right[index]?.agentType &&
-      item.messageCount === right[index]?.messageCount
+  return useMemo(
+    () => (conversations.length > 0 ? computeStats(conversations) : null),
+    // `stats` only depends on agent type + message count. Keep the reference
+    // stable for status-only patches while staying pure during render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [statsKey]
   )
 }
 

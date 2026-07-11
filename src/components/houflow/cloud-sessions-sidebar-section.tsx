@@ -47,7 +47,10 @@ import type {
 } from "@/houflow/cloud-sessions"
 import { isHouflowCloudWorkspaceTarget } from "@/houflow/agent-hub-conversation-target"
 import { cloudActivityTone } from "@/houflow/cloud-session-display"
-import type { HouflowAgentTarget, HouflowConnectorSummary } from "@/houflow/types"
+import type {
+  HouflowAgentTarget,
+  HouflowConnectorSummary,
+} from "@/houflow/types"
 import { toErrorMessage } from "@/lib/app-error"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { cn } from "@/lib/utils"

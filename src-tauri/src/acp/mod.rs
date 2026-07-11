@@ -1,4 +1,5 @@
 pub mod binary_cache;
+pub mod background_watch;
 pub mod codex_goal;
 pub mod connection;
 pub mod delegation;

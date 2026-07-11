@@ -6,6 +6,10 @@ import { describe, expect, it, vi } from "vitest"
 // stripped `houhub://` hrefs and rendered them as "[blocked]". The isolated
 // MarkdownLink unit test runs after that layer, so it could not catch the
 // regression. Only the link-safety hook is stubbed (irrelevant to badges).
+//
+// These are ASSISTANT-path guards: `houhub://` reference links render as inline
+// badges via MarkdownLink + rehype-allow-houhub regardless of role. (User messages
+// no longer go through MessageResponse — see message/plain-text-with-badges.tsx.)
 vi.mock("@/components/ai-elements/link-safety", () => ({
   useStreamdownLinkSafety: () => ({ enabled: false }),
 }))
@@ -15,7 +19,7 @@ import { MessageResponse } from "./message"
 describe("MessageResponse — houhub references survive sanitization (real Streamdown)", () => {
   it("renders an agent reference inline as a badge, not as '[blocked]'", async () => {
     const { container } = render(
-      <MessageResponse softBreaks>
+      <MessageResponse>
         {"[@Codex CLI](houhub://agent/codex) hi"}
       </MessageResponse>
     )
@@ -31,7 +35,7 @@ describe("MessageResponse — houhub references survive sanitization (real Strea
 
   it("renders a session reference inline as a badge", async () => {
     const { container } = render(
-      <MessageResponse softBreaks>
+      <MessageResponse>
         {"see [#42](houhub://session/claude_code_abc)"}
       </MessageResponse>
     )
@@ -48,7 +52,7 @@ describe("MessageResponse — houhub references survive sanitization (real Strea
 
   it("renders a commit reference inline as a badge", async () => {
     const { container } = render(
-      <MessageResponse softBreaks>
+      <MessageResponse>
         {"[a1b2c3d](houhub://commit/%2Frepo@a1b2c3ddeadbeef)"}
       </MessageResponse>
     )

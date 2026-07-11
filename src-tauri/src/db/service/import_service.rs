@@ -12,10 +12,12 @@ use crate::parsers::cline::ClineParser;
 use crate::parsers::codebuddy::CodeBuddyParser;
 use crate::parsers::codex::CodexParser;
 use crate::parsers::gemini::GeminiParser;
+use crate::parsers::grok::GrokParser;
 use crate::parsers::hermes::HermesParser;
 use crate::parsers::kimi_code::KimiCodeParser;
 use crate::parsers::openclaw::OpenClawParser;
 use crate::parsers::opencode::OpenCodeParser;
+use crate::parsers::pi::PiParser;
 use crate::parsers::{path_eq_for_matching, AgentParser};
 
 /// Import (and refresh the titles of) the local agent sessions under
@@ -41,6 +43,8 @@ pub async fn import_local_conversations(
             (AgentType::Hermes, Box::new(HermesParser::new())),
             (AgentType::CodeBuddy, Box::new(CodeBuddyParser::new())),
             (AgentType::KimiCode, Box::new(KimiCodeParser::new())),
+            (AgentType::Pi, Box::new(PiParser::new())),
+            (AgentType::Grok, Box::new(GrokParser::new())),
         ];
 
         let mut matched = Vec::new();

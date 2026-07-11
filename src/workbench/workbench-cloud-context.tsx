@@ -35,8 +35,9 @@ interface WorkbenchCloudContextValue {
   rememberSession: (session: WorkbenchAiSession) => void
 }
 
-const WorkbenchCloudContext =
-  createContext<WorkbenchCloudContextValue | null>(null)
+const WorkbenchCloudContext = createContext<WorkbenchCloudContextValue | null>(
+  null
+)
 
 export function WorkbenchCloudProvider({ children }: { children: ReactNode }) {
   const workbench = useWorkbench()
@@ -118,7 +119,7 @@ export function WorkbenchCloudProvider({ children }: { children: ReactNode }) {
   const selectedAssistant = useMemo(
     () =>
       selectedAssistantId
-        ? assistants.find((item) => item.id === selectedAssistantId) ?? null
+        ? (assistants.find((item) => item.id === selectedAssistantId) ?? null)
         : null,
     [assistants, selectedAssistantId]
   )
@@ -126,7 +127,8 @@ export function WorkbenchCloudProvider({ children }: { children: ReactNode }) {
   const selectedSession = useMemo(
     () =>
       selectedSessionId
-        ? sessions.find((item) => item.sessionId === selectedSessionId) ?? null
+        ? (sessions.find((item) => item.sessionId === selectedSessionId) ??
+          null)
         : null,
     [selectedSessionId, sessions]
   )
@@ -140,17 +142,22 @@ export function WorkbenchCloudProvider({ children }: { children: ReactNode }) {
     [refreshSessions]
   )
 
-  const selectSession = useCallback((sessionId: string | null) => {
-    if (sessionId) {
-      const session = sessions.find((item) => item.sessionId === sessionId)
-      if (session?.assistantId) setSelectedAssistantId(session.assistantId)
-    }
-    setSelectedSessionId(sessionId)
-  }, [sessions])
+  const selectSession = useCallback(
+    (sessionId: string | null) => {
+      if (sessionId) {
+        const session = sessions.find((item) => item.sessionId === sessionId)
+        if (session?.assistantId) setSelectedAssistantId(session.assistantId)
+      }
+      setSelectedSessionId(sessionId)
+    },
+    [sessions]
+  )
 
   const rememberSession = useCallback((session: WorkbenchAiSession) => {
     setSessions((current) => {
-      const without = current.filter((item) => item.sessionId !== session.sessionId)
+      const without = current.filter(
+        (item) => item.sessionId !== session.sessionId
+      )
       return [session, ...without]
     })
     if (session.assistantId) setSelectedAssistantId(session.assistantId)
@@ -200,7 +207,9 @@ export function WorkbenchCloudProvider({ children }: { children: ReactNode }) {
 export function useWorkbenchCloud(): WorkbenchCloudContextValue {
   const value = useContext(WorkbenchCloudContext)
   if (!value) {
-    throw new Error("useWorkbenchCloud must be used inside WorkbenchCloudProvider")
+    throw new Error(
+      "useWorkbenchCloud must be used inside WorkbenchCloudProvider"
+    )
   }
   return value
 }

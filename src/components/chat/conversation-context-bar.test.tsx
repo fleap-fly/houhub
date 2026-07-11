@@ -9,8 +9,8 @@ const mocks = vi.hoisted(() => ({
   gitListAllBranches: vi.fn(),
   gitCheckout: vi.fn(),
   switchToBranch: vi.fn(),
-  tabContext: { current: null as any },
-  workspaceContext: { current: null as any },
+  tabContext: { current: null as Record<string, unknown> | null },
+  workspaceContext: { current: null as Record<string, unknown> | null },
 }))
 
 vi.mock("next-intl", () => ({

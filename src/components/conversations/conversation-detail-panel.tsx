@@ -35,6 +35,7 @@ import { buildOptimisticUserTurnFromDraft } from "@/lib/optimistic-user-turn"
 import { MessageListView } from "@/components/message/message-list-view"
 import { ConversationShell } from "@/components/chat/conversation-shell"
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
+import { BackgroundTasksChip } from "@/components/chat/background-tasks-chip"
 import { FeedbackNotesDisplay } from "@/components/chat/feedback-notes-display"
 import { FeedbackDialog } from "@/components/chat/feedback-dialog"
 import { useFeedbackEnabled } from "@/hooks/use-feedback-enabled"
@@ -496,8 +497,8 @@ const ConversationTabView = memo(function ConversationTabView({
 
   // completeTurn MUST be declared BEFORE setLiveMessage so that React runs
   // its cleanup/setup before setLiveMessage's cleanup. When connStatus
-  // transitions away from "prompting", completeTurn snapshots and promotes
-  // the liveMessage first, then setLiveMessage's cleanup safely clears it.
+  // Promote the completed turn on the prompting-to-idle edge. The connection
+  // dispatch mirrors liveMessage into the runtime store synchronously.
   const prevConnStatusRef = useRef(connStatus)
   useEffect(() => {
     const wasPrompting = prevConnStatusRef.current === "prompting"
@@ -505,12 +506,8 @@ const ConversationTabView = memo(function ConversationTabView({
     if (!wasPrompting || connStatus === "prompting") return
 
     // Turn completed — promote liveMessage + optimisticTurns to localTurns.
-    // Pass conn.liveMessage explicitly: when turn_complete arrives in the
-    // same React batch as the final STREAM_BATCH (typical case), the mirror
-    // effect that syncs conn.liveMessage into the runtime session has not
-    // run yet for this render, so session.liveMessage would be missing the
-    // final text chunk. The connections-context value is authoritative.
-    completeTurn(effectiveConversationId, conn.liveMessage)
+    // The sink has already written the final stream chunk into the runtime.
+    completeTurn(effectiveConversationId)
 
     // Cancel previous metadata sync (handles rapid consecutive turns)
     syncCancelRef.current?.()
@@ -523,13 +520,7 @@ const ConversationTabView = memo(function ConversationTabView({
         effectiveConversationId
       )
     }
-  }, [
-    completeTurn,
-    connStatus,
-    conn.liveMessage,
-    effectiveConversationId,
-    syncTurnMetadata,
-  ])
+  }, [completeTurn, connStatus, effectiveConversationId, syncTurnMetadata])
 
   // Auto-send queued messages when agent finishes responding.
   // Refs are synced via useEffect; the auto-send effect is declared
@@ -602,33 +593,10 @@ const ConversationTabView = memo(function ConversationTabView({
   ])
 
   useEffect(() => {
-    // Only sync non-null liveMessage updates to state. When conn.liveMessage
-    // goes null (agent finished streaming), don't clear state.liveMessage —
-    // COMPLETE_TURN needs to snapshot it when connStatus transitions.
-    // Clearing is handled by COMPLETE_TURN (sets liveMessage = null) and
-    // by this effect's cleanup (when not prompting).
-    if (conn.liveMessage != null) {
-      // isLive=true when actively prompting tells the runtime reducer to
-      // bypass its stale-reconnect-replay guard. This matters for the
-      // rekey path (close+reopen mid-turn): the runtime session for the
-      // persisted conversation id is fresh and may have user turns in
-      // detail.turns post-load, which would otherwise drop the live
-      // assistant stream on the floor.
-      setLiveMessage(
-        effectiveConversationId,
-        conn.liveMessage,
-        connStatus === "prompting"
-      )
-    }
-    return () => {
-      // Don't clear liveMessage if agent is still responding — the session
-      // is kept via pendingCleanup, and clearing here would cause the
-      // SET_LIVE_MESSAGE guard to block the reconnect liveMessage on reopen.
-      if (connStatusRef.current !== "prompting") {
-        setLiveMessage(effectiveConversationId, null)
-      }
-    }
-  }, [conn.liveMessage, connStatus, effectiveConversationId, setLiveMessage])
+    return acpActions.registerLiveMessageSink(tabId, (liveMessage, isLive) =>
+      setLiveMessage(effectiveConversationId, liveMessage, isLive)
+    )
+  }, [acpActions, tabId, effectiveConversationId, setLiveMessage])
 
   // Cross-client VIEWER (Bug 2): mirror the connection's in-flight user prompt
   // (from a snapshot's `pending_user_message`, captured when we attach
@@ -1309,7 +1277,12 @@ const ConversationTabView = memo(function ConversationTabView({
   })
   return (
     <ConversationShell
-      topBanner={<SessionConfigStaleBanner contextKey={tabId} />}
+      topBanner={
+        <>
+          <SessionConfigStaleBanner contextKey={tabId} />
+          <BackgroundTasksChip contextKey={tabId} />
+        </>
+      }
       status={connStatus}
       promptCapabilities={conn.promptCapabilities}
       defaultPath={workingDirForConnection}

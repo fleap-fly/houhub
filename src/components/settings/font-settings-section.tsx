@@ -255,7 +255,10 @@ export function FontSettingsSection() {
           unavailableLabel={t("fonts.ligaturesUnavailable")}
         />
         <label className="flex items-center gap-2">
-          <Switch checked={editorWordWrap} onCheckedChange={setEditorWordWrap} />
+          <Switch
+            checked={editorWordWrap}
+            onCheckedChange={setEditorWordWrap}
+          />
           <span className="text-xs text-muted-foreground">
             {t("fonts.wordWrap")}
           </span>

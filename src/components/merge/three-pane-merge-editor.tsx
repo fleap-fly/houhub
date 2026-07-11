@@ -516,7 +516,13 @@ export function ThreePaneMergeEditor({
         wordWrap: editorWordWrap ? "on" : "off",
         overviewRulerLanes: 0,
       }),
-      [zoomLevel, editorFontStack, editorFontSize, editorLigatures, editorWordWrap]
+      [
+        zoomLevel,
+        editorFontStack,
+        editorFontSize,
+        editorLigatures,
+        editorWordWrap,
+      ]
     )
 
   const readonlyOptions = useMemo(

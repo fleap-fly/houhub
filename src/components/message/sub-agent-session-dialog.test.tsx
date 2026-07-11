@@ -206,6 +206,9 @@ function makeConnState(overrides: Partial<ConnectionState>): ConnectionState {
     pendingUserMessage: null,
     configStale: false,
     configStaleKind: null,
+    backgroundOutstanding: 0,
+    backgroundSettleSyncingSince: null,
+    outOfTurnToolCalls: null,
     configStaleDismissed: false,
     ...overrides,
   }
