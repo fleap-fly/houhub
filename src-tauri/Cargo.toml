@@ -1,6 +1,6 @@
 [package]
 name = "houhub"
-version = "0.19.3"
+version = "0.19.5"
 description = "Agent Code Generation App"
 authors = ["feitao"]
 edition = "2021"
