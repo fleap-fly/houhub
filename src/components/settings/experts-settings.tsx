@@ -1,11 +1,9 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { FolderOpen, Loader2, RefreshCw } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
-import { toast } from "sonner"
 
-import { Button } from "@/components/ui/button"
 import {
   SkillAgentMatrix,
   type MatrixSkill,
@@ -16,14 +14,10 @@ import {
   expertsApplyLinks,
   expertsList,
   expertsListAllInstallStatuses,
-  expertsOpenCentralDir,
   expertsReadContent,
-  openFolder,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { getExpertIcon, pickLocalized } from "@/lib/expert-presentation"
-import { revealItemInDir } from "@/lib/platform"
-import { getActiveRemoteConnectionId, isDesktop } from "@/lib/transport"
 import { piUsesCustomAgentDir } from "@/lib/pi-config"
 import type { AcpAgentInfo, ExpertLinkState, ExpertListItem } from "@/lib/types"
 
@@ -37,7 +31,11 @@ const CATEGORY_SORT: Record<string, number> = {
   meta: 7,
 }
 
-export function ExpertsSettings() {
+export function ExpertsBody({
+  onRegisterRefresh,
+}: {
+  onRegisterRefresh?: (refresh: () => void) => void
+}) {
   const t = useTranslations("ExpertsSettings")
   const locale = useLocale()
 
@@ -72,6 +70,16 @@ export function ExpertsSettings() {
       console.error("[ExpertsSettings] initial refresh failed:", err)
     })
   }, [refresh])
+
+  // Publish the reload handler so the hub's fixed "Refresh" button can drive
+  // this pack while it is the active tab.
+  useEffect(() => {
+    onRegisterRefresh?.(() => {
+      refresh().catch((err) => {
+        console.error("[ExpertsSettings] refresh failed:", err)
+      })
+    })
+  }, [onRegisterRefresh, refresh])
 
   const translatedCategory = useCallback(
     (category: string): string => {
@@ -134,24 +142,6 @@ export function ExpertsSettings() {
     [experts, locale, t]
   )
 
-  const handleOpenCentralDir = useCallback(async () => {
-    try {
-      const path = await expertsOpenCentralDir()
-      if (isDesktop() && getActiveRemoteConnectionId() === null) {
-        // Desktop: reveal the central skills folder in Finder / File Explorer.
-        // `revealItemInDir` is used deliberately because the opener plugin's
-        // path scope rejects `openPath` for the hidden `~/.houhub/...` path.
-        await revealItemInDir(path)
-      } else {
-        await openFolder(path)
-      }
-    } catch (err) {
-      toast.error(t("toasts.openFolderFailed"), {
-        description: toErrorMessage(err),
-      })
-    }
-  }, [t])
-
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
@@ -162,50 +152,15 @@ export function ExpertsSettings() {
   }
 
   return (
-    <div className="h-full flex flex-col p-3 md:p-4">
-      <div className="flex items-center justify-between gap-3 pb-4">
-        <div>
-          <h2 className="text-base font-semibold">{t("title")}</h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            {t("description")}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              handleOpenCentralDir().catch((err) => {
-                console.error("[ExpertsSettings] open central dir failed:", err)
-              })
-            }}
-          >
-            <FolderOpen className="h-3.5 w-3.5" />
-            {t("actions.openCentralDir")}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              refresh().catch((err) => {
-                console.error("[ExpertsSettings] refresh failed:", err)
-              })
-            }}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            {t("actions.refresh")}
-          </Button>
-        </div>
-      </div>
-
+    <div className="flex flex-col h-full min-h-0">
       {loadError && (
-        <div className="mb-3 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+        <div className="mb-3 shrink-0 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
           {loadError}
         </div>
       )}
 
       {experts.length === 0 ? (
-        <div className="h-full rounded-lg border bg-card flex items-center justify-center text-sm text-muted-foreground">
+        <div className="flex-1 min-h-0 rounded-lg border bg-card flex items-center justify-center text-sm text-muted-foreground">
           {t("emptyExperts")}
         </div>
       ) : (

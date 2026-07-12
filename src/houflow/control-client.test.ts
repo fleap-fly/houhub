@@ -217,6 +217,32 @@ describe("loadHouflowControlSnapshot", () => {
     ])
   })
 
+  it("maps the control-plane defaultEnvironmentId into target metadata", async () => {
+    mocks.agents = [
+      {
+        id: "agt_poetry",
+        name: "诗歌智能体",
+        model: { id: "gpt-5" },
+        metadata: { defaultEnvironmentId: "env_poetry_default" },
+      },
+    ]
+
+    const snapshot = await loadHouflowControlSnapshot(session(), secret(), {
+      gatewayCatalogMode: "skip",
+    })
+
+    expect(snapshot.targets).toEqual([
+      expect.objectContaining({
+        id: "agt_poetry",
+        kind: "managed",
+        metadata: expect.objectContaining({
+          default_environment_id: "env_poetry_default",
+          defaultEnvironmentId: "env_poetry_default",
+        }),
+      }),
+    ])
+  })
+
   it("loads targets through the unified Agent Hub session target catalog", async () => {
     await loadHouflowControlSnapshot(session(), secret(), {
       gatewayCatalogMode: "skip",

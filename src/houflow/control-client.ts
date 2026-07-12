@@ -506,6 +506,7 @@ function managedSessionTargetFromDto(
   const defaultEnvironmentId =
     stringValue(agentDto.default_environment_id) ||
     stringValue(agentMetadata.default_environment_id) ||
+    stringValue(agentMetadata.defaultEnvironmentId) ||
     stringValue(agentMetadata.environment_id)
   return {
     key: `managed:${id}`,

@@ -216,7 +216,11 @@ function DetectionCard({
 
 // ─── Main component ───────────────────────────────────────────────────
 
-export function OfficeToolsSettings() {
+export function OfficeToolsBody({
+  onRegisterRefresh,
+}: {
+  onRegisterRefresh?: (refresh: () => void) => void
+}) {
   const t = useTranslations("OfficeToolsSettings")
   const locale = useLocale()
   const [autoPreview, setAutoPreview] = useState(() => loadOfficeAutoPreview())
@@ -302,6 +306,15 @@ export function OfficeToolsSettings() {
     })
   }, [detect, refreshSkills])
 
+  // Publish the reload handler so the hub's fixed "Refresh" button can drive
+  // this pack while it is the active tab.
+  useEffect(() => {
+    onRegisterRefresh?.(() => {
+      Promise.all([detect(), refreshSkills()]).catch((err) => {
+        console.error("[OfficeToolsSettings] refresh failed:", err)
+      })
+    })
+  }, [onRegisterRefresh, detect, refreshSkills])
   const matrixSkills = useMemo<MatrixSkill[]>(
     () =>
       skills.map((s) => ({
@@ -398,39 +411,20 @@ export function OfficeToolsSettings() {
   const installed = info?.installed === true
 
   return (
-    <div className="h-full flex flex-col p-3 md:p-4">
-      <div className="flex items-center justify-between gap-3 pb-4">
-        <div>
-          <h2 className="text-base font-semibold">{t("title")}</h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            {t("description")}
-          </p>
-        </div>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => {
-            Promise.all([detect(), refreshSkills()]).catch((err) => {
-              console.error("[OfficeToolsSettings] refresh failed:", err)
-            })
-          }}
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          {t("actions.refresh")}
-        </Button>
+    <div className="flex flex-col h-full min-h-0">
+      <div className="shrink-0">
+        <DetectionCard
+          info={info}
+          detecting={detecting}
+          installing={installing}
+          onInstall={handleInstall}
+          onUninstall={handleUninstall}
+          onSync={handleSync}
+          syncing={syncing}
+        />
       </div>
 
-      <DetectionCard
-        info={info}
-        detecting={detecting}
-        installing={installing}
-        onInstall={handleInstall}
-        onUninstall={handleUninstall}
-        onSync={handleSync}
-        syncing={syncing}
-      />
-
-      <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3">
+      <div className="mt-4 shrink-0 flex items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3">
         <div className="min-w-0 space-y-1">
           <label htmlFor="office-auto-preview" className="text-sm font-medium">
             {t("autoPreviewLabel")}
