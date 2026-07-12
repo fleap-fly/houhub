@@ -113,6 +113,7 @@ function houflowTarget(
     key: overrides.key ?? `${overrides.kind}:target_1`,
     kind: overrides.kind,
     id: overrides.id ?? "target_1",
+    defaultEnvironmentId: overrides.defaultEnvironmentId ?? null,
     name: overrides.name ?? "Agent",
     provider: overrides.provider ?? "agent-hub",
     status: overrides.status ?? "active",

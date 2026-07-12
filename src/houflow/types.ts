@@ -98,6 +98,7 @@ export interface HouflowAgentTarget {
   key: string
   kind: HouflowAgentTargetKind
   id: string
+  defaultEnvironmentId: string | null
   name: string
   provider: string
   status: string

@@ -503,15 +503,12 @@ function managedSessionTargetFromDto(
   const agentDto = objectValue(agent)
   const model = objectValue(agentDto.model)
   const agentMetadata = stringRecord(agent.metadata)
-  const defaultEnvironmentId =
-    stringValue(agentDto.default_environment_id) ||
-    stringValue(agentMetadata.default_environment_id) ||
-    stringValue(agentMetadata.defaultEnvironmentId) ||
-    stringValue(agentMetadata.environment_id)
+  const defaultEnvironmentId = stringValue(value.default_environment_id) || null
   return {
     key: `managed:${id}`,
     kind: "managed",
     id,
+    defaultEnvironmentId,
     name: stringValue(value.name) || stringValue(agent.name) || id,
     provider: stringValue(model.id) || "agent-hub",
     status: stringValue(value.status) || "active",
@@ -519,7 +516,6 @@ function managedSessionTargetFromDto(
     source: "agent_hub",
     metadata: cleanStringRecord({
       management_mode: stringValue(agentDto.management_mode),
-      default_environment_id: defaultEnvironmentId,
       vault_ids: stringListValue(agentDto.vault_ids),
       ...agentMetadata,
     }),
@@ -543,10 +539,11 @@ function connectedSessionTargetFromDto(
       `Connected Agent Hub target ${value.id} references missing connected agent ${connectedAgentId}`
     )
   }
-  return connectedTargetFromDto(connectedAgent, kind)
+  return connectedTargetFromDto(value, connectedAgent, kind)
 }
 
 function connectedTargetFromDto(
+  target: HouflowConnectedSessionTargetDto,
   value: ConnectedAgent,
   kind: "hosted_connected" | "external_local"
 ): HouflowAgentTarget | null {
@@ -562,6 +559,7 @@ function connectedTargetFromDto(
         : `external_local:${id}:${binding?.local_agent_ref || id}`,
     kind,
     id,
+    defaultEnvironmentId: stringValue(target.default_environment_id) || null,
     name: stringValue(value.name) || id,
     provider: stringValue(value.provider) || "agent-hub",
     status: stringValue(value.status) || "active",

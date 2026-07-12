@@ -15,17 +15,16 @@ import {
   archiveHouflowCloudSession,
   deleteHouflowCloudSession,
   deleteHouflowHostedAgentCommand,
+  isHouflowCloudSessionNotFound,
   listHouflowHostedAgentCommands,
   listHouflowCloudSessions,
   type HouflowCloudHostedCommand,
   type HouflowCloudSession,
 } from "./cloud-sessions"
-
-interface HouflowCloudOutputSelectionRequest {
-  sessionId: string
-  target: string
-  nonce: number
-}
+import {
+  reconcileHouflowCloudSessionSelection,
+  type HouflowCloudOutputSelectionRequest,
+} from "./cloud-session-selection"
 
 interface HouflowCloudWorkspaceContextValue {
   sessions: HouflowCloudSession[]
@@ -39,6 +38,7 @@ interface HouflowCloudWorkspaceContextValue {
   loading: boolean
   error: string | null
   refreshSessions: () => Promise<void>
+  removeSession: (sessionId: string) => void
   archiveSession: (sessionId: string) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
   deleteHostedCommand: (commandId: string) => Promise<void>
@@ -88,6 +88,34 @@ export function HouflowCloudWorkspaceProvider({
   const signedIn = houflow.session.status === "signed_in"
   const workspaceId = signedIn ? houflow.session.workspaceId : null
 
+  const applySessions = useCallback((next: HouflowCloudSession[]) => {
+    setSessions(next)
+    setSelectedSessionId(
+      (current) =>
+        reconcileHouflowCloudSessionSelection(next, {
+          selectedSessionId: current,
+          selectedOutputRequest: null,
+        }).selectedSessionId
+    )
+    setSelectedOutputRequest(
+      (current) =>
+        reconcileHouflowCloudSessionSelection(next, {
+          selectedSessionId: null,
+          selectedOutputRequest: current,
+        }).selectedOutputRequest
+    )
+  }, [])
+
+  const removeSession = useCallback((sessionId: string) => {
+    setSessions((current) =>
+      current.filter((session) => session.id !== sessionId)
+    )
+    setSelectedSessionId((current) => (current === sessionId ? null : current))
+    setSelectedOutputRequest((current) =>
+      current?.sessionId === sessionId ? null : current
+    )
+  }, [])
+
   const refreshSessions = useCallback(async () => {
     if (houflow.session.status !== "signed_in") {
       setSessions([])
@@ -110,17 +138,13 @@ export function HouflowCloudWorkspaceProvider({
         50,
         true
       )
-      setSessions(next)
-      setSelectedSessionId((current) => {
-        if (current && next.some((item) => item.id === current)) return current
-        return null
-      })
+      applySessions(next)
     } catch (err) {
       setError(toErrorMessage(err))
     } finally {
       setLoading(false)
     }
-  }, [houflow.secret, houflow.session])
+  }, [applySessions, houflow.secret, houflow.session])
 
   useEffect(() => {
     let cancelled = false
@@ -146,13 +170,7 @@ export function HouflowCloudWorkspaceProvider({
           true
         )
         if (cancelled) return
-        setSessions(next)
-        setSelectedSessionId((current) => {
-          if (current && next.some((item) => item.id === current)) {
-            return current
-          }
-          return null
-        })
+        applySessions(next)
       } catch (err) {
         if (!cancelled) setError(toErrorMessage(err))
       } finally {
@@ -163,7 +181,22 @@ export function HouflowCloudWorkspaceProvider({
     return () => {
       cancelled = true
     }
-  }, [houflow.secret, houflow.session, signedIn, workspaceId])
+  }, [applySessions, houflow.secret, houflow.session, signedIn, workspaceId])
+
+  useEffect(() => {
+    if (!signedIn) return
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshSessions()
+    }
+    const interval = window.setInterval(refreshWhenVisible, 30_000)
+    window.addEventListener("focus", refreshWhenVisible)
+    document.addEventListener("visibilitychange", refreshWhenVisible)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener("focus", refreshWhenVisible)
+      document.removeEventListener("visibilitychange", refreshWhenVisible)
+    }
+  }, [refreshSessions, signedIn])
 
   const selectedSession = useMemo(
     () =>
@@ -255,37 +288,41 @@ export function HouflowCloudWorkspaceProvider({
   const archiveSession = useCallback(
     async (sessionId: string) => {
       if (houflow.session.status !== "signed_in") return
-      const archived = await archiveHouflowCloudSession(
-        houflow.session,
-        houflow.secret,
-        sessionId
-      )
-      if (archived) {
-        setSessions((current) => mergeSessions(current, [archived]))
+      try {
+        const archived = await archiveHouflowCloudSession(
+          houflow.session,
+          houflow.secret,
+          sessionId
+        )
+        if (archived) {
+          setSessions((current) => mergeSessions(current, [archived]))
+        }
+      } catch (error) {
+        if (isHouflowCloudSessionNotFound(error)) {
+          removeSession(sessionId)
+          return
+        }
+        throw error
       }
     },
-    [houflow.secret, houflow.session]
+    [houflow.secret, houflow.session, removeSession]
   )
 
   const deleteSession = useCallback(
     async (sessionId: string) => {
       if (houflow.session.status !== "signed_in") return
-      await deleteHouflowCloudSession(
-        houflow.session,
-        houflow.secret,
-        sessionId
-      )
-      setSessions((current) =>
-        current.filter((session) => session.id !== sessionId)
-      )
-      setSelectedSessionId((current) =>
-        current === sessionId ? null : current
-      )
-      setSelectedOutputRequest((current) =>
-        current?.sessionId === sessionId ? null : current
-      )
+      try {
+        await deleteHouflowCloudSession(
+          houflow.session,
+          houflow.secret,
+          sessionId
+        )
+      } catch (error) {
+        if (!isHouflowCloudSessionNotFound(error)) throw error
+      }
+      removeSession(sessionId)
     },
-    [houflow.secret, houflow.session]
+    [houflow.secret, houflow.session, removeSession]
   )
 
   const deleteHostedCommand = useCallback(
@@ -319,6 +356,7 @@ export function HouflowCloudWorkspaceProvider({
       loading,
       error,
       refreshSessions,
+      removeSession,
       archiveSession,
       deleteSession,
       deleteHostedCommand,
@@ -335,6 +373,7 @@ export function HouflowCloudWorkspaceProvider({
       error,
       archiveSession,
       deleteSession,
+      removeSession,
       deleteHostedCommand,
       hostedCommands,
       loading,

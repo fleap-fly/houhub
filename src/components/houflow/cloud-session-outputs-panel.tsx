@@ -24,6 +24,7 @@ import {
   getHouflowCloudSessionOutputBytes,
   getHouflowCloudSessionOutputText,
   houflowHostedCommandOutputSessionId,
+  isHouflowCloudSessionNotFound,
   listHouflowCloudSessionOutputs,
   type HouflowCloudSessionOutput,
 } from "@/houflow/cloud-sessions"
@@ -46,8 +47,9 @@ export function CloudSessionOutputsPanel() {
   const requestRef = useRef(0)
   const openedSelectionNonceRef = useRef<number | null>(null)
 
+  const selectedCloudSessionId = cloud.selectedSession?.id ?? null
   const selectedSessionId =
-    cloud.selectedSession?.id ??
+    selectedCloudSessionId ??
     houflowHostedCommandOutputSessionId(cloud.selectedHostedCommand)
   const selectedOutputRequest = cloud.selectedOutputRequest
   const selectedOutput = useMemo(
@@ -86,14 +88,30 @@ export function CloudSessionOutputsPanel() {
         return null
       })
     } catch (err) {
-      if (requestRef.current === requestId) setError(toErrorMessage(err))
+      if (requestRef.current === requestId) {
+        // This list endpoint is session-scoped. A typed 404 here means the
+        // selected managed session was removed elsewhere, unlike a 404 while
+        // fetching one individual output file.
+        if (selectedCloudSessionId && isHouflowCloudSessionNotFound(err)) {
+          cloud.removeSession(selectedCloudSessionId)
+          setOutputs([])
+          return
+        }
+        setError(toErrorMessage(err))
+      }
     } finally {
       if (requestRef.current === requestId) {
         setLoading(false)
         setOutputsLoaded(true)
       }
     }
-  }, [houflow.secret, houflow.session, selectedSessionId])
+  }, [
+    cloud,
+    houflow.secret,
+    houflow.session,
+    selectedCloudSessionId,
+    selectedSessionId,
+  ])
 
   const openOutput = useCallback(
     async (output: HouflowCloudSessionOutput) => {

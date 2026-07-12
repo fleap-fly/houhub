@@ -37,6 +37,8 @@ vi.mock("@houshan/agent-hub-network-sdk", () => ({
           data: mocks.agents.map((agent) => ({
             id: `agent:${(agent as { id: string }).id}`,
             kind: "managed_agent",
+            default_environment_id:
+              (agent as { default_environment_id?: string }).default_environment_id ?? null,
             agent_id: (agent as { id: string }).id,
             connected_agent_id: null,
             connector_id: null,
@@ -165,15 +167,15 @@ describe("loadHouflowControlSnapshot", () => {
       expect.objectContaining({
         id: "agt_poetry",
         kind: "managed",
+        defaultEnvironmentId: "env_poetry",
         metadata: expect.objectContaining({
-          default_environment_id: "env_poetry",
           vault_ids: "vlt_ocr,vlt_files",
         }),
       }),
     ])
   })
 
-  it("maps managed session target environment fields into target metadata", async () => {
+  it("uses the canonical session target environment field", async () => {
     mocks.agents = [
       {
         id: "agt_poetry",
@@ -187,6 +189,7 @@ describe("loadHouflowControlSnapshot", () => {
       {
         kind: "managed_agent",
         id: "agent:agt_poetry",
+        default_environment_id: "env_poetry",
         agent_id: "agt_poetry",
         connected_agent_id: null,
         connector_id: null,
@@ -209,20 +212,21 @@ describe("loadHouflowControlSnapshot", () => {
       expect.objectContaining({
         id: "agt_poetry",
         kind: "managed",
-        metadata: expect.objectContaining({
-          default_environment_id: "env_agent_metadata",
-          environment_id: "env_agent_metadata",
+        defaultEnvironmentId: "env_poetry",
+        metadata: expect.not.objectContaining({
+          default_environment_id: expect.anything(),
         }),
       }),
     ])
   })
 
-  it("maps the control-plane defaultEnvironmentId into target metadata", async () => {
+  it("does not infer a target environment from agent metadata", async () => {
     mocks.agents = [
       {
         id: "agt_poetry",
         name: "诗歌智能体",
         model: { id: "gpt-5" },
+        default_environment_id: null,
         metadata: { defaultEnvironmentId: "env_poetry_default" },
       },
     ]
@@ -235,10 +239,7 @@ describe("loadHouflowControlSnapshot", () => {
       expect.objectContaining({
         id: "agt_poetry",
         kind: "managed",
-        metadata: expect.objectContaining({
-          default_environment_id: "env_poetry_default",
-          defaultEnvironmentId: "env_poetry_default",
-        }),
+        defaultEnvironmentId: null,
       }),
     ])
   })
@@ -261,6 +262,7 @@ describe("loadHouflowControlSnapshot", () => {
       {
         kind: "hosted_connected_agent",
         id: "connected:cag_resident_codex",
+        default_environment_id: "env_resident",
         agent_id: null,
         connected_agent_id: "cag_resident_codex",
         connector_id: null,
@@ -323,6 +325,7 @@ describe("loadHouflowControlSnapshot", () => {
       {
         kind: "external_connected_agent",
         id: "connected:cag_local_pi",
+        default_environment_id: null,
         agent_id: null,
         connected_agent_id: "cag_local_pi",
         connector_id: "cac_desktop",

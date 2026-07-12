@@ -15,11 +15,11 @@ import { toast } from "sonner"
 import type { LinkSafetyConfig, LinkSafetyModalProps } from "streamdown"
 import {
   DirectLinkOpen,
-  StreamdownLinkSafetyProvider,
   useOpenLinkOrFile,
 } from "@/components/ai-elements/link-safety"
 import { Message, MessageContent } from "@/components/ai-elements/message"
 import { MessageInput } from "@/components/chat/message-input"
+import { CloudMessageThread } from "@/components/houflow/cloud-message-thread"
 import {
   CloudTargetCapabilityBadges,
   CloudTargetIcon,
@@ -50,6 +50,7 @@ import {
   decideHouflowCloudSessionApproval,
   createHouflowManagedCloudSession,
   isCloudSessionActive,
+  isHouflowCloudSessionNotFound,
   listHouflowCloudSessionApprovals,
   listHouflowCloudSessionEvents,
   mergeHouflowHostedCommandStreamFrame,
@@ -62,6 +63,7 @@ import {
   type HouflowCloudHostedCommand,
   type HouflowCloudSessionEvent,
 } from "@/houflow/cloud-sessions"
+import { mergeHouflowCloudSessionEvents } from "@/houflow/cloud-session-event-merge"
 import { normalizeCloudOutputTarget } from "@/houflow/cloud-session-output-links"
 import type {
   HouflowAgentTarget,
@@ -213,14 +215,17 @@ export function CloudSessionPage() {
   const visibleEvents = useMemo(
     () =>
       selected && starterPendingEvent
-        ? mergeCloudSessionEvents(events, [starterPendingEvent])
+        ? mergeHouflowCloudSessionEvents(events, [starterPendingEvent])
         : events,
     [events, selected, starterPendingEvent]
   )
+  const turns = useMemo(
+    () => houflowCloudEventsToTurns(visibleEvents),
+    [visibleEvents]
+  )
   const messages = useMemo(
-    () =>
-      turnAdapter.adapt(houflowCloudEventsToTurns(visibleEvents), adapterText),
-    [adapterText, turnAdapter, visibleEvents]
+    () => turnAdapter.adapt(turns, adapterText),
+    [adapterText, turnAdapter, turns]
   )
   const consoleUrl = useMemo(() => {
     if (!selected || houflow.session.status !== "signed_in") return null
@@ -263,16 +268,21 @@ export function CloudSessionPage() {
         selectedId
       )
       if (eventsRequestRef.current === requestId) {
-        setEvents((current) => mergeCloudSessionEvents(current, next))
+        setEvents((current) => mergeHouflowCloudSessionEvents(current, next))
       }
     } catch (err) {
       if (eventsRequestRef.current === requestId) {
+        if (isHouflowCloudSessionNotFound(err)) {
+          cloud.removeSession(selectedId)
+          setEvents([])
+          return
+        }
         setEventsError(toErrorMessage(err))
       }
     } finally {
       if (eventsRequestRef.current === requestId) setEventsLoading(false)
     }
-  }, [houflow.secret, houflow.session, selectedId])
+  }, [cloud, houflow.secret, houflow.session, selectedId])
 
   const refreshApprovals = useCallback(async () => {
     const requestId = ++approvalsRequestRef.current
@@ -291,10 +301,15 @@ export function CloudSessionPage() {
       if (approvalsRequestRef.current === requestId) setApprovals(next)
     } catch (err) {
       if (approvalsRequestRef.current === requestId) {
+        if (isHouflowCloudSessionNotFound(err)) {
+          cloud.removeSession(selectedId)
+          setApprovals([])
+          return
+        }
         setApprovalsError(toErrorMessage(err))
       }
     }
-  }, [houflow.secret, houflow.session, selectedId])
+  }, [cloud, houflow.secret, houflow.session, selectedId])
 
   useEffect(() => {
     ++eventsRequestRef.current
@@ -347,6 +362,14 @@ export function CloudSessionPage() {
     return () => window.clearInterval(timer)
   }, [cloud, refreshApprovals, refreshEvents, selected])
 
+  const refreshCloudSessionState = useCallback(() => {
+    void Promise.all([
+      cloud.refreshSessions(),
+      refreshEvents(),
+      refreshApprovals(),
+    ]).catch(() => {})
+  }, [cloud, refreshApprovals, refreshEvents])
+
   useEffect(() => {
     if (
       !hostedStreamCommand ||
@@ -395,7 +418,7 @@ export function CloudSessionPage() {
         sharedT("attachedResources")
       )
       setEvents((current) =>
-        mergeCloudSessionEvents(current, [optimisticEvent])
+        mergeHouflowCloudSessionEvents(current, [optimisticEvent])
       )
       setSending(true)
       try {
@@ -407,22 +430,22 @@ export function CloudSessionPage() {
           (event) => {
             if (activeStreamRef.current !== streamId) return
             setEvents((current) =>
-              mergeCloudSessionEvents(current, [event], {
+              mergeHouflowCloudSessionEvents(current, [event], {
                 removeOptimisticEventId: optimisticEvent.id,
               })
             )
           },
           optimisticEvent.id
         )
-        await Promise.all([
-          cloud.refreshSessions(),
-          refreshEvents(),
-          refreshApprovals(),
-        ])
+        refreshCloudSessionState()
       } catch (err) {
         setEvents((current) =>
           current.filter((event) => event.id !== optimisticEvent.id)
         )
+        if (isHouflowCloudSessionNotFound(err)) {
+          cloud.removeSession(selected.id)
+          return
+        }
         toast.error(t("sendFailed"), { description: toErrorMessage(err) })
       } finally {
         if (activeStreamRef.current === streamId) {
@@ -435,8 +458,7 @@ export function CloudSessionPage() {
       cloud,
       houflow.secret,
       houflow.session,
-      refreshApprovals,
-      refreshEvents,
+      refreshCloudSessionState,
       selected,
       sharedT,
       t,
@@ -455,12 +477,12 @@ export function CloudSessionPage() {
           approvalId,
           decision
         )
-        await Promise.all([
-          refreshApprovals(),
-          refreshEvents(),
-          cloud.refreshSessions(),
-        ])
+        refreshCloudSessionState()
       } catch (err) {
+        if (isHouflowCloudSessionNotFound(err)) {
+          cloud.removeSession(selectedId)
+          return
+        }
         toast.error(t("approvalFailed"), { description: toErrorMessage(err) })
       } finally {
         setApprovalSubmittingId(null)
@@ -470,8 +492,7 @@ export function CloudSessionPage() {
       cloud,
       houflow.secret,
       houflow.session,
-      refreshApprovals,
-      refreshEvents,
+      refreshCloudSessionState,
       selectedId,
       t,
     ]
@@ -520,19 +541,19 @@ export function CloudSessionPage() {
                 if (activeStreamRef.current !== streamId) return
                 setStarterPendingEvent(null)
                 setEvents((current) =>
-                  mergeCloudSessionEvents(current, [event], {
+                  mergeHouflowCloudSessionEvents(current, [event], {
                     removeOptimisticEventId: optimisticEvent.id,
                   })
                 )
               },
               optimisticEvent.id
             )
-            await Promise.all([
-              cloud.refreshSessions(),
-              refreshEvents(),
-              refreshApprovals(),
-            ])
+            refreshCloudSessionState()
           } catch (err) {
+            if (isHouflowCloudSessionNotFound(err)) {
+              cloud.removeSession(created.id)
+              return
+            }
             toast.error(t("sendFailed"), { description: toErrorMessage(err) })
           } finally {
             if (activeStreamRef.current === streamId) {
@@ -577,8 +598,7 @@ export function CloudSessionPage() {
       cloud,
       houflow.secret,
       houflow.session,
-      refreshApprovals,
-      refreshEvents,
+      refreshCloudSessionState,
       selectedTarget,
       sharedT,
       t,
@@ -774,38 +794,11 @@ export function CloudSessionPage() {
                 }
               />
             ) : null}
-            {messages.map((message) => {
-              const messageRole =
-                message.role === "user" ||
-                message.role === "assistant" ||
-                message.role === "system"
-                  ? message.role
-                  : "assistant"
-              return (
-                <Message
-                  key={message.id}
-                  from={messageRole}
-                  className={cn(
-                    messageRole === "assistant" && "max-w-full",
-                    messageRole === "system" && "max-w-full opacity-80"
-                  )}
-                >
-                  <MessageContent>
-                    <StreamdownLinkSafetyProvider value={cloudLinkSafety}>
-                      <ContentPartsRenderer
-                        parts={message.content}
-                        role={message.role}
-                      />
-                    </StreamdownLinkSafetyProvider>
-                    <div className="text-[0.6875rem] text-muted-foreground">
-                      {formatTimestamp(
-                        message.completed_at ?? message.timestamp
-                      )}
-                    </div>
-                  </MessageContent>
-                </Message>
-              )
-            })}
+            <CloudMessageThread
+              messages={messages}
+              turns={turns}
+              linkSafety={cloudLinkSafety}
+            />
             {sending ? <CloudWaitingMessage /> : null}
           </div>
         )}
@@ -882,47 +875,6 @@ function optimisticCloudEventFromDraft(
   }
 }
 
-function mergeCloudSessionEvents(
-  current: HouflowCloudSessionEvent[],
-  incoming: HouflowCloudSessionEvent[],
-  options: { removeOptimisticEventId?: string | null } = {}
-): HouflowCloudSessionEvent[] {
-  const byId = new Map<string, HouflowCloudSessionEvent>()
-  for (const event of current) byId.set(event.id, event)
-  for (const event of incoming) {
-    if (
-      options.removeOptimisticEventId &&
-      event.type === "user.message" &&
-      cloudEventClientEventId(event) === options.removeOptimisticEventId
-    ) {
-      byId.delete(options.removeOptimisticEventId)
-    }
-    byId.set(event.id, event)
-  }
-  return Array.from(byId.values()).sort(compareCloudEvents)
-}
-
-function cloudEventClientEventId(
-  event: HouflowCloudSessionEvent
-): string | null {
-  const input = event.raw.input
-  if (!input || typeof input !== "object" || Array.isArray(input)) return null
-  const value = (input as Record<string, unknown>).houhub_client_event_id
-  return typeof value === "string" && value.trim() ? value.trim() : null
-}
-
-function compareCloudEvents(
-  left: HouflowCloudSessionEvent,
-  right: HouflowCloudSessionEvent
-): number {
-  const leftTime = Date.parse(left.createdAt ?? "")
-  const rightTime = Date.parse(right.createdAt ?? "")
-  if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) {
-    return leftTime - rightTime
-  }
-  return 0
-}
-
 function HostedCommandPage({
   command,
   commands,
@@ -973,18 +925,21 @@ function HostedCommandPage({
     }),
     [sharedT]
   )
+  const hostedTurns = useMemo(
+    () => houflowCloudEventsToTurns(hostedEvents),
+    [hostedEvents]
+  )
   const messages = useMemo(
-    () =>
-      turnAdapter.adapt(houflowCloudEventsToTurns(hostedEvents), adapterText),
-    [adapterText, hostedEvents, turnAdapter]
+    () => turnAdapter.adapt(hostedTurns, adapterText),
+    [adapterText, hostedTurns, turnAdapter]
   )
   const title = hostedThreadTitle(threadCommands) || t("untitled")
   const toneClass = statusBadgeClass(latestCommand.status)
   const error = threadCommands.map(hostedCommandError).find(Boolean) ?? null
   const active = isHostedCommandActive(latestCommand.status)
-  const latestCommandHasAssistantReply = houflowCloudEventsToTurns(
-    hostedCommandToCloudEvents(latestCommand)
-  ).some((turn) => turn.role === "assistant")
+  const latestCommandHasAssistantReply = hostedTurns.some(
+    (turn) => turn.role === "assistant"
+  )
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
@@ -1036,36 +991,11 @@ function HostedCommandPage({
             </div>
           ) : null}
           {error ? <HostedCommandErrorMessage message={error} /> : null}
-          {messages.map((message) => {
-            const messageRole =
-              message.role === "user" ||
-              message.role === "assistant" ||
-              message.role === "system"
-                ? message.role
-                : "assistant"
-            return (
-              <Message
-                key={message.id}
-                from={messageRole}
-                className={cn(
-                  messageRole === "assistant" && "max-w-full",
-                  messageRole === "system" && "max-w-full opacity-80"
-                )}
-              >
-                <MessageContent>
-                  <StreamdownLinkSafetyProvider value={commandLinkSafety}>
-                    <ContentPartsRenderer
-                      parts={message.content}
-                      role={message.role}
-                    />
-                  </StreamdownLinkSafetyProvider>
-                  <div className="text-[0.6875rem] text-muted-foreground">
-                    {formatTimestamp(message.completed_at ?? message.timestamp)}
-                  </div>
-                </MessageContent>
-              </Message>
-            )
-          })}
+          <CloudMessageThread
+            messages={messages}
+            turns={hostedTurns}
+            linkSafety={commandLinkSafety}
+          />
           {sending || (active && !latestCommandHasAssistantReply) ? (
             <CloudWaitingMessage />
           ) : null}
@@ -1558,13 +1488,6 @@ function targetKindLabel(
 ): string {
   if (kind === "hosted_connected") return hostedLabel
   return managedLabel
-}
-
-function formatTimestamp(value: string | null): string {
-  if (!value) return ""
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ""
-  return date.toLocaleString()
 }
 
 function isHostedCommandActive(status: string): boolean {

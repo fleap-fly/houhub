@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   listOutputs: vi.fn(),
   getOutputText: vi.fn(),
   getOutputBytes: vi.fn(),
+  isNotFound: vi.fn(),
+  removeSession: vi.fn(),
 }))
 
 vi.mock("next-intl", () => ({
@@ -42,6 +44,7 @@ vi.mock("@/houflow/cloud-workspace-context", () => ({
     selectedSession: { id: "session-1" },
     selectedHostedCommand: null,
     selectedOutputRequest: null,
+    removeSession: mocks.removeSession,
   }),
 }))
 
@@ -50,6 +53,7 @@ vi.mock("@/houflow/cloud-sessions", () => ({
   getHouflowCloudSessionOutputText: mocks.getOutputText,
   getHouflowCloudSessionOutputBytes: mocks.getOutputBytes,
   houflowHostedCommandOutputSessionId: () => null,
+  isHouflowCloudSessionNotFound: mocks.isNotFound,
 }))
 
 describe("canPreviewOutput", () => {
@@ -74,6 +78,8 @@ describe("CloudSessionOutputsPanel", () => {
     mocks.listOutputs.mockReset()
     mocks.getOutputText.mockReset()
     mocks.getOutputBytes.mockReset()
+    mocks.isNotFound.mockReset()
+    mocks.removeSession.mockReset()
   })
 
   it("opens cloud HTML through the shared readonly file workspace", async () => {
@@ -106,6 +112,17 @@ describe("CloudSessionOutputsPanel", () => {
       })
     })
     expect(mocks.getOutputBytes).not.toHaveBeenCalled()
+  })
+
+  it("reconciles a missing managed session instead of showing a stale file error", async () => {
+    mocks.listOutputs.mockRejectedValue(new Error("Session not found"))
+    mocks.isNotFound.mockReturnValue(true)
+
+    render(<CloudSessionOutputsPanel />)
+
+    await waitFor(() => {
+      expect(mocks.removeSession).toHaveBeenCalledWith("session-1")
+    })
   })
 })
 

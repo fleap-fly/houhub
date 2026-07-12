@@ -115,6 +115,7 @@ function eventToTurn(event: HouflowCloudSessionEvent): CloudMessageTurn | null {
     timestamp: event.createdAt ?? new Date(0).toISOString(),
     completed_at: event.createdAt,
     sourceEventType: event.type,
+    ...turnMetadataFromEvent(event),
   }
 }
 
@@ -125,8 +126,72 @@ function publicTurn(turn: CloudMessageTurn): MessageTurn {
     blocks: turn.blocks,
     timestamp: turn.timestamp,
     completed_at: turn.completed_at,
+    ...(turn.usage ? { usage: turn.usage } : {}),
+    ...(turn.duration_ms != null ? { duration_ms: turn.duration_ms } : {}),
+    ...(turn.model ? { model: turn.model } : {}),
   }
   return messageTurn
+}
+
+function turnMetadataFromEvent(
+  event: HouflowCloudSessionEvent
+): Pick<MessageTurn, "usage" | "duration_ms" | "model"> {
+  const raw = event.raw
+  const input = isRecord(raw.input) ? raw.input : null
+  const data = isRecord(raw.data) ? raw.data : null
+  const usage =
+    turnUsage(raw.model_usage) ??
+    turnUsage(data?.model_usage) ??
+    turnUsage(input?.usage)
+  const duration =
+    positiveNumber(raw.duration_ms) ??
+    positiveNumber(data?.duration_ms) ??
+    positiveNumber(input?.duration_ms)
+  const model =
+    stringValue(raw.model) ||
+    stringValue(data?.model) ||
+    stringValue(input?.model) ||
+    null
+
+  return {
+    ...(usage ? { usage } : {}),
+    ...(duration != null ? { duration_ms: duration } : {}),
+    ...(model ? { model } : {}),
+  }
+}
+
+function turnUsage(value: unknown): MessageTurn["usage"] {
+  if (!isRecord(value)) return null
+  const input = nonNegativeNumber(value.input_tokens)
+  const output = nonNegativeNumber(value.output_tokens)
+  const cacheCreation = nonNegativeNumber(value.cache_creation_input_tokens)
+  const cacheRead = nonNegativeNumber(value.cache_read_input_tokens)
+  if (
+    input == null &&
+    output == null &&
+    cacheCreation == null &&
+    cacheRead == null
+  ) {
+    return null
+  }
+  return {
+    input_tokens: input ?? 0,
+    output_tokens: output ?? 0,
+    cache_creation_input_tokens: cacheCreation ?? 0,
+    cache_read_input_tokens: cacheRead ?? 0,
+  }
+}
+
+function positiveNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null
+}
+
+function nonNegativeNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null
 }
 
 function roleFromEvent(event: HouflowCloudSessionEvent): TurnRole {

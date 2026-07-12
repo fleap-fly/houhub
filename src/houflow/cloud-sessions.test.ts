@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { RequestOptions } from "@houshan/agent-hub-network-sdk"
+import {
+  AgentHubNetworkError,
+  type RequestOptions,
+} from "@houshan/agent-hub-network-sdk"
 import {
   archiveHouflowCloudSession,
   decideHouflowCloudSessionApproval,
@@ -14,6 +17,7 @@ import {
   listHouflowCloudSessions,
   createHouflowManagedCloudSession,
   houflowHostedCommandOutputSessionId,
+  isHouflowCloudSessionNotFound,
   sendHouflowCloudSessionMessage,
   startHouflowCloudTargetSession,
 } from "./cloud-sessions"
@@ -88,6 +92,24 @@ describe("Houflow cloud sessions", () => {
     mocks.streamFrames.length = 0
     mocks.dispatchAgentHubTarget.mockReset()
     mocks.dispatchManagedAgent.mockReset()
+  })
+
+  it("recognizes typed SDK 404 responses for session-level reconciliation", () => {
+    expect(
+      isHouflowCloudSessionNotFound(
+        new AgentHubNetworkError("Session not found", 404, {
+          error: { code: "not_found" },
+        })
+      )
+    ).toBe(true)
+    expect(
+      isHouflowCloudSessionNotFound(
+        new AgentHubNetworkError("Unauthorized", 401, {})
+      )
+    ).toBe(false)
+    expect(isHouflowCloudSessionNotFound(new Error("Session not found"))).toBe(
+      false
+    )
   })
 
   it("lists Agent Hub sessions for the active Houflow workspace", async () => {
@@ -647,7 +669,7 @@ describe("Houflow cloud sessions", () => {
     )
   })
 
-  it("lets the standard session API resolve a managed target default environment", async () => {
+  it("sends the canonical managed target environment", async () => {
     mocks.dispatchManagedAgent.mockResolvedValue({
       surface: "agent_hub",
       kind: "managed",
@@ -669,21 +691,18 @@ describe("Houflow cloud sessions", () => {
         },
       },
     })
-    const target = {
-      ...managedTarget(),
-      metadata: {},
-    }
+    const target = managedTarget()
 
     await startHouflowCloudTargetSession(session(), secret(), target, "开始")
 
     expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
       expect.any(Object),
       expect.any(Object),
-      expect.objectContaining({ environmentId: undefined })
+      expect.objectContaining({ environmentId: "env_default" })
     )
   })
 
-  it("creates managed cloud sessions without duplicating server default-environment resolution", async () => {
+  it("creates managed cloud sessions with the target environment", async () => {
     mocks.responses.push({
       id: "ses_server_default",
       status: "idle",
@@ -704,12 +723,13 @@ describe("Houflow cloud sessions", () => {
     expect(mocks.calls[0]).toMatchObject({ path: "/v1/sessions" })
     expect(mocks.calls[0]?.options.body).toEqual({
       agent: "agt_1",
+      environment_id: "env_default",
       workspace_id: "ws_1",
       title: "开始",
     })
   })
 
-  it("accepts managed target environment_id metadata as the launch environment", async () => {
+  it("does not accept managed target environment metadata as the launch environment", async () => {
     mocks.dispatchManagedAgent.mockResolvedValue({
       surface: "agent_hub",
       kind: "managed",
@@ -732,20 +752,16 @@ describe("Houflow cloud sessions", () => {
       },
     })
 
-    await startHouflowCloudTargetSession(
-      session(),
-      secret(),
-      {
-        ...managedTarget(),
-        metadata: { environment_id: "env_metadata" },
-      },
-      "开始"
-    )
+    await startHouflowCloudTargetSession(session(), secret(), {
+      ...managedTarget(),
+      defaultEnvironmentId: "env_default",
+      metadata: { environment_id: "env_metadata" },
+    }, "开始")
 
     expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
       expect.any(Object),
       expect.any(Object),
-      expect.objectContaining({ environmentId: "env_metadata" })
+      expect.objectContaining({ environmentId: "env_default" })
     )
   })
 
@@ -768,6 +784,7 @@ describe("Houflow cloud sessions", () => {
         key: "hosted_connected:cag_1",
         kind: "hosted_connected",
         id: "cag_1",
+        defaultEnvironmentId: "env_resident",
         name: "常驻助手",
         provider: "agent-hub",
         status: "active",
@@ -820,6 +837,7 @@ describe("Houflow cloud sessions", () => {
         key: "hosted_connected:cag_1",
         kind: "hosted_connected",
         id: "cag_1",
+        defaultEnvironmentId: "env_resident",
         name: "常驻助手",
         provider: "agent-hub",
         status: "active",
@@ -856,6 +874,7 @@ describe("Houflow cloud sessions", () => {
         key: "hosted_connected:cag_1",
         kind: "hosted_connected",
         id: "cag_1",
+        defaultEnvironmentId: null,
         name: "常驻助手",
         provider: "agent-hub",
         status: "active",
@@ -902,6 +921,7 @@ describe("Houflow cloud sessions", () => {
         key: "external_local:cag_2:codex",
         kind: "external_local",
         id: "cag_2",
+        defaultEnvironmentId: null,
         name: "本机 Codex",
         provider: "codex",
         status: "active",
@@ -1025,11 +1045,12 @@ function managedTarget(): HouflowAgentTarget {
     key: "managed:agt_1",
     kind: "managed",
     id: "agt_1",
+    defaultEnvironmentId: "env_default",
     name: "云端助手",
     provider: "agent-hub",
     status: "active",
     capabilities: ["chat", "artifact_upload"],
     source: "agent_hub",
-    metadata: { default_environment_id: "env_default" },
+    metadata: {},
   }
 }

@@ -271,6 +271,38 @@ describe("houflowCloudEventsToTurns", () => {
       },
     ])
   })
+
+  it("preserves explicit server-side model usage and duration for reply actions", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_usage",
+        type: "agent.message",
+        model: "gpt-5.5",
+        duration_ms: 320,
+        model_usage: {
+          input_tokens: 120,
+          output_tokens: 32,
+          cache_read_input_tokens: 8,
+          cache_creation_input_tokens: 0,
+        },
+        content: [{ type: "text", text: "已完成。" }],
+      }),
+    ])
+
+    expect(turns).toMatchObject([
+      {
+        id: "evt_usage",
+        model: "gpt-5.5",
+        duration_ms: 320,
+        usage: {
+          input_tokens: 120,
+          output_tokens: 32,
+          cache_read_input_tokens: 8,
+          cache_creation_input_tokens: 0,
+        },
+      },
+    ])
+  })
 })
 
 function event(raw: Record<string, unknown>): HouflowCloudSessionEvent {

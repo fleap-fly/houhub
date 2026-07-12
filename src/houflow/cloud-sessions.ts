@@ -1,6 +1,7 @@
-import type {
-  ConnectedAgentConnectorCommand,
-  PageCursor,
+import {
+  AgentHubNetworkError,
+  type ConnectedAgentConnectorCommand,
+  type PageCursor,
 } from "@houshan/agent-hub-network-sdk"
 import type { ContentBlock } from "@houshan/agent-hub-sdk"
 import {
@@ -111,6 +112,16 @@ export interface HouflowCloudDispatchDraft {
 }
 
 export type HouflowCloudDispatchInput = string | HouflowCloudDispatchDraft
+
+/**
+ * Session-level callers use the SDK's typed 404 response to reconcile a
+ * session deleted from another client. Output-file callers intentionally do
+ * not use this predicate because a missing file does not imply a missing
+ * session.
+ */
+export function isHouflowCloudSessionNotFound(error: unknown): boolean {
+  return error instanceof AgentHubNetworkError && error.status === 404
+}
 
 interface SessionDto {
   id?: unknown
@@ -593,7 +604,7 @@ export async function startHouflowCloudTargetSession(
     conversationTarget.kind === "hosted_connected" ||
     conversationTarget.kind === "external_local"
   ) {
-    const environmentId = target.metadata.environment_id?.trim()
+    const environmentId = target.defaultEnvironmentId?.trim()
     const dispatch = await dispatchAgentHubTarget(client, conversationTarget, {
       action: "workspace_message",
       environmentId: environmentId || undefined,
@@ -616,13 +627,14 @@ export async function startHouflowCloudTargetSession(
   throw new Error(`Cloud target is not supported yet: ${target.name}`)
 }
 
-function managedTargetEnvironmentId(
-  target: HouflowAgentTarget
-): string | undefined {
-  return (
-    target.metadata.default_environment_id?.trim() ||
-    target.metadata.environment_id?.trim()
-  ) || undefined
+function managedTargetEnvironmentId(target: HouflowAgentTarget): string {
+  const environmentId = target.defaultEnvironmentId?.trim()
+  if (!environmentId) {
+    throw new Error(
+      `Cloud managed agent ${target.name} is missing default environment`
+    )
+  }
+  return environmentId
 }
 
 function normalizeCloudDispatchInput(
