@@ -752,11 +752,16 @@ describe("Houflow cloud sessions", () => {
       },
     })
 
-    await startHouflowCloudTargetSession(session(), secret(), {
-      ...managedTarget(),
-      defaultEnvironmentId: "env_default",
-      metadata: { environment_id: "env_metadata" },
-    }, "开始")
+    await startHouflowCloudTargetSession(
+      session(),
+      secret(),
+      {
+        ...managedTarget(),
+        defaultEnvironmentId: "env_default",
+        metadata: { environment_id: "env_metadata" },
+      },
+      "开始"
+    )
 
     expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
       expect.any(Object),

@@ -38,7 +38,8 @@ vi.mock("@houshan/agent-hub-network-sdk", () => ({
             id: `agent:${(agent as { id: string }).id}`,
             kind: "managed_agent",
             default_environment_id:
-              (agent as { default_environment_id?: string }).default_environment_id ?? null,
+              (agent as { default_environment_id?: string })
+                .default_environment_id ?? null,
             agent_id: (agent as { id: string }).id,
             connected_agent_id: null,
             connector_id: null,
