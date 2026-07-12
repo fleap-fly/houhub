@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { isDesktop } from "@/lib/platform"
 import Image from "next/image"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import {
   BookOpenText,
@@ -12,8 +12,11 @@ import {
   ClipboardPaste,
   Cog,
   Copy,
+  FileStack,
+  FlaskConical,
   FolderSearch,
   GitFork,
+  Lock,
   MessageSquarePlus,
   MessageSquareText,
   Paperclip,
@@ -22,6 +25,7 @@ import {
   Search,
   Send,
   Command,
+  Sparkles,
   Square,
   TextSelect,
   Upload,
@@ -71,6 +75,8 @@ import {
   uploadAttachment,
   uploadLocalPathToRemote,
   isEmptyAttachmentError,
+  openSettingsWindow,
+  type SettingsSection,
   UPLOAD_MAX_BYTES,
   UPLOAD_I18N_KEY_TOO_LARGE,
   UPLOAD_I18N_KEY_NOT_A_FILE,
@@ -82,10 +88,13 @@ import { getActiveRemoteConnectionId } from "@/lib/transport"
 import { ServerFileBrowserDialog } from "@/components/shared/server-file-browser-dialog"
 import { toast } from "sonner"
 import { disposeTauriListener } from "@/lib/tauri-listener"
+import { AGENT_LABELS } from "@/lib/types"
 import type {
   AgentSkillItem,
   AgentType,
   AvailableCommandInfo,
+  ExpertListItem,
+  ScienceListItem,
   PromptCapabilitiesInfo,
   PromptDraft,
   PromptInputBlock,
@@ -121,7 +130,13 @@ import {
 } from "@/lib/model-config-groups"
 import { DropdownRadioItemContent } from "@/components/chat/dropdown-radio-item-content"
 import { useAgentSkills } from "@/hooks/use-agent-skills"
+import { useBuiltInExperts } from "@/hooks/use-built-in-experts"
+import { useBuiltInScience } from "@/hooks/use-built-in-science"
+import { useEnabledSkillIds } from "@/hooks/use-enabled-skill-ids"
 import { useScrollbarSafeDismiss } from "@/hooks/use-scrollbar-safe-dismiss"
+import { getExpertIcon, pickLocalized } from "@/lib/expert-presentation"
+import { getScienceIcon } from "@/lib/science-presentation"
+import { OFFICE_ACTIONS, type OfficeAction } from "@/lib/office-actions"
 import {
   clearMessageInputDraftV2,
   loadMessageInputDraftV2,
@@ -144,6 +159,7 @@ import {
   applyExpertReference,
   isComposerChromeClick,
   isComposerEmpty,
+  restampSkillPrefixes,
   restoreBlocksIntoEditor,
 } from "@/components/chat/composer/composer-commands"
 import {
@@ -196,8 +212,8 @@ interface MessageInputProps {
   availableCommands?: AvailableCommandInfo[] | null
   promptCapabilities: PromptCapabilitiesInfo
   /** Enables local workspace references such as @file, folder branch picker,
-   *  server file browser, and direct local file:// path attachment. Cloud
-   *  conversations keep this off so they do not leak the active local folder. */
+   * server file browser, and direct local file:// path attachment. Cloud
+   * conversations keep this off so they do not leak the active local folder. */
   enableWorkspaceReferences?: boolean
   attachmentTabId?: string | null
   draftStorageKey?: string | null
@@ -538,6 +554,20 @@ export function MessageInput({
   const { shortcuts } = useShortcutSettings()
   const effectiveDraftStorageKey = draftStorageKey ?? null
   const resolvedPlaceholder = placeholder ?? t("askAnything")
+  // The "+" menu's expert / daily-office / research skill shortcuts mirror the
+  // welcome-page quick actions: localized labels, the bundled experts and
+  // science skills, and per-agent skill-enabled gating. Experts and science load
+  // their full lists from the backend (so every skill shows, not a curated
+  // subset); office is a fixed static set. `tQa` supplies office labels/prompts.
+  const locale = useLocale()
+  const tQa = useTranslations("Folder.chat.welcomePanel.quickActions")
+  const experts = useBuiltInExperts()
+  const science = useBuiltInScience()
+  const {
+    enabledIds,
+    ready: skillStatusReady,
+    supported: skillManagementSupported,
+  } = useEnabledSkillIds(agentType ?? null)
   const editorRef = useRef<RichComposerHandle>(null)
   // The editor owns the content now; this mirror of its empty state drives the
   // send button and `hasSendableContent`.
@@ -864,6 +894,25 @@ export function MessageInput({
     })
     return () => cancelAnimationFrame(raf)
   }, [injectContent, composerReady, skillPrefix, onInjectConsumed])
+
+  // A skill / expert badge freezes its invocation prefix (`$` for Codex, `/`
+  // elsewhere) at insert time. On the welcome page users routinely click a
+  // quick-skill card while the default agent is selected and only then switch to
+  // Codex via the picker below — the badge would keep its `/` and Codex would
+  // parse the leading `/skill` as a slash command and reject the turn. Re-stamp
+  // the existing skill badges whenever the effective prefix changes so the
+  // leading invocation always matches the selected agent (ACP slash commands
+  // carry no scope and stay `/`). rAF-deferred like the sibling editor-mutation
+  // effects to stay off React's commit phase — the badge NodeView re-renders via
+  // a synchronous flushSync().
+  useEffect(() => {
+    if (!composerReady) return
+    const raf = requestAnimationFrame(() => {
+      const editor = editorRef.current?.getEditor()
+      if (editor) restampSkillPrefixes(editor, skillPrefix)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [skillPrefix, composerReady])
 
   const setDragActiveIfChanged = useCallback((next: boolean) => {
     if (dragActiveRef.current === next) return
@@ -1806,6 +1855,131 @@ export function MessageInput({
     chain.insertReference(commandToReference(cmd)).insertContent(" ").run()
   }, [])
 
+  // ── "+" menu skill shortcuts (experts / daily office / research) ──
+  //
+  // Surface the welcome-page skill families inside an active conversation. Each
+  // item drops that skill's leading invocation badge into the composer. A skill
+  // not linked to the current agent is "locked": clicking it surfaces a hint
+  // (and a jump to Settings) instead of injecting a badge the agent can't act on
+  // — the same gating QuickActions applies, to avoid a wasted send.
+  const expertsSorted = useMemo(
+    () =>
+      [...experts].sort(
+        (a, b) =>
+          (a.metadata.sort_order ?? 0) - (b.metadata.sort_order ?? 0) ||
+          a.metadata.id.localeCompare(b.metadata.id)
+      ),
+    [experts]
+  )
+
+  const scienceSorted = useMemo(
+    () =>
+      [...science].sort(
+        (a, b) =>
+          (a.metadata.sort_order ?? 0) - (b.metadata.sort_order ?? 0) ||
+          a.metadata.id.localeCompare(b.metadata.id)
+      ),
+    [science]
+  )
+
+  const isSkillLocked = useCallback(
+    (id: string) => !!agentType && skillStatusReady && !enabledIds.has(id),
+    [agentType, skillStatusReady, enabledIds]
+  )
+
+  const notifySkillNotEnabled = useCallback(
+    (skillLabel: string, section: SettingsSection) => {
+      const agentLabel = agentType ? AGENT_LABELS[agentType] : ""
+      toast.warning(
+        tQa("notEnabled.title", { skill: skillLabel, agent: agentLabel }),
+        {
+          description: tQa("notEnabled.description"),
+          action: {
+            label: tQa("notEnabled.action"),
+            onClick: () => {
+              void openSettingsWindow(section).catch((err) =>
+                console.error("[MessageInput] failed to open settings:", err)
+              )
+            },
+          },
+        }
+      )
+    },
+    [agentType, tQa]
+  )
+
+  // Insert a skill shortcut: seed the template only into an *empty* composer
+  // (never clobber an in-progress draft), then prepend the skill as the leading
+  // invocation badge. Deferred to the next frame — inserting the badge mounts a
+  // React NodeView rendered with a synchronous flushSync(), which warns if run
+  // during React's commit phase (same pattern as the inject/hydration effects).
+  const insertSkillShortcut = useCallback(
+    (skill: { id: string; label: string }, template: string) => {
+      requestAnimationFrame(() => {
+        const handle = editorRef.current
+        const editor = handle?.getEditor()
+        if (!handle || !editor) return
+        if (template && isComposerEmpty(editor)) {
+          handle.setText(template)
+        }
+        applyExpertReference(editor, {
+          refType: "skill",
+          id: skill.id,
+          label: skill.label,
+          uri: null,
+          meta: { invocationPrefix: skillPrefix, scope: "expert" },
+        })
+        syncComposerEmpty()
+        handle.focus()
+      })
+    },
+    [skillPrefix, syncComposerEmpty]
+  )
+
+  const handleExpertShortcut = useCallback(
+    (item: ExpertListItem) => {
+      const label =
+        pickLocalized(item.metadata.display_name, locale) || item.metadata.id
+      if (isSkillLocked(item.metadata.id)) {
+        notifySkillNotEnabled(label, "experts")
+        return
+      }
+      // Experts are open-ended: just the leading badge, no canned template.
+      insertSkillShortcut({ id: item.metadata.id, label }, "")
+    },
+    [locale, isSkillLocked, notifySkillNotEnabled, insertSkillShortcut]
+  )
+
+  const handleOfficeShortcut = useCallback(
+    (action: OfficeAction) => {
+      const label = tQa(action.id as Parameters<typeof tQa>[0])
+      if (isSkillLocked(action.skillId)) {
+        notifySkillNotEnabled(label, "office-tools")
+        return
+      }
+      insertSkillShortcut(
+        { id: action.skillId, label },
+        tQa(action.promptKey as Parameters<typeof tQa>[0])
+      )
+    },
+    [tQa, isSkillLocked, notifySkillNotEnabled, insertSkillShortcut]
+  )
+
+  const handleScienceShortcut = useCallback(
+    (item: ScienceListItem) => {
+      const label =
+        pickLocalized(item.metadata.display_name, locale) || item.metadata.id
+      if (isSkillLocked(item.metadata.id)) {
+        notifySkillNotEnabled(label, "science")
+        return
+      }
+      // Science skills are open-ended methodologies: just the leading badge,
+      // no canned template (mirrors experts).
+      insertSkillShortcut({ id: item.metadata.id, label }, "")
+    },
+    [locale, isSkillLocked, notifySkillNotEnabled, insertSkillShortcut]
+  )
+
   const handlePickFiles = useCallback(async () => {
     if (disabled) return
     // Only wired up when `showNativePaperclip` is true (i.e. local desktop),
@@ -2191,6 +2365,14 @@ export function MessageInput({
 
   const buildDraft = useCallback((): PromptDraft | null => {
     const editor = editorRef.current?.getEditor()
+    // Authoritative prefix normalization at the send boundary. A skill / expert
+    // badge freezes its `$`/`/` trigger at insert time and the agent can change
+    // afterward; the agent-change effect re-stamps live, but doing it here too —
+    // synchronously, before both the sent blocks and the display prose read the
+    // doc — guarantees the wire text matches the current agent regardless of any
+    // timing/ordering (Codex needs `$skill`, not the slash-command `/skill`).
+    // Cheap: one small-doc walk, and no dispatch when nothing is stale.
+    if (editor) restampSkillPrefixes(editor, skillPrefix)
     // Inline badges + prose → text/resource_link blocks (file mentions become
     // first-class ResourceLinks; agent/session/commit/skill stay inline text;
     // embedded badges are dropped here and re-added below from the payload map).
@@ -2240,7 +2422,7 @@ export function MessageInput({
       displayProse ||
       `Attached ${attachments.length} attachment${attachments.length > 1 ? "s" : ""}`
     return { blocks, displayText }
-  }, [attachments])
+  }, [attachments, skillPrefix])
 
   // Clear the editor + attachments after a send / enqueue / save.
   const resetComposer = useCallback(() => {
@@ -2395,6 +2577,9 @@ export function MessageInput({
   // textarea, instead of always jumping to the end.
   const handleChromeMouseDown = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
+      // Not gated on `disabled`: the editor stays editable while connecting (see
+      // `handleSend`), so chrome clicks must focus too — else only the existing
+      // text line is clickable and the blank area below it is dead until ready.
       if (!isComposerChromeClick(e.target)) return
       // Keep the editor from blurring before we refocus it.
       e.preventDefault()
@@ -2859,7 +3044,7 @@ export function MessageInput({
                     <DropdownMenuContent
                       side="top"
                       align="start"
-                      className="min-w-48"
+                      className="min-w-56 w-auto"
                     >
                       {showNativePaperclip ? (
                         <DropdownMenuItem
@@ -3050,6 +3235,127 @@ export function MessageInput({
                           </div>
                         </DropdownMenuSubContent>
                       </DropdownMenuSub>
+                      {/* A custom-dir pi can't have skills managed by HouHub's
+                          default-dir store, so hide these shortcuts instead of
+                          offering ones that lock with a Settings path the
+                          Experts/Office matrices also hide for this agent. */}
+                      {skillManagementSupported && (
+                        <>
+                          <DropdownMenuSub>
+                            <DropdownMenuSubTrigger
+                              disabled={expertsSorted.length === 0}
+                            >
+                              <Sparkles className="size-4" />
+                              {t("experts")}
+                            </DropdownMenuSubTrigger>
+                            <DropdownMenuSubContent
+                              className="min-w-44 overflow-y-auto"
+                              style={{
+                                maxWidth: "min(20rem, calc(100vw - 1rem))",
+                                maxHeight:
+                                  "min(32rem, var(--radix-dropdown-menu-content-available-height))",
+                              }}
+                            >
+                              {expertsSorted.map((item) => {
+                                const Icon = getExpertIcon(item.metadata.icon)
+                                const label =
+                                  pickLocalized(
+                                    item.metadata.display_name,
+                                    locale
+                                  ) || item.metadata.id
+                                return (
+                                  <DropdownMenuItem
+                                    key={item.metadata.id}
+                                    onClick={() => handleExpertShortcut(item)}
+                                  >
+                                    <Icon className="size-4" />
+                                    <span className="flex-1 truncate">
+                                      {label}
+                                    </span>
+                                    {isSkillLocked(item.metadata.id) && (
+                                      <Lock className="ml-auto size-3.5 shrink-0 text-muted-foreground/70" />
+                                    )}
+                                  </DropdownMenuItem>
+                                )
+                              })}
+                            </DropdownMenuSubContent>
+                          </DropdownMenuSub>
+                          <DropdownMenuSub>
+                            <DropdownMenuSubTrigger>
+                              <FileStack className="size-4" />
+                              {t("office")}
+                            </DropdownMenuSubTrigger>
+                            <DropdownMenuSubContent
+                              className="min-w-44 overflow-y-auto"
+                              style={{
+                                maxWidth: "min(20rem, calc(100vw - 1rem))",
+                                maxHeight:
+                                  "min(32rem, var(--radix-dropdown-menu-content-available-height))",
+                              }}
+                            >
+                              {OFFICE_ACTIONS.map((action) => {
+                                const Icon = action.icon
+                                const label = tQa(
+                                  action.id as Parameters<typeof tQa>[0]
+                                )
+                                return (
+                                  <DropdownMenuItem
+                                    key={action.id}
+                                    onClick={() => handleOfficeShortcut(action)}
+                                  >
+                                    <Icon className="size-4" />
+                                    <span className="flex-1 truncate">
+                                      {label}
+                                    </span>
+                                    {isSkillLocked(action.skillId) && (
+                                      <Lock className="ml-auto size-3.5 shrink-0 text-muted-foreground/70" />
+                                    )}
+                                  </DropdownMenuItem>
+                                )
+                              })}
+                            </DropdownMenuSubContent>
+                          </DropdownMenuSub>
+                          <DropdownMenuSub>
+                            <DropdownMenuSubTrigger
+                              disabled={scienceSorted.length === 0}
+                            >
+                              <FlaskConical className="size-4" />
+                              {t("research")}
+                            </DropdownMenuSubTrigger>
+                            <DropdownMenuSubContent
+                              className="min-w-44 overflow-y-auto"
+                              style={{
+                                maxWidth: "min(20rem, calc(100vw - 1rem))",
+                                maxHeight:
+                                  "min(32rem, var(--radix-dropdown-menu-content-available-height))",
+                              }}
+                            >
+                              {scienceSorted.map((item) => {
+                                const Icon = getScienceIcon(item.metadata.icon)
+                                const label =
+                                  pickLocalized(
+                                    item.metadata.display_name,
+                                    locale
+                                  ) || item.metadata.id
+                                return (
+                                  <DropdownMenuItem
+                                    key={item.metadata.id}
+                                    onClick={() => handleScienceShortcut(item)}
+                                  >
+                                    <Icon className="size-4" />
+                                    <span className="flex-1 truncate">
+                                      {label}
+                                    </span>
+                                    {isSkillLocked(item.metadata.id) && (
+                                      <Lock className="ml-auto size-3.5 shrink-0 text-muted-foreground/70" />
+                                    )}
+                                  </DropdownMenuItem>
+                                )
+                              })}
+                            </DropdownMenuSubContent>
+                          </DropdownMenuSub>
+                        </>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                   {hasInlineSelectors && (
@@ -3093,6 +3399,9 @@ export function MessageInput({
                           aria-label={t("agentSettings")}
                           onPointerDownOutside={
                             collapsedSelectorsGuard.onPointerDownOutside
+                          }
+                          onFocusOutside={
+                            collapsedSelectorsGuard.onFocusOutside
                           }
                           className="w-[22rem] max-w-[calc(100vw-1rem)] p-1"
                         >
