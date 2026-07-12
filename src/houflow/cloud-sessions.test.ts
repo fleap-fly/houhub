@@ -647,34 +647,66 @@ describe("Houflow cloud sessions", () => {
     )
   })
 
-  it("rejects managed cloud session starts when the target has no default environment", async () => {
+  it("lets the standard session API resolve a managed target default environment", async () => {
+    mocks.dispatchManagedAgent.mockResolvedValue({
+      surface: "agent_hub",
+      kind: "managed",
+      status: "queued",
+      sessionId: "ses_new",
+      runId: "run_1",
+      interactionId: "int_1",
+      engineRunId: null,
+      raw: {
+        session: {
+          id: "ses_new",
+          status: "queued",
+          title: "开始",
+          environment_id: "env_server_default",
+          agent: { id: "agt_1", name: "云端助手" },
+          created_at: "2026-06-28T00:00:00.000Z",
+          updated_at: "2026-06-28T00:00:00.000Z",
+          archived_at: null,
+        },
+      },
+    })
     const target = {
       ...managedTarget(),
       metadata: {},
     }
 
-    await expect(
-      startHouflowCloudTargetSession(session(), secret(), target, "开始")
-    ).rejects.toThrow(
-      "Cloud managed agent 云端助手 is missing default environment"
-    )
+    await startHouflowCloudTargetSession(session(), secret(), target, "开始")
 
-    expect(mocks.dispatchManagedAgent).not.toHaveBeenCalled()
+    expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({ environmentId: undefined })
+    )
   })
 
-  it("rejects managed cloud session creates when the target has no default environment", async () => {
+  it("creates managed cloud sessions without duplicating server default-environment resolution", async () => {
+    mocks.responses.push({
+      id: "ses_server_default",
+      status: "idle",
+      title: "开始",
+      environment_id: "env_server_default",
+      agent: { id: "agt_1", name: "云端助手" },
+      created_at: "2026-06-28T00:00:00.000Z",
+      updated_at: "2026-06-28T00:00:00.000Z",
+      archived_at: null,
+    })
     const target = {
       ...managedTarget(),
       metadata: {},
     }
 
-    await expect(
-      createHouflowManagedCloudSession(session(), secret(), target, "开始")
-    ).rejects.toThrow(
-      "Cloud managed agent 云端助手 is missing default environment"
-    )
+    await createHouflowManagedCloudSession(session(), secret(), target, "开始")
 
-    expect(mocks.calls).toEqual([])
+    expect(mocks.calls[0]).toMatchObject({ path: "/v1/sessions" })
+    expect(mocks.calls[0]?.options.body).toEqual({
+      agent: "agt_1",
+      workspace_id: "ws_1",
+      title: "开始",
+    })
   })
 
   it("accepts managed target environment_id metadata as the launch environment", async () => {

@@ -569,6 +569,9 @@ export async function startHouflowCloudTargetSession(
 
   if (conversationTarget.kind === "managed") {
     const title = draft.message.trim().slice(0, 80) || target.name
+    // The control plane owns default-environment resolution for managed agents.
+    // Supplying an explicit target environment is supported, but a missing
+    // projection must not make HouHub diverge from the standard session API.
     const environmentId = managedTargetEnvironmentId(target)
     const vaultIds = targetMetadataList(target.metadata.vault_ids)
     const dispatch = await dispatchManagedAgent(client, conversationTarget, {
@@ -613,16 +616,13 @@ export async function startHouflowCloudTargetSession(
   throw new Error(`Cloud target is not supported yet: ${target.name}`)
 }
 
-function managedTargetEnvironmentId(target: HouflowAgentTarget): string {
-  const environmentId =
+function managedTargetEnvironmentId(
+  target: HouflowAgentTarget
+): string | undefined {
+  return (
     target.metadata.default_environment_id?.trim() ||
     target.metadata.environment_id?.trim()
-  if (!environmentId) {
-    throw new Error(
-      `Cloud managed agent ${target.name} is missing default environment`
-    )
-  }
-  return environmentId
+  ) || undefined
 }
 
 function normalizeCloudDispatchInput(
