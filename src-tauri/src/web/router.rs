@@ -703,6 +703,10 @@ pub fn build_router(
             post(handlers::acp::opencode_list_plugins),
         )
         .route(
+            "/codex_bundled_catalog",
+            post(handlers::acp::codex_bundled_catalog),
+        )
+        .route(
             "/opencode_install_plugins",
             post(handlers::acp::opencode_install_plugins),
         )
@@ -777,6 +781,44 @@ pub fn build_router(
         .route(
             "/science_open_central_dir",
             post(handlers::science::science_open_central_dir),
+        )
+        // ─── Custom skills ───
+        .route("/custom_list", post(handlers::custom_skills::custom_list))
+        .route(
+            "/custom_list_all_install_statuses",
+            post(handlers::custom_skills::custom_list_all_install_statuses),
+        )
+        .route(
+            "/custom_apply_links",
+            post(handlers::custom_skills::custom_apply_links),
+        )
+        .route(
+            "/custom_read_skill",
+            post(handlers::custom_skills::custom_read_skill),
+        )
+        .route(
+            "/custom_create_skill",
+            post(handlers::custom_skills::custom_create_skill),
+        )
+        .route(
+            "/custom_save_skill",
+            post(handlers::custom_skills::custom_save_skill),
+        )
+        .route(
+            "/custom_duplicate_skill",
+            post(handlers::custom_skills::custom_duplicate_skill),
+        )
+        .route(
+            "/custom_import_skill",
+            post(handlers::custom_skills::custom_import_skill),
+        )
+        .route(
+            "/custom_import_from_agent",
+            post(handlers::custom_skills::custom_import_from_agent),
+        )
+        .route(
+            "/custom_delete_skills",
+            post(handlers::custom_skills::custom_delete_skills),
         )
         // ─── Office tools ───
         .route(
@@ -1149,7 +1191,10 @@ pub fn build_router(
             "/automation_list",
             post(handlers::automation::automation_list),
         )
-        .route("/automation_get", post(handlers::automation::automation_get))
+        .route(
+            "/automation_get",
+            post(handlers::automation::automation_get),
+        )
         .route(
             "/automation_runs",
             post(handlers::automation::automation_runs),

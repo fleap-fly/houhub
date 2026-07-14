@@ -106,15 +106,23 @@ import type {
   HermesLocalConfig,
   ModelProviderInfo,
   PreflightResult,
+  CodexModelConfig,
 } from "@/lib/types"
-import { HERMES_PROVIDERS, parseClaudeProviderModel } from "@/lib/types"
+import {
+  HERMES_PROVIDERS,
+  parseClaudeProviderModel,
+  parseCodexModelConfig,
+  serializeCodexModelConfig,
+} from "@/lib/types"
 import { toErrorMessage } from "@/lib/app-error"
 import { getInstallErrorHintKey } from "@/lib/agent-install-error"
+import { modelReasoningEfforts } from "@/lib/reasoning-effort-capabilities"
 import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
 import { OpencodePluginsModal } from "./opencode-plugins-modal"
 import { useHouflowDesktop, type HouflowAgentTarget } from "@/houflow"
 import { CodeBuddyConfigPanel } from "./codebuddy-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
+import { CodexModelListEditor } from "./codex-model-list-editor"
 
 interface AgentCheckState {
   result?: PreflightResult
@@ -161,6 +169,9 @@ interface AgentDraft {
   claudeEffortLevel: ClaudeEffortLevel
   codexAuthJsonText: string
   codexConfigTomlText: string
+  /** Structured codex custom-model list (mirrors the catalog source sidecar).
+   *  Drives the model editor + `model_catalog_json` generation on save. */
+  codexModelList: CodexModelConfig
   grokConfigTomlText: string
   // Grok structured controls (empty string = "unset / use default"). Backed by
   // ~/.grok/config.toml [ui].permission_mode / [models].default_reasoning_effort;
@@ -322,11 +333,11 @@ const CLAUDE_MODEL_ENV_KEYS = {
 
 const CLAUDE_EFFORT_LEVEL_CONFIG_KEY = "effortLevel"
 
-type ClaudeEffortLevel = "" | "low" | "medium" | "high" | "xhigh"
+type ClaudeEffortLevel = "" | "low" | "medium" | "high" | "xhigh" | "max"
 
 const CLAUDE_EFFORT_LEVEL_VALUES: ReadonlyArray<
   Exclude<ClaudeEffortLevel, "">
-> = ["low", "medium", "high", "xhigh"]
+> = ["low", "medium", "high", "xhigh", "max"]
 
 function normalizeClaudeEffortLevel(value: unknown): ClaudeEffortLevel {
   if (typeof value !== "string") return ""
@@ -339,7 +350,8 @@ function normalizeClaudeEffortLevel(value: unknown): ClaudeEffortLevel {
     normalized === "low" ||
     normalized === "medium" ||
     normalized === "high" ||
-    normalized === "xhigh"
+    normalized === "xhigh" ||
+    normalized === "max"
   ) {
     return normalized
   }
@@ -1368,7 +1380,13 @@ const CODEX_AUTH_MODES = [
 ] as const
 type CodexAuthMode = (typeof CODEX_AUTH_MODES)[number]
 
-type CodexReasoningEffort = "low" | "medium" | "high" | "xhigh"
+type CodexReasoningEffort =
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra"
 
 const CODEX_REASONING_EFFORT_OPTIONS: ReadonlyArray<{
   value: CodexReasoningEffort
@@ -1395,6 +1413,16 @@ const CODEX_REASONING_EFFORT_OPTIONS: ReadonlyArray<{
     label: "Extra High",
     description: "Extra high reasoning depth for complex problems",
   },
+  {
+    value: "max",
+    label: "Max",
+    description: "Maximum reasoning depth for the hardest problems",
+  },
+  {
+    value: "ultra",
+    label: "Ultra",
+    description: "Maximum reasoning with automatic task delegation",
+  },
 ]
 
 const CODEX_DEFAULT_REASONING_EFFORT: CodexReasoningEffort = "high"
@@ -1407,7 +1435,9 @@ function normalizeCodexReasoningEffort(
     normalized === "low" ||
     normalized === "medium" ||
     normalized === "high" ||
-    normalized === "xhigh"
+    normalized === "xhigh" ||
+    normalized === "max" ||
+    normalized === "ultra"
   ) {
     return normalized
   }
@@ -2747,6 +2777,7 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
     claudeEffortLevel: important.claudeEffortLevel,
     codexAuthJsonText,
     codexConfigTomlText,
+    codexModelList: parseCodexModelConfig(agent.codex_model_catalog ?? null),
     grokConfigTomlText,
     grokPermissionMode,
     grokReasoningEffort,
@@ -2795,6 +2826,28 @@ function modelProviderSupportsAgentType(
   return getModelProviderAgentTypes(provider).includes(agentType)
 }
 
+function isStructuredCodexModelConfig(raw: string | null | undefined): boolean {
+  const value = raw?.trim()
+  if (!value?.startsWith("{")) return false
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>
+    return ["customs", "models", "excludedOfficials", "default"].some((key) =>
+      Object.prototype.hasOwnProperty.call(parsed, key)
+    )
+  } catch {
+    return false
+  }
+}
+
+function modelProviderUsesCodexCatalog(
+  provider: Pick<ModelProviderInfo, "agent_types" | "agent_type" | "model">
+): boolean {
+  return (
+    getModelProviderAgentTypes(provider).length === 1 ||
+    isStructuredCodexModelConfig(provider.model)
+  )
+}
+
 function resolveCompatibleModelProviderId(
   agentType: AgentType,
   providerId: number | null | undefined,
@@ -2806,6 +2859,19 @@ function resolveCompatibleModelProviderId(
   return modelProviderSupportsAgentType(provider, agentType)
     ? provider.id
     : null
+}
+
+export function hasEffectiveGrokCredential(input: {
+  providerApiKey?: string | null
+  envApiKey?: string | null
+  customModelId?: string | null
+  customApiKey?: string | null
+}): boolean {
+  return Boolean(
+    input.providerApiKey?.trim() ||
+    input.envApiKey?.trim() ||
+    (input.customModelId?.trim() && input.customApiKey?.trim())
+  )
 }
 
 function compareVersion(a: string, b: string): number {
@@ -4401,6 +4467,7 @@ export function AcpAgentSettings() {
         openCodeAuthJsonText?: string
         codexAuthJsonText?: string
         codexConfigTomlText?: string
+        codexModelCatalog?: string
         grokConfigTomlText?: string
         grokStructured?: GrokStructuredConfig
       }
@@ -4453,6 +4520,10 @@ export function AcpAgentSettings() {
           codex_config_toml:
             typeof options?.codexConfigTomlText === "string"
               ? options.codexConfigTomlText
+              : null,
+          codex_model_catalog:
+            typeof options?.codexModelCatalog === "string"
+              ? options.codexModelCatalog
               : null,
           grok_config_toml:
             typeof options?.grokConfigTomlText === "string"
@@ -5118,6 +5189,38 @@ export function AcpAgentSettings() {
         return true
       })
   }, [selectedModelProvider])
+  const selectedProviderDefaultModel = useMemo(() => {
+    const configured = removeSlotPrefixedModel(
+      selectedModelProvider?.model ?? ""
+    )
+    if (
+      configured &&
+      (selectedProviderModelOptions.length === 0 ||
+        selectedProviderModelOptions.includes(configured))
+    ) {
+      return configured
+    }
+    return selectedProviderModelOptions[0] ?? ""
+  }, [selectedModelProvider?.model, selectedProviderModelOptions])
+  const selectedGrokProviderModel =
+    selectedAgent?.agent_type === "grok" && selectedDraft
+      ? selectedProviderModelOptions.includes(selectedDraft.model.trim())
+        ? selectedDraft.model.trim()
+        : selectedProviderDefaultModel
+      : ""
+  const selectedGrokHasCredential =
+    selectedAgent?.agent_type === "grok" && selectedDraft
+      ? hasEffectiveGrokCredential({
+          providerApiKey: selectedModelProvider?.api_key,
+          envApiKey: selectedDraft.apiKey,
+          customModelId: selectedDraft.grokCustomModelId,
+          customApiKey: selectedDraft.grokCustomApiKey,
+        })
+      : false
+  const selectedCodexUsesCatalog =
+    selectedAgent?.agent_type === "codex" && selectedModelProvider
+      ? modelProviderUsesCodexCatalog(selectedModelProvider)
+      : false
 
   const selectedNeedsModelProvider = useMemo(() => {
     if (!selectedDraft) return false
@@ -5128,6 +5231,7 @@ export function AcpAgentSettings() {
     if (at === "codex") return selectedDraft.codexAuthMode === "model_provider"
     if (at === "gemini")
       return selectedDraft.geminiAuthMode === "model_provider"
+    if (at === "grok") return selectedDraft.modelProviderId != null
     return false
   }, [selectedAgent, selectedDraft])
 
@@ -5143,6 +5247,15 @@ export function AcpAgentSettings() {
   const selectedMissingModelProvider = selectedModelProviderErrorMessage != null
   const selectedConfigText = selectedDraft?.configText ?? ""
   const selectedOpenCodeAuthJsonText = selectedDraft?.openCodeAuthJsonText ?? ""
+  const selectedCodexReasoningEffortOptions =
+    selectedAgent?.agent_type === "codex" && selectedDraft
+      ? CODEX_REASONING_EFFORT_OPTIONS.filter((option) =>
+          modelReasoningEfforts({
+            engine: "codex",
+            model: selectedDraft.model,
+          }).includes(option.value)
+        )
+      : CODEX_REASONING_EFFORT_OPTIONS
   const selectedCodexReasoningEffortOption =
     selectedAgent?.agent_type === "codex" && selectedDraft
       ? (CODEX_REASONING_EFFORT_OPTIONS.find(
@@ -5589,17 +5702,39 @@ export function AcpAgentSettings() {
           }
         })
       } else if (agentType === "codex") {
+        const codexCatalogEnabled = Boolean(
+          provider && modelProviderUsesCodexCatalog(provider)
+        )
+        const codexList = parseCodexModelConfig(provider?.model ?? null)
+        const codexHasConfig =
+          codexCatalogEnabled &&
+          (codexList.customs.length > 0 ||
+            (codexList.excludedOfficials?.length ?? 0) > 0)
+        const providerModels = (provider?.models ?? [])
+          .map(removeSlotPrefixedModel)
+          .filter(Boolean)
+        const codexModel = codexCatalogEnabled
+          ? (codexList.default ?? codexList.customs[0]?.slug ?? "")
+          : providerModels.includes(selectedDraft.model)
+            ? selectedDraft.model
+            : (providerModels[0] ?? "")
         const nextAuthPatch = patchCodexAuthJsonText(
           selectedDraft.codexAuthJsonText,
           { apiKey, authMode: null }
         )
         const nextAuthJsonText = nextAuthPatch.authJsonText
-        const nextConfigTomlText = patchCodexConfigTomlText(
+        let nextConfigTomlText = patchCodexConfigTomlText(
           selectedDraft.codexConfigTomlText,
           {
             modelProvider: CODEX_DEFAULT_MODEL_PROVIDER,
             apiBaseUrl: apiUrl,
+            model: codexModel,
           }
+        )
+        nextConfigTomlText = updateTomlRootStringKey(
+          nextConfigTomlText,
+          "model_catalog_json",
+          codexHasConfig ? "Houhub-model-catalog.json" : ""
         )
         const synced = extractCodexImportantValues(
           nextAuthJsonText,
@@ -5610,7 +5745,8 @@ export function AcpAgentSettings() {
           modelProviderId: effectiveProviderId,
           apiBaseUrl: apiUrl,
           apiKey,
-          model: synced.model,
+          model: codexModel,
+          codexModelList: codexCatalogEnabled ? codexList : { customs: [] },
           codexAuthJsonText: nextAuthJsonText,
           codexConfigTomlText: nextConfigTomlText,
           codexModelProvider: CODEX_DEFAULT_MODEL_PROVIDER,
@@ -5618,7 +5754,7 @@ export function AcpAgentSettings() {
           envText: patchEnvText(current.envText, {
             OPENAI_API_KEY: apiKey,
             OPENAI_BASE_URL: apiUrl,
-            OPENAI_MODEL: "",
+            OPENAI_MODEL: codexModel,
           }),
         }))
       } else if (agentType === "gemini") {
@@ -5645,6 +5781,28 @@ export function AcpAgentSettings() {
             configText: nextConfigJson.configText,
           }
         })
+      } else if (agentType === "grok") {
+        const providerModels = (provider?.models ?? [])
+          .map(removeSlotPrefixedModel)
+          .filter(Boolean)
+        const configuredModel = removeSlotPrefixedModel(provider?.model ?? "")
+        const providerModel =
+          configuredModel &&
+          (providerModels.length === 0 ||
+            providerModels.includes(configuredModel))
+            ? configuredModel
+            : (providerModels[0] ?? "")
+        updateSelectedDraft((current) => ({
+          ...current,
+          modelProviderId: effectiveProviderId,
+          model: provider ? providerModel : "",
+          envText: patchEnvByImportantKey(
+            agentType,
+            current.envText,
+            "model",
+            provider ? providerModel : ""
+          ),
+        }))
       } else {
         updateSelectedDraft((current) => ({
           ...current,
@@ -6727,6 +6885,33 @@ export function AcpAgentSettings() {
     [selectedAgent, selectedDraft, updateSelectedDraft]
   )
 
+  const handleCodexModelListChange = useCallback(
+    (next: CodexModelConfig) => {
+      const defaultSlug = next.default ?? next.customs[0]?.slug ?? ""
+      const hasCatalog =
+        next.customs.length > 0 || (next.excludedOfficials?.length ?? 0) > 0
+      updateSelectedDraft((current) => {
+        let toml = updateTomlRootStringKey(
+          current.codexConfigTomlText,
+          "model",
+          defaultSlug
+        )
+        toml = updateTomlRootStringKey(
+          toml,
+          "model_catalog_json",
+          hasCatalog ? "Houhub-model-catalog.json" : ""
+        )
+        return {
+          ...current,
+          codexModelList: next,
+          model: defaultSlug,
+          codexConfigTomlText: toml,
+        }
+      })
+    },
+    [updateSelectedDraft]
+  )
+
   const handleCodexImportantConfigChange = useCallback(
     (
       key: "apiBaseUrl" | "apiKey" | "model" | "reasoningEffort",
@@ -6991,6 +7176,8 @@ export function AcpAgentSettings() {
               await persistConfig("codex", draft.configText, {
                 codexAuthJsonText: authJson,
                 codexConfigTomlText: draft.codexConfigTomlText,
+                codexModelCatalog:
+                  serializeCodexModelConfig(draft.codexModelList) ?? "",
               })
             } catch (err) {
               const msg = toErrorMessage(err)
@@ -7673,10 +7860,8 @@ export function AcpAgentSettings() {
                     {(selectedDraft.codexAuthMode === "api_key" ||
                       selectedDraft.codexAuthMode === "model_provider") && (
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
-                          {t("codex.modelName")}
-                        </label>
                         {selectedDraft.codexAuthMode === "model_provider" &&
+                        !selectedCodexUsesCatalog &&
                         selectedProviderModelOptions.length > 0 ? (
                           <Select
                             value={selectedDraft.model}
@@ -7696,15 +7881,12 @@ export function AcpAgentSettings() {
                             </SelectContent>
                           </Select>
                         ) : (
-                          <Input
-                            value={selectedDraft.model}
-                            onChange={(event) => {
-                              handleCodexImportantConfigChange(
-                                "model",
-                                event.target.value
-                              )
-                            }}
-                            placeholder="gpt-5.6-sol / gpt-5.5"
+                          <CodexModelListEditor
+                            value={selectedDraft.codexModelList}
+                            onChange={handleCodexModelListChange}
+                            readOnly={
+                              selectedDraft.codexAuthMode === "model_provider"
+                            }
                           />
                         )}
                       </div>
@@ -7729,7 +7911,7 @@ export function AcpAgentSettings() {
                           />
                         </SelectTrigger>
                         <SelectContent align="start">
-                          {CODEX_REASONING_EFFORT_OPTIONS.map((option) => (
+                          {selectedCodexReasoningEffortOptions.map((option) => (
                             <SelectItem key={option.value} value={option.value}>
                               {option.label}
                             </SelectItem>
@@ -7849,6 +8031,10 @@ supports_websockets = false`}
                                     selectedDraft.codexAuthJsonText,
                                   codexConfigTomlText:
                                     selectedDraft.codexConfigTomlText,
+                                  codexModelCatalog:
+                                    serializeCodexModelConfig(
+                                      selectedDraft.codexModelList
+                                    ) ?? "",
                                 }
                               )
                             )
@@ -9597,10 +9783,16 @@ supports_websockets = false`}
                             <SelectItem value={GROK_UNSET}>
                               {t("grok.optionDefault")}
                             </SelectItem>
-                            <SelectItem value="ask">
-                              {t("grok.permissionAsk")}
+                            <SelectItem value="default">
+                              {t("grok.permissionDefault")}
                             </SelectItem>
-                            <SelectItem value="always-approve">
+                            <SelectItem value="acceptEdits">
+                              {t("grok.permissionAcceptEdits")}
+                            </SelectItem>
+                            <SelectItem value="auto">
+                              {t("grok.permissionAuto")}
+                            </SelectItem>
+                            <SelectItem value="bypassPermissions">
                               {t("grok.permissionAlwaysApprove")}
                             </SelectItem>
                           </SelectContent>
@@ -9651,248 +9843,328 @@ supports_websockets = false`}
                       </div>
                     </div>
 
-                    {/* Authentication — status + inline XAI_API_KEY */}
+                    {/* Authentication uses the same shared provider binding as
+                        the other gateway-capable agents. Manual mode keeps the
+                        native XAI_API_KEY / grok login flow. */}
                     <div className="space-y-2 rounded-md border p-2.5">
                       <div>
                         <label className="text-[11px] font-medium">
                           {t("grok.authTitle")}
                         </label>
                         <p className="mt-1 text-[11px] text-muted-foreground">
-                          {selectedDraft.apiKey.trim()
+                          {selectedGrokHasCredential
                             ? t("grok.authKeyConfigured")
                             : t("grok.authKeyMissing")}
                         </p>
                       </div>
                       <div className="space-y-1.5">
                         <label className="text-[11px] text-muted-foreground">
-                          XAI_API_KEY
+                          {t("selectModelProvider")}
                         </label>
-                        <div className="flex items-center gap-2">
-                          <Input
-                            type={
-                              showApiKeys[selectedAgent.agent_type]
-                                ? "text"
-                                : "password"
-                            }
-                            value={selectedDraft.apiKey}
-                            onChange={(event) =>
-                              handleImportantConfigChange(
-                                "apiKey",
-                                event.target.value
-                              )
-                            }
-                            placeholder="xai-..."
-                            aria-label="XAI_API_KEY"
-                            name="grok-xai-api-key"
-                            autoComplete="off"
-                            spellCheck={false}
-                            disabled={grokSaving}
-                          />
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={grokSaving}
-                            onClick={() =>
-                              setShowApiKeys((prev) => ({
-                                ...prev,
-                                [selectedAgent.agent_type]:
-                                  !prev[selectedAgent.agent_type],
-                              }))
-                            }
-                            aria-label={
-                              showApiKeys[selectedAgent.agent_type]
-                                ? t("actions.hideApiKey")
-                                : t("actions.showApiKey")
-                            }
-                            title={
-                              showApiKeys[selectedAgent.agent_type]
-                                ? t("actions.hideApiKey")
-                                : t("actions.showApiKey")
-                            }
-                          >
-                            {showApiKeys[selectedAgent.agent_type] ? (
-                              <EyeOff className="h-3.5 w-3.5" />
-                            ) : (
-                              <Eye className="h-3.5 w-3.5" />
-                            )}
-                          </Button>
-                        </div>
+                        <Select
+                          value={
+                            selectedCompatibleModelProviderId != null
+                              ? String(selectedCompatibleModelProviderId)
+                              : MODEL_PROVIDER_MANUAL_VALUE
+                          }
+                          disabled={grokSaving}
+                          onValueChange={handleModelProviderSelect}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent align="start">
+                            <SelectItem value={MODEL_PROVIDER_MANUAL_VALUE}>
+                              {t("authModeCustomEndpoint")}
+                            </SelectItem>
+                            {selectedModelProviders.map((provider) => (
+                              <SelectItem
+                                key={provider.id}
+                                value={String(provider.id)}
+                              >
+                                {provider.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
-                      <p className="text-[11px] text-muted-foreground">
-                        {t("grok.authLoginHint")}
-                      </p>
+
+                      {selectedCompatibleModelProviderId != null ? (
+                        <div className="space-y-1.5">
+                          <label className="text-[11px] text-muted-foreground">
+                            {t("codex.modelName")}
+                          </label>
+                          {selectedProviderModelOptions.length > 0 ? (
+                            <Select
+                              value={selectedGrokProviderModel}
+                              disabled={grokSaving}
+                              onValueChange={(value) =>
+                                handleImportantConfigChange("model", value)
+                              }
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue
+                                  placeholder={t("codex.modelName")}
+                                />
+                              </SelectTrigger>
+                              <SelectContent align="start">
+                                {selectedProviderModelOptions.map((model) => (
+                                  <SelectItem key={model} value={model}>
+                                    {model}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <Input
+                              value={selectedDraft.model}
+                              onChange={(event) =>
+                                handleImportantConfigChange(
+                                  "model",
+                                  event.target.value
+                                )
+                              }
+                              placeholder="grok-4.5"
+                              disabled={grokSaving}
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        <>
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] text-muted-foreground">
+                              XAI_API_KEY
+                            </label>
+                            <div className="flex items-center gap-2">
+                              <Input
+                                type={
+                                  showApiKeys[selectedAgent.agent_type]
+                                    ? "text"
+                                    : "password"
+                                }
+                                value={selectedDraft.apiKey}
+                                onChange={(event) =>
+                                  handleImportantConfigChange(
+                                    "apiKey",
+                                    event.target.value
+                                  )
+                                }
+                                placeholder="xai-..."
+                                aria-label="XAI_API_KEY"
+                                name="grok-xai-api-key"
+                                autoComplete="off"
+                                spellCheck={false}
+                                disabled={grokSaving}
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={grokSaving}
+                                onClick={() =>
+                                  setShowApiKeys((prev) => ({
+                                    ...prev,
+                                    [selectedAgent.agent_type]:
+                                      !prev[selectedAgent.agent_type],
+                                  }))
+                                }
+                                aria-label={
+                                  showApiKeys[selectedAgent.agent_type]
+                                    ? t("actions.hideApiKey")
+                                    : t("actions.showApiKey")
+                                }
+                                title={
+                                  showApiKeys[selectedAgent.agent_type]
+                                    ? t("actions.hideApiKey")
+                                    : t("actions.showApiKey")
+                                }
+                              >
+                                {showApiKeys[selectedAgent.agent_type] ? (
+                                  <EyeOff className="h-3.5 w-3.5" />
+                                ) : (
+                                  <Eye className="h-3.5 w-3.5" />
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            {t("grok.authLoginHint")}
+                          </p>
+                        </>
+                      )}
                     </div>
 
                     {/* Custom model (BYO endpoint) → [model.<id>] + [models].default.
                         A model id here registers a custom Grok model and makes it
                         the default; empty id removes the HouHub-managed block. */}
-                    <div className="space-y-2.5 rounded-md border p-2.5">
-                      <div>
-                        <label className="text-[11px] font-medium">
-                          {t("grok.customModelTitle")}
-                        </label>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          {t("grok.customModelHint")}
-                        </p>
-                      </div>
+                    {selectedCompatibleModelProviderId == null && (
+                      <div className="space-y-2.5 rounded-md border p-2.5">
+                        <div>
+                          <label className="text-[11px] font-medium">
+                            {t("grok.customModelTitle")}
+                          </label>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            {t("grok.customModelHint")}
+                          </p>
+                        </div>
 
-                      <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
-                          {t("grok.customModelIdLabel")}
-                        </label>
-                        <Input
-                          value={selectedDraft.grokCustomModelId}
-                          onChange={(event) =>
-                            updateSelectedDraft((current) => ({
-                              ...current,
-                              grokCustomModelId: event.target.value,
-                            }))
-                          }
-                          placeholder={t("grok.customModelIdPlaceholder")}
-                          aria-label={t("grok.customModelIdLabel")}
-                          autoComplete="off"
-                          spellCheck={false}
-                          disabled={grokSaving}
-                        />
-                        <p className="text-[11px] text-muted-foreground">
-                          {t("grok.customModelIdHint")}
-                        </p>
-                      </div>
-
-                      <div className="grid gap-3 md:grid-cols-2">
                         <div className="space-y-1.5">
                           <label className="text-[11px] text-muted-foreground">
-                            {t("grok.customBaseUrlLabel")}
+                            {t("grok.customModelIdLabel")}
                           </label>
                           <Input
-                            value={selectedDraft.grokCustomBaseUrl}
+                            value={selectedDraft.grokCustomModelId}
                             onChange={(event) =>
                               updateSelectedDraft((current) => ({
                                 ...current,
-                                grokCustomBaseUrl: event.target.value,
+                                grokCustomModelId: event.target.value,
                               }))
                             }
-                            placeholder={t("grok.customBaseUrlPlaceholder")}
-                            aria-label={t("grok.customBaseUrlLabel")}
+                            placeholder={t("grok.customModelIdPlaceholder")}
+                            aria-label={t("grok.customModelIdLabel")}
                             autoComplete="off"
                             spellCheck={false}
                             disabled={grokSaving}
                           />
+                          <p className="text-[11px] text-muted-foreground">
+                            {t("grok.customModelIdHint")}
+                          </p>
                         </div>
-                        <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
-                            {t("grok.customApiBackendLabel")}
-                          </label>
-                          <Select
-                            value={
-                              selectedDraft.grokCustomApiBackend ||
-                              GROK_DEFAULT_API_BACKEND
-                            }
-                            disabled={grokSaving}
-                            onValueChange={(value) =>
-                              updateSelectedDraft((current) => ({
-                                ...current,
-                                grokCustomApiBackend: value,
-                              }))
-                            }
-                          >
-                            <SelectTrigger
-                              className="w-full"
-                              aria-label={t("grok.customApiBackendLabel")}
+
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] text-muted-foreground">
+                              {t("grok.customBaseUrlLabel")}
+                            </label>
+                            <Input
+                              value={selectedDraft.grokCustomBaseUrl}
+                              onChange={(event) =>
+                                updateSelectedDraft((current) => ({
+                                  ...current,
+                                  grokCustomBaseUrl: event.target.value,
+                                }))
+                              }
+                              placeholder={t("grok.customBaseUrlPlaceholder")}
+                              aria-label={t("grok.customBaseUrlLabel")}
+                              autoComplete="off"
+                              spellCheck={false}
+                              disabled={grokSaving}
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] text-muted-foreground">
+                              {t("grok.customApiBackendLabel")}
+                            </label>
+                            <Select
+                              value={
+                                selectedDraft.grokCustomApiBackend ||
+                                GROK_DEFAULT_API_BACKEND
+                              }
+                              disabled={grokSaving}
+                              onValueChange={(value) =>
+                                updateSelectedDraft((current) => ({
+                                  ...current,
+                                  grokCustomApiBackend: value,
+                                }))
+                              }
                             >
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="responses">
-                                {t("grok.backendResponses")}
-                              </SelectItem>
-                              <SelectItem value="chat_completions">
-                                {t("grok.backendChatCompletions")}
-                              </SelectItem>
-                              <SelectItem value="messages">
-                                {t("grok.backendMessages")}
-                              </SelectItem>
-                            </SelectContent>
-                          </Select>
+                              <SelectTrigger
+                                className="w-full"
+                                aria-label={t("grok.customApiBackendLabel")}
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="responses">
+                                  {t("grok.backendResponses")}
+                                </SelectItem>
+                                <SelectItem value="chat_completions">
+                                  {t("grok.backendChatCompletions")}
+                                </SelectItem>
+                                <SelectItem value="messages">
+                                  {t("grok.backendMessages")}
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
                         </div>
-                      </div>
 
-                      <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
-                          {t("grok.customApiKeyLabel")}
-                        </label>
-                        <div className="flex items-center gap-2">
+                        <div className="space-y-1.5">
+                          <label className="text-[11px] text-muted-foreground">
+                            {t("grok.customApiKeyLabel")}
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type={showGrokCustomKey ? "text" : "password"}
+                              value={selectedDraft.grokCustomApiKey}
+                              onChange={(event) =>
+                                updateSelectedDraft((current) => ({
+                                  ...current,
+                                  grokCustomApiKey: event.target.value,
+                                }))
+                              }
+                              placeholder="xai-..."
+                              aria-label={t("grok.customApiKeyLabel")}
+                              name="grok-custom-api-key"
+                              autoComplete="off"
+                              spellCheck={false}
+                              disabled={grokSaving}
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={grokSaving}
+                              onClick={() =>
+                                setShowGrokCustomKey((prev) => !prev)
+                              }
+                              aria-label={
+                                showGrokCustomKey
+                                  ? t("actions.hideApiKey")
+                                  : t("actions.showApiKey")
+                              }
+                              title={
+                                showGrokCustomKey
+                                  ? t("actions.hideApiKey")
+                                  : t("actions.showApiKey")
+                              }
+                            >
+                              {showGrokCustomKey ? (
+                                <EyeOff className="h-3.5 w-3.5" />
+                              ) : (
+                                <Eye className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            {t("grok.customApiKeyHint")}
+                          </p>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[11px] text-muted-foreground">
+                            {t("grok.customContextWindowLabel")}
+                          </label>
                           <Input
-                            type={showGrokCustomKey ? "text" : "password"}
-                            value={selectedDraft.grokCustomApiKey}
+                            type="number"
+                            inputMode="numeric"
+                            value={selectedDraft.grokCustomContextWindow}
                             onChange={(event) =>
                               updateSelectedDraft((current) => ({
                                 ...current,
-                                grokCustomApiKey: event.target.value,
+                                grokCustomContextWindow: event.target.value,
                               }))
                             }
-                            placeholder="xai-..."
-                            aria-label={t("grok.customApiKeyLabel")}
-                            name="grok-custom-api-key"
-                            autoComplete="off"
-                            spellCheck={false}
+                            placeholder="500000"
+                            aria-label={t("grok.customContextWindowLabel")}
                             disabled={grokSaving}
                           />
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={grokSaving}
-                            onClick={() =>
-                              setShowGrokCustomKey((prev) => !prev)
-                            }
-                            aria-label={
-                              showGrokCustomKey
-                                ? t("actions.hideApiKey")
-                                : t("actions.showApiKey")
-                            }
-                            title={
-                              showGrokCustomKey
-                                ? t("actions.hideApiKey")
-                                : t("actions.showApiKey")
-                            }
-                          >
-                            {showGrokCustomKey ? (
-                              <EyeOff className="h-3.5 w-3.5" />
-                            ) : (
-                              <Eye className="h-3.5 w-3.5" />
-                            )}
-                          </Button>
+                          <p className="text-[11px] text-muted-foreground">
+                            {t("grok.customContextWindowHint")}
+                          </p>
                         </div>
-                        <p className="text-[11px] text-muted-foreground">
-                          {t("grok.customApiKeyHint")}
-                        </p>
                       </div>
-
-                      <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
-                          {t("grok.customContextWindowLabel")}
-                        </label>
-                        <Input
-                          type="number"
-                          inputMode="numeric"
-                          value={selectedDraft.grokCustomContextWindow}
-                          onChange={(event) =>
-                            updateSelectedDraft((current) => ({
-                              ...current,
-                              grokCustomContextWindow: event.target.value,
-                            }))
-                          }
-                          placeholder="500000"
-                          aria-label={t("grok.customContextWindowLabel")}
-                          disabled={grokSaving}
-                        />
-                        <p className="text-[11px] text-muted-foreground">
-                          {t("grok.customContextWindowHint")}
-                        </p>
-                      </div>
-                    </div>
+                    )}
 
                     {/* Compaction — session-global auto-compact threshold. */}
                     <div className="space-y-1.5">
@@ -9995,10 +10267,20 @@ supports_websockets = false`}
                             // If it fails after config committed, report that
                             // partial outcome honestly rather than a blanket fail.
                             try {
+                              const envText =
+                                selectedCompatibleModelProviderId != null &&
+                                selectedGrokProviderModel
+                                  ? patchEnvByImportantKey(
+                                      "grok",
+                                      selectedDraft.envText,
+                                      "model",
+                                      selectedGrokProviderModel
+                                    )
+                                  : selectedDraft.envText
                               await persistEnv(
                                 selectedAgent.agent_type,
                                 selectedDraft.enabled,
-                                selectedDraft.envText,
+                                envText,
                                 selectedDraft.modelProviderId
                               )
                             } catch (envErr) {

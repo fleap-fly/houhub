@@ -17,6 +17,7 @@ import {
   type HouflowAuthSecret,
   type HouflowDesktopSession,
 } from "./types"
+import type { HouflowCloudModelSettings } from "./cloud-session-config"
 
 export type HouflowCloudSessionStatus =
   | "queued"
@@ -109,6 +110,7 @@ export interface HouflowCloudDispatchDraft {
   message: string
   content?: ContentBlock[]
   channelRef?: string
+  modelSettings?: HouflowCloudModelSettings
 }
 
 export type HouflowCloudDispatchInput = string | HouflowCloudDispatchDraft
@@ -288,7 +290,7 @@ export async function listHouflowCloudSessionOutputs(
   session: HouflowDesktopSession,
   secret: HouflowAuthSecret | null,
   sessionId: string,
-  limit = 20
+  limit = 100
 ): Promise<HouflowCloudSessionOutput[]> {
   assertHouflowSignedIn(session)
   const client = new HouflowControlClient(session, secret)
@@ -432,22 +434,22 @@ export async function getHouflowCloudSessionOutputText(
   session: HouflowDesktopSession,
   secret: HouflowAuthSecret | null,
   sessionId: string,
-  filename: string
+  outputRef: string
 ): Promise<string> {
   assertHouflowSignedIn(session)
   const client = new HouflowControlClient(session, secret)
-  return client.text(outputPath(sessionId, filename))
+  return client.text(outputPath(sessionId, outputRef))
 }
 
 export async function getHouflowCloudSessionOutputBytes(
   session: HouflowDesktopSession,
   secret: HouflowAuthSecret | null,
   sessionId: string,
-  filename: string
+  outputRef: string
 ): Promise<Uint8Array> {
   assertHouflowSignedIn(session)
   const client = new HouflowControlClient(session, secret)
-  return client.bytes(outputPath(sessionId, filename))
+  return client.bytes(outputPath(sessionId, outputRef))
 }
 
 export async function sendHouflowCloudSessionMessage(
@@ -477,6 +479,7 @@ export async function sendHouflowCloudSessionMessage(
       workspaceId: session.workspaceId,
       message: draft.message,
       content: draft.content,
+      messageInput: cloudModelSettingsInput(draft.modelSettings),
     }
   )
 }
@@ -537,8 +540,15 @@ export async function streamHouflowCloudSessionMessage(
             ? draft.content
             : [{ type: "text", text: draft.message }],
         ...(clientEventId
-          ? { input: { houhub_client_event_id: clientEventId } }
-          : {}),
+          ? {
+              input: {
+                houhub_client_event_id: clientEventId,
+                ...cloudModelSettingsInput(draft.modelSettings),
+              },
+            }
+          : draft.modelSettings
+            ? { input: cloudModelSettingsInput(draft.modelSettings) }
+            : {}),
       },
     }
   )) {
@@ -591,6 +601,7 @@ export async function startHouflowCloudTargetSession(
       workspaceId: session.workspaceId,
       message: draft.message,
       content: draft.content,
+      messageInput: cloudModelSettingsInput(draft.modelSettings),
       title,
     })
     const created = sessionFromDto(dispatch.raw.session as SessionDto)
@@ -610,6 +621,9 @@ export async function startHouflowCloudTargetSession(
       environmentId: environmentId || undefined,
       message: draft.message,
       content: draft.content,
+      modelProviderId: draft.modelSettings?.modelProviderId,
+      model: draft.modelSettings?.model,
+      reasoningEffort: draft.modelSettings?.reasoningEffort,
       channelRef:
         draft.channelRef ??
         `houhub/desktop/${session.workspaceId}/target/${target.id}`,
@@ -654,7 +668,22 @@ function normalizeCloudDispatchInput(
     content:
       input.content && input.content.length > 0 ? input.content : undefined,
     channelRef: input.channelRef?.trim() || undefined,
+    modelSettings: input.modelSettings,
   }
+}
+
+function cloudModelSettingsInput(
+  settings: HouflowCloudModelSettings | undefined
+): Record<string, unknown> | undefined {
+  return settings
+    ? {
+        model_settings: {
+          model_provider_id: settings.modelProviderId,
+          model: settings.model,
+          reasoning_effort: settings.reasoningEffort,
+        },
+      }
+    : undefined
 }
 
 function targetMetadataList(value: string | undefined): string[] | undefined {
@@ -676,6 +705,14 @@ export function isCloudSessionActive(
 ): boolean {
   if (!session) return false
   return ["queued", "running", "requires_action"].includes(session.status)
+}
+
+export function isHouflowHostedCommandActive(
+  command: HouflowCloudHostedCommand | null | undefined
+): boolean {
+  return Boolean(
+    command && ["queued", "leased", "running"].includes(command.status)
+  )
 }
 
 function sessionFromDto(value: SessionDto): HouflowCloudSession | null {
@@ -805,10 +842,10 @@ function numberValue(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
 
-function outputPath(sessionId: string, filename: string): string {
+function outputPath(sessionId: string, outputRef: string): string {
   return `/v1/sessions/${encodeURIComponent(
     sessionId
-  )}/outputs/${encodeURIComponent(filename)}`
+  )}/outputs/${encodeURIComponent(outputRef)}`
 }
 
 function nullableString(value: unknown): string | null {

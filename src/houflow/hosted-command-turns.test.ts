@@ -226,6 +226,37 @@ describe("hostedCommandToCloudEvents", () => {
     ).toHaveLength(1)
   })
 
+  it("folds Runtime Plane usage and elapsed time into the hosted reply stats", () => {
+    const turns = houflowCloudEventsToTurns(
+      hostedCommandToCloudEvents(
+        command({
+          status: "succeeded",
+          input: {
+            message: "hello",
+            model: "openai/gpt-5.6",
+          },
+          output: {
+            text: "done",
+            runtime_response: {
+              usage: { input_tokens: 120, output_tokens: 24 },
+            },
+          },
+          completed_at: "2026-07-06T15:00:03.500Z",
+        })
+      )
+    )
+
+    expect(turns[1]).toMatchObject({
+      role: "assistant",
+      model: "openai/gpt-5.6",
+      duration_ms: 3500,
+      usage: {
+        input_tokens: 120,
+        output_tokens: 24,
+      },
+    })
+  })
+
   it("maps Runtime Plane ACP stream events from connector command payloads", () => {
     const events = hostedCommandToCloudEvents(
       command({
@@ -287,15 +318,9 @@ describe("hostedCommandToCloudEvents", () => {
       { role: "user", blocks: [{ type: "text", text: "hello" }] },
       {
         role: "assistant",
-        blocks: [{ type: "thinking", text: "正在检查项目上下文" }],
-      },
-      {
-        role: "assistant",
-        blocks: [{ type: "text", text: "流式片段" }],
-      },
-      {
-        role: "assistant",
         blocks: [
+          { type: "thinking", text: "正在检查项目上下文" },
+          { type: "text", text: "流式片段" },
           {
             type: "tool_use",
             tool_use_id: "rt_tool",

@@ -6,16 +6,14 @@ use serde::Deserialize;
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::commands::houflow::{
-    houflow_connector_autostart_core, houflow_connector_commands_core,
-    houflow_connector_down_core, houflow_connector_heartbeat_core, houflow_connector_login_core,
-    houflow_connector_logs_core, houflow_connector_status_core,
-    houflow_connector_sync_local_agents_core, houflow_connector_up_core,
-    houflow_control_http_call, houflow_sync_managed_gateway_core,
-    HouflowConnectorAutostartInput, HouflowConnectorCommandsInput, HouflowConnectorLogsInput,
-    HouflowConnectorLoginInput, HouflowConnectorStatusResult,
-    HouflowConnectorSyncLocalAgentsInput, HouflowConnectorSyncLocalAgentsResult,
-    HouflowControlHttpRequest, HouflowControlHttpResponse, HouflowManagedGatewaySyncInput,
-    HouflowManagedGatewaySyncResult,
+    houflow_connector_autostart_core, houflow_connector_commands_core, houflow_connector_down_core,
+    houflow_connector_heartbeat_core, houflow_connector_login_core, houflow_connector_logs_core,
+    houflow_connector_status_core, houflow_connector_sync_local_agents_core,
+    houflow_connector_up_core, houflow_control_http_call, houflow_sync_managed_gateway_core,
+    HouflowConnectorAutostartInput, HouflowConnectorCommandsInput, HouflowConnectorLoginInput,
+    HouflowConnectorLogsInput, HouflowConnectorStatusResult, HouflowConnectorSyncLocalAgentsInput,
+    HouflowConnectorSyncLocalAgentsResult, HouflowControlHttpRequest, HouflowControlHttpResponse,
+    HouflowManagedGatewaySyncInput, HouflowManagedGatewaySyncResult,
 };
 use serde_json::Value as JsonValue;
 
@@ -46,7 +44,8 @@ pub async fn houflow_control_http_call_web(
     Ok(Json(houflow_control_http_call(input.request).await?))
 }
 
-pub async fn houflow_connector_status() -> Result<Json<HouflowConnectorStatusResult>, AppCommandError> {
+pub async fn houflow_connector_status(
+) -> Result<Json<HouflowConnectorStatusResult>, AppCommandError> {
     Ok(Json(houflow_connector_status_core().await))
 }
 

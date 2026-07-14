@@ -7,9 +7,15 @@ import {
   buildVersionCheck,
   configTextForClaudeSave,
   getAgentChecks,
+  hasEffectiveGrokCredential,
   patchImportantConfigText,
 } from "./acp-agent-settings"
-import type { AcpAgentInfo, AgentType, PreflightResult } from "@/lib/types"
+import {
+  MODEL_PROVIDER_AGENT_TYPES,
+  type AcpAgentInfo,
+  type AgentType,
+  type PreflightResult,
+} from "@/lib/types"
 
 function makeAgent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
   return {
@@ -30,6 +36,7 @@ function makeAgent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
     codex_auth_json: null,
     cline_secrets_json: null,
     codex_config_toml: null,
+    codex_model_catalog: null,
     grok_config_toml: null,
     grok_settings: null,
     hermes_config_yaml: null,
@@ -82,12 +89,12 @@ describe("buildGrokStructuredConfig — Grok panel save payload", () => {
     expect(
       buildGrokStructuredConfig(
         grokDraft({
-          grokPermissionMode: "always-approve",
+          grokPermissionMode: "bypassPermissions",
           grokReasoningEffort: "high",
         })
       )
     ).toEqual({
-      permissionMode: "always-approve",
+      permissionMode: "bypassPermissions",
       defaultReasoningEffort: "high",
       ...emptyCustoms,
     })
@@ -174,9 +181,31 @@ describe("buildGrokStructuredConfig — Grok panel save payload", () => {
   })
 })
 
+describe("Grok shared model-provider integration", () => {
+  it("is available to shared model providers", () => {
+    expect(MODEL_PROVIDER_AGENT_TYPES).toContain("grok")
+  })
+
+  it("recognizes provider, env, and active custom-model credentials", () => {
+    expect(hasEffectiveGrokCredential({ providerApiKey: "gateway-key" })).toBe(
+      true
+    )
+    expect(hasEffectiveGrokCredential({ envApiKey: "xai-key" })).toBe(true)
+    expect(
+      hasEffectiveGrokCredential({
+        customModelId: "custom-grok",
+        customApiKey: "custom-key",
+      })
+    ).toBe(true)
+    expect(hasEffectiveGrokCredential({ customApiKey: "orphaned-key" })).toBe(
+      false
+    )
+  })
+})
+
 describe("buildGrokSaveOptions — one save persists both surfaces", () => {
   const base = grokDraft({
-    grokPermissionMode: "ask",
+    grokPermissionMode: "default",
     grokReasoningEffort: "high",
   })
 
@@ -190,7 +219,7 @@ describe("buildGrokSaveOptions — one save persists both surfaces", () => {
     )
     expect(opts.grokConfigTomlText).toBeUndefined()
     expect(opts.grokStructured).toEqual({
-      permissionMode: "ask",
+      permissionMode: "default",
       defaultReasoningEffort: "high",
       ...emptyCustoms,
     })

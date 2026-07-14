@@ -64,6 +64,14 @@ import {
   type HouflowCloudSessionEvent,
 } from "@/houflow/cloud-sessions"
 import { mergeHouflowCloudSessionEvents } from "@/houflow/cloud-session-event-merge"
+import {
+  houflowCloudModelSettingsFromEvents,
+  houflowCloudModelSettingsFromHostedCommand,
+  houflowCloudSessionConfigOptions,
+  resolveHouflowCloudModelSettings,
+  updateHouflowCloudModelSettings,
+  type HouflowCloudModelSettings,
+} from "@/houflow/cloud-session-config"
 import { normalizeCloudOutputTarget } from "@/houflow/cloud-session-output-links"
 import type {
   HouflowAgentTarget,
@@ -84,7 +92,11 @@ import { toErrorMessage } from "@/lib/app-error"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { buildOptimisticUserTurnFromDraft } from "@/lib/optimistic-user-turn"
 import { openUrl } from "@/lib/platform"
-import type { PromptCapabilitiesInfo, PromptDraft } from "@/lib/types"
+import type {
+  PromptCapabilitiesInfo,
+  PromptDraft,
+  SessionConfigOptionInfo,
+} from "@/lib/types"
 import { cn, randomUUID } from "@/lib/utils"
 
 const CLOUD_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
@@ -131,6 +143,7 @@ function useCloudSessionLinkSafety(sessionId: string | null): LinkSafetyConfig {
 export function CloudSessionPage() {
   const t = useTranslations("HouflowCloud")
   const sharedT = useTranslations("Folder.chat.shared")
+  const configT = useTranslations("AcpAgentSettings")
   const houflow = useHouflowDesktop()
   const cloud = useHouflowCloudWorkspace()
   const workbench = useWorkbench()
@@ -149,6 +162,9 @@ export function CloudSessionPage() {
   >(null)
   const [sending, setSending] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [modelSettingsByScope, setModelSettingsByScope] = useState<
+    Record<string, HouflowCloudModelSettings>
+  >({})
   const eventsRequestRef = useRef(0)
   const approvalsRequestRef = useRef(0)
   const activeStreamRef = useRef<string | null>(null)
@@ -204,7 +220,92 @@ export function CloudSessionPage() {
         : null,
     [cloudTargets, selected]
   )
+  const selectedHostedTarget = useMemo(
+    () =>
+      hostedCommand
+        ? (cloudTargets.find(
+            (target) => target.id === hostedCommand.connected_agent_id
+          ) ?? null)
+        : null,
+    [cloudTargets, hostedCommand]
+  )
   const connector = houflow.snapshot?.connector ?? null
+  const cloudWorkspaceLocation = useMemo(() => {
+    const workspaceId = houflow.session.workspaceId?.trim()
+    if (!workspaceId) return null
+    const workspaceName = houflow.snapshot?.workspaces
+      .find((workspace) => workspace.id === workspaceId)
+      ?.name.trim()
+    return {
+      label: workspaceName || workspaceId,
+      title: workspaceId,
+    }
+  }, [houflow.session.workspaceId, houflow.snapshot?.workspaces])
+  const activeModelSettingsScope = selected
+    ? `session:${selected.id}`
+    : hostedCommand
+      ? `hosted:${hostedCommandThreadDraftKey(hostedCommand)}`
+      : selectedTarget
+        ? `target:${selectedTarget.key}`
+        : null
+  const activeModelSettingsTarget = selected
+    ? selectedSessionTarget
+    : hostedCommand
+      ? selectedHostedTarget
+      : selectedTarget
+  const persistedModelSettings = useMemo(
+    () =>
+      selected
+        ? houflowCloudModelSettingsFromEvents(events)
+        : hostedCommand
+          ? houflowCloudModelSettingsFromHostedCommand(
+              hostedLatestCommand ?? hostedCommand
+            )
+          : null,
+    [events, hostedCommand, hostedLatestCommand, selected]
+  )
+  const activeModelSettings = useMemo(
+    () =>
+      resolveHouflowCloudModelSettings({
+        target: activeModelSettingsTarget,
+        gateway: houflow.snapshot?.gateway,
+        persisted: persistedModelSettings,
+        draft: activeModelSettingsScope
+          ? modelSettingsByScope[activeModelSettingsScope]
+          : null,
+      }),
+    [
+      activeModelSettingsScope,
+      activeModelSettingsTarget,
+      houflow.snapshot?.gateway,
+      modelSettingsByScope,
+      persistedModelSettings,
+    ]
+  )
+  const cloudConfigOptions = useMemo(
+    () =>
+      houflowCloudSessionConfigOptions(
+        activeModelSettings,
+        houflow.snapshot?.gateway,
+        {
+          model: configT("codex.modelName"),
+          reasoningEffort: configT("claude.effortLevel"),
+          effortLow: configT("claude.effortLevel_low"),
+          effortMedium: configT("claude.effortLevel_medium"),
+          effortHigh: configT("claude.effortLevel_high"),
+          effortXhigh: configT("claude.effortLevel_xhigh"),
+          effortMax: configT("claude.effortLevel_max"),
+          effortUltra: configT("claude.effortLevel_ultra"),
+        },
+        activeModelSettingsTarget
+      ),
+    [
+      activeModelSettings,
+      activeModelSettingsTarget,
+      configT,
+      houflow.snapshot?.gateway,
+    ]
+  )
   const adapterText = useMemo(
     () => ({
       attachedResources: sharedT("attachedResources"),
@@ -370,6 +471,30 @@ export function CloudSessionPage() {
     ]).catch(() => {})
   }, [cloud, refreshApprovals, refreshEvents])
 
+  const handleCloudConfigOptionChange = useCallback(
+    (configId: string, valueId: string) => {
+      if (!activeModelSettingsScope || !activeModelSettings) return
+      const next = updateHouflowCloudModelSettings(
+        activeModelSettings,
+        configId,
+        valueId
+      )
+      setModelSettingsByScope((current) => ({
+        ...current,
+        [activeModelSettingsScope]: next,
+      }))
+    },
+    [activeModelSettings, activeModelSettingsScope]
+  )
+
+  const cloudDispatchDraft = useCallback(
+    (draft: PromptDraft): HouflowCloudDispatchDraft => ({
+      ...cloudDispatchDraftFromPromptDraft(draft),
+      ...(activeModelSettings ? { modelSettings: activeModelSettings } : {}),
+    }),
+    [activeModelSettings]
+  )
+
   useEffect(() => {
     if (
       !hostedStreamCommand ||
@@ -426,7 +551,7 @@ export function CloudSessionPage() {
           houflow.session,
           houflow.secret,
           selected,
-          cloudDispatchDraftFromPromptDraft(draft),
+          cloudDispatchDraft(draft),
           (event) => {
             if (activeStreamRef.current !== streamId) return
             setEvents((current) =>
@@ -456,6 +581,7 @@ export function CloudSessionPage() {
     },
     [
       cloud,
+      cloudDispatchDraft,
       houflow.secret,
       houflow.session,
       refreshCloudSessionState,
@@ -514,7 +640,7 @@ export function CloudSessionPage() {
         draft,
         sharedT("attachedResources")
       )
-      const dispatchDraft = cloudDispatchDraftFromPromptDraft(draft)
+      const dispatchDraft = cloudDispatchDraft(draft)
       setStarterPendingEvent(optimisticEvent)
       setStarting(true)
       try {
@@ -526,6 +652,12 @@ export function CloudSessionPage() {
             dispatchDraft
           )
           cloud.rememberSession(created)
+          if (activeModelSettings) {
+            setModelSettingsByScope((current) => ({
+              ...current,
+              [`session:${created.id}`]: activeModelSettings,
+            }))
+          }
           cloud.selectSession(created.id)
           setStarting(false)
           setSending(true)
@@ -596,10 +728,12 @@ export function CloudSessionPage() {
     },
     [
       cloud,
+      cloudDispatchDraft,
       houflow.secret,
       houflow.session,
       refreshCloudSessionState,
       selectedTarget,
+      activeModelSettings,
       sharedT,
       t,
     ]
@@ -629,7 +763,7 @@ export function CloudSessionPage() {
           houflow.secret,
           target,
           {
-            ...cloudDispatchDraftFromPromptDraft(draft),
+            ...cloudDispatchDraft(draft),
             channelRef: hostedCommandChannelRef(hostedCommand) ?? undefined,
           }
         )
@@ -652,6 +786,7 @@ export function CloudSessionPage() {
     },
     [
       cloud,
+      cloudDispatchDraft,
       cloudTargets,
       hostedCommand,
       houflow.secret,
@@ -681,9 +816,7 @@ export function CloudSessionPage() {
         connector={connector}
         pendingEvent={hostedPendingEvent}
         sending={starting}
-        target={cloudTargets.find(
-          (target) => target.id === hostedCommand.connected_agent_id
-        )}
+        target={selectedHostedTarget ?? undefined}
         onRefresh={() => {
           const command = hostedLatestCommand ?? hostedCommand
           void cloud.refreshHostedCommand(
@@ -692,6 +825,9 @@ export function CloudSessionPage() {
           )
         }}
         onSend={(draft) => void handleSendHostedCommand(draft)}
+        configOptions={cloudConfigOptions}
+        onConfigOptionChange={handleCloudConfigOptionChange}
+        workspaceLocation={cloudWorkspaceLocation}
       />
     )
   }
@@ -709,6 +845,9 @@ export function CloudSessionPage() {
         onChangeTarget={cloud.selectTarget}
         onRefresh={() => void houflow.refresh()}
         onSend={(draft) => void handleStartSession(draft)}
+        configOptions={cloudConfigOptions}
+        onConfigOptionChange={handleCloudConfigOptionChange}
+        workspaceLocation={cloudWorkspaceLocation}
       />
     )
   }
@@ -809,7 +948,10 @@ export function CloudSessionPage() {
           <MessageInput
             onSend={(draft) => void handleSend(draft)}
             promptCapabilities={CLOUD_PROMPT_CAPABILITIES}
+            configOptions={cloudConfigOptions}
+            onConfigOptionChange={handleCloudConfigOptionChange}
             enableWorkspaceReferences={false}
+            contextLocation={cloudWorkspaceLocation}
             disabled={sending || !selected.agentId}
             placeholder={t("messagePlaceholder")}
             draftStorageKey={
@@ -884,6 +1026,9 @@ function HostedCommandPage({
   target,
   onRefresh,
   onSend,
+  configOptions,
+  onConfigOptionChange,
+  workspaceLocation,
 }: {
   command: HouflowCloudHostedCommand
   commands: HouflowCloudHostedCommand[]
@@ -893,6 +1038,9 @@ function HostedCommandPage({
   target: HouflowAgentTarget | undefined
   onRefresh: () => void
   onSend: (draft: PromptDraft) => void
+  configOptions: SessionConfigOptionInfo[]
+  onConfigOptionChange: (configId: string, valueId: string) => void
+  workspaceLocation: { label: string; title?: string } | null
 }) {
   const t = useTranslations("HouflowCloud")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -1007,7 +1155,10 @@ function HostedCommandPage({
           <MessageInput
             onSend={onSend}
             promptCapabilities={CLOUD_PROMPT_CAPABILITIES}
+            configOptions={configOptions}
+            onConfigOptionChange={onConfigOptionChange}
             enableWorkspaceReferences={false}
+            contextLocation={workspaceLocation}
             disabled={sending || !target}
             placeholder={t("messagePlaceholder")}
             draftStorageKey={`houflow-hosted-command:${hostedCommandThreadDraftKey(command)}`}
@@ -1176,6 +1327,9 @@ function CloudSessionStarter({
   onChangeTarget,
   onRefresh,
   onSend,
+  configOptions,
+  onConfigOptionChange,
+  workspaceLocation,
 }: {
   connector: HouflowConnectorSummary | null
   loading: boolean
@@ -1187,6 +1341,9 @@ function CloudSessionStarter({
   onChangeTarget: (value: string) => void
   onRefresh: () => void
   onSend: (draft: PromptDraft) => void
+  configOptions: SessionConfigOptionInfo[]
+  onConfigOptionChange: (configId: string, valueId: string) => void
+  workspaceLocation: { label: string; title?: string } | null
 }) {
   const t = useTranslations("HouflowCloud")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -1282,7 +1439,10 @@ function CloudSessionStarter({
           <MessageInput
             onSend={onSend}
             promptCapabilities={CLOUD_PROMPT_CAPABILITIES}
+            configOptions={configOptions}
+            onConfigOptionChange={onConfigOptionChange}
             enableWorkspaceReferences={false}
+            contextLocation={workspaceLocation}
             disabled={sending || !selectedTarget}
             placeholder={t("messagePlaceholder")}
             draftStorageKey={

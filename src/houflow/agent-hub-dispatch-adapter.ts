@@ -34,6 +34,10 @@ export interface AgentHubDispatchInput {
   attachments?: ConnectedAgentCommandAttachment[]
   action?: AgentHubHostedDispatchAction
   channelRef?: string
+  messageInput?: Record<string, unknown>
+  modelProviderId?: string
+  model?: string
+  reasoningEffort?: string
 }
 
 export interface AgentHubManagedInvocation {
@@ -159,6 +163,9 @@ export async function dispatchManagedAgent(
           {
             type: "user.message",
             content: content ?? [{ type: "text", text: message ?? "" }],
+            ...(nonEmptyRecord(input.messageInput)
+              ? { input: nonEmptyRecord(input.messageInput) }
+              : {}),
           },
         ],
       }),
@@ -255,6 +262,9 @@ export async function dispatchHostedConnectedAgent(
         environment_id: environmentId,
         channel_ref: channelRef,
         attachments: nonEmptyArray(input.attachments),
+        model_provider_id: textOrUndefined(input.modelProviderId),
+        model: textOrUndefined(input.model),
+        reasoning_effort: textOrUndefined(input.reasoningEffort),
         metadata: nonEmptyMetadata(input.metadata),
       }),
     }
@@ -304,6 +314,9 @@ export async function dispatchExternalLocalAgent(
         environment_id: environmentId,
         channel_ref: channelRef,
         attachments: nonEmptyArray(input.attachments),
+        model_provider_id: textOrUndefined(input.modelProviderId),
+        model: textOrUndefined(input.model),
+        reasoning_effort: textOrUndefined(input.reasoningEffort),
         metadata: nonEmptyMetadata(input.metadata),
       }),
     }
@@ -345,6 +358,12 @@ function nonEmptyTextArray(value: string[] | undefined): string[] | undefined {
 }
 
 function nonEmptyMetadata(value: Metadata | undefined): Metadata | undefined {
+  return value && Object.keys(value).length > 0 ? value : undefined
+}
+
+function nonEmptyRecord(
+  value: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
   return value && Object.keys(value).length > 0 ? value : undefined
 }
 

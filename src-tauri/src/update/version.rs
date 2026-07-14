@@ -15,14 +15,12 @@ use crate::app_error::AppCommandError;
 
 /// Update manifest URL — mirrors the `endpoints` entry in `tauri.conf.json`
 /// so desktop and server modes consult the same source of truth.
-pub const UPDATE_MANIFEST_URL: &str =
-    "https://agent.houflow.com/downloads/houhub/latest.json";
+pub const UPDATE_MANIFEST_URL: &str = "https://agent.houflow.com/downloads/houhub/latest.json";
 
 /// Deterministic base for release assets (desktop updater assets plus server
 /// tarballs/zips and their `.sig` detached signatures). Same channel as the
 /// manifest.
-pub const RELEASE_DOWNLOAD_BASE: &str =
-    "https://agent.houflow.com/downloads/houhub";
+pub const RELEASE_DOWNLOAD_BASE: &str = "https://agent.houflow.com/downloads/houhub";
 
 /// Short-timeout client for the small manifest fetch. Proxy env vars are
 /// sampled at build time, so `init_proxy_from_db` must run before the first

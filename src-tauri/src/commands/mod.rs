@@ -5,6 +5,7 @@ pub mod automation;
 pub mod backup;
 pub mod chat_channel;
 pub mod conversations;
+pub mod custom_skills;
 pub mod delegation;
 pub mod experts;
 pub mod feedback;
@@ -16,9 +17,9 @@ pub mod houflow;
 pub mod logging;
 pub mod mcp;
 pub mod model_provider;
-pub mod office_tools;
 #[cfg(feature = "tauri-runtime")]
 pub mod notification;
+pub mod office_tools;
 pub mod pet;
 pub mod project_boot;
 pub mod question;
@@ -32,7 +33,7 @@ pub mod session_info;
 pub mod system_settings;
 pub mod terminal;
 pub mod version_control;
-pub mod workbench;
 #[cfg(feature = "tauri-runtime")]
 pub mod windows;
+pub mod workbench;
 pub mod workspace_state;

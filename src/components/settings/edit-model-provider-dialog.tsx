@@ -25,13 +25,17 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { fetchOpenAiCompatibleModels, updateModelProvider } from "@/lib/api"
+import { CodexModelListEditor } from "@/components/settings/codex-model-list-editor"
 import {
   MODEL_PROVIDER_AGENT_TYPES,
   AGENT_LABELS,
   parseClaudeProviderModel,
+  parseCodexModelConfig,
   serializeClaudeProviderModel,
+  serializeCodexModelConfig,
   type AgentType,
   type ClaudeProviderModel,
+  type CodexModelConfig,
   type ModelProviderInfo,
 } from "@/lib/types"
 
@@ -105,7 +109,11 @@ export function EditModelProviderDialog({
   const [defaultModel, setDefaultModel] = useState("")
   const [modelsText, setModelsText] = useState("")
   const [claudeModel, setClaudeModel] = useState<ClaudeProviderModel>({})
+  const [codexModel, setCodexModel] = useState<CodexModelConfig>({
+    customs: [],
+  })
   const includesClaude = agentTypes.includes("claude_code")
+  const codexOnly = agentTypes.length === 1 && agentTypes[0] === "codex"
 
   const modelOptions = useMemo(
     () => normalizeModelList(modelsText),
@@ -130,7 +138,12 @@ export function EditModelProviderDialog({
     const nextClaudeModel = nextAgentTypes.includes("claude_code")
       ? parseClaudeProviderModel(provider.model)
       : {}
+    const nextCodexModel =
+      nextAgentTypes.length === 1 && nextAgentTypes[0] === "codex"
+        ? parseCodexModelConfig(provider.model)
+        : { customs: [] }
     setClaudeModel(nextClaudeModel)
+    setCodexModel(nextCodexModel)
     setDefaultModel(
       nextAgentTypes.includes("claude_code")
         ? (nextClaudeModel.main ?? providerDefaultModel(provider))
@@ -224,9 +237,15 @@ export function EditModelProviderDialog({
           ...claudeModel,
           main: claudeModel.main?.trim() || defaultModelValue || undefined,
         }) ?? "")
-      : defaultModelValue
-    const modelsPayload =
-      modelOptions.length > 0
+      : codexOnly
+        ? (serializeCodexModelConfig(codexModel) ?? "")
+        : defaultModelValue
+    const modelsPayload = codexOnly
+      ? mergeModelList([
+          codexModel.default ?? "",
+          ...codexModel.customs.map((model) => model.slug),
+        ])
+      : modelOptions.length > 0
         ? modelOptions
         : modelPayload
           ? includesClaude
@@ -292,6 +311,8 @@ export function EditModelProviderDialog({
     defaultModel,
     includesClaude,
     claudeModel,
+    codexModel,
+    codexOnly,
     modelOptions,
     handleOpenChange,
     onProviderUpdated,
@@ -364,29 +385,33 @@ export function EditModelProviderDialog({
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium">{t("model")}</label>
-            {modelOptions.length > 0 ? (
-              <Select value={defaultModel} onValueChange={setDefaultModel}>
-                <SelectTrigger className="h-9 text-xs">
-                  <SelectValue placeholder={defaultModelOptions[0]} />
-                </SelectTrigger>
-                <SelectContent>
-                  {defaultModelOptions.map((model) => (
-                    <SelectItem key={model} value={model}>
-                      {model}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <Input
-                value={defaultModel}
-                onChange={(e) => setDefaultModel(e.target.value)}
-                placeholder={modelPlaceholder}
-              />
-            )}
-          </div>
+          {codexOnly ? (
+            <CodexModelListEditor value={codexModel} onChange={setCodexModel} />
+          ) : (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">{t("model")}</label>
+              {modelOptions.length > 0 ? (
+                <Select value={defaultModel} onValueChange={setDefaultModel}>
+                  <SelectTrigger className="h-9 text-xs">
+                    <SelectValue placeholder={defaultModelOptions[0]} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {defaultModelOptions.map((model) => (
+                      <SelectItem key={model} value={model}>
+                        {model}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  value={defaultModel}
+                  onChange={(e) => setDefaultModel(e.target.value)}
+                  placeholder={modelPlaceholder}
+                />
+              )}
+            </div>
+          )}
 
           {includesClaude && (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

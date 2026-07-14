@@ -54,19 +54,19 @@ describe("ConversationDetailPanel new conversation layout", () => {
     expect(welcomeHeroSource).not.toContain("bg-gradient-to-r")
   })
 
-  it("uses the shared attached folder branch picker treatment for all chat inputs", () => {
+  it("uses the shared attached conversation location treatment for local and cloud inputs", () => {
     expect(source).not.toContain("attachFolderBranchPickerToInput")
     expect(conversationShellSource).not.toContain(
       "attachFolderBranchPickerToInput"
     )
     expect(messageInputSource).not.toContain("attachFolderBranchPickerToInput")
     expect(messageInputSource).toContain(
-      "const folderBranchPickerAttached = hasFolderBranchPicker"
+      "const folderBranchPickerAttached = hasConversationLocation"
     )
     expect(messageInputSource).not.toContain("rounded-b-none")
 
     const pickerStart = messageInputSource.indexOf(
-      "{hasFolderBranchPicker && ("
+      "{hasConversationLocation && ("
     )
     const pickerEnd = messageInputSource.indexOf(
       "<ImagePreviewDialog",

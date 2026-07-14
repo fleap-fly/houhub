@@ -319,10 +319,7 @@ pub enum AcpEvent {
     /// clear its "restart to apply" banner. Carried into `SessionState` so a
     /// snapshot attach (web reconnect, window refresh, new tile) recovers the
     /// staleness the one-shot event won't replay for it.
-    SessionConfigStale {
-        stale: bool,
-        kind: ConfigStaleKind,
-    },
+    SessionConfigStale { stale: bool, kind: ConfigStaleKind },
 }
 
 /// One transcript-accounted background task settlement carried on
@@ -333,6 +330,13 @@ pub struct BackgroundSettledInfo {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    /// True when the task reply is already rendered on the held ACP turn.
+    #[serde(default)]
+    pub wire_visible: bool,
 }
 
 /// Which settings surface drifted, so the frontend can word the
@@ -457,6 +461,23 @@ pub struct SessionConfigOptionInfo {
     pub kind: SessionConfigKindInfo,
 }
 
+/// Grok's per-model reasoning-effort capability, parsed from a session
+/// response's top-level `models.availableModels[]._meta` (only reachable via the
+/// raw JSON, since the `unstable_session_model` feature that would surface the
+/// typed `models` field is intentionally off). Drives the model-reactive
+/// composer effort selector: `supports == false` ⇒ the model shows NO effort
+/// selector. Backend-internal — NOT serialized onto the wire.
+#[derive(Debug, Clone, Default)]
+pub struct GrokEffortSpec {
+    /// Switchable efforts the model advertises: `(id, label, description)`.
+    pub options: Vec<(String, String, Option<String>)>,
+    /// The model's default/current effort. MAY fall outside `options`
+    /// (e.g. grok-4.5 defaults to `xhigh` while only listing `high/medium/low`).
+    pub default: Option<String>,
+    /// Whether the model advertises `supportsReasoningEffort`.
+    pub supports: bool,
+}
+
 /// Read-only snapshot of the modes + config_options an agent advertises
 /// when it opens a new session. Used by `ConnectionManager::probe_agent_options`
 /// to give the delegation settings UI an authoritative view of what an
@@ -532,6 +553,10 @@ pub struct AcpAgentInfo {
     pub opencode_auth_json: Option<String>,
     pub codex_auth_json: Option<String>,
     pub codex_config_toml: Option<String>,
+    /// Compact structured codex model-catalog source (the `Houhub` custom-model
+    /// list) round-tripped into the settings editor. Only populated for
+    /// `AgentType::Codex`, and only in api-key mode (no bound provider).
+    pub codex_model_catalog: Option<String>,
     pub cline_secrets_json: Option<String>,
     /// Raw `~/.hermes/config.yaml` text, attached for the Hermes settings panel's
     /// advanced editor. Only populated for `AgentType::Hermes`.
@@ -561,7 +586,9 @@ pub struct AcpAgentInfo {
 pub struct GrokSettings {
     /// `[models].default_reasoning_effort` — one of low/medium/high/xhigh.
     pub default_reasoning_effort: Option<String>,
-    /// `[ui].permission_mode` — one of ask/always-approve.
+    /// `[ui].permission_mode` — Grok's native enum
+    /// (default/acceptEdits/auto/dontAsk/bypassPermissions/plan). Legacy
+    /// `ask`/`always-approve` values are migrated on read.
     pub permission_mode: Option<String>,
     /// The HouHub-managed custom model id: the `[model.<id>]` block whose id
     /// equals `[models].default`. `None` when there is no such managed block.

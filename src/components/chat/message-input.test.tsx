@@ -225,6 +225,22 @@ describe("MessageInput (RichComposer integration)", () => {
       screen.queryByText(enMessages.Folder.chat.messageInput.attachServerFile)
     ).toBeNull()
   })
+
+  it("shows a remote location without enabling local workspace references", async () => {
+    renderInput({
+      enableWorkspaceReferences: false,
+      contextLocation: {
+        label: "Poetry production",
+        title: "workspace-remote-1",
+      },
+    })
+
+    expect(await screen.findByText("Poetry production")).toHaveAttribute(
+      "class",
+      expect.stringContaining("truncate")
+    )
+    expect(screen.getByTitle("workspace-remote-1")).toBeInTheDocument()
+  })
 })
 
 describe("MessageInput attach-to-chat insertion position", () => {

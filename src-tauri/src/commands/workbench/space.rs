@@ -67,9 +67,7 @@ pub async fn workbench_space_list_core(
 }
 
 /// Storage usage for the project: `{ used, total, percentage }`.
-pub async fn workbench_space_usage_core(
-    project_id: String,
-) -> Result<JsonValue, AppCommandError> {
+pub async fn workbench_space_usage_core(project_id: String) -> Result<JsonValue, AppCommandError> {
     let project_id = require_project_id(&project_id)?;
     let session = require_session()?;
     ps_get(
@@ -123,7 +121,11 @@ pub async fn workbench_space_create_folder_core(
     }
     let session = require_session()?;
     let mut body = json!({ "folder_name": folder_name });
-    if let Some(parent) = parent_id.as_ref().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+    if let Some(parent) = parent_id
+        .as_ref()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+    {
         body["parent_id"] = json!(parent);
     }
     ps_post(
@@ -158,7 +160,11 @@ pub async fn workbench_space_presign_upload_core(
     }
     let session = require_session()?;
     let mut body = json!({ "file_name": file_name, "size": size });
-    if let Some(mime) = mime_type.as_ref().map(|m| m.trim()).filter(|m| !m.is_empty()) {
+    if let Some(mime) = mime_type
+        .as_ref()
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty())
+    {
         body["mime_type"] = json!(mime);
     }
     if let Some(folder) = folder_path
@@ -192,7 +198,11 @@ pub async fn workbench_space_complete_upload_core(
     }
     let session = require_session()?;
     let mut body = json!({ "file_id": file_id });
-    if let Some(mime) = mime_type.as_ref().map(|m| m.trim()).filter(|m| !m.is_empty()) {
+    if let Some(mime) = mime_type
+        .as_ref()
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty())
+    {
         body["mime_type"] = json!(mime);
     }
     if let Some(folder) = folder_path
@@ -224,12 +234,6 @@ pub async fn workbench_space_delete_file_core(
     }
     let session = require_session()?;
     let path = format!("/space/files/{file_id}");
-    ps_delete(
-        &session.host,
-        &session.session_token,
-        &project_id,
-        &path,
-    )
-    .await?;
+    ps_delete(&session.host, &session.session_token, &project_id, &path).await?;
     Ok(json!({ "ok": true }))
 }

@@ -38,6 +38,7 @@ const h = vi.hoisted(() => {
     acpConnect: vi.fn(),
     acpDisconnect: vi.fn(),
     acpGetSessionSnapshot: vi.fn(),
+    getFolderConversation: vi.fn(),
     buildDelegationSeedEnvelopes: vi.fn(() => []),
     denormalizeSnapshot: vi.fn(),
   }
@@ -90,6 +91,7 @@ vi.mock("@/lib/api", () => ({
   acpCancel: vi.fn(),
   acpRespondPermission: vi.fn(),
   acpTouchConnection: vi.fn(),
+  getFolderConversation: h.getFolderConversation,
 }))
 
 function Probe() {
@@ -126,9 +128,29 @@ beforeEach(() => {
   h.acpConnect.mockReset()
   h.acpDisconnect.mockReset()
   h.acpGetSessionSnapshot.mockReset()
+  h.getFolderConversation.mockReset()
+  h.getFolderConversation.mockRejectedValue(
+    new Error("detail not seeded in this suite")
+  )
   h.denormalizeSnapshot.mockReset()
   h.denormalizeSnapshot.mockReturnValue({
     connectionId: "owner-conn",
+    status: "connected",
+    sessionId: null,
+    modes: null,
+    configOptions: null,
+    availableCommands: null,
+    usage: null,
+    liveMessage: null,
+    pendingPermission: null,
+    pendingAskQuestion: null,
+    pendingUserMessage: null,
+    promptCapabilities: null,
+    selectorsReady: false,
+    supportsFork: false,
+    configStale: false,
+    configStaleKind: null,
+    lastError: null,
     eventSeq: 0,
     activeDelegations: [],
   })
@@ -491,6 +513,7 @@ describe("AcpConnectionsProvider permission request details", () => {
       supportsFork: false,
       configStale: false,
       configStaleKind: null,
+      lastError: null,
       eventSeq: 5,
       activeDelegations: [],
     })
@@ -553,6 +576,152 @@ describe("AcpConnectionsProvider permission request details", () => {
     expect(parsed.title).toBe("Bash")
     expect(parsed.command).toBe("pnpm test -- --runInBand")
     expect(parsed.cwd).toBe("/tmp/x")
+  })
+})
+
+describe("AcpConnectionsProvider background activity", () => {
+  async function mountOwnerConnection(): Promise<AttachHandlers> {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    return latestAttachHandlers()
+  }
+
+  it("settles launch cards in memory without refetching conversation detail", async () => {
+    const { useConversationRuntimeStore, resetConversationRuntimeStore } =
+      await import("@/stores/conversation-runtime-store")
+    const { sendSystemNotification } = await import("@/lib/notification")
+    const notify = vi.mocked(sendSystemNotification)
+    notify.mockClear()
+    h.getFolderConversation.mockClear()
+    resetConversationRuntimeStore()
+
+    const runtimeConversationId = -9
+    useConversationRuntimeStore
+      .getState()
+      .actions.setExternalId(runtimeConversationId, "sess-1")
+    useConversationRuntimeStore
+      .getState()
+      .actions.setDbConversationId(runtimeConversationId, 42)
+
+    const handlers = await mountOwnerConnection()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "background_activity",
+      session_id: "sess-1",
+      turns: [
+        {
+          id: "bg-100-0",
+          role: "assistant",
+          blocks: [{ type: "text", text: "build finished cleanly" }],
+          timestamp: "2026-07-07T03:47:08.000Z",
+        },
+      ],
+      outstanding: 2,
+      settled: [
+        {
+          task_id: "agent1",
+          status: "completed",
+          summary: 'Agent "Run pnpm build" finished',
+          tool_use_id: "toolu_01",
+          result: "Build succeeded (exit code 0).",
+        },
+      ],
+      watermark: 4096,
+    })
+
+    expect(h.store!.getConnection(TAB)?.backgroundOutstanding).toBe(2)
+    expect(h.store!.getConnection(TAB)?.backgroundSettleSyncingSince).toEqual(
+      expect.any(Number)
+    )
+
+    const session = useConversationRuntimeStore
+      .getState()
+      .byConversationId.get(runtimeConversationId)
+    expect(session?.backgroundTurns).toHaveLength(1)
+    expect(session?.backgroundTurns[0]).toMatchObject({
+      watermark: 4096,
+      turn: { id: "bg-100-0" },
+    })
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(notify.mock.calls[0][1]).toContain('Agent "Run pnpm build" finished')
+    expect(h.getFolderConversation).not.toHaveBeenCalled()
+    expect(session?.pendingBackgroundSettlements).toEqual([
+      {
+        toolUseId: "toolu_01",
+        taskId: "agent1",
+        status: "completed",
+        summary: 'Agent "Run pnpm build" finished',
+        result: "Build succeeded (exit code 0).",
+      },
+    ])
+
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "background_activity",
+      session_id: "sess-1",
+      outstanding: 0,
+      watermark: 4200,
+    })
+    expect(h.store!.getConnection(TAB)?.backgroundOutstanding).toBe(0)
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(h.store!.getConnection(TAB)?.backgroundSettleSyncingSince).toEqual(
+      expect.any(Number)
+    )
+
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "background_activity",
+      session_id: "sess-1",
+      turns: [
+        {
+          id: "bg-100-1",
+          role: "assistant",
+          blocks: [{ type: "text", text: "here is what the build produced" }],
+          timestamp: "2026-07-07T03:47:12.000Z",
+        },
+      ],
+      outstanding: 0,
+      watermark: 4400,
+    })
+    expect(h.store!.getConnection(TAB)?.backgroundSettleSyncingSince).toBeNull()
+
+    resetConversationRuntimeStore()
+  })
+
+  it("does not arm the syncing hint for a wire-visible settlement", async () => {
+    const { resetConversationRuntimeStore } =
+      await import("@/stores/conversation-runtime-store")
+    resetConversationRuntimeStore()
+    const handlers = await mountOwnerConnection()
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "background_activity",
+      session_id: "sess-1",
+      outstanding: 0,
+      settled: [
+        {
+          task_id: "agent1",
+          status: "completed",
+          tool_use_id: "toolu_01",
+          result: "done",
+          wire_visible: true,
+        },
+      ],
+      watermark: 100,
+    })
+
+    expect(h.store!.getConnection(TAB)?.backgroundOutstanding).toBe(0)
+    expect(h.store!.getConnection(TAB)?.backgroundSettleSyncingSince).toBeNull()
+
+    resetConversationRuntimeStore()
   })
 })
 
@@ -646,5 +815,100 @@ describe("AcpConnectionsProvider Grok cross-agent-type model switch", () => {
     // The attempted model stays the saved preference (no revert of the persisted
     // choice), so a fresh session lands on Composer where the switch succeeds.
     expect(saveConfigPreference).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("HYDRATE_FROM_SNAPSHOT last_error recovery", () => {
+  // Full SnapshotPatch fixture; per-test overrides set connectionId / eventSeq /
+  // lastError. `denormalizeSnapshot` is mocked, so onSnapshot dispatches exactly
+  // this object as `action.patch`.
+  function snapshotPatch(overrides: {
+    eventSeq: number
+    lastError: string | null
+    connectionId?: string
+  }) {
+    return {
+      connectionId: "spawned-conn",
+      status: "connected",
+      sessionId: null,
+      modes: null,
+      configOptions: null,
+      availableCommands: null,
+      usage: null,
+      liveMessage: null,
+      pendingPermission: null,
+      pendingAskQuestion: null,
+      pendingUserMessage: null,
+      promptCapabilities: null,
+      selectorsReady: false,
+      supportsFork: false,
+      configStale: false,
+      configStaleKind: null,
+      backgroundOutstanding: 0,
+      activeDelegations: [],
+      ...overrides,
+    }
+  }
+
+  async function connectOwner(): Promise<AttachHandlers> {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    h.acpGetAgentStatus.mockResolvedValue({
+      agent_type: "claude_code",
+      enabled: true,
+      available: true,
+      installed_version: "1.0.0",
+    })
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    return latestAttachHandlers()
+  }
+
+  it("recovers last_error from a FRESH snapshot (client missed the live error)", async () => {
+    const handlers = await connectOwner()
+    // A freshly reconnected client (lastAppliedSeq=0) receives a snapshot ahead
+    // of its cursor carrying an error whose live event it never saw. The fresh
+    // path recovers it.
+    h.denormalizeSnapshot.mockReturnValue(
+      snapshotPatch({ eventSeq: 5, lastError: "boom from snapshot" })
+    )
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+    expect(h.store!.getConnection(TAB)!.error).toBe("boom from snapshot")
+  })
+
+  it("does NOT resurrect a cleared error from a STALE snapshot", async () => {
+    const handlers = await connectOwner()
+    // Live: an error lands, then a new prompt starts and clears it. This also
+    // advances lastAppliedSeq to 2.
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "error",
+      message: "boom",
+      agent_type: "claude_code",
+      code: "runtime_failure",
+    })
+    expect(h.store!.getConnection(TAB)!.error).toBe("boom")
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "prompting",
+    })
+    expect(h.store!.getConnection(TAB)!.error).toBeNull()
+
+    // A snapshot generated BEFORE the prompt (eventSeq=1 <= lastAppliedSeq=2)
+    // still carries the old error. Folding it back in would resurrect an error
+    // the current turn already cleared — the stale path must leave error alone.
+    h.denormalizeSnapshot.mockReturnValue(
+      snapshotPatch({ eventSeq: 1, lastError: "boom" })
+    )
+    hydrateSnapshot(handlers, {
+      event_seq: 1,
+    } as unknown as LiveSessionSnapshot)
+    expect(h.store!.getConnection(TAB)!.error).toBeNull()
   })
 })

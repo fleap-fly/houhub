@@ -15,7 +15,11 @@ export function hostedCommandToCloudEvents(
     ].filter(isPresent)
   )
   const outputEvent = hostedCommandOutputToCloudEvent(command, events)
-  return outputEvent ? [...events, outputEvent] : events
+  const conversationalEvents = outputEvent ? [...events, outputEvent] : events
+  const completionEvent = hostedCommandCompletionEvent(command)
+  return completionEvent
+    ? [...conversationalEvents, completionEvent]
+    : conversationalEvents
 }
 
 export function hostedCommandError(
@@ -95,6 +99,34 @@ function hostedCommandOutputToCloudEvent(
   }
 }
 
+function hostedCommandCompletionEvent(
+  command: HouflowCloudHostedCommand
+): HouflowCloudSessionEvent | null {
+  const completedAt = stringValue(command.completed_at)
+  if (!completedAt) return null
+  const output = recordValue(command.output)
+  const response = recordValue(output.runtime_response)
+  const usage = recordValue(response.usage)
+  const model = stringValue(response.model) || stringValue(command.input?.model)
+  const duration = durationMs(command.started_at, command.completed_at)
+  const raw = {
+    id: `${command.id}:completion`,
+    type: "span.model_request_end",
+    ...(model ? { model } : {}),
+    ...(Object.keys(usage).length > 0 ? { model_usage: usage } : {}),
+    ...(duration != null ? { duration_ms: duration } : {}),
+    created_at: completedAt,
+  }
+  return {
+    id: raw.id,
+    type: raw.type,
+    role: null,
+    text: null,
+    createdAt: completedAt,
+    raw,
+  }
+}
+
 function eventContainsAssistantText(
   event: HouflowCloudSessionEvent,
   text: string
@@ -136,6 +168,13 @@ function contentItemText(value: unknown): string {
 
 function normalizeText(value: string): string {
   return value.trim().replace(/\s+/g, " ")
+}
+
+function durationMs(startValue: unknown, endValue: unknown): number | null {
+  const start = Date.parse(stringValue(startValue))
+  const end = Date.parse(stringValue(endValue))
+  const duration = end - start
+  return Number.isFinite(duration) && duration > 0 ? duration : null
 }
 
 function hostedCommandEventToCloudEvents(

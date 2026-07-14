@@ -71,9 +71,9 @@ fn is_valid_target(target: &str) -> bool {
     {
         return false;
     }
-    target.split("::").all(|seg| {
-        !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-    })
+    target
+        .split("::")
+        .all(|seg| !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
 }
 
 /// Build a reload handle not attached to any installed subscriber, for tests
@@ -328,7 +328,10 @@ mod tests {
         assert!(!rendered.contains("bad-target"), "{rendered}");
         // The logging module stays off; the override attempt is dropped.
         assert!(rendered.contains("houhub_lib::logging=off"), "{rendered}");
-        assert!(!rendered.contains("houhub_lib::logging=trace"), "{rendered}");
+        assert!(
+            !rendered.contains("houhub_lib::logging=trace"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -365,13 +368,10 @@ mod tests {
             },
         );
         // Both empty / whitespace-only → no override.
-        temp_env::with_vars(
-            [("HOUHUB_LOG", Some("  ")), ("RUST_LOG", Some(""))],
-            || {
-                assert_eq!(env_level_override(), None);
-                assert!(!env_level_is_set());
-            },
-        );
+        temp_env::with_vars([("HOUHUB_LOG", Some("  ")), ("RUST_LOG", Some(""))], || {
+            assert_eq!(env_level_override(), None);
+            assert!(!env_level_is_set());
+        });
         // HOUHUB_LOG wins when both are non-empty.
         temp_env::with_vars(
             [("HOUHUB_LOG", Some("trace")), ("RUST_LOG", Some("debug"))],

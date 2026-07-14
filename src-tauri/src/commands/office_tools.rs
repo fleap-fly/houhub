@@ -16,6 +16,7 @@ use serde::Serialize;
 use tokio::sync::Mutex;
 
 use crate::acp::types::AgentSkillScope;
+use crate::app_error::AppCommandError;
 use crate::commands::acp::{
     preferred_scope_skill_dir, remove_skill_entry, resolve_command_on_path, scoped_skill_dirs,
     skill_storage_spec, validate_skill_id,
@@ -24,7 +25,6 @@ use crate::commands::experts::{
     central_experts_dir, classify_link, create_link_raw, path_is_symlink, read_link_target,
     ExpertInstallStatus, ExpertLinkState, LinkOp, LinkOpResult,
 };
-use crate::app_error::AppCommandError;
 use crate::commands::folders::resolve_tree_path;
 use crate::models::agent::AgentType;
 use crate::process::tokio_command;
@@ -229,6 +229,13 @@ const SKILLS: &[SkillDef] = &[
         zh_desc: "CSV/表格数据 → KPI/分析 Excel 仪表盘",
     },
 ];
+
+/// Ids of all OfficeCLI-managed skills. Used by the custom-skills pack to
+/// exclude built-in ids from the "custom" set (all packs share the central
+/// store).
+pub(crate) fn bundled_skill_ids() -> Vec<String> {
+    SKILLS.iter().map(|s| s.id.to_string()).collect()
+}
 
 fn skill_defs() -> &'static [SkillDef] {
     SKILLS
@@ -573,7 +580,10 @@ pub async fn officecli_sync_skills() -> Result<SkillSyncReport, OfficeToolsError
                 report.errors.push(msg);
             }
             Err(e) => {
-                tracing::warn!("[office] load_skill {} could not be spawned: {e}", def.load_id);
+                tracing::warn!(
+                    "[office] load_skill {} could not be spawned: {e}",
+                    def.load_id
+                );
                 report
                     .errors
                     .push(format!("{}: command error: {e}", def.id));
@@ -821,8 +831,7 @@ pub async fn officecli_skill_list_all_install_statuses(
                 Err(_) => continue,
             };
             let state = classify_link(&link_path, &expected);
-            let target_path =
-                read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
+            let target_path = read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
             out.push(ExpertInstallStatus {
                 expert_id: def.id.to_string(),
                 agent_type: agent,
@@ -963,7 +972,10 @@ mod tests {
             .expect("batch returns Ok");
         assert_eq!(results.len(), 2);
         // Unknown skills fail their own op without aborting the batch.
-        assert!(results.iter().all(|r| !r.ok && r.error.is_some()), "{results:?}");
+        assert!(
+            results.iter().all(|r| !r.ok && r.error.is_some()),
+            "{results:?}"
+        );
     }
 
     #[tokio::test]

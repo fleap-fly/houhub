@@ -45,14 +45,8 @@ describe("houflowCloudEventsToTurns", () => {
       {
         id: "evt_reasoning",
         role: "assistant",
-        blocks: [{ type: "thinking", text: "分析中" }],
-        timestamp: "2026-06-28T00:00:00.000Z",
-        completed_at: "2026-06-28T00:00:00.000Z",
-      },
-      {
-        id: "evt_tool",
-        role: "assistant",
         blocks: [
+          { type: "thinking", text: "分析中" },
           {
             type: "tool_use",
             tool_use_id: "call_1",
@@ -214,7 +208,7 @@ describe("houflowCloudEventsToTurns", () => {
       }),
     ])
 
-    expect(turns).toHaveLength(2)
+    expect(turns).toHaveLength(1)
     expect(turns[0]?.blocks[0]).toMatchObject({
       type: "tool_use",
       tool_use_id: "call_delegate",
@@ -227,12 +221,12 @@ describe("houflowCloudEventsToTurns", () => {
         },
       },
     })
-    expect(turns[1]?.blocks[0]).toMatchObject({
+    expect(turns[0]?.blocks[2]).toMatchObject({
       type: "tool_use",
       tool_use_id: "call_poll",
       tool_name: "get_delegation_status",
     })
-    expect(turns[1]?.blocks[1]).toMatchObject({
+    expect(turns[0]?.blocks[3]).toMatchObject({
       type: "tool_result",
       tool_use_id: "call_poll",
       output_preview:
@@ -302,6 +296,126 @@ describe("houflowCloudEventsToTurns", () => {
         },
       },
     ])
+  })
+
+  it("folds a model completion span emitted before the reply into that reply", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_user",
+        type: "user.message",
+        content: [{ type: "text", text: "开始" }],
+      }),
+      event({
+        id: "evt_span_start",
+        type: "span.model_request_start",
+        model: "gpt-old",
+      }),
+      event({
+        id: "evt_span_end",
+        type: "span.model_request_end",
+        model: "gpt-5.5",
+        duration_ms: 640,
+        model_usage: {
+          input_tokens: 240,
+          output_tokens: 64,
+          cache_read_input_tokens: 16,
+        },
+      }),
+      event({
+        id: "evt_reply",
+        type: "agent.message",
+        content: [{ type: "text", text: "完成" }],
+      }),
+    ])
+
+    expect(turns[1]).toMatchObject({
+      id: "evt_reply",
+      model: "gpt-5.5",
+      duration_ms: 640,
+      usage: {
+        input_tokens: 240,
+        output_tokens: 64,
+        cache_read_input_tokens: 16,
+        cache_creation_input_tokens: 0,
+      },
+    })
+  })
+
+  it("folds a model completion span emitted after streaming deltas into the streamed reply", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_user",
+        type: "user.message",
+        content: [{ type: "text", text: "开始" }],
+      }),
+      event({
+        id: "evt_delta_1",
+        type: "agent.message.delta",
+        delta: "云端",
+      }),
+      event({
+        id: "evt_delta_2",
+        type: "agent.message.delta",
+        delta: "回复",
+      }),
+      event({
+        id: "evt_span_end",
+        type: "span.model_request_end",
+        model: "gpt-5.5",
+        duration_ms: 320,
+        model_usage: { input_tokens: 10, output_tokens: 4 },
+      }),
+    ])
+
+    expect(turns[1]).toMatchObject({
+      id: "evt_delta_1",
+      blocks: [{ type: "text", text: "云端回复" }],
+      model: "gpt-5.5",
+      duration_ms: 320,
+      usage: { input_tokens: 10, output_tokens: 4 },
+    })
+  })
+
+  it("aggregates usage and duration across one consecutive assistant reply", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_user",
+        type: "user.message",
+        content: [{ type: "text", text: "开始" }],
+      }),
+      event({
+        id: "evt_reasoning",
+        type: "agent.message",
+        model: "gpt-5.6",
+        duration_ms: 120,
+        model_usage: { input_tokens: 6, output_tokens: 2 },
+        content: [{ type: "thinking", text: "分析" }],
+      }),
+      event({
+        id: "evt_reply",
+        type: "agent.message",
+        model: "gpt-5.6",
+        duration_ms: 280,
+        model_usage: { input_tokens: 4, output_tokens: 8 },
+        content: [{ type: "text", text: "完成" }],
+      }),
+    ])
+
+    expect(turns[1]).toMatchObject({
+      id: "evt_reasoning",
+      model: "gpt-5.6",
+      duration_ms: 400,
+      usage: {
+        input_tokens: 10,
+        output_tokens: 10,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+      blocks: [
+        { type: "thinking", text: "分析" },
+        { type: "text", text: "完成" },
+      ],
+    })
   })
 })
 

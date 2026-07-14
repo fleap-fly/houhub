@@ -12,8 +12,8 @@
 //! - [`auth`]   device-code handshake, session, project listing, sign-out
 //! - [`space`]  portal-neutral project-space (digital asset center) data layer
 
-mod auth;
 mod ai;
+mod auth;
 mod client;
 mod space;
 mod store;

@@ -270,6 +270,12 @@ fn load_bundled_metadata_inner() -> Result<Vec<ExpertMetadata>, ExpertsError> {
     Ok(out)
 }
 
+/// Ids of all bundled experts. Used by the custom-skills pack to exclude
+/// built-in ids from the "custom" set (all packs share the central store).
+pub(crate) fn bundled_ids() -> Vec<String> {
+    bundled_metadata().iter().map(|m| m.id.clone()).collect()
+}
+
 fn find_metadata(expert_id: &str) -> Result<&'static ExpertMetadata, ExpertsError> {
     bundled_metadata()
         .iter()
@@ -987,8 +993,7 @@ pub async fn experts_list_all_install_statuses() -> Result<Vec<ExpertInstallStat
                 Err(_) => continue,
             };
             let state = classify_link(&link_path, &expected);
-            let target_path =
-                read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
+            let target_path = read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
             out.push(ExpertInstallStatus {
                 expert_id: meta.id.clone(),
                 agent_type: agent,

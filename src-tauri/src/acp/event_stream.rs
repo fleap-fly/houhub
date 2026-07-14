@@ -257,8 +257,7 @@ fn json_value_size(value: &serde_json::Value) -> usize {
         serde_json::Value::String(s) => json_str_len(s),
         serde_json::Value::Array(items) => {
             // `[` + elements + `,` between them + `]`.
-            2 + items.len().saturating_sub(1)
-                + items.iter().map(json_value_size).sum::<usize>()
+            2 + items.len().saturating_sub(1) + items.iter().map(json_value_size).sum::<usize>()
         }
         serde_json::Value::Object(map) => {
             // `{` + `"key":value` pairs + `,` between them + `}`.
@@ -354,9 +353,7 @@ fn estimate_envelope_size(envelope: &EventEnvelope) -> usize {
     // UUID-shaped ones production emits. (`ENVELOPE_OVERHEAD` covers its key.)
     let base = ENVELOPE_OVERHEAD + json_str_len(&envelope.connection_id);
     let payload = match &envelope.payload {
-        AcpEvent::ContentDelta { text } | AcpEvent::Thinking { text } => {
-            json_str_len(text)
-        }
+        AcpEvent::ContentDelta { text } | AcpEvent::Thinking { text } => json_str_len(text),
         AcpEvent::ClaudeSdkMessage {
             session_id,
             message,
@@ -419,12 +416,109 @@ fn estimate_envelope_size(envelope: &EventEnvelope) -> usize {
                 + blocks.len().saturating_sub(1)
                 + blocks.iter().map(user_block_size).sum::<usize>()
         }
+        // Background activity may carry whole transcript turns and large tool
+        // results, so size it structurally without serializing under the lock.
+        AcpEvent::BackgroundActivity {
+            session_id,
+            turns,
+            outstanding: _,
+            settled,
+            watermark: _,
+        } => {
+            json_str_len(session_id)
+                + turns.len().saturating_sub(1)
+                + turns.iter().map(message_turn_size).sum::<usize>()
+                + settled
+                    .iter()
+                    .map(|settlement| {
+                        128 + json_str_len(&settlement.task_id)
+                            + json_str_len(&settlement.status)
+                            + opt_str_size(&settlement.summary)
+                            + opt_str_size(&settlement.tool_use_id)
+                            + opt_str_size(&settlement.result)
+                    })
+                    .sum::<usize>()
+        }
         // Small, infrequent variants: an exact serialized length is cheap here
         // and preserves the prior threshold behavior; the 256 fallback only
         // guards the (practically impossible) serialization failure.
         other => serde_json::to_vec(other).map_or(256, |v| v.len()),
     };
     base + payload
+}
+
+fn message_turn_size(turn: &crate::models::message::MessageTurn) -> usize {
+    384 + json_str_len(&turn.id)
+        + opt_str_size(&turn.model)
+        + turn.blocks.len().saturating_sub(1)
+        + turn.blocks.iter().map(content_block_size).sum::<usize>()
+}
+
+fn content_block_size(block: &crate::models::message::ContentBlock) -> usize {
+    use crate::models::message::ContentBlock as CB;
+    match block {
+        CB::Text { text } | CB::Thinking { text } => 32 + json_str_len(text),
+        CB::Image {
+            data,
+            mime_type,
+            uri,
+        } => 64 + json_str_len(data) + json_str_len(mime_type) + opt_str_size(uri),
+        CB::ImageGeneration {
+            revised_prompt,
+            image,
+        } => {
+            64 + opt_str_size(revised_prompt)
+                + image.as_ref().map_or(0, |image| {
+                    64 + json_str_len(&image.data)
+                        + json_str_len(&image.mime_type)
+                        + opt_str_size(&image.uri)
+                })
+        }
+        CB::ToolUse {
+            tool_use_id,
+            tool_name,
+            input_preview,
+            meta,
+        } => {
+            96 + opt_str_size(tool_use_id)
+                + json_str_len(tool_name)
+                + opt_str_size(input_preview)
+                + opt_json_size(meta)
+        }
+        CB::ToolResult {
+            tool_use_id,
+            output_preview,
+            is_error: _,
+            agent_stats,
+            images,
+        } => {
+            128 + opt_str_size(tool_use_id)
+                + opt_str_size(output_preview)
+                + agent_stats.as_ref().map_or(0, agent_stats_size)
+                + images
+                    .iter()
+                    .map(|image| {
+                        64 + json_str_len(&image.data)
+                            + json_str_len(&image.mime_type)
+                            + opt_str_size(&image.uri)
+                    })
+                    .sum::<usize>()
+        }
+    }
+}
+
+fn agent_stats_size(stats: &crate::models::message::AgentExecutionStats) -> usize {
+    640 + opt_str_size(&stats.agent_type)
+        + opt_str_size(&stats.status)
+        + stats
+            .tool_calls
+            .iter()
+            .map(|call| {
+                96 + json_str_len(&call.tool_name)
+                    + opt_str_size(&call.input_preview)
+                    + opt_str_size(&call.output_preview)
+            })
+            .sum::<usize>()
 }
 
 #[cfg(test)]
@@ -647,7 +741,10 @@ mod tests {
             "escape-aware estimate {est} must trip the cap like serialized {serialized}"
         );
         // Never undercount the serialized envelope (the per-event cap invariant).
-        assert!(est >= serialized, "estimate {est} < serialized {serialized}");
+        assert!(
+            est >= serialized,
+            "estimate {est} < serialized {serialized}"
+        );
     }
 
     #[test]
@@ -674,7 +771,10 @@ mod tests {
             est > RECENT_EVENT_MAX_BYTES,
             "comma-aware estimate {est} must trip the cap like serialized {serialized}"
         );
-        assert!(est >= serialized, "estimate {est} < serialized {serialized}");
+        assert!(
+            est >= serialized,
+            "estimate {est} < serialized {serialized}"
+        );
     }
 
     #[test]
@@ -817,7 +917,10 @@ mod tests {
             },
         });
         let serialized = serde_json::to_vec(&*env).expect("serialize").len();
-        assert!(serialized > RECENT_EVENT_MAX_BYTES, "serialized {serialized}");
+        assert!(
+            serialized > RECENT_EVENT_MAX_BYTES,
+            "serialized {serialized}"
+        );
         assert!(
             estimate_envelope_size(&env) > RECENT_EVENT_MAX_BYTES,
             "estimate must trip the cap like serialized {serialized}"
@@ -843,7 +946,10 @@ mod tests {
             },
         });
         let serialized = serde_json::to_vec(&*env).expect("serialize").len();
-        assert!(serialized > RECENT_EVENT_MAX_BYTES, "serialized {serialized}");
+        assert!(
+            serialized > RECENT_EVENT_MAX_BYTES,
+            "serialized {serialized}"
+        );
         assert!(estimate_envelope_size(&env) > RECENT_EVENT_MAX_BYTES);
     }
 
@@ -861,7 +967,10 @@ mod tests {
             tool_update_with_image(1, evil.clone()),
         ] {
             let serialized = serde_json::to_vec(&*env).expect("serialize").len();
-            assert!(serialized > RECENT_EVENT_MAX_BYTES, "serialized {serialized}");
+            assert!(
+                serialized > RECENT_EVENT_MAX_BYTES,
+                "serialized {serialized}"
+            );
             assert!(
                 estimate_envelope_size(&env) > RECENT_EVENT_MAX_BYTES,
                 "escape-aware image sizing must trip the cap (serialized {serialized})"
@@ -883,7 +992,10 @@ mod tests {
             },
         });
         let serialized = serde_json::to_vec(&*env).expect("serialize").len();
-        assert!(serialized > RECENT_EVENT_MAX_BYTES, "serialized {serialized}");
+        assert!(
+            serialized > RECENT_EVENT_MAX_BYTES,
+            "serialized {serialized}"
+        );
         assert!(estimate_envelope_size(&env) > RECENT_EVENT_MAX_BYTES);
         assert_ge_serialized(&env);
     }

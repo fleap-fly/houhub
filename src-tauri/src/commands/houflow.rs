@@ -180,7 +180,9 @@ fn validate_houflow_control_url(
         ));
     }
     let Some(host) = url.host_str() else {
-        return Err(AppCommandError::invalid_input("Houflow request URL is missing a host"));
+        return Err(AppCommandError::invalid_input(
+            "Houflow request URL is missing a host",
+        ));
     };
     let local_dev_host = matches!(host, "localhost" | "127.0.0.1" | "::1");
     if !(host == "houflow.com" || host.ends_with(".houflow.com") || local_dev_host) {
@@ -530,10 +532,9 @@ pub async fn houflow_sync_managed_gateway_core(
 
     if bind_agents {
         for agent_type in agent_types {
-            let setting =
-                agent_setting_service::get_by_agent_type(&db.conn, agent_type)
-                    .await
-                    .map_err(AppCommandError::from)?;
+            let setting = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
+                .await
+                .map_err(AppCommandError::from)?;
             let env = setting
                 .as_ref()
                 .and_then(|row| row.env_json.as_deref())
@@ -874,6 +875,7 @@ fn gateway_agent_types() -> Vec<AgentType> {
         AgentType::ClaudeCode,
         AgentType::Gemini,
         AgentType::Pi,
+        AgentType::Grok,
     ]
 }
 
@@ -1139,6 +1141,7 @@ mod tests {
     #[test]
     fn gateway_sync_includes_pi() {
         assert!(gateway_agent_types().contains(&AgentType::Pi));
+        assert!(gateway_agent_types().contains(&AgentType::Grok));
     }
 
     #[test]

@@ -53,6 +53,8 @@ vi.mock("@/houflow/cloud-sessions", () => ({
   getHouflowCloudSessionOutputText: mocks.getOutputText,
   getHouflowCloudSessionOutputBytes: mocks.getOutputBytes,
   houflowHostedCommandOutputSessionId: () => null,
+  isCloudSessionActive: () => false,
+  isHouflowHostedCommandActive: () => false,
   isHouflowCloudSessionNotFound: mocks.isNotFound,
 }))
 
@@ -95,6 +97,15 @@ describe("CloudSessionOutputsPanel", () => {
 
     render(<CloudSessionOutputsPanel />)
 
+    await waitFor(() => {
+      expect(mocks.listOutputs).toHaveBeenCalledWith(
+        expect.anything(),
+        null,
+        "session-1",
+        100
+      )
+    })
+
     const file = await screen.findByRole("button", {
       name: /outputs\/report\.html/,
     })
@@ -111,6 +122,12 @@ describe("CloudSessionOutputsPanel", () => {
         preview: true,
       })
     })
+    expect(mocks.getOutputText).toHaveBeenCalledWith(
+      expect.anything(),
+      null,
+      "session-1",
+      "file_1"
+    )
     expect(mocks.getOutputBytes).not.toHaveBeenCalled()
   })
 

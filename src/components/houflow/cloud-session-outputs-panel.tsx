@@ -25,6 +25,8 @@ import {
   getHouflowCloudSessionOutputText,
   houflowHostedCommandOutputSessionId,
   isHouflowCloudSessionNotFound,
+  isCloudSessionActive,
+  isHouflowHostedCommandActive,
   listHouflowCloudSessionOutputs,
   type HouflowCloudSessionOutput,
 } from "@/houflow/cloud-sessions"
@@ -45,6 +47,8 @@ export function CloudSessionOutputsPanel() {
   const [openingOutputId, setOpeningOutputId] = useState<string | null>(null)
   const [selectionError, setSelectionError] = useState<string | null>(null)
   const requestRef = useRef(0)
+  const backgroundRefreshInFlightRef = useRef(false)
+  const wasActiveRef = useRef(false)
   const openedSelectionNonceRef = useRef<number | null>(null)
 
   const selectedCloudSessionId = cloud.selectedSession?.id ?? null
@@ -60,58 +64,71 @@ export function CloudSessionOutputsPanel() {
     [outputs, selectedOutputId]
   )
 
-  const refreshOutputs = useCallback(async () => {
-    const requestId = ++requestRef.current
-    if (houflow.session.status !== "signed_in" || !selectedSessionId) {
-      setOutputs([])
-      setError(null)
-      setLoading(false)
-      setOutputsLoaded(false)
-      setSelectedOutputId(null)
-      return
-    }
-    setLoading(true)
-    setOutputsLoaded(false)
-    setError(null)
-    try {
-      const next = await listHouflowCloudSessionOutputs(
-        houflow.session,
-        houflow.secret,
-        selectedSessionId
-      )
-      if (requestRef.current !== requestId) return
-      setOutputs(next)
-      setSelectedOutputId((current) => {
-        if (current && next.some((output) => output.id === current)) {
-          return current
-        }
-        return null
-      })
-    } catch (err) {
-      if (requestRef.current === requestId) {
-        // This list endpoint is session-scoped. A typed 404 here means the
-        // selected managed session was removed elsewhere, unlike a 404 while
-        // fetching one individual output file.
-        if (selectedCloudSessionId && isHouflowCloudSessionNotFound(err)) {
-          cloud.removeSession(selectedCloudSessionId)
+  const outputsActive =
+    isCloudSessionActive(cloud.selectedSession) ||
+    isHouflowHostedCommandActive(cloud.selectedHostedCommand)
+
+  const refreshOutputs = useCallback(
+    async (background = false) => {
+      if (background && backgroundRefreshInFlightRef.current) return
+      if (background) backgroundRefreshInFlightRef.current = true
+      const requestId = ++requestRef.current
+      try {
+        if (houflow.session.status !== "signed_in" || !selectedSessionId) {
           setOutputs([])
+          setError(null)
+          setLoading(false)
+          setOutputsLoaded(false)
+          setSelectedOutputId(null)
           return
         }
-        setError(toErrorMessage(err))
+        if (!background) {
+          setLoading(true)
+          setOutputsLoaded(false)
+        }
+        setError(null)
+        const next = await listHouflowCloudSessionOutputs(
+          houflow.session,
+          houflow.secret,
+          selectedSessionId,
+          100
+        )
+        if (requestRef.current !== requestId) return
+        setOutputs(next)
+        setSelectedOutputId((current) => {
+          if (current && next.some((output) => output.id === current)) {
+            return current
+          }
+          return null
+        })
+      } catch (err) {
+        if (requestRef.current === requestId) {
+          // This list endpoint is session-scoped. A typed 404 here means the
+          // selected managed session was removed elsewhere, unlike a 404 while
+          // fetching one individual output file.
+          if (selectedCloudSessionId && isHouflowCloudSessionNotFound(err)) {
+            cloud.removeSession(selectedCloudSessionId)
+            setOutputs([])
+            return
+          }
+          setError(toErrorMessage(err))
+        }
+      } finally {
+        if (requestRef.current === requestId) {
+          if (!background) setLoading(false)
+          setOutputsLoaded(true)
+        }
+        if (background) backgroundRefreshInFlightRef.current = false
       }
-    } finally {
-      if (requestRef.current === requestId) {
-        setLoading(false)
-        setOutputsLoaded(true)
-      }
-    }
-  }, [
-    cloud,
-    houflow.secret,
-    houflow.session,
-    selectedCloudSessionId,
-    selectedSessionId,
-  ])
+    },
+    [
+      cloud,
+      houflow.secret,
+      houflow.session,
+      selectedCloudSessionId,
+      selectedSessionId,
+    ]
+  )
 
   const openOutput = useCallback(
     async (output: HouflowCloudSessionOutput) => {
@@ -132,7 +149,7 @@ export function CloudSessionOutputsPanel() {
             houflow.session,
             houflow.secret,
             selectedSessionId,
-            output.filename
+            output.fileId
           )
           content = await blobToDataUrl(
             new Blob([bytes], { type: mediaTypeForCloudOutputBlob(output) })
@@ -146,7 +163,7 @@ export function CloudSessionOutputsPanel() {
             houflow.session,
             houflow.secret,
             selectedSessionId,
-            output.filename
+            output.fileId
           )
           language = languageFromPath(displayPath)
         }
@@ -187,7 +204,7 @@ export function CloudSessionOutputsPanel() {
           houflow.session,
           houflow.secret,
           selectedSessionId,
-          output.filename
+          output.fileId
         )
         downloadBytes(output, bytes)
       } catch (err) {
@@ -212,6 +229,19 @@ export function CloudSessionOutputsPanel() {
   useEffect(() => {
     void refreshOutputs()
   }, [refreshOutputs])
+
+  useEffect(() => {
+    const wasActive = wasActiveRef.current
+    wasActiveRef.current = outputsActive
+    if (wasActive && !outputsActive) {
+      void refreshOutputs(true)
+    }
+    if (!outputsActive) return
+    const timer = window.setInterval(() => {
+      void refreshOutputs(true)
+    }, 2500)
+    return () => window.clearInterval(timer)
+  }, [outputsActive, refreshOutputs])
 
   useEffect(() => {
     if (

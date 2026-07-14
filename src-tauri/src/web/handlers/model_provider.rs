@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::{Json, extract::Extension};
+use axum::{extract::Extension, Json};
 use serde::Deserialize;
 
 use crate::app_error::AppCommandError;

@@ -219,7 +219,10 @@ pub(crate) fn resolve_uvx_command() -> Option<PathBuf> {
     }
     let exe = if cfg!(windows) { "uvx.exe" } else { "uvx" };
     let home = home_dir_or_default();
-    for dir in [home.join(".local").join("bin"), home.join(".cargo").join("bin")] {
+    for dir in [
+        home.join(".local").join("bin"),
+        home.join(".cargo").join("bin"),
+    ] {
         let cand = dir.join(exe);
         if cand.is_file() {
             return Some(cand);
@@ -376,7 +379,7 @@ async fn resolve_npx_command_from_current_npm_prefix(cmd: &str) -> Option<PathBu
     resolve_npx_command_from_npm_prefix(cmd, &prefix)
 }
 
-async fn cached_npm_global_prefix() -> Option<PathBuf> {
+pub(crate) async fn cached_npm_global_prefix() -> Option<PathBuf> {
     cached_npm_global_prefix_with(&NPM_GLOBAL_PREFIX_CACHE, resolve_current_npm_global_prefix).await
 }
 
@@ -713,7 +716,13 @@ async fn install_npm_global_package_streaming(
     );
 
     let (success, stderr) = run_npm_streaming(
-        &["install", "-g", NPM_INCLUDE_OPTIONAL, &registry_arg, package],
+        &[
+            "install",
+            "-g",
+            NPM_INCLUDE_OPTIONAL,
+            &registry_arg,
+            package,
+        ],
         task_id,
         emitter,
     )
@@ -1069,8 +1078,9 @@ fn write_json_object_pretty(
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), AcpError> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| AcpError::protocol(format!("create pi config directory failed: {err}")))?;
+        fs::create_dir_all(parent).map_err(|err| {
+            AcpError::protocol(format!("create pi config directory failed: {err}"))
+        })?;
     }
     let mut body = serde_json::to_string_pretty(&serde_json::Value::Object(object.clone()))
         .map_err(|err| AcpError::protocol(format!("serialize pi config failed: {err}")))?;
@@ -1202,14 +1212,20 @@ fn update_pi_config_files(update: PiConfigUpdate) -> Result<(), AcpError> {
             "baseUrl".to_string(),
             serde_json::Value::String(base_url.to_string()),
         );
-        entry.insert("api".to_string(), serde_json::Value::String(api.to_string()));
+        entry.insert(
+            "api".to_string(),
+            serde_json::Value::String(api.to_string()),
+        );
         let models = normalize_pi_provider_models(update.models.as_ref(), model)
             .into_iter()
             .map(|id| serde_json::json!({ "id": id, "name": id }))
             .collect();
         entry.insert("models".to_string(), serde_json::Value::Array(models));
         providers.insert(provider.to_string(), serde_json::Value::Object(entry));
-        document.insert("providers".to_string(), serde_json::Value::Object(providers));
+        document.insert(
+            "providers".to_string(),
+            serde_json::Value::Object(providers),
+        );
         write_json_object_pretty(&pi_models_json_path(), &document)?;
     }
 
@@ -1837,6 +1853,73 @@ fn load_codex_config_toml_raw() -> Option<String> {
     fs::read_to_string(codex_config_toml_path()).ok()
 }
 
+/// Read the compact codex model-catalog *source* sidecar (written next to the
+/// generated catalog) so the structured editor can round-trip the list in
+/// api-key mode, where no DB provider owns it.
+fn load_codex_model_catalog_source_raw() -> Option<String> {
+    let home = codex_home_dir();
+    // 1. Houhub's own source sidecar → an exact, byte-stable round-trip.
+    if let Ok(raw) = fs::read_to_string(home.join(crate::acp::codex_model_catalog::SOURCE_REL)) {
+        return Some(raw);
+    }
+    // 2. No sidecar: adopt a pre-existing `model_catalog_json` the user (or an
+    //    older Houhub) wrote by hand, so the editor shows those models instead of
+    //    appearing empty — and the next save reproduces them rather than dropping
+    //    the reference.
+    import_existing_codex_catalog_source(&home)
+}
+
+/// Resolve a `model_catalog_json` value into an absolute path the way codex does:
+/// `~/…` against the home dir, absolute paths verbatim, and everything else
+/// relative to `CODEX_HOME`.
+fn resolve_codex_home_relative(value: &str, codex_home: &Path) -> PathBuf {
+    if value == "~" {
+        return home_dir_or_default();
+    }
+    if let Some(rest) = value.strip_prefix("~/") {
+        return home_dir_or_default().join(rest);
+    }
+    let p = Path::new(value);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        codex_home.join(value)
+    }
+}
+
+/// Read a pre-existing `model_catalog_json` catalog referenced by
+/// `~/.codex/config.toml` and project it into Houhub's compact source shape.
+/// Returns `None` when there is no reference, the file is missing/oversized/not
+/// valid JSON, or it yields no usable models.
+fn import_existing_codex_catalog_source(codex_home: &Path) -> Option<String> {
+    let toml_value = fs::read_to_string(codex_home.join("config.toml"))
+        .ok()?
+        .parse::<toml::Value>()
+        .ok()?;
+    let rel = toml_value
+        .get("model_catalog_json")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+
+    let catalog_path = resolve_codex_home_relative(rel, codex_home);
+    // Guard against pathological files (the shape is a small models array).
+    let meta = fs::metadata(&catalog_path).ok()?;
+    if meta.len() > 8 * 1024 * 1024 {
+        return None;
+    }
+    let catalog: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&catalog_path).ok()?).ok()?;
+
+    let root_model = toml_value.get("model").and_then(toml::Value::as_str);
+    let snapshot = crate::acp::codex_catalog_source::cached_or_bundled_snapshot();
+    let config = crate::acp::codex_model_catalog::import_catalog(&catalog, root_model, &snapshot);
+    if crate::acp::codex_model_catalog::is_empty(&config) {
+        return None;
+    }
+    serde_json::to_string(&config).ok()
+}
+
 /// Project codex `config.toml` text into the launch-relevant config map shared
 /// by the settings read-back and the staleness fingerprint. Pure (no I/O) so it
 /// is unit-testable; [`load_codex_local_config_json`] is the on-disk wrapper
@@ -2044,7 +2127,10 @@ fn persist_codex_local_config(config_patch_json: Option<&str>) -> Result<(), Acp
         }
     }
     if provider_name == "houhub" {
-        provider_table.insert("name".to_string(), toml::Value::String("houhub".to_string()));
+        provider_table.insert(
+            "name".to_string(),
+            toml::Value::String("houhub".to_string()),
+        );
         provider_table.insert(
             "wire_api".to_string(),
             toml::Value::String("responses".to_string()),
@@ -2125,7 +2211,10 @@ fn persist_codex_native_config_files(
     codex_auth_json: Option<&str>,
     codex_config_toml: Option<&str>,
 ) -> Result<(), AcpError> {
-    if let Some(raw_toml) = codex_config_toml.map(str::trim).filter(|raw| !raw.is_empty()) {
+    if let Some(raw_toml) = codex_config_toml
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+    {
         toml::from_str::<toml::Table>(raw_toml)
             .map_err(|e| AcpError::protocol(format!("invalid codex config.toml: {e}")))?;
         let path = codex_config_toml_path();
@@ -2273,7 +2362,8 @@ fn parse_grok_settings(raw_toml: &str) -> GrokSettings {
 
     GrokSettings {
         default_reasoning_effort: get("models", "default_reasoning_effort"),
-        permission_mode: get("ui", "permission_mode"),
+        permission_mode: get("ui", "permission_mode")
+            .map(|v| migrate_grok_permission_mode(&v).to_string()),
         custom_model_id,
         custom_base_url,
         custom_api_key,
@@ -2283,22 +2373,34 @@ fn parse_grok_settings(raw_toml: &str) -> GrokSettings {
     }
 }
 
-/// Pure predicate: does this Grok `config.toml` select the "always-approve"
-/// permission mode? Drives whether the ACP launch carries the explicit
-/// `--always-approve` flag. Anything else — "ask", unset, or malformed — is
-/// `false`, so ACP permission requests keep flowing to HouHub's UI.
-fn grok_config_selects_always_approve(config_toml: &str) -> bool {
-    parse_grok_settings(config_toml).permission_mode.as_deref() == Some("always-approve")
+const GROK_PERMISSION_MODES: &[&str] = &[
+    "default",
+    "acceptEdits",
+    "auto",
+    "dontAsk",
+    "bypassPermissions",
+    "plan",
+];
+
+fn migrate_grok_permission_mode(value: &str) -> &str {
+    match value {
+        "always-approve" => "bypassPermissions",
+        "ask" => "default",
+        other => other,
+    }
 }
 
-/// Whether Grok's ACP launch should carry `--always-approve`, read from the
-/// global `~/.grok/config.toml` (the same `[ui].permission_mode` the settings
-/// panel writes). Best-effort: a missing/unreadable config reads as `false`, so
-/// the default preserves HouHub's ability to prompt for approvals.
-pub(crate) fn grok_launch_always_approve() -> bool {
-    load_grok_config_toml_raw()
-        .map(|raw| grok_config_selects_always_approve(&raw))
-        .unwrap_or(false)
+fn grok_config_permission_mode(config_toml: &str) -> Option<String> {
+    parse_grok_settings(config_toml)
+        .permission_mode
+        .filter(|mode| mode != "default" && GROK_PERMISSION_MODES.contains(&mode.as_str()))
+}
+
+/// Return the explicit non-default permission mode for a Grok launch. Missing,
+/// malformed, legacy `ask`, and native `default` settings keep ACP approvals in
+/// the desktop UI.
+pub(crate) fn grok_launch_permission_mode() -> Option<String> {
+    load_grok_config_toml_raw().and_then(|raw| grok_config_permission_mode(&raw))
 }
 
 /// Merge the Grok panel's structured control values into the raw config.toml
@@ -2382,8 +2484,16 @@ fn apply_grok_custom_model(
                 let tbl = grok_model_table_mut(doc, id)?;
                 // `model` is the id sent to the API; always kept in sync with <id>.
                 grok_tbl_set_str(tbl, "model", Some(id));
-                grok_tbl_set_str(tbl, "base_url", trimmed_opt(settings.custom_base_url.as_deref()));
-                grok_tbl_set_str(tbl, "api_key", trimmed_opt(settings.custom_api_key.as_deref()));
+                grok_tbl_set_str(
+                    tbl,
+                    "base_url",
+                    trimmed_opt(settings.custom_base_url.as_deref()),
+                );
+                grok_tbl_set_str(
+                    tbl,
+                    "api_key",
+                    trimmed_opt(settings.custom_api_key.as_deref()),
+                );
                 grok_tbl_set_str(
                     tbl,
                     "api_backend",
@@ -2526,7 +2636,9 @@ fn set_or_remove_grok_key(
             }
         }
         None => {
-            if let Some(table) = doc.get_mut(section).and_then(|item| item.as_table_like_mut())
+            if let Some(table) = doc
+                .get_mut(section)
+                .and_then(|item| item.as_table_like_mut())
             {
                 table.remove(key);
             }
@@ -2560,7 +2672,9 @@ fn set_or_remove_grok_number(
             }
         }
         None => {
-            if let Some(table) = doc.get_mut(section).and_then(|item| item.as_table_like_mut())
+            if let Some(table) = doc
+                .get_mut(section)
+                .and_then(|item| item.as_table_like_mut())
             {
                 table.remove(key);
             }
@@ -2707,10 +2821,20 @@ fn apply_kimi_managed_block(
                 "type".to_string(),
                 toml::Value::String(spec.interface_type.clone()),
             );
-            if let Some(url) = spec.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            if let Some(url) = spec
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
                 provider_table.insert("base_url".to_string(), toml::Value::String(url.to_string()));
             }
-            if let Some(key) = spec.api_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            if let Some(key) = spec
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
                 provider_table.insert("api_key".to_string(), toml::Value::String(key.to_string()));
             }
             if !spec.env.is_empty() {
@@ -2763,8 +2887,9 @@ fn apply_kimi_managed_block(
             );
         }
         None => {
-            let providers_empty = if let Some(providers) =
-                table.get_mut("providers").and_then(toml::Value::as_table_mut)
+            let providers_empty = if let Some(providers) = table
+                .get_mut("providers")
+                .and_then(toml::Value::as_table_mut)
             {
                 providers.remove(KIMI_MANAGED_PROVIDER);
                 providers.is_empty()
@@ -2774,18 +2899,18 @@ fn apply_kimi_managed_block(
             if providers_empty {
                 table.remove("providers");
             }
-            let models_empty = if let Some(models) =
-                table.get_mut("models").and_then(toml::Value::as_table_mut)
-            {
-                models.remove(KIMI_MANAGED_MODEL_ALIAS);
-                models.is_empty()
-            } else {
-                false
-            };
+            let models_empty =
+                if let Some(models) = table.get_mut("models").and_then(toml::Value::as_table_mut) {
+                    models.remove(KIMI_MANAGED_MODEL_ALIAS);
+                    models.is_empty()
+                } else {
+                    false
+                };
             if models_empty {
                 table.remove("models");
             }
-            if table.get("default_model").and_then(toml::Value::as_str) == Some(KIMI_MANAGED_MODEL_ALIAS)
+            if table.get("default_model").and_then(toml::Value::as_str)
+                == Some(KIMI_MANAGED_MODEL_ALIAS)
             {
                 table.remove("default_model");
             }
@@ -2843,7 +2968,9 @@ fn kimi_token_is_synthetic(token: &serde_json::Value) -> bool {
         .get("_houhub_synthetic")
         .and_then(serde_json::Value::as_bool)
         == Some(true)
-        || token.get("access_token").and_then(serde_json::Value::as_str)
+        || token
+            .get("access_token")
+            .and_then(serde_json::Value::as_str)
             == Some(KIMI_SYNTHETIC_TOKEN_ACCESS)
 }
 
@@ -2859,7 +2986,9 @@ fn kimi_token_has_access(token: &serde_json::Value) -> bool {
 
 /// Whether any usable credential (real or synthetic) is present.
 fn kimi_credential_present() -> bool {
-    read_kimi_token().map(|t| kimi_token_has_access(&t)).unwrap_or(false)
+    read_kimi_token()
+        .map(|t| kimi_token_has_access(&t))
+        .unwrap_or(false)
 }
 
 /// Whether the present credential is houhub's synthetic gate token.
@@ -2957,33 +3086,48 @@ fn project_kimi_managed_config(value: &toml::Value) -> serde_json::Map<String, s
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            merged.insert("key".to_string(), serde_json::Value::String(key.to_string()));
+            merged.insert(
+                "key".to_string(),
+                serde_json::Value::String(key.to_string()),
+            );
             merged.insert(
                 "authType".to_string(),
                 serde_json::Value::String("api_key".to_string()),
             );
         }
         if let Some(env) = provider.get("env").and_then(toml::Value::as_table) {
-            if let Some(project) = env.get("GOOGLE_CLOUD_PROJECT").and_then(toml::Value::as_str) {
+            if let Some(project) = env
+                .get("GOOGLE_CLOUD_PROJECT")
+                .and_then(toml::Value::as_str)
+            {
                 merged.insert(
                     "vertexProject".to_string(),
                     serde_json::Value::String(project.to_string()),
                 );
             }
-            if let Some(location) = env.get("GOOGLE_CLOUD_LOCATION").and_then(toml::Value::as_str) {
+            if let Some(location) = env
+                .get("GOOGLE_CLOUD_LOCATION")
+                .and_then(toml::Value::as_str)
+            {
                 merged.insert(
                     "vertexLocation".to_string(),
                     serde_json::Value::String(location.to_string()),
                 );
             }
-            if let Some(var) = interface_type.as_deref().and_then(kimi_provider_key_env_var) {
+            if let Some(var) = interface_type
+                .as_deref()
+                .and_then(kimi_provider_key_env_var)
+            {
                 if let Some(key) = env
                     .get(var)
                     .and_then(toml::Value::as_str)
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                 {
-                    merged.insert("key".to_string(), serde_json::Value::String(key.to_string()));
+                    merged.insert(
+                        "key".to_string(),
+                        serde_json::Value::String(key.to_string()),
+                    );
                     merged.insert(
                         "authType".to_string(),
                         serde_json::Value::String("env".to_string()),
@@ -3008,7 +3152,10 @@ fn project_kimi_managed_config(value: &toml::Value) -> serde_json::Map<String, s
                 serde_json::Value::String(model_id.to_string()),
             );
         }
-        if let Some(ctx) = model.get("max_context_size").and_then(toml::Value::as_integer) {
+        if let Some(ctx) = model
+            .get("max_context_size")
+            .and_then(toml::Value::as_integer)
+        {
             merged.insert(
                 "maxContextSize".to_string(),
                 serde_json::Value::Number(ctx.into()),
@@ -3017,17 +3164,26 @@ fn project_kimi_managed_config(value: &toml::Value) -> serde_json::Map<String, s
     }
 
     let has_managed = merged.contains_key("interfaceType");
-    merged.insert("hasManagedBlock".to_string(), serde_json::Value::Bool(has_managed));
+    merged.insert(
+        "hasManagedBlock".to_string(),
+        serde_json::Value::Bool(has_managed),
+    );
     merged
 }
 
 fn load_kimi_code_config_json() -> Option<String> {
     let raw = fs::read_to_string(kimi_code_config_toml_path()).ok();
-    let mut merged = match raw.as_deref().and_then(|text| text.parse::<toml::Value>().ok()) {
+    let mut merged = match raw
+        .as_deref()
+        .and_then(|text| text.parse::<toml::Value>().ok())
+    {
         Some(value) => project_kimi_managed_config(&value),
         None => {
             let mut m = serde_json::Map::new();
-            m.insert("hasManagedBlock".to_string(), serde_json::Value::Bool(false));
+            m.insert(
+                "hasManagedBlock".to_string(),
+                serde_json::Value::Bool(false),
+            );
             m
         }
     };
@@ -3071,7 +3227,11 @@ pub(crate) struct KimiCodeConfigUpdate {
 
 /// Validate + resolve a `native`-mode update into the managed block to write.
 fn build_kimi_managed_spec(update: &KimiCodeConfigUpdate) -> Result<KimiManagedSpec, AcpError> {
-    let interface_type = update.interface_type.as_deref().map(str::trim).unwrap_or("");
+    let interface_type = update
+        .interface_type
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("");
     if !KIMI_INTERFACE_TYPES.contains(&interface_type) {
         return Err(AcpError::protocol(format!(
             "unknown kimi interface type: '{interface_type}'"
@@ -3092,7 +3252,9 @@ fn build_kimi_managed_spec(update: &KimiCodeConfigUpdate) -> Result<KimiManagedS
         .map(str::to_string);
     if let Some(url) = &base_url {
         if url.contains(['\n', '\r']) {
-            return Err(AcpError::protocol("kimi base url must not contain newlines"));
+            return Err(AcpError::protocol(
+                "kimi base url must not contain newlines",
+            ));
         }
     }
 
@@ -3231,7 +3393,9 @@ pub(crate) async fn acp_update_kimi_code_config_core(
             (FileAction::Raw(raw.to_string()), CredentialAction::Seed)
         }
         other => {
-            return Err(AcpError::protocol(format!("unknown kimi config mode: '{other}'")));
+            return Err(AcpError::protocol(format!(
+                "unknown kimi config mode: '{other}'"
+            )));
         }
     };
 
@@ -3872,8 +4036,10 @@ fn shell_quote_arg_for(arg: &str, windows: bool) -> String {
     } else {
         "[](){}'\"$&;|<>*?`\\!#~"
     };
-    let needs_quoting =
-        arg.is_empty() || arg.chars().any(|c| c.is_whitespace() || special.contains(c));
+    let needs_quoting = arg.is_empty()
+        || arg
+            .chars()
+            .any(|c| c.is_whitespace() || special.contains(c));
     if !needs_quoting {
         return arg.to_string();
     }
@@ -4741,7 +4907,7 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         AgentType::KimiCode => Some(SkillStorageSpec {
             kind: SkillStorageKind::SkillDirectoryOnly,
             global_dirs: vec![
-                crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("skills"),
+                crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("skills")
             ],
             project_rel_dirs: vec![".kimi-code/skills"],
         }),
@@ -4850,7 +5016,7 @@ fn skill_name_from_id(id: &str) -> String {
 /// file's YAML frontmatter. Prefers `short-description` (commonly nested under
 /// a `metadata:` block) and falls back to a top-level `description`. Only the
 /// first 4 KiB is read; frontmatter always fits, and skill bodies can be large.
-fn read_skill_description(content_path: &Path) -> Option<String> {
+pub(crate) fn read_skill_description(content_path: &Path) -> Option<String> {
     use std::io::Read;
     let mut file = fs::File::open(content_path).ok()?;
     let mut buf = [0u8; 4096];
@@ -5100,7 +5266,7 @@ fn locate_existing_skill(
     None
 }
 
-fn locate_existing_skill_across_dirs(
+pub(crate) fn locate_existing_skill_across_dirs(
     dirs: &[PathBuf],
     kind: SkillStorageKind,
     skill_id: &str,
@@ -5151,7 +5317,11 @@ fn agent_env_keys(agent_type: AgentType) -> (&'static str, &'static str, &'stati
         // Kimi Code does NOT read shell KIMI_API_KEY/OPENAI_API_KEY; the only
         // non-interactive credential path is the `KIMI_MODEL_*` family, which
         // also takes priority over `~/.kimi-code/config.toml`.
-        AgentType::KimiCode => ("KIMI_MODEL_BASE_URL", "KIMI_MODEL_API_KEY", "KIMI_MODEL_NAME"),
+        AgentType::KimiCode => (
+            "KIMI_MODEL_BASE_URL",
+            "KIMI_MODEL_API_KEY",
+            "KIMI_MODEL_NAME",
+        ),
         // Grok's non-interactive credential is `XAI_API_KEY`. Model + endpoint
         // also have working env overrides (verified against the 0.2.94 binary):
         // `GROK_DEFAULT_MODEL` selects the default model and `GROK_XAI_API_BASE_URL`
@@ -5230,12 +5400,21 @@ pub(crate) async fn apply_model_provider_env(
         Ok(Some(p)) => p,
         _ => return,
     };
-    let (url_key, key_key, _) = agent_env_keys(agent_type);
+    let (url_key, key_key, model_key) = agent_env_keys(agent_type);
     if !provider.api_url.trim().is_empty() {
         runtime_env.insert(url_key.to_string(), provider.api_url.clone());
     }
     if !provider.api_key.trim().is_empty() {
         runtime_env.insert(key_key.to_string(), provider.api_key.clone());
+    }
+    if agent_type == AgentType::Grok
+        && runtime_env
+            .get(model_key)
+            .is_none_or(|model| model.trim().is_empty())
+    {
+        if let Some(model) = resolve_provider_default_model(&provider) {
+            runtime_env.insert(model_key.to_string(), model);
+        }
     }
 }
 
@@ -5252,6 +5431,20 @@ fn provider_model_is_structured_bundle(raw: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(raw)
         .ok()
         .is_some_and(|value| value.is_object() || value.is_array())
+}
+
+fn resolve_provider_default_model(
+    provider: &crate::db::entities::model_provider::Model,
+) -> Option<String> {
+    let models = parse_provider_models_json(&provider.models_json);
+    provider
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty() && !provider_model_is_structured_bundle(model))
+        .filter(|model| models.is_empty() || models.iter().any(|item| item == model))
+        .map(str::to_string)
+        .or_else(|| models.first().cloned())
 }
 
 fn pi_provider_id(provider: &crate::db::entities::model_provider::Model) -> String {
@@ -5278,9 +5471,11 @@ fn resolve_pi_provider_model(
         }
     }
 
-    let provider_model = provider.model.as_deref().map(str::trim).filter(|model| {
-        !model.is_empty() && !provider_model_is_structured_bundle(model)
-    });
+    let provider_model = provider
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty() && !provider_model_is_structured_bundle(model));
     if let Some(model) = provider_model {
         if models.is_empty() || models.iter().any(|item| item == model) {
             return Ok(model.to_string());
@@ -5359,6 +5554,8 @@ const CLAUDE_MODEL_KEY_MAP: &[(&str, &str)] = &[
 ///   ANTHROPIC_*_MODEL fields plus the ANTHROPIC_CUSTOM_MODEL_OPTION trio. Each
 ///   entry is `None` when the provider's JSON omits that key or has an empty
 ///   value.
+/// - Codex: returns `OPENAI_MODEL`; callers bypass this parser when a shared
+///   multi-agent provider does not carry an explicit Codex catalog.
 /// - Others: returns no model actions; URL/key still come from the provider.
 pub(crate) fn parse_provider_model(
     agent_type: AgentType,
@@ -5382,9 +5579,57 @@ pub(crate) fn parse_provider_model(
                 out.insert((*env_name).to_string(), value);
             }
         }
+        AgentType::Codex => {
+            let model = crate::acp::codex_model_catalog::default_slug_for_env(
+                &crate::acp::codex_model_catalog::parse_model_config(trimmed_raw),
+            );
+            out.insert("OPENAI_MODEL".to_string(), model);
+        }
         _ => {}
     }
     out
+}
+
+pub(crate) enum CodexModelAction {
+    NoOp,
+    Set(String),
+    Clear,
+}
+
+pub(crate) fn provider_codex_model_action(
+    agent_type: AgentType,
+    raw: Option<&str>,
+) -> CodexModelAction {
+    if agent_type != AgentType::Codex {
+        return CodexModelAction::NoOp;
+    }
+    match crate::acp::codex_model_catalog::default_slug_for_env(
+        &crate::acp::codex_model_catalog::parse_model_config(raw),
+    ) {
+        Some(model) => CodexModelAction::Set(model),
+        None => CodexModelAction::Clear,
+    }
+}
+
+fn has_codex_model_config(raw: Option<&str>) -> bool {
+    let config = crate::acp::codex_model_catalog::parse_model_config(raw);
+    crate::acp::codex_model_catalog::default_slug_for_env(&config).is_some()
+        || !config.excluded_officials.is_empty()
+}
+
+fn is_structured_codex_model_config(raw: Option<&str>) -> bool {
+    raw.and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .and_then(|value| value.as_object().cloned())
+        .is_some_and(|object| {
+            ["customs", "models", "excludedOfficials", "default"]
+                .iter()
+                .any(|key| object.contains_key(*key))
+        })
+}
+
+fn codex_catalog_allowed(agent_types: &[AgentType], raw: Option<&str>) -> bool {
+    (agent_types.len() == 1 && agent_types.contains(&AgentType::Codex))
+        || is_structured_codex_model_config(raw)
 }
 
 /// Update on-disk config files for a single agent when model provider credentials change.
@@ -5398,6 +5643,8 @@ fn cascade_update_agent_config(
     api_url: &str,
     api_key: &str,
     model_env: &BTreeMap<String, Option<String>>,
+    codex_model: &CodexModelAction,
+    codex_model_raw: Option<&str>,
 ) -> Result<(), AcpError> {
     let (url_key, key_key, _) = agent_env_keys(agent_type);
     match agent_type {
@@ -5504,7 +5751,10 @@ fn cascade_update_agent_config(
                 );
             }
             if provider_name == "houhub" {
-                provider_table.insert("name".to_string(), toml::Value::String("houhub".to_string()));
+                provider_table.insert(
+                    "name".to_string(),
+                    toml::Value::String("houhub".to_string()),
+                );
                 provider_table.insert(
                     "wire_api".to_string(),
                     toml::Value::String("responses".to_string()),
@@ -5513,6 +5763,38 @@ fn cascade_update_agent_config(
                     "requires_openai_auth".to_string(),
                     toml::Value::Boolean(true),
                 );
+            }
+            match codex_model {
+                CodexModelAction::Set(model) => {
+                    table.insert("model".to_string(), toml::Value::String(model.clone()));
+                }
+                CodexModelAction::Clear => {
+                    table.remove("model");
+                }
+                CodexModelAction::NoOp => {}
+            }
+            if !matches!(codex_model, CodexModelAction::NoOp)
+                || has_codex_model_config(codex_model_raw)
+            {
+                let snapshot = crate::acp::codex_catalog_source::cached_or_bundled_snapshot();
+                match crate::acp::codex_model_catalog::write_catalog_files(
+                    codex_model_raw.unwrap_or_default(),
+                    &codex_home_dir(),
+                    &snapshot,
+                ) {
+                    Ok(Some(injection)) => {
+                        table.insert(
+                            "model_catalog_json".to_string(),
+                            toml::Value::String(injection.catalog_rel.to_string()),
+                        );
+                    }
+                    Ok(None) => {
+                        table.remove("model_catalog_json");
+                    }
+                    Err(error) => {
+                        tracing::warn!("[ModelProvider] write codex catalog failed: {error}");
+                    }
+                }
             }
             let toml_str = toml::to_string_pretty(&toml_value)
                 .map_err(|e| AcpError::protocol(e.to_string()))?;
@@ -5578,6 +5860,12 @@ pub(crate) async fn cascade_update_model_provider(
     new_model: Option<&str>,
     emitter: &EventEmitter,
 ) -> Result<(), AcpError> {
+    let provider = model_provider_service::get_by_id(&db.conn, provider_id)
+        .await
+        .map_err(|e| AcpError::protocol(e.to_string()))?
+        .ok_or_else(|| AcpError::protocol(format!("model provider not found: {provider_id}")))?;
+    let provider_agent_types = provider_agent_types_for_binding(&provider, provider_id)?;
+    let codex_catalog_enabled = codex_catalog_allowed(&provider_agent_types, new_model);
     let dependents = agent_setting_service::find_by_model_provider_id(&db.conn, provider_id)
         .await
         .map_err(|e| AcpError::protocol(e.to_string()))?;
@@ -5603,7 +5891,11 @@ pub(crate) async fn cascade_update_model_provider(
             env_map.insert(key_key.to_string(), new_api_key.to_string());
         }
 
-        let model_env = parse_provider_model(agent_type, new_model);
+        let model_env = if agent_type == AgentType::Codex && !codex_catalog_enabled {
+            BTreeMap::new()
+        } else {
+            parse_provider_model(agent_type, new_model)
+        };
         for (k, v) in &model_env {
             match v {
                 Some(value) => {
@@ -5625,9 +5917,19 @@ pub(crate) async fn cascade_update_model_provider(
             .map_err(|e| AcpError::protocol(e.to_string()))?;
 
         // 2. Update on-disk config files
-        if let Err(e) =
-            cascade_update_agent_config(agent_type, new_api_url, new_api_key, &model_env)
-        {
+        let codex_action = if codex_catalog_enabled {
+            provider_codex_model_action(agent_type, new_model)
+        } else {
+            CodexModelAction::NoOp
+        };
+        if let Err(e) = cascade_update_agent_config(
+            agent_type,
+            new_api_url,
+            new_api_key,
+            &model_env,
+            &codex_action,
+            codex_catalog_enabled.then_some(new_model).flatten(),
+        ) {
             tracing::warn!(
                 "[ModelProvider] cascade_update_agent_config({agent_type}) failed: {e}, skipping config update"
             );
@@ -6415,6 +6717,11 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
         } else {
             None
         };
+        let codex_model_catalog = if agent_type == AgentType::Codex {
+            load_codex_model_catalog_source_raw()
+        } else {
+            None
+        };
         let cline_secrets_json = if agent_type == AgentType::Cline {
             load_cline_secrets_json_raw()
         } else {
@@ -6463,6 +6770,7 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
             opencode_auth_json,
             codex_auth_json,
             codex_config_toml,
+            codex_model_catalog,
             cline_secrets_json,
             hermes_config_yaml,
             grok_config_toml,
@@ -6662,8 +6970,8 @@ fn provider_agent_types_for_binding(
 
     let mut agent_types = Vec::new();
     for raw in raw_types {
-        let agent_type: AgentType =
-            serde_json::from_value(serde_json::Value::String(raw.clone())).map_err(|_| {
+        let agent_type: AgentType = serde_json::from_value(serde_json::Value::String(raw.clone()))
+            .map_err(|_| {
                 AcpError::protocol(format!(
                     "model provider {provider_id} has invalid agent_type: {raw}"
                 ))
@@ -6721,6 +7029,7 @@ async fn acp_update_agent_env_core_with_enabled_update(
     // treats provider.model as authoritative runtime model data; other agents
     // keep their model in their own engine-specific config.
     let mut merged_env = env;
+    let mut codex_bound_model: Option<Option<String>> = None;
     // When a Claude provider is bound, capture the inputs to also rewrite the
     // on-disk config.env below. Claude's model fields live in config.env, which
     // the runtime overlays OVER db env_json (see `build_runtime_env_from_setting`),
@@ -6728,8 +7037,7 @@ async fn acp_update_agent_env_core_with_enabled_update(
     // `~/.claude/settings.json` (e.g. ANTHROPIC_CUSTOM_MODEL_OPTION) would win at
     // launch. Binding must therefore be authoritative on disk too, matching the
     // provider-edit cascade.
-    let mut claude_local_cascade: Option<(String, String, BTreeMap<String, Option<String>>)> =
-        None;
+    let mut claude_local_cascade: Option<(String, String, BTreeMap<String, Option<String>>)> = None;
     let mut pi_config_update: Option<PiConfigUpdate> = None;
     if let Some(pid) = model_provider_id {
         let provider = crate::db::service::model_provider_service::get_by_id(&db.conn, pid)
@@ -6753,7 +7061,13 @@ async fn acp_update_agent_env_core_with_enabled_update(
             )));
         }
 
-        let model_env = parse_provider_model(agent_type, provider.model.as_deref());
+        let codex_catalog_enabled =
+            codex_catalog_allowed(&provider_agent_types, provider.model.as_deref());
+        let model_env = if agent_type == AgentType::Codex && !codex_catalog_enabled {
+            BTreeMap::new()
+        } else {
+            parse_provider_model(agent_type, provider.model.as_deref())
+        };
         for (k, v) in &model_env {
             match v {
                 Some(value) => {
@@ -6764,11 +7078,17 @@ async fn acp_update_agent_env_core_with_enabled_update(
                 }
             }
         }
+        if agent_type == AgentType::Codex && codex_catalog_enabled {
+            codex_bound_model = Some(provider.model.clone());
+        }
         // Gemini's analogous config.env gap is pre-existing and out of scope
         // here. Only Claude needs the local-config cascade on bind.
         if agent_type == AgentType::ClaudeCode {
-            claude_local_cascade =
-                Some((provider.api_url.clone(), provider.api_key.clone(), model_env));
+            claude_local_cascade = Some((
+                provider.api_url.clone(),
+                provider.api_key.clone(),
+                model_env,
+            ));
         }
         if agent_type == AgentType::Pi {
             let model = resolve_pi_provider_model(&provider, &merged_env)?;
@@ -6803,15 +7123,80 @@ async fn acp_update_agent_env_core_with_enabled_update(
             &api_url,
             &api_key,
             &model_env,
+            &CodexModelAction::NoOp,
+            None,
         ) {
-            eprintln!("[acp_update_agent_env] cascade_update_agent_config({agent_type}) failed: {e}");
+            eprintln!(
+                "[acp_update_agent_env] cascade_update_agent_config({agent_type}) failed: {e}"
+            );
         }
     }
     if let Some(update) = pi_config_update {
         update_pi_config_files(update)?;
     }
+    if let Some(model) = codex_bound_model {
+        apply_codex_catalog_and_model(model.as_deref())?;
+    }
 
     emit_acp_agents_updated(emitter, "env_updated", Some(agent_type));
+    Ok(())
+}
+
+/// Codex: generate the `model_catalog_json` catalog file from a structured
+/// model list and point `~/.codex/config.toml` at it (relative to `CODEX_HOME`),
+/// plus set the root `model` to the default slug. An empty/blank list removes
+/// both keys and the generated files (codex falls back to its default catalog).
+///
+/// This reflows config.toml through the `toml` crate — the same behavior the
+/// provider bind / cascade paths already have. The comment-preserving agent
+/// panel path instead patches the config.toml text on the frontend and only
+/// asks the backend to (re)write the catalog *files* (see
+/// `acp_update_agent_config_core`).
+fn apply_codex_catalog_and_model(raw: Option<&str>) -> Result<(), AcpError> {
+    let snapshot = crate::acp::codex_catalog_source::cached_or_bundled_snapshot();
+    let injection = crate::acp::codex_model_catalog::write_catalog_files(
+        raw.unwrap_or_default(),
+        &codex_home_dir(),
+        &snapshot,
+    )
+    .map_err(|e| AcpError::protocol(e.to_string()))?;
+
+    let config_path = codex_config_toml_path();
+    let mut toml_value = if config_path.exists() {
+        fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|raw| raw.parse::<toml::Value>().ok())
+            .filter(|v| v.is_table())
+            .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new()))
+    } else {
+        toml::Value::Table(toml::map::Map::new())
+    };
+    let table = toml_value
+        .as_table_mut()
+        .ok_or_else(|| AcpError::protocol("codex config root must be a TOML table"))?;
+    match &injection {
+        Some(inj) => {
+            table.insert(
+                "model_catalog_json".to_string(),
+                toml::Value::String(inj.catalog_rel.to_string()),
+            );
+            match &inj.default_model {
+                Some(model) => {
+                    table.insert("model".to_string(), toml::Value::String(model.clone()));
+                }
+                None => {
+                    table.remove("model");
+                }
+            }
+        }
+        None => {
+            table.remove("model_catalog_json");
+            table.remove("model");
+        }
+    }
+    let toml_str =
+        toml::to_string_pretty(&toml_value).map_err(|e| AcpError::protocol(e.to_string()))?;
+    persist_codex_native_config_files(None, Some(&toml_str))?;
     Ok(())
 }
 
@@ -6852,6 +7237,7 @@ pub(crate) async fn acp_update_agent_config_core(
     opencode_auth_json: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
+    codex_model_catalog: Option<String>,
     grok_config_toml: Option<String>,
     grok_structured: Option<GrokStructuredConfig>,
     emitter: &EventEmitter,
@@ -6888,6 +7274,19 @@ pub(crate) async fn acp_update_agent_config_core(
                 codex_auth_json.as_deref(),
                 codex_config_toml.as_deref(),
             )?;
+        }
+        // The frontend has already patched config.toml's `model_catalog_json` +
+        // root `model` into `codex_config_toml` (comment-preserving text patch);
+        // the backend only (re)writes the generated catalog *files* here.
+        if let Some(raw) = codex_model_catalog.as_deref() {
+            let snapshot = crate::acp::codex_catalog_source::cached_or_bundled_snapshot();
+            if let Err(e) = crate::acp::codex_model_catalog::write_catalog_files(
+                raw,
+                &codex_home_dir(),
+                &snapshot,
+            ) {
+                tracing::error!("[acp_update_agent_config] write codex catalog failed: {e}");
+            }
         }
         emit_acp_agents_updated(emitter, "config_updated", Some(agent_type));
         return Ok(());
@@ -6956,6 +7355,7 @@ pub(crate) async fn acp_update_agent_config_and_refresh(
     opencode_auth_json: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
+    codex_model_catalog: Option<String>,
     grok_config_toml: Option<String>,
     grok_structured: Option<GrokStructuredConfig>,
     db: &AppDatabase,
@@ -6969,12 +7369,20 @@ pub(crate) async fn acp_update_agent_config_and_refresh(
         opencode_auth_json,
         codex_auth_json,
         codex_config_toml,
+        codex_model_catalog,
         grok_config_toml,
         grok_structured,
         emitter,
     )
     .await?;
-    Ok(refresh_config_staleness(manager, db, data_dir, &[agent_type], ConfigStaleKind::AgentConfig).await)
+    Ok(refresh_config_staleness(
+        manager,
+        db,
+        data_dir,
+        &[agent_type],
+        ConfigStaleKind::AgentConfig,
+    )
+    .await)
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -6986,6 +7394,7 @@ pub async fn acp_update_agent_config(
     opencode_auth_json: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
+    codex_model_catalog: Option<String>,
     grok_config_toml: Option<String>,
     grok_structured: Option<GrokStructuredConfig>,
     manager: State<'_, ConnectionManager>,
@@ -7004,6 +7413,7 @@ pub async fn acp_update_agent_config(
         opencode_auth_json,
         codex_auth_json,
         codex_config_toml,
+        codex_model_catalog,
         grok_config_toml,
         grok_structured,
         &db,
@@ -7183,9 +7593,8 @@ fn open_external_terminal_impl(command: &str, cwd: Option<&str>) -> Result<(), A
         // literal (backslashes first, then double-quotes).
         let shell_cmd = format!("cd {} && {}", shell_single_quote(&dir), command);
         let escaped = shell_cmd.replace('\\', "\\\\").replace('"', "\\\"");
-        let osa = format!(
-            "tell application \"Terminal\"\nactivate\ndo script \"{escaped}\"\nend tell"
-        );
+        let osa =
+            format!("tell application \"Terminal\"\nactivate\ndo script \"{escaped}\"\nend tell");
         Command::new("osascript")
             .arg("-e")
             .arg(osa)
@@ -7234,7 +7643,9 @@ fn open_external_terminal_impl(command: &str, cwd: Option<&str>) -> Result<(), A
     }
 
     #[allow(unreachable_code)]
-    Err(AcpError::protocol("unsupported platform for terminal launch"))
+    Err(AcpError::protocol(
+        "unsupported platform for terminal launch",
+    ))
 }
 
 /// Quote a string for a single-quoted POSIX shell argument.
@@ -7422,10 +7833,7 @@ pub(crate) async fn acp_install_uv_tool_core(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_install_uv_tool(
-    task_id: String,
-    app: tauri::AppHandle,
-) -> Result<(), AcpError> {
+pub async fn acp_install_uv_tool(task_id: String, app: tauri::AppHandle) -> Result<(), AcpError> {
     let emitter = EventEmitter::Tauri(app);
     acp_install_uv_tool_core(task_id, &emitter).await
 }
@@ -7774,10 +8182,7 @@ pub(crate) async fn acp_install_pi_binary_core(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_install_pi_binary(
-    task_id: String,
-    app: tauri::AppHandle,
-) -> Result<(), AcpError> {
+pub async fn acp_install_pi_binary(task_id: String, app: tauri::AppHandle) -> Result<(), AcpError> {
     let emitter = EventEmitter::Tauri(app);
     acp_install_pi_binary_core(task_id, &emitter).await
 }
@@ -8062,6 +8467,18 @@ pub async fn opencode_list_plugins() -> Result<PluginCheckSummary, AcpError> {
     opencode_list_plugins_core().await
 }
 
+pub(crate) async fn codex_bundled_catalog_core(force_refresh: bool) -> Vec<serde_json::Value> {
+    crate::acp::codex_catalog_source::runtime_catalog(force_refresh).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn codex_bundled_catalog(
+    force_refresh: Option<bool>,
+) -> Result<Vec<serde_json::Value>, AcpError> {
+    Ok(codex_bundled_catalog_core(force_refresh.unwrap_or(false)).await)
+}
+
 pub(crate) async fn opencode_install_plugins_core(
     names: Option<Vec<String>>,
     task_id: String,
@@ -8333,6 +8750,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_grok_settings_uses_native_permission_modes_and_migrates_legacy_values() {
+        let native = parse_grok_settings("[ui]\npermission_mode = \"acceptEdits\"\n");
+        assert_eq!(native.permission_mode.as_deref(), Some("acceptEdits"));
+
+        let approve = parse_grok_settings("[ui]\npermission_mode = \"always-approve\"\n");
+        assert_eq!(
+            approve.permission_mode.as_deref(),
+            Some("bypassPermissions")
+        );
+
+        let ask = parse_grok_settings("[ui]\npermission_mode = \"ask\"\n");
+        assert_eq!(ask.permission_mode.as_deref(), Some("default"));
+    }
+
+    #[test]
     fn parse_grok_settings_ignores_stock_default_without_model_block() {
         let settings = parse_grok_settings(
             "[model.foo]\nbase_url = \"x\"\n\n[models]\ndefault = \"grok-4.5\"\n",
@@ -8389,7 +8821,8 @@ mod tests {
 
     #[test]
     fn apply_grok_custom_model_rename_preserves_unmanaged_keys_until_rename() {
-        let base = "[model.foo]\nmodel = \"foo\"\ntemperature = 0.7\nbase_url = \"https://old/v1\"\n\n\
+        let base =
+            "[model.foo]\nmodel = \"foo\"\ntemperature = 0.7\nbase_url = \"https://old/v1\"\n\n\
                     [models]\ndefault = \"foo\"\n";
         let updated = apply_grok_structured_config(
             base,
@@ -8459,15 +8892,20 @@ mod tests {
     }
 
     #[test]
-    fn grok_always_approve_launch_flag_is_explicit() {
-        assert!(grok_config_selects_always_approve(
-            "[ui]\npermission_mode = \"always-approve\"\n"
-        ));
-        assert!(!grok_config_selects_always_approve(
-            "[ui]\npermission_mode = \"ask\"\n"
-        ));
-        assert!(!grok_config_selects_always_approve(""));
-        assert!(!grok_config_selects_always_approve("== not toml =="));
+    fn grok_permission_mode_maps_to_launch_flag() {
+        assert_eq!(
+            grok_config_permission_mode("[ui]\npermission_mode = \"always-approve\"\n").as_deref(),
+            Some("bypassPermissions")
+        );
+        assert_eq!(
+            grok_config_permission_mode("[ui]\npermission_mode = \"acceptEdits\"\n").as_deref(),
+            Some("acceptEdits")
+        );
+        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"default\"\n").is_none());
+        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"ask\"\n").is_none());
+        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"bogus\"\n").is_none());
+        assert!(grok_config_permission_mode("").is_none());
+        assert!(grok_config_permission_mode("== not toml ==").is_none());
     }
 
     #[test]
@@ -8499,9 +8937,10 @@ mod tests {
             assert_eq!(settings["defaultModel"], "gpt-5");
             assert_eq!(settings["defaultThinkingLevel"], "medium");
 
-            let auth: serde_json::Value =
-                serde_json::from_str(&fs::read_to_string(pi_home.join("auth.json")).expect("read auth"))
-                    .expect("auth json");
+            let auth: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(pi_home.join("auth.json")).expect("read auth"),
+            )
+            .expect("auth json");
             assert_eq!(auth["houflow"]["type"], "api_key");
             assert_eq!(auth["houflow"]["key"], "sk-test");
 
@@ -8515,8 +8954,14 @@ mod tests {
             );
             assert_eq!(models["providers"]["houflow"]["api"], "openai-completions");
             assert_eq!(models["providers"]["houflow"]["models"][0]["id"], "gpt-5");
-            assert_eq!(models["providers"]["houflow"]["models"][1]["id"], "gpt-5-mini");
-            assert_eq!(models["providers"]["houflow"]["models"][2]["id"], "gpt-5-codex");
+            assert_eq!(
+                models["providers"]["houflow"]["models"][1]["id"],
+                "gpt-5-mini"
+            );
+            assert_eq!(
+                models["providers"]["houflow"]["models"][2]["id"],
+                "gpt-5-codex"
+            );
         });
     }
 
@@ -8541,6 +8986,37 @@ mod tests {
     }
 
     #[test]
+    fn resolve_provider_default_model_rejects_stale_or_structured_values() {
+        let mut provider = crate::db::entities::model_provider::Model {
+            id: 8,
+            name: "Houflow Gateway".to_string(),
+            api_url: "https://api.houshanai.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            agent_types_json: r#"["grok"]"#.to_string(),
+            agent_type: "grok".to_string(),
+            model: Some(r#"{"main":"grok-stale"}"#.to_string()),
+            models_json: r#"["grok-4.5","grok-4.5-fast"]"#.to_string(),
+            created_at: chrono::Utc::now().into(),
+            updated_at: chrono::Utc::now().into(),
+        };
+
+        assert_eq!(
+            resolve_provider_default_model(&provider).as_deref(),
+            Some("grok-4.5")
+        );
+        provider.model = Some("grok-4.5-fast".to_string());
+        assert_eq!(
+            resolve_provider_default_model(&provider).as_deref(),
+            Some("grok-4.5-fast")
+        );
+        provider.model = Some("grok-missing".to_string());
+        assert_eq!(
+            resolve_provider_default_model(&provider).as_deref(),
+            Some("grok-4.5")
+        );
+    }
+
+    #[test]
     fn codex_config_projection_tracks_model_provider_for_fingerprint() {
         let houhub = r#"
 model = "gpt-5-codex"
@@ -8554,10 +9030,7 @@ wire_api = "responses"
 base_url = "https://gateway.example/v1"
 wire_api = "chat"
 "#;
-        let other = houhub.replace(
-            "model_provider = \"houhub\"",
-            "model_provider = \"other\"",
-        );
+        let other = houhub.replace("model_provider = \"houhub\"", "model_provider = \"other\"");
 
         let p_houhub = codex_config_projection_from_toml(houhub);
         let p_other = codex_config_projection_from_toml(&other);
@@ -8583,7 +9056,10 @@ wire_api = "chat"
 
         let bare = codex_config_projection_from_toml("model = \"gpt-5-codex\"\n");
         assert!(!bare.contains_key("modelProvider"));
-        assert_eq!(bare.get("model").and_then(|v| v.as_str()), Some("gpt-5-codex"));
+        assert_eq!(
+            bare.get("model").and_then(|v| v.as_str()),
+            Some("gpt-5-codex")
+        );
         assert!(codex_config_projection_from_toml("model_provider = ").is_empty());
     }
 
@@ -8597,7 +9073,10 @@ wire_api = "chat"
             Some(expected_home.as_str())
         );
 
-        codex_env.insert("CODEX_HOME".to_string(), "C:\\Custom\\CodexHome".to_string());
+        codex_env.insert(
+            "CODEX_HOME".to_string(),
+            "C:\\Custom\\CodexHome".to_string(),
+        );
         ensure_codex_home_env(AgentType::Codex, &mut codex_env);
         assert_eq!(
             codex_env.get("CODEX_HOME").map(String::as_str),
@@ -8659,12 +9138,58 @@ wire_api = "chat"
 
     #[test]
     fn kimi_code_skill_storage_spec_targets_kimi_home() {
-        let spec =
-            skill_storage_spec(AgentType::KimiCode).expect("Kimi Code supports skills");
-        assert_eq!(spec.kind, SkillStorageKind::SkillDirectoryOnly);
-        assert_eq!(spec.project_rel_dirs, vec![".kimi-code/skills"]);
-        let expected = crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("skills");
-        assert_eq!(spec.global_dirs, vec![expected]);
+        // `resolve_kimi_code_home_dir()` reads the process-wide `$HOME` (when
+        // `KIMI_CODE_HOME` is unset), and other tests mutate HOME via `temp_env`.
+        // Pin it (and clear `KIMI_CODE_HOME`) so the spec and the expected path
+        // resolve against one consistent home instead of racing a concurrent
+        // HOME-mutating test. Deriving `expected` from the same production helper
+        // keeps it correct on Windows, where `dirs::home_dir()` ignores HOME.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(tmp.path())),
+                ("KIMI_CODE_HOME", None::<&std::path::Path>),
+            ],
+            || {
+                let spec =
+                    skill_storage_spec(AgentType::KimiCode).expect("Kimi Code supports skills");
+                assert_eq!(spec.kind, SkillStorageKind::SkillDirectoryOnly);
+                assert_eq!(spec.project_rel_dirs, vec![".kimi-code/skills"]);
+                let expected =
+                    crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("skills");
+                assert_eq!(spec.global_dirs, vec![expected]);
+            },
+        );
+    }
+
+    #[test]
+    fn pi_skill_storage_spec_targets_pi_agent_dir() {
+        // `pi_agent_dir()` and `home_dir_or_default()` both read the process-wide
+        // `$HOME`, and other tests mutate HOME via `temp_env`. Pin it (and clear
+        // the BYO `PI_CODING_AGENT_DIR` override) so this test serializes against
+        // those mutators through temp_env's shared lock and reads one consistent
+        // home for both the spec and the expected paths. Deriving `expected` from
+        // the same production helpers keeps it correct on Windows, where
+        // `dirs::home_dir()` ignores the pinned HOME.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(tmp.path())),
+                ("PI_CODING_AGENT_DIR", None::<&std::path::Path>),
+            ],
+            || {
+                let spec = skill_storage_spec(AgentType::Pi).expect("Pi supports skills");
+                // pi's native dir accepts standalone `.md` files, like Codex.
+                assert_eq!(spec.kind, SkillStorageKind::SkillDirectoryOrMarkdownFile);
+                assert_eq!(spec.project_rel_dirs, vec![".pi/skills", ".agents/skills"]);
+                // Native pi dir first (preferred link target), shared store second.
+                let expected = vec![
+                    pi_agent_dir().join("skills"),
+                    home_dir_or_default().join(".agents").join("skills"),
+                ];
+                assert_eq!(spec.global_dirs, expected);
+            },
+        );
     }
 
     #[test]
@@ -8691,7 +9216,10 @@ wire_api = "chat"
             out.get("ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION"),
             Some(&Some("via gateway".to_string()))
         );
-        assert_eq!(out.get("ANTHROPIC_MODEL"), Some(&Some("gw/opus".to_string())));
+        assert_eq!(
+            out.get("ANTHROPIC_MODEL"),
+            Some(&Some("gw/opus".to_string()))
+        );
 
         // Omitted custom keys are authoritative clears (None => remove from env),
         // matching the five model fields' overwrite semantics.
@@ -8702,6 +9230,26 @@ wire_api = "chat"
             bare.get("ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION"),
             Some(&None)
         );
+    }
+
+    #[test]
+    fn parse_provider_model_codex_uses_default_slug() {
+        // A structured codex catalog resolves OPENAI_MODEL to its default slug,
+        // not the whole JSON blob.
+        let raw = r#"{"models":[{"slug":"gw/a","base":"gpt-5.4"},{"slug":"gw/b","base":"gpt-5.4"}],"default":"gw/b"}"#;
+        let out = parse_provider_model(AgentType::Codex, Some(raw));
+        assert_eq!(out.get("OPENAI_MODEL"), Some(&Some("gw/b".to_string())));
+
+        // A legacy plain slug passes through as the model.
+        let legacy = parse_provider_model(AgentType::Codex, Some("gpt-5.5"));
+        assert_eq!(
+            legacy.get("OPENAI_MODEL"),
+            Some(&Some("gpt-5.5".to_string()))
+        );
+
+        // No models → OPENAI_MODEL cleared (None).
+        let empty = parse_provider_model(AgentType::Codex, Some(r#"{"models":[]}"#));
+        assert_eq!(empty.get("OPENAI_MODEL"), Some(&None));
     }
 
     #[test]
@@ -9216,8 +9764,14 @@ wire_api = "chat"
     fn parse_env_file_ignores_comments_and_strips_quotes() {
         let raw = "# comment\n\nexport OPENROUTER_API_KEY=\"sk-or-123\"\nOPENAI_BASE_URL='https://x.test/v1'\nBARE=plain\n=novalue\n";
         let map = parse_env_file(raw);
-        assert_eq!(map.get("OPENROUTER_API_KEY").map(String::as_str), Some("sk-or-123"));
-        assert_eq!(map.get("OPENAI_BASE_URL").map(String::as_str), Some("https://x.test/v1"));
+        assert_eq!(
+            map.get("OPENROUTER_API_KEY").map(String::as_str),
+            Some("sk-or-123")
+        );
+        assert_eq!(
+            map.get("OPENAI_BASE_URL").map(String::as_str),
+            Some("https://x.test/v1")
+        );
         assert_eq!(map.get("BARE").map(String::as_str), Some("plain"));
         assert!(!map.contains_key(""));
     }
@@ -9227,9 +9781,18 @@ wire_api = "chat"
         let existing = "# secrets\nOPENROUTER_API_KEY=old\n\nOTHER_TOKEN=keep\n";
         let out = patch_env_text(existing, &[("OPENROUTER_API_KEY", "new")]);
         assert!(out.contains("# secrets"), "comment preserved: {out}");
-        assert!(out.contains("OPENROUTER_API_KEY=new"), "key replaced: {out}");
-        assert!(!out.contains("OPENROUTER_API_KEY=old"), "old value gone: {out}");
-        assert!(out.contains("OTHER_TOKEN=keep"), "unrelated key preserved: {out}");
+        assert!(
+            out.contains("OPENROUTER_API_KEY=new"),
+            "key replaced: {out}"
+        );
+        assert!(
+            !out.contains("OPENROUTER_API_KEY=old"),
+            "old value gone: {out}"
+        );
+        assert!(
+            out.contains("OTHER_TOKEN=keep"),
+            "unrelated key preserved: {out}"
+        );
         // Replacement happens in place, not appended at the end.
         assert_eq!(out.matches("OPENROUTER_API_KEY=").count(), 1);
         assert!(out.ends_with('\n'));
@@ -9241,13 +9804,22 @@ wire_api = "chat"
         // last-occurrence-wins, so a stale second line would shadow the update.
         let existing = "OPENAI_API_KEY=old1\nKEEP=1\nOPENAI_API_KEY=old2\n";
         let out = patch_env_text(existing, &[("OPENAI_API_KEY", "new")]);
-        assert_eq!(out.matches("OPENAI_API_KEY=").count(), 1, "single key: {out}");
+        assert_eq!(
+            out.matches("OPENAI_API_KEY=").count(),
+            1,
+            "single key: {out}"
+        );
         assert!(out.contains("OPENAI_API_KEY=new"));
-        assert!(!out.contains("old1") && !out.contains("old2"), "stale gone: {out}");
+        assert!(
+            !out.contains("old1") && !out.contains("old2"),
+            "stale gone: {out}"
+        );
         assert!(out.contains("KEEP=1"));
         // And a reader of the result sees the new value, not a stale shadow.
         assert_eq!(
-            parse_env_file(&out).get("OPENAI_API_KEY").map(String::as_str),
+            parse_env_file(&out)
+                .get("OPENAI_API_KEY")
+                .map(String::as_str),
             Some("new")
         );
     }
@@ -9278,7 +9850,8 @@ wire_api = "chat"
 
     #[test]
     fn merge_hermes_model_config_sets_model_and_keeps_other_keys() {
-        let existing = "terminal:\n  backend: local\nmodel:\n  default: old-model\n  provider: openai\n";
+        let existing =
+            "terminal:\n  backend: local\nmodel:\n  default: old-model\n  provider: openai\n";
         let merged = merge_hermes_model_config(
             Some(existing),
             "openrouter",
@@ -9289,14 +9862,20 @@ wire_api = "chat"
         .expect("merge");
         let value: serde_yaml::Value = serde_yaml::from_str(&merged).expect("parse merged");
         let model = value.get("model").expect("model section");
-        assert_eq!(model.get("provider").and_then(|v| v.as_str()), Some("openrouter"));
+        assert_eq!(
+            model.get("provider").and_then(|v| v.as_str()),
+            Some("openrouter")
+        );
         assert_eq!(
             model.get("default").and_then(|v| v.as_str()),
             Some("moonshotai/kimi-k2")
         );
         // Unrelated top-level keys survive the targeted merge.
         assert_eq!(
-            value.get("terminal").and_then(|t| t.get("backend")).and_then(|v| v.as_str()),
+            value
+                .get("terminal")
+                .and_then(|t| t.get("backend"))
+                .and_then(|v| v.as_str()),
             Some("local")
         );
         // No base_url was requested, so none is written.
@@ -9315,7 +9894,10 @@ wire_api = "chat"
         .expect("merge with base");
         let value: serde_yaml::Value = serde_yaml::from_str(&with_base).expect("parse");
         assert_eq!(
-            value.get("model").and_then(|m| m.get("base_url")).and_then(|v| v.as_str()),
+            value
+                .get("model")
+                .and_then(|m| m.get("base_url"))
+                .and_then(|v| v.as_str()),
             Some("https://api.test/v1")
         );
         // Set("") clears the field (user emptied the API URL input).
@@ -9341,7 +9923,10 @@ wire_api = "chat"
         .expect("merge preserve");
         let value: serde_yaml::Value = serde_yaml::from_str(&kept).expect("parse");
         assert_eq!(
-            value.get("model").and_then(|m| m.get("base_url")).and_then(|v| v.as_str()),
+            value
+                .get("model")
+                .and_then(|m| m.get("base_url"))
+                .and_then(|v| v.as_str()),
             Some("https://api.test/v1")
         );
     }
@@ -9362,8 +9947,14 @@ wire_api = "chat"
         .expect("merge custom");
         let value: serde_yaml::Value = serde_yaml::from_str(&with_key).expect("parse");
         let model = value.get("model").expect("model section");
-        assert_eq!(model.get("provider").and_then(|v| v.as_str()), Some("custom"));
-        assert_eq!(model.get("api_key").and_then(|v| v.as_str()), Some("sk-abc"));
+        assert_eq!(
+            model.get("provider").and_then(|v| v.as_str()),
+            Some("custom")
+        );
+        assert_eq!(
+            model.get("api_key").and_then(|v| v.as_str()),
+            Some("sk-abc")
+        );
         assert_eq!(
             model.get("base_url").and_then(|v| v.as_str()),
             Some("https://endpoint.test/v1")
@@ -9386,7 +9977,8 @@ wire_api = "chat"
 
         // custom→custom re-save with scrub_mode=false preserves a raw-editor
         // `api_mode`; switching in with scrub_mode=true drops it.
-        let with_mode = "model:\n  provider: custom\n  default: m\n  api_mode: anthropic_messages\n";
+        let with_mode =
+            "model:\n  provider: custom\n  default: m\n  api_mode: anthropic_messages\n";
         let resaved = merge_hermes_model_config(
             Some(with_mode),
             "custom",
@@ -9436,15 +10028,22 @@ wire_api = "chat"
         .expect("merge switch");
         let value: serde_yaml::Value = serde_yaml::from_str(&switched).expect("parse");
         let model = value.get("model").expect("model section");
-        assert!(model.get("api_key").is_none(), "stale inline key must be scrubbed");
-        assert!(model.get("api_mode").is_none(), "stale api_mode must be scrubbed");
+        assert!(
+            model.get("api_key").is_none(),
+            "stale inline key must be scrubbed"
+        );
+        assert!(
+            model.get("api_mode").is_none(),
+            "stale api_mode must be scrubbed"
+        );
     }
 
     #[test]
     fn plan_hermes_write_preserves_base_url_for_fixed_endpoint_provider() {
         // Anthropic (needsBaseUrl: false) behind a proxy: a structured save that
         // doesn't touch the hidden API URL field must keep the existing endpoint.
-        let existing = "model:\n  provider: anthropic\n  default: old\n  base_url: https://my-proxy/v1\n";
+        let existing =
+            "model:\n  provider: anthropic\n  default: old\n  base_url: https://my-proxy/v1\n";
         let (yaml, env) = plan_hermes_write(
             "anthropic",
             Some("sk-ant"),
@@ -9456,7 +10055,10 @@ wire_api = "chat"
         .expect("plan");
         let value: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("yaml");
         assert_eq!(
-            value.get("model").and_then(|m| m.get("base_url")).and_then(|v| v.as_str()),
+            value
+                .get("model")
+                .and_then(|m| m.get("base_url"))
+                .and_then(|v| v.as_str()),
             Some("https://my-proxy/v1"),
             "out-of-band base_url must survive a structured save"
         );
@@ -9482,7 +10084,10 @@ wire_api = "chat"
         .expect("plan");
         let value: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("yaml");
         assert_eq!(
-            value.get("model").and_then(|m| m.get("provider")).and_then(|v| v.as_str()),
+            value
+                .get("model")
+                .and_then(|m| m.get("provider"))
+                .and_then(|v| v.as_str()),
             Some("anthropic")
         );
         assert!(
@@ -9510,8 +10115,8 @@ wire_api = "chat"
             assert!(!env.iter().any(|(k, _)| *k == "OPENROUTER_API_KEY"));
         }
         // A provided key is written alongside the neutralization.
-        let (_, env) = plan_hermes_write("openrouter", Some("sk-or"), "m", None, None, None)
-            .expect("keyed");
+        let (_, env) =
+            plan_hermes_write("openrouter", Some("sk-or"), "m", None, None, None).expect("keyed");
         assert!(env.contains(&("OPENROUTER_API_KEY", "sk-or".to_string())));
         assert!(env.contains(&("OPENAI_API_KEY", String::new())));
     }
@@ -9558,7 +10163,11 @@ wire_api = "chat"
         let inode_before = fs::metadata(&env_path).unwrap().ino();
         write_hermes_secret_file(&env_path, "OPENROUTER_API_KEY=sk-2\n", ".env")
             .expect("rewrite env");
-        assert_eq!(mode_of(&env_path), 0o640, "existing managed mode must be preserved");
+        assert_eq!(
+            mode_of(&env_path),
+            0o640,
+            "existing managed mode must be preserved"
+        );
         assert_eq!(
             fs::metadata(&env_path).unwrap().ino(),
             inode_before,
@@ -9585,7 +10194,10 @@ wire_api = "chat"
         write_hermes_secret_file(&link, "model:\n  provider: anthropic\n", "config.yaml")
             .expect("write through symlink");
         assert!(
-            fs::symlink_metadata(&link).unwrap().file_type().is_symlink(),
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
             "the symlink must be preserved, not replaced by a regular file"
         );
         assert_eq!(
@@ -9605,7 +10217,10 @@ wire_api = "chat"
         let real = dir.join("vault-hermes.env");
         let link = dir.join(".env");
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        assert!(fs::metadata(&link).is_err(), "precondition: dangling symlink");
+        assert!(
+            fs::metadata(&link).is_err(),
+            "precondition: dangling symlink"
+        );
 
         write_hermes_secret_file(&link, "OPENROUTER_API_KEY=sk\n", ".env").expect("write");
         // The target is created THROUGH the symlink and is owner-only (0600), not
@@ -9615,9 +10230,15 @@ wire_api = "chat"
             0o600,
             "a freshly created symlink target must be 0600"
         );
-        assert_eq!(fs::read_to_string(&real).unwrap(), "OPENROUTER_API_KEY=sk\n");
+        assert_eq!(
+            fs::read_to_string(&real).unwrap(),
+            "OPENROUTER_API_KEY=sk\n"
+        );
         assert!(
-            fs::symlink_metadata(&link).unwrap().file_type().is_symlink(),
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
             "the symlink itself must be preserved"
         );
     }
@@ -9642,7 +10263,11 @@ wire_api = "chat"
         fs::write(&env_path, "OPENROUTER_API_KEY=old\n").unwrap();
         fs::set_permissions(&env_path, fs::Permissions::from_mode(0o644)).unwrap();
         write_hermes_secret_file(&env_path, "OPENROUTER_API_KEY=new\n", ".env").unwrap();
-        assert_eq!(mode_of(&env_path), 0o600, "a world-readable 0644 secret → 0600");
+        assert_eq!(
+            mode_of(&env_path),
+            0o600,
+            "a world-readable 0644 secret → 0600"
+        );
         assert_eq!(
             fs::read_to_string(&env_path).unwrap(),
             "OPENROUTER_API_KEY=new\n"
@@ -9653,7 +10278,11 @@ wire_api = "chat"
         fs::write(&managed, "K=1\n").unwrap();
         fs::set_permissions(&managed, fs::Permissions::from_mode(0o640)).unwrap();
         write_hermes_secret_file(&managed, "K=2\n", ".env").unwrap();
-        assert_eq!(mode_of(&managed), 0o640, "managed group-shared mode preserved");
+        assert_eq!(
+            mode_of(&managed),
+            0o640,
+            "managed group-shared mode preserved"
+        );
     }
 
     #[cfg(unix)]
@@ -9690,7 +10319,11 @@ wire_api = "chat"
         fs::create_dir_all(&managed).unwrap();
         fs::set_permissions(&managed, fs::Permissions::from_mode(0o755)).unwrap();
         ensure_hermes_home_secure(&managed).expect("ensure managed");
-        assert_eq!(mode_of(&managed), 0o755, "existing hermes home mode preserved");
+        assert_eq!(
+            mode_of(&managed),
+            0o755,
+            "existing hermes home mode preserved"
+        );
     }
 
     // ── Hermes base-URL reconcile (auxiliary/main endpoint parity) ──────────
@@ -9721,11 +10354,19 @@ wire_api = "chat"
     fn plan_hermes_base_url_reconcile_ignores_trailing_slash() {
         // Trailing-slash-only differences must not churn .env (both directions).
         assert_eq!(
-            plan_hermes_base_url_reconcile("openai-api", Some("https://x/v1/"), Some("https://x/v1")),
+            plan_hermes_base_url_reconcile(
+                "openai-api",
+                Some("https://x/v1/"),
+                Some("https://x/v1")
+            ),
             None
         );
         assert_eq!(
-            plan_hermes_base_url_reconcile("openai-api", Some("https://x/v1"), Some("https://x/v1/")),
+            plan_hermes_base_url_reconcile(
+                "openai-api",
+                Some("https://x/v1"),
+                Some("https://x/v1/")
+            ),
             None
         );
     }
@@ -9743,9 +10384,18 @@ wire_api = "chat"
     #[test]
     fn plan_hermes_base_url_reconcile_no_op_when_both_empty() {
         // Absent var and explicitly-empty var both → no-op (no redundant `KEY=`).
-        assert_eq!(plan_hermes_base_url_reconcile("openai-api", None, None), None);
-        assert_eq!(plan_hermes_base_url_reconcile("openai-api", None, Some("")), None);
-        assert_eq!(plan_hermes_base_url_reconcile("openai-api", Some("  "), Some("")), None);
+        assert_eq!(
+            plan_hermes_base_url_reconcile("openai-api", None, None),
+            None
+        );
+        assert_eq!(
+            plan_hermes_base_url_reconcile("openai-api", None, Some("")),
+            None
+        );
+        assert_eq!(
+            plan_hermes_base_url_reconcile("openai-api", Some("  "), Some("")),
+            None
+        );
     }
 
     #[test]
@@ -9776,7 +10426,10 @@ wire_api = "chat"
     fn plan_hermes_base_url_reconcile_openrouter_only_touches_its_own_var() {
         // openrouter never returns an OPENAI_BASE_URL write (that would re-pollute
         // the panel's neutralization); it only reconciles OPENROUTER_BASE_URL.
-        assert_eq!(plan_hermes_base_url_reconcile("openrouter", None, None), None);
+        assert_eq!(
+            plan_hermes_base_url_reconcile("openrouter", None, None),
+            None
+        );
         assert_eq!(
             plan_hermes_base_url_reconcile("openrouter", Some("https://or/api/v1"), None),
             Some(("OPENROUTER_BASE_URL", "https://or/api/v1".to_string()))
@@ -9918,7 +10571,10 @@ wire_api = "chat"
         .unwrap();
         reconcile_hermes_runtime_env_in(home).expect("reconcile");
         let env = fs::read_to_string(home.join(".env")).unwrap();
-        assert!(env.contains("OPENAI_BASE_URL=\n"), "stale base url cleared: {env:?}");
+        assert!(
+            env.contains("OPENAI_BASE_URL=\n"),
+            "stale base url cleared: {env:?}"
+        );
         assert!(env.contains("OPENAI_API_KEY=sk"), "key preserved: {env:?}");
     }
 
@@ -9954,11 +10610,17 @@ wire_api = "chat"
         // either (both an absolute path and a literal `~/…` path are passed as-is).
         let mut abs = BTreeMap::new();
         abs.insert("HERMES_HOME".to_string(), "/tmp/hermes-alt".to_string());
-        assert_eq!(hermes_home_for_launch(&abs), PathBuf::from("/tmp/hermes-alt"));
+        assert_eq!(
+            hermes_home_for_launch(&abs),
+            PathBuf::from("/tmp/hermes-alt")
+        );
 
         let mut tilde = BTreeMap::new();
         tilde.insert("HERMES_HOME".to_string(), "~/alt-hermes".to_string());
-        assert_eq!(hermes_home_for_launch(&tilde), PathBuf::from("~/alt-hermes"));
+        assert_eq!(
+            hermes_home_for_launch(&tilde),
+            PathBuf::from("~/alt-hermes")
+        );
 
         // A blank override REPLACES the parent value in the child, and Hermes then
         // falls back to the default `~/.hermes` — not the parent's HERMES_HOME.
@@ -10033,10 +10695,7 @@ wire_api = "chat"
     fn hermes_skip_chmod_requires_a_non_empty_opt_out() {
         // A non-empty opt-out enables skip.
         temp_env::with_vars(
-            [
-                ("HERMES_SKIP_CHMOD", Some("1")),
-                ("HERMES_CONTAINER", None),
-            ],
+            [("HERMES_SKIP_CHMOD", Some("1")), ("HERMES_CONTAINER", None)],
             || assert!(hermes_skip_chmod(), "non-empty HERMES_SKIP_CHMOD skips"),
         );
         // An EMPTY opt-out must NOT skip (Hermes' Python truthiness treats `` as
@@ -10081,9 +10740,14 @@ wire_api = "chat"
         assert_eq!(openai_api.key_env_var, "OPENAI_API_KEY");
         assert!(openai_api.needs_base_url);
         // Hermes' first-priority key var per provider (auth.py PROVIDER_REGISTRY).
-        assert_eq!(hermes_provider("zai").expect("zai").key_env_var, "GLM_API_KEY");
         assert_eq!(
-            hermes_provider("kimi-coding").expect("kimi-coding").key_env_var,
+            hermes_provider("zai").expect("zai").key_env_var,
+            "GLM_API_KEY"
+        );
+        assert_eq!(
+            hermes_provider("kimi-coding")
+                .expect("kimi-coding")
+                .key_env_var,
             "KIMI_API_KEY"
         );
         // OAuth + AWS providers carry no API-key env var (set via terminal --setup
@@ -10192,7 +10856,10 @@ wire_api = "chat"
         assert_eq!(env, vec![("ANTHROPIC_API_KEY", "sk-ant-1".to_string())]);
         let value: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("yaml");
         assert_eq!(
-            value.get("model").and_then(|m| m.get("provider")).and_then(|v| v.as_str()),
+            value
+                .get("model")
+                .and_then(|m| m.get("provider"))
+                .and_then(|v| v.as_str()),
             Some("anthropic")
         );
     }
@@ -10212,9 +10879,18 @@ wire_api = "chat"
         assert!(env.is_empty(), "custom must not write any .env var");
         let value: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("yaml");
         let model = value.get("model").expect("model section");
-        assert_eq!(model.get("provider").and_then(|v| v.as_str()), Some("custom"));
-        assert_eq!(model.get("default").and_then(|v| v.as_str()), Some("gpt-5.5"));
-        assert_eq!(model.get("api_key").and_then(|v| v.as_str()), Some("sk-custom-1"));
+        assert_eq!(
+            model.get("provider").and_then(|v| v.as_str()),
+            Some("custom")
+        );
+        assert_eq!(
+            model.get("default").and_then(|v| v.as_str()),
+            Some("gpt-5.5")
+        );
+        assert_eq!(
+            model.get("api_key").and_then(|v| v.as_str()),
+            Some("sk-custom-1")
+        );
         assert_eq!(
             model.get("base_url").and_then(|v| v.as_str()),
             Some("https://endpoint.test/v1")
@@ -10232,7 +10908,8 @@ wire_api = "chat"
 
         // Switching TO custom from another provider that carried an `api_mode`
         // scrubs the stale mode (it must not bleed into the custom endpoint).
-        let prior = "model:\n  provider: openai-api\n  default: gpt\n  api_mode: chat_completions\n";
+        let prior =
+            "model:\n  provider: openai-api\n  default: gpt\n  api_mode: chat_completions\n";
         let (yaml, _env) = plan_hermes_write(
             "custom",
             Some("sk-2"),
@@ -10263,21 +10940,23 @@ wire_api = "chat"
         )
         .expect("plan");
         assert!(env.is_empty(), "raw mode must not write .env");
-        assert!(yaml.contains("anthropic"), "raw yaml written verbatim: {yaml}");
+        assert!(
+            yaml.contains("anthropic"),
+            "raw yaml written verbatim: {yaml}"
+        );
     }
 
     #[test]
     fn plan_hermes_write_oauth_and_blank_key_produce_no_env() {
         // OAuth provider (empty key var) → no .env update.
-        let (_, env) = plan_hermes_write("nous", Some("ignored"), "m", None, None, None)
-            .expect("oauth");
+        let (_, env) =
+            plan_hermes_write("nous", Some("ignored"), "m", None, None, None).expect("oauth");
         assert!(env.is_empty());
         // Blank key on a keyed provider with no base-URL var → nothing touched.
-        let (_, env) = plan_hermes_write("anthropic", Some("   "), "m", None, None, None)
-            .expect("blank");
-        assert!(env.is_empty());
         let (_, env) =
-            plan_hermes_write("anthropic", None, "m", None, None, None).expect("none");
+            plan_hermes_write("anthropic", Some("   "), "m", None, None, None).expect("blank");
+        assert!(env.is_empty());
+        let (_, env) = plan_hermes_write("anthropic", None, "m", None, None, None).expect("none");
         assert!(env.is_empty());
     }
 
@@ -10288,8 +10967,15 @@ wire_api = "chat"
             "newline in key must be rejected"
         );
         assert!(
-            plan_hermes_write("openai-api", None, "m", None, Some("model: [unterminated"), None)
-                .is_err(),
+            plan_hermes_write(
+                "openai-api",
+                None,
+                "m",
+                None,
+                Some("model: [unterminated"),
+                None
+            )
+            .is_err(),
             "invalid raw yaml must be rejected"
         );
     }
@@ -10316,13 +11002,16 @@ wire_api = "chat"
         );
         let value: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("yaml");
         assert_eq!(
-            value.get("model").and_then(|m| m.get("base_url")).and_then(|v| v.as_str()),
+            value
+                .get("model")
+                .and_then(|m| m.get("base_url"))
+                .and_then(|v| v.as_str()),
             Some("https://api.test/v1")
         );
         // Clearing the base URL writes an empty override so a stale `.env` value
         // can't shadow the default endpoint.
-        let (_, env) = plan_hermes_write("openai-api", None, "m", None, None, None)
-            .expect("clear base");
+        let (_, env) =
+            plan_hermes_write("openai-api", None, "m", None, None, None).expect("clear base");
         assert_eq!(env, vec![("OPENAI_BASE_URL", String::new())]);
     }
 
@@ -10351,7 +11040,10 @@ wire_api = "chat"
     fn project_hermes_key_and_base_falls_back_to_env_base_url() {
         let mut env = BTreeMap::new();
         env.insert("OPENAI_API_KEY".to_string(), "sk-1".to_string());
-        env.insert("OPENAI_BASE_URL".to_string(), "https://proxy/v1".to_string());
+        env.insert(
+            "OPENAI_BASE_URL".to_string(),
+            "https://proxy/v1".to_string(),
+        );
         // No YAML base_url → the panel still sees the endpoint from `.env`, so a
         // later save won't clear it (regression guard for the dual-write change).
         let (key, base) = project_hermes_key_and_base("openai-api", &env, None, None);
@@ -10445,19 +11137,27 @@ wire_api = "chat"
     }
 
     #[test]
-    fn non_claude_provider_model_does_not_override_agent_model() {
-        for agent_type in [
-            AgentType::Codex,
-            AgentType::Gemini,
-            AgentType::Pi,
-            AgentType::KimiCode,
-        ] {
+    fn non_codex_provider_model_does_not_override_agent_model() {
+        for agent_type in [AgentType::Gemini, AgentType::Pi, AgentType::KimiCode] {
             let out = parse_provider_model(agent_type, Some("gateway-default"));
             assert!(
                 out.is_empty(),
                 "{agent_type} must keep its model in the agent config"
             );
         }
+    }
+
+    #[test]
+    fn codex_catalog_projection_is_scoped_to_codex_specific_data() {
+        assert!(codex_catalog_allowed(&[AgentType::Codex], None));
+        assert!(!codex_catalog_allowed(
+            &[AgentType::Codex, AgentType::ClaudeCode],
+            Some("gateway-default")
+        ));
+        assert!(codex_catalog_allowed(
+            &[AgentType::Codex, AgentType::ClaudeCode],
+            Some(r#"{"models":[],"default":null}"#)
+        ));
     }
 
     #[test]
@@ -10480,7 +11180,10 @@ wire_api = "chat"
         let serialized = toml::to_string_pretty(&doc).expect("serialize");
         let reparsed: toml::Value = serialized.parse().expect("valid toml");
         let t = reparsed.as_table().unwrap();
-        assert_eq!(t.get("telemetry").and_then(toml::Value::as_bool), Some(true));
+        assert_eq!(
+            t.get("telemetry").and_then(toml::Value::as_bool),
+            Some(true)
+        );
         assert_eq!(
             t.get("default_model").and_then(toml::Value::as_str),
             Some(KIMI_MANAGED_MODEL_ALIAS)
@@ -10512,7 +11215,9 @@ wire_api = "chat"
             Some("claude-opus-4-7")
         );
         assert_eq!(
-            model.get("max_context_size").and_then(toml::Value::as_integer),
+            model
+                .get("max_context_size")
+                .and_then(toml::Value::as_integer),
             Some(200_000)
         );
     }
@@ -10702,7 +11407,10 @@ max_context_size = 200000
             Some("https://api.anthropic.com")
         );
         assert_eq!(proj.get("key").and_then(|v| v.as_str()), Some("sk-ant"));
-        assert_eq!(proj.get("authType").and_then(|v| v.as_str()), Some("api_key"));
+        assert_eq!(
+            proj.get("authType").and_then(|v| v.as_str()),
+            Some("api_key")
+        );
         assert_eq!(
             proj.get("modelId").and_then(|v| v.as_str()),
             Some("claude-opus-4-7")
@@ -10711,7 +11419,10 @@ max_context_size = 200000
             proj.get("maxContextSize").and_then(|v| v.as_i64()),
             Some(200000)
         );
-        assert_eq!(proj.get("hasManagedBlock"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(
+            proj.get("hasManagedBlock"),
+            Some(&serde_json::Value::Bool(true))
+        );
         for forbidden in [
             "apiKey",
             "apiBaseUrl",

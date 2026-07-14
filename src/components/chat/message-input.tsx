@@ -215,6 +215,10 @@ interface MessageInputProps {
    * server file browser, and direct local file:// path attachment. Cloud
    * conversations keep this off so they do not leak the active local folder. */
   enableWorkspaceReferences?: boolean
+  /** Read-only conversation location rendered in the existing folder row.
+   * Remote conversations use this to identify their workspace without exposing
+   * or enabling the active local folder picker. */
+  contextLocation?: { label: string; title?: string } | null
   attachmentTabId?: string | null
   draftStorageKey?: string | null
   isActive?: boolean
@@ -503,6 +507,7 @@ export function MessageInput({
   availableCommands,
   promptCapabilities,
   enableWorkspaceReferences = true,
+  contextLocation,
   attachmentTabId,
   draftStorageKey,
   isActive = false,
@@ -960,9 +965,17 @@ export function MessageInput({
   const hasAnySelector =
     showConfigLoading || hasConfigOptions || showModeLoading || showModeSelector
   const hasInlineSelectors = hasConfigOptions || showModeSelector
-  const hasFolderBranchPicker =
+  // Keep hooks unconditional, then gate the local picker at the presentation
+  // boundary. Cloud composers still share this component but must never expose
+  // the active local tab's folder merely because a local tab exists.
+  const localFolderBranchPickerVisible =
     useConversationFolderBranchPickerVisible(attachmentTabId)
-  const folderBranchPickerAttached = hasFolderBranchPicker
+  const hasFolderBranchPicker =
+    enableWorkspaceReferences && localFolderBranchPickerVisible
+  const contextLocationLabel = contextLocation?.label.trim() ?? ""
+  const hasContextLocation = contextLocationLabel.length > 0
+  const hasConversationLocation = hasFolderBranchPicker || hasContextLocation
+  const folderBranchPickerAttached = hasConversationLocation
   const imageAttachments = useMemo(
     () =>
       attachments.filter(
@@ -3507,7 +3520,7 @@ export function MessageInput({
             </ContextMenuSub>
           </ContextMenuContent>
         </ContextMenu>
-        {hasFolderBranchPicker && (
+        {hasConversationLocation && (
           // `pl-2` mirrors the action bar's `px-2` so this row lines up with the
           // composer above. Kept on the rem scale (no px literals) so it tracks
           // UI zoom; the folder icon then aligns with the centered "+" icon
@@ -3519,7 +3532,19 @@ export function MessageInput({
               folderBranchPickerAttached ? "rounded-b-xl pt-1 pr-2" : "mt-1.5"
             )}
           >
-            <ConversationFolderBranchPicker tabId={attachmentTabId} />
+            {hasFolderBranchPicker ? (
+              <ConversationFolderBranchPicker tabId={attachmentTabId} />
+            ) : (
+              <div
+                className="flex h-6 min-w-0 items-center gap-1 px-1.5"
+                title={contextLocation?.title ?? contextLocationLabel}
+              >
+                <FolderSearch className="size-3 shrink-0" />
+                <span className="max-w-[220px] truncate">
+                  {contextLocationLabel}
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>

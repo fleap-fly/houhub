@@ -4,8 +4,8 @@ use crate::acp::manager::ConnectionManager;
 use crate::acp::types::ConfigStaleKind;
 use crate::app_error::AppCommandError;
 use crate::commands::acp;
-use crate::db::AppDatabase;
 use crate::db::service::{agent_setting_service, model_provider_service};
+use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
 use crate::models::model_provider::ModelProviderInfo;
 use crate::web::event_bridge::EventEmitter;
@@ -71,10 +71,11 @@ fn validate_model(agent_type: &str, model: Option<&str>) -> Result<(), AppComman
     let Some(raw) = model.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(());
     };
-    if raw.len() > 4096 {
-        return Err(AppCommandError::invalid_input(
-            "Model must be 4096 characters or less",
-        ));
+    let max_len = if agent_type == "codex" { 262_144 } else { 4096 };
+    if raw.len() > max_len {
+        return Err(AppCommandError::invalid_input(format!(
+            "Model must be {max_len} characters or less"
+        )));
     }
     if agent_type == "claude_code" {
         if raw.starts_with('{') {
@@ -85,6 +86,36 @@ fn validate_model(agent_type: &str, model: Option<&str>) -> Result<(), AppComman
                 return Err(AppCommandError::invalid_input(
                     "Claude model must be a JSON object",
                 ));
+            }
+        }
+    }
+    if agent_type == "codex" {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+            let entries = value
+                .get("customs")
+                .or_else(|| value.get("models"))
+                .and_then(|models| models.as_array());
+            if let Some(models) = entries {
+                let non_empty = |model: &serde_json::Value, key: &str| {
+                    model
+                        .get(key)
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|value| !value.trim().is_empty())
+                };
+                for (index, model) in models.iter().enumerate() {
+                    if !non_empty(model, "slug") {
+                        return Err(AppCommandError::invalid_input(format!(
+                            "Codex custom model #{} is missing a slug",
+                            index + 1
+                        )));
+                    }
+                    if !non_empty(model, "base") {
+                        return Err(AppCommandError::invalid_input(format!(
+                            "Codex custom model #{} is missing a base model",
+                            index + 1
+                        )));
+                    }
+                }
             }
         }
     }
@@ -119,6 +150,21 @@ fn model_list_from_default_model(agent_type: &str, model: Option<&str>) -> Vec<S
                 })
                 .map(normalize_model_list)
                 .unwrap_or_default();
+        }
+    }
+    if agent_type == "codex" {
+        let config = crate::acp::codex_model_catalog::parse_model_config(Some(raw));
+        let mut models = config
+            .customs
+            .into_iter()
+            .map(|entry| entry.slug)
+            .collect::<Vec<_>>();
+        if let Some(default) = config.default {
+            models.insert(0, default);
+        }
+        let models = normalize_model_list(models);
+        if !models.is_empty() {
+            return models;
         }
     }
     vec![raw.to_string()]
@@ -363,7 +409,16 @@ pub async fn update_model_provider_and_refresh(
     emitter: &EventEmitter,
 ) -> Result<UpdateModelProviderResult, AppCommandError> {
     let provider = update_model_provider_core(
-        db, id, name, api_url, api_key, agent_type, agent_types, model, models, emitter,
+        db,
+        id,
+        name,
+        api_url,
+        api_key,
+        agent_type,
+        agent_types,
+        model,
+        models,
+        emitter,
     )
     .await?;
 
@@ -544,6 +599,37 @@ mod tests {
         // The raw key round-trips; only the masked view is derived.
         assert_eq!(rows[0].api_key, "sk-密钥abcd1234");
         assert!(!rows[0].api_key_masked.is_empty());
+    }
+
+    #[test]
+    fn validate_model_codex_accepts_structured_and_legacy() {
+        // New structured config with custom slug + base is accepted.
+        assert!(validate_model(
+            "codex",
+            Some(
+                r#"{"customs":[{"slug":"gw/opus","base":"gpt-5.6-sol"}],"excludedOfficials":["gpt-5.2"],"default":"gw/opus"}"#
+            )
+        )
+        .is_ok());
+        // Legacy `{models}` catalog is still accepted (migration).
+        assert!(validate_model(
+            "codex",
+            Some(r#"{"models":[{"slug":"gw/opus","base":"gpt-5.3-codex"}],"default":"gw/opus"}"#)
+        )
+        .is_ok());
+        // Legacy plain slug is accepted (back-compat).
+        assert!(validate_model("codex", Some("gpt-5.5")).is_ok());
+        // A custom entry missing its slug / base is rejected.
+        assert!(validate_model("codex", Some(r#"{"customs":[{"base":"gpt-5.4"}]}"#)).is_err());
+        assert!(validate_model("codex", Some(r#"{"customs":[{"slug":"x"}]}"#)).is_err());
+        // A base_instructions-heavy payload over the plain 4096 cap is allowed
+        // for codex, but the same length is rejected for a plain-string agent.
+        let big = format!(
+            r#"{{"models":[{{"slug":"x","base":"gpt-5.4","overrides":{{"base_instructions":"{}"}}}}]}}"#,
+            "a".repeat(10_000)
+        );
+        assert!(validate_model("codex", Some(&big)).is_ok());
+        assert!(validate_model("open_code", Some(&"a".repeat(10_000))).is_err());
     }
 
     /// Regression for the model-provider staleness path: editing a provider must

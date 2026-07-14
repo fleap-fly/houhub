@@ -314,7 +314,7 @@ type Action =
       type: "SET_BACKGROUND_OUTSTANDING"
       contextKey: string
       outstanding: number
-      settledCount: number
+      outOfTurnSettleCount: number
       turnsCount: number
     }
   | StreamingAction
@@ -1177,9 +1177,13 @@ function connectionsReducer(
       // Race guard: the snapshot may have been generated BEFORE events
       // that have since arrived and been applied to in-memory state.
       // Mutable fields (status, sessionId, liveMessage, pendingPermission,
-      // usage) are fresher in memory than in the snapshot and must NOT be
-      // overwritten — but the latched/fill-null fields above are still
-      // applied so the once-per-lifetime bits can recover.
+      // usage, error) are fresher in memory than in the snapshot and must NOT
+      // be overwritten — but the latched/fill-null fields above are still
+      // applied so the once-per-lifetime bits can recover. `error` in
+      // particular is cleared on a new prompt (STATUS_CHANGED → prompting), so
+      // folding a stale snapshot's `lastError` back in here would resurrect an
+      // error the current turn already cleared; it is recovered on the fresh
+      // path below instead.
       if (action.patch.eventSeq <= current.lastAppliedSeq) {
         if (
           mergedSelectorsReady === current.selectorsReady &&
@@ -1231,6 +1235,7 @@ function connectionsReducer(
         configStale: action.patch.configStale,
         configStaleKind: action.patch.configStaleKind,
         backgroundOutstanding: action.patch.backgroundOutstanding,
+        error: action.patch.lastError,
         lastAppliedSeq: action.patch.eventSeq,
       })
       return next
@@ -1301,7 +1306,7 @@ function connectionsReducer(
       const conn = state.get(action.contextKey)
       if (!conn) return state
       const syncingSince =
-        action.settledCount > 0
+        action.outOfTurnSettleCount > 0
           ? Date.now()
           : action.turnsCount > 0
             ? null
@@ -3141,7 +3146,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             type: "SET_BACKGROUND_OUTSTANDING",
             contextKey,
             outstanding: e.outstanding,
-            settledCount: e.settled?.length ?? 0,
+            outOfTurnSettleCount:
+              e.settled?.filter((settled) => !settled.wire_visible).length ?? 0,
             turnsCount: e.turns?.length ?? 0,
           })
 
@@ -3195,11 +3201,18 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               e.session_id
             )
             if (conversationId != null) {
-              useConversationRuntimeStore
-                .getState()
-                .actions.refetchDetail(conversationId, {
-                  preserveLive: nc?.status === "prompting",
+              const runtimeActions =
+                useConversationRuntimeStore.getState().actions
+              for (const settled of e.settled) {
+                if (!settled.tool_use_id) continue
+                runtimeActions.resolveBackgroundTask(conversationId, {
+                  toolUseId: settled.tool_use_id,
+                  taskId: settled.task_id,
+                  status: settled.status,
+                  summary: settled.summary ?? null,
+                  result: settled.result ?? null,
                 })
+              }
             }
           }
           break

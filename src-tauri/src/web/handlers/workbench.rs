@@ -6,9 +6,9 @@ use crate::app_error::AppCommandError;
 use crate::commands::workbench::{
     workbench_ai_create_session_core, workbench_ai_get_session_core,
     workbench_ai_list_assistants_core, workbench_ai_list_sessions_core,
-    workbench_ai_send_message_core,
-    workbench_begin_device_auth_core, workbench_get_session_core, workbench_list_projects_core,
-    workbench_poll_device_auth_core, workbench_set_active_project_core, workbench_sign_out_core,
+    workbench_ai_send_message_core, workbench_begin_device_auth_core, workbench_get_session_core,
+    workbench_list_projects_core, workbench_poll_device_auth_core,
+    workbench_set_active_project_core, workbench_sign_out_core,
     workbench_space_complete_upload_core, workbench_space_create_folder_core,
     workbench_space_delete_file_core, workbench_space_download_url_core, workbench_space_list_core,
     workbench_space_presign_upload_core, workbench_space_usage_core, DeviceAuthPollResult,
@@ -37,7 +37,9 @@ pub struct PollInput {
 pub async fn workbench_poll_device_auth(
     Json(input): Json<PollInput>,
 ) -> Result<Json<DeviceAuthPollResult>, AppCommandError> {
-    Ok(Json(workbench_poll_device_auth_core(input.device_code).await?))
+    Ok(Json(
+        workbench_poll_device_auth_core(input.device_code).await?,
+    ))
 }
 
 pub async fn workbench_get_session() -> Result<Json<WorkbenchSession>, AppCommandError> {
@@ -211,7 +213,9 @@ pub struct AiProjectInput {
 pub async fn workbench_ai_list_assistants(
     Json(input): Json<AiProjectInput>,
 ) -> Result<Json<JsonValue>, AppCommandError> {
-    Ok(Json(workbench_ai_list_assistants_core(input.project_id).await?))
+    Ok(Json(
+        workbench_ai_list_assistants_core(input.project_id).await?,
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,7 +264,9 @@ pub struct AiSessionInput {
 pub async fn workbench_ai_get_session(
     Json(input): Json<AiSessionInput>,
 ) -> Result<Json<JsonValue>, AppCommandError> {
-    Ok(Json(workbench_ai_get_session_core(input.project_id, input.session_id).await?))
+    Ok(Json(
+        workbench_ai_get_session_core(input.project_id, input.session_id).await?,
+    ))
 }
 
 #[derive(Debug, Deserialize)]

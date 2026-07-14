@@ -4,12 +4,59 @@ import type { HouflowCloudSessionEvent } from "./cloud-sessions"
 export function houflowCloudEventsToTurns(
   events: HouflowCloudSessionEvent[]
 ): MessageTurn[] {
-  return mergeAdjacentToolEvents(
-    mergeAdjacentStreamingDeltas(events.map(eventToTurn).filter(isPresent))
+  return mergeConsecutiveAssistantTurns(
+    mergeAdjacentToolEvents(
+      mergeAdjacentStreamingDeltas(eventsToCloudTurns(events))
+    )
   ).map(publicTurn)
 }
 
 type CloudMessageTurn = MessageTurn & { sourceEventType: string }
+
+type TurnMetadata = Pick<MessageTurn, "usage" | "duration_ms" | "model">
+
+function eventsToCloudTurns(
+  events: HouflowCloudSessionEvent[]
+): CloudMessageTurn[] {
+  const turns: CloudMessageTurn[] = []
+  let latestAssistantIndex: number | null = null
+  let pendingAssistantMetadata: TurnMetadata = {}
+
+  for (const event of events) {
+    const turn = eventToTurn(event)
+    const metadata = turnMetadataFromEvent(event)
+
+    if (!turn) {
+      if (!isAssistantCompletionMetadataEvent(event, metadata)) continue
+      if (latestAssistantIndex != null) {
+        turns[latestAssistantIndex] = mergeTurnMetadata(
+          turns[latestAssistantIndex]!,
+          metadata
+        )
+      } else {
+        pendingAssistantMetadata = mergeMetadata(
+          pendingAssistantMetadata,
+          metadata
+        )
+      }
+      continue
+    }
+
+    if (turn.role === "user") {
+      latestAssistantIndex = null
+      pendingAssistantMetadata = {}
+    } else if (turn.role === "assistant") {
+      const withPending = mergeTurnMetadata(turn, pendingAssistantMetadata)
+      pendingAssistantMetadata = {}
+      turns.push(withPending)
+      latestAssistantIndex = turns.length - 1
+      continue
+    }
+    turns.push(turn)
+  }
+
+  return turns
+}
 
 function mergeAdjacentStreamingDeltas(
   turns: CloudMessageTurn[]
@@ -33,6 +80,7 @@ function mergeAdjacentStreamingDeltas(
         ]
       }
       previous.completed_at = turn.completed_at ?? previous.completed_at
+      mergeTurnMetadataInPlace(previous, turn)
       continue
     }
     merged.push({ ...turn, blocks: [...turn.blocks] })
@@ -66,6 +114,24 @@ function mergeAdjacentToolEvents(
       previous.blocks = [...previous.blocks, ...turn.blocks]
       previous.completed_at = turn.completed_at ?? previous.completed_at
       previous.timestamp = turn.timestamp || previous.timestamp
+      mergeTurnMetadataInPlace(previous, turn)
+      continue
+    }
+    merged.push({ ...turn, blocks: [...turn.blocks] })
+  }
+  return merged
+}
+
+function mergeConsecutiveAssistantTurns(
+  turns: CloudMessageTurn[]
+): CloudMessageTurn[] {
+  const merged: CloudMessageTurn[] = []
+  for (const turn of turns) {
+    const previous = merged[merged.length - 1]
+    if (previous?.role === "assistant" && turn.role === "assistant") {
+      previous.blocks = [...previous.blocks, ...turn.blocks]
+      previous.completed_at = turn.completed_at ?? previous.completed_at
+      aggregateTurnMetadataInPlace(previous, turn)
       continue
     }
     merged.push({ ...turn, blocks: [...turn.blocks] })
@@ -157,6 +223,76 @@ function turnMetadataFromEvent(
     ...(usage ? { usage } : {}),
     ...(duration != null ? { duration_ms: duration } : {}),
     ...(model ? { model } : {}),
+  }
+}
+
+function isAssistantCompletionMetadataEvent(
+  event: HouflowCloudSessionEvent,
+  metadata: TurnMetadata
+): boolean {
+  return (
+    event.type === "span.model_request_end" ||
+    metadata.usage != null ||
+    metadata.duration_ms != null
+  )
+}
+
+function mergeTurnMetadata<T extends CloudMessageTurn>(
+  turn: T,
+  metadata: TurnMetadata
+): T {
+  const merged = { ...turn }
+  mergeTurnMetadataInPlace(merged, metadata)
+  return merged
+}
+
+function mergeTurnMetadataInPlace(
+  turn: CloudMessageTurn,
+  metadata: TurnMetadata
+): void {
+  if (metadata.usage != null) turn.usage = metadata.usage
+  if (metadata.duration_ms != null) turn.duration_ms = metadata.duration_ms
+  if (metadata.model) turn.model = metadata.model
+}
+
+function aggregateTurnMetadataInPlace(
+  turn: CloudMessageTurn,
+  metadata: TurnMetadata
+): void {
+  if (metadata.usage != null) {
+    turn.usage = turn.usage
+      ? {
+          input_tokens: turn.usage.input_tokens + metadata.usage.input_tokens,
+          output_tokens:
+            turn.usage.output_tokens + metadata.usage.output_tokens,
+          cache_creation_input_tokens:
+            turn.usage.cache_creation_input_tokens +
+            metadata.usage.cache_creation_input_tokens,
+          cache_read_input_tokens:
+            turn.usage.cache_read_input_tokens +
+            metadata.usage.cache_read_input_tokens,
+        }
+      : metadata.usage
+  }
+  if (metadata.duration_ms != null) {
+    turn.duration_ms = (turn.duration_ms ?? 0) + metadata.duration_ms
+  }
+  if (metadata.model) turn.model = metadata.model
+}
+
+function mergeMetadata(
+  current: TurnMetadata,
+  next: TurnMetadata
+): TurnMetadata {
+  return {
+    ...(current.usage != null ? { usage: current.usage } : {}),
+    ...(current.duration_ms != null
+      ? { duration_ms: current.duration_ms }
+      : {}),
+    ...(current.model ? { model: current.model } : {}),
+    ...(next.usage != null ? { usage: next.usage } : {}),
+    ...(next.duration_ms != null ? { duration_ms: next.duration_ms } : {}),
+    ...(next.model ? { model: next.model } : {}),
   }
 }
 
