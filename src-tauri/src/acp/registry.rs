@@ -161,6 +161,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             supports_mcp: true,
             name: "Claude Code",
             description: "ACP wrapper for Anthropic's Claude",
+            // Houhub already shipped 0.59.0; keep the release line monotonic.
             distribution: AgentDistribution::Npx {
                 version: "0.59.0",
                 package: "@agentclientprotocol/claude-agent-acp@0.59.0",
@@ -226,8 +227,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "Cline",
             description: "Autonomous coding agent CLI",
             distribution: AgentDistribution::Npx {
-                version: "3.0.40",
-                package: "cline@3.0.40",
+                version: "3.0.42",
+                package: "cline@3.0.42",
                 cmd: "cline",
                 args: &["--acp"],
                 env: &[],
@@ -240,34 +241,34 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "OpenCode",
             description: "The open source coding agent",
             distribution: AgentDistribution::Binary {
-                version: "1.17.20",
+                version: "1.18.3",
                 cmd: "opencode",
                 args: &["acp"],
                 env: &[],
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.17.20/opencode-darwin-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.3/opencode-darwin-arm64.zip",
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.17.20/opencode-darwin-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.3/opencode-darwin-x64.zip",
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.17.20/opencode-linux-arm64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.3/opencode-linux-arm64.tar.gz",
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.17.20/opencode-linux-x64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.3/opencode-linux-x64.tar.gz",
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.17.20/opencode-windows-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.3/opencode-windows-arm64.zip",
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.17.20/opencode-windows-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.3/opencode-windows-x64.zip",
                     },
                 ],
             },
@@ -300,8 +301,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "CodeBuddy",
             description: "Tencent Cloud's official AI coding assistant (ACP)",
             distribution: AgentDistribution::Npx {
-                version: "2.121.2",
-                package: "@tencent-ai/codebuddy-code@2.121.2",
+                version: "2.123.1",
+                package: "@tencent-ai/codebuddy-code@2.123.1",
                 cmd: "codebuddy",
                 args: &["--acp"],
                 env: &[],
@@ -314,8 +315,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "Kimi Code",
             description: "Moonshot AI's official CLI coding assistant (ACP)",
             distribution: AgentDistribution::Npx {
-                version: "0.24.1",
-                package: "@moonshot-ai/kimi-code@0.24.1",
+                version: "0.26.0",
+                package: "@moonshot-ai/kimi-code@0.26.0",
                 cmd: "kimi",
                 args: &["acp"],
                 env: &[],
@@ -488,17 +489,17 @@ mod tests {
             "openclaw@2026.7.1",
             Some("22.22.3"),
         );
-        assert_npx_version(AgentType::Cline, "3.0.40", "cline@3.0.40", Some("22.0.0"));
+        assert_npx_version(AgentType::Cline, "3.0.42", "cline@3.0.42", Some("22.0.0"));
         assert_npx_version(
             AgentType::CodeBuddy,
-            "2.121.2",
-            "@tencent-ai/codebuddy-code@2.121.2",
+            "2.123.1",
+            "@tencent-ai/codebuddy-code@2.123.1",
             Some("22.0.0"),
         );
         assert_npx_version(
             AgentType::KimiCode,
-            "0.24.1",
-            "@moonshot-ai/kimi-code@0.24.1",
+            "0.26.0",
+            "@moonshot-ai/kimi-code@0.26.0",
             Some("22.19.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.31", "pi-acp@0.0.31", Some("22.0.0"));
@@ -508,11 +509,7 @@ mod tests {
             "@xai-official/grok@0.2.101",
             Some("20.0.0"),
         );
-        assert_binary_version(
-            AgentType::OpenCode,
-            "1.17.20",
-            "/releases/download/v1.17.20/",
-        );
+        assert_binary_version(AgentType::OpenCode, "1.18.3", "/releases/download/v1.18.3/");
         assert_uvx_version(
             AgentType::Hermes,
             "0.18.2",
