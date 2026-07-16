@@ -1244,6 +1244,7 @@
     },
     "sessionDetails": {
       "menuLabel": "Session Details",
+      "noActiveSession": "No active session",
       "title": "Session Details",
       "subtitle": "Session metadata and token usage",
       "fieldTitle": "Title",

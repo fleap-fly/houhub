@@ -1244,6 +1244,7 @@
     },
     "sessionDetails": {
       "menuLabel": "セッション詳細",
+      "noActiveSession": "アクティブなセッションがありません",
       "title": "セッション詳細",
       "subtitle": "セッションのメタデータとトークン使用量",
       "fieldTitle": "タイトル",

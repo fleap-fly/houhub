@@ -32,8 +32,6 @@ import {
   matchShortcutEvent,
 } from "@/lib/keyboard-shortcuts"
 import { AppTitleBar } from "./app-title-bar"
-import { BranchDropdown } from "./branch-dropdown"
-import { CommandDropdown } from "./command-dropdown"
 import { HouflowAccountButton } from "./houflow-account-button"
 import { WorkbenchAccountButton } from "./workbench-account-button"
 import { NewFolderDropdown } from "./new-folder-dropdown"
@@ -153,13 +151,9 @@ export function FolderTitleBar() {
         return
       }
       if (matchShortcutEvent(e, shortcuts.toggle_aux_panel)) {
-        // Chat mode hides the aux panel + its toggle; the shortcut must not
-        // re-open it either.
-        if (
-          (isChatMode && !auxPanelOpen && !isCloudRoute) ||
-          auxPanelToggleDisabled
-        )
-          return
+        // The aux panel now hosts the Session Details tab, so it's usable in
+        // chat mode too. Cloud sessions expose their outputs in the same panel.
+        if (auxPanelToggleDisabled && !isChatMode) return
         e.preventDefault()
         handleToggleAuxPanel()
         return
@@ -223,7 +217,6 @@ export function FolderTitleBar() {
               <RemoteWorkspaceDropdown />
               <HouflowAccountButton />
               <WorkbenchAccountButton />
-              {showLocalWorkspaceChrome ? <BranchDropdown /> : null}
             </div>
           ) : (
             <div className="flex h-8 flex-1 items-center gap-6">
@@ -257,7 +250,6 @@ export function FolderTitleBar() {
                   <PawPrint className="h-3.5 w-3.5" />
                 </Button>
               </div>
-              {showLocalWorkspaceChrome ? <BranchDropdown /> : null}
               <div data-tauri-drag-region className="h-8 flex-1" />
             </div>
           )
@@ -265,7 +257,6 @@ export function FolderTitleBar() {
         right={
           isMobile ? (
             <div className="flex items-center gap-1">
-              {showLocalWorkspaceChrome ? <CommandDropdown /> : null}
               {/* Search lives only in the left sidebar's fixed actions region
                   now (desktop + mobile sheet); no title-bar search entry on any
                   width. The ⌘K shortcut + SearchCommandDialog stay wired here. */}
@@ -276,16 +267,13 @@ export function FolderTitleBar() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  {/* Folderless chat conversations hide the aux panel entirely. */}
-                  {(!isChatMode || auxPanelOpen || isCloudRoute) && (
-                    <DropdownMenuItem
-                      onClick={handleToggleAuxPanel}
-                      disabled={auxPanelToggleDisabled}
-                    >
-                      <PanelRight className="h-3.5 w-3.5" />
-                      {tTitleBar("toggleAuxPanel")}
-                    </DropdownMenuItem>
-                  )}
+                  <DropdownMenuItem
+                    onClick={handleToggleAuxPanel}
+                    disabled={auxPanelToggleDisabled && !isChatMode}
+                  >
+                    <PanelRight className="h-3.5 w-3.5" />
+                    {tTitleBar("toggleAuxPanel")}
+                  </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => toggleTerminal()}
                     disabled={localWorkspaceToolDisabled}
@@ -303,9 +291,6 @@ export function FolderTitleBar() {
           ) : (
             <div className="flex items-center gap-10">
               <div className="flex items-center gap-2">
-                {showLocalWorkspaceChrome ? <CommandDropdown /> : null}
-              </div>
-              <div className="flex items-center gap-2">
                 <Button
                   variant="ghost"
                   size="icon"
@@ -322,25 +307,22 @@ export function FolderTitleBar() {
                 >
                   <SquareTerminal className="h-3.5 w-3.5" />
                 </Button>
-                {/* Folderless chat conversations hide the aux panel entirely. */}
-                {(!isChatMode || auxPanelOpen || isCloudRoute) && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={`h-6 w-6 hover:text-foreground/80 ${auxPanelOpen ? "bg-accent" : ""}`}
-                    onClick={handleToggleAuxPanel}
-                    disabled={auxPanelToggleDisabled}
-                    title={tTitleBar("withShortcut", {
-                      label: tTitleBar("toggleAuxPanel"),
-                      shortcut: formatShortcutLabel(
-                        shortcuts.toggle_aux_panel,
-                        isMac
-                      ),
-                    })}
-                  >
-                    <PanelRight className="h-3.5 w-3.5" />
-                  </Button>
-                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={`h-6 w-6 hover:text-foreground/80 ${auxPanelOpen ? "bg-accent" : ""}`}
+                  onClick={handleToggleAuxPanel}
+                  disabled={auxPanelToggleDisabled && !isChatMode}
+                  title={tTitleBar("withShortcut", {
+                    label: tTitleBar("toggleAuxPanel"),
+                    shortcut: formatShortcutLabel(
+                      shortcuts.toggle_aux_panel,
+                      isMac
+                    ),
+                  })}
+                >
+                  <PanelRight className="h-3.5 w-3.5" />
+                </Button>
                 {/* Desktop search moved into the sidebar's fixed top region;
                     the dialog + ⌘K shortcut still live here. */}
                 <Button
