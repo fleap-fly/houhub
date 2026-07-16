@@ -20,8 +20,8 @@ import {
   updateConversationTitle,
 } from "@/lib/api"
 import { formatConversationTitle } from "@/lib/conversation-title"
-import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
-import { useTabActions } from "@/contexts/tab-context"
+import { useAppWorkspace } from "@/contexts/app-workspace-context"
+import { useTabContext } from "@/contexts/tab-context"
 import { getRuntimeSession } from "@/stores/conversation-runtime-store"
 import type { ConversationStatus } from "@/lib/types"
 import { STATUS_ORDER } from "@/lib/types"
@@ -105,13 +105,12 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
   const tConv = useTranslations("Folder.conversation")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
-  const { closeTab, openNewConversationTab } = useTabActions()
-  const updateConversationLocal = useAppWorkspaceStore(
-    (s) => s.updateConversationLocal
-  )
-  const refreshConversations = useAppWorkspaceStore(
-    (s) => s.refreshConversations
-  )
+  const { closeTab, openNewConversationTab } = useTabContext()
+  const {
+    conversations,
+    updateConversationLocal,
+    refreshConversations,
+  } = useAppWorkspace()
   // A brand-new (draft-origin) conversation keeps streaming under its virtual
   // runtime key even after it persists — its DB row exists, but the live
   // session (detail/turns) stays keyed by `runtimeConversationId`. So details
@@ -120,12 +119,10 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
   const runtimeId = runtimeConversationId ?? conversationId
   // Narrow reactive read: a primitive-derived boolean that doesn't change on
   // streaming tokens, so the header stays inert mid-turn.
-  const isPinned = useAppWorkspaceStore(
-    (s) =>
-      conversationId != null &&
-      (s.conversations.find((c) => c.id === conversationId)?.pinned_at ??
-        null) != null
-  )
+  const isPinned =
+    conversationId != null &&
+    (conversations.find((c) => c.id === conversationId)?.pinned_at ?? null) !=
+      null
 
   const [details, setDetails] = useState<ActiveSessionDetails | null>(null)
   // Snapshot the action target when a dialog OPENS. The header is a SINGLE
@@ -223,7 +220,6 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     // helper the panel uses; `runtimeId` covers the virtual-key case.
     if (runtimeId == null) return
     const session = getRuntimeSession(runtimeId)
-    const conversations = useAppWorkspaceStore.getState().conversations
     const resolved = resolveActiveSessionDetails(
       {
         conversationId,
@@ -234,7 +230,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     )
     if (!resolved.summary) return
     setDetails(resolved)
-  }, [conversationId, runtimeConversationId, runtimeId])
+  }, [conversationId, conversations, runtimeConversationId, runtimeId])
 
   return (
     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">

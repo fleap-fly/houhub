@@ -4,9 +4,9 @@ import { useMemo } from "react"
 import { useTranslations } from "next-intl"
 import { useShallow } from "zustand/react/shallow"
 import type { MessageTurn } from "@/lib/types"
-import { useTabStore } from "@/contexts/tab-context"
+import { useTabContext } from "@/contexts/tab-context"
 import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
-import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { useAppWorkspace } from "@/contexts/app-workspace-context"
 import { resolveActiveSessionDetails } from "@/components/conversations/active-session-details"
 import { SessionDetailsContent } from "@/components/conversations/session-details-content"
 import { useActiveFolder } from "@/contexts/active-folder-context"
@@ -37,8 +37,7 @@ export function SessionDetailsTab() {
   const { activeFolderId } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
 
-  const tabs = useTabStore((s) => s.tabs)
-  const activeTabId = useTabStore((s) => s.activeTabId)
+  const { tabs, activeTabId } = useTabContext()
   const activeConversationTab = useMemo(
     () =>
       tabs.find(
@@ -73,7 +72,7 @@ export function SessionDetailsTab() {
       }
     })
   )
-  const conversations = useAppWorkspaceStore((s) => s.conversations)
+  const { conversations } = useAppWorkspace()
   const { summary, stats, model } = resolveActiveSessionDetails(
     activeConversationTab,
     (id) => (id === activeRuntimeId ? runtimeSlice : null),

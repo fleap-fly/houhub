@@ -60,6 +60,10 @@ import { UpdateProvider } from "@/components/providers/update-provider"
 import { TabBar } from "@/components/tabs/tab-bar"
 import { TerminalPanel } from "@/components/terminal/terminal-panel"
 import { AuxPanel } from "@/components/layout/aux-panel"
+import { LeftEdgeChrome } from "@/components/layout/left-edge-chrome"
+import { RightEdgeChrome } from "@/components/layout/right-edge-chrome"
+import { WorkspaceChromeController } from "@/components/layout/workspace-chrome-controller"
+import { WindowControls } from "@/components/layout/window-controls"
 import { FileWorkspaceTabBar } from "@/components/files/file-workspace-tab-bar"
 import { FileWorkspaceHeader } from "@/components/files/file-workspace-header"
 import { FileWorkspacePanel } from "@/components/files/file-workspace-panel"
@@ -77,7 +81,9 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
 import { cn } from "@/lib/utils"
+import { isDesktop } from "@/lib/platform"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { usePlatform } from "@/hooks/use-platform"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 
 function WorkspaceDocumentTitle() {
@@ -244,6 +250,24 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
   )
 
   const { isConversations } = useWorkbenchRoute()
+  const { isOpen: sidebarOpen } = useSidebarContext()
+  const { isOpen: auxOpen } = useAuxPanelContext()
+  const { isMac, isWindows, isLinux } = usePlatform()
+  const { tabs } = useTabContext()
+  const hasConvTabs = tabs.length > 0
+  const winLinuxControls = isDesktop() && (isWindows || isLinux)
+  // Right-edge chrome (terminal/aux/settings) lives in the AuxPanel header when
+  // the aux panel owns the window's right edge (macOS only — see plan D3);
+  // otherwise it lives in the right-most middle column's top bar (file in
+  // fusion, else conversation).
+  const rightChromeInMiddle = isMac ? !auxOpen : true
+  const convHostsRightChrome = rightChromeInMiddle && mode === "conversation"
+  const fileHostsRightChrome = rightChromeInMiddle && mode === "fusion"
+  // The right-most middle column reserves the Win/Linux caption-button strip
+  // only when it (not the aux panel) is the window's right edge.
+  const middleReservesControls = winLinuxControls && !auxOpen
+  const convReservesControls = middleReservesControls && mode === "conversation"
+  const fileReservesControls = middleReservesControls && mode === "fusion"
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
@@ -268,12 +292,43 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                 "flex h-full min-h-0 flex-col overflow-hidden",
                 mode === "conversation" && "absolute inset-0 z-30 bg-background"
               )}
-              onPointerDownCapture={markConversationActive}
-              onFocusCapture={markConversationActive}
               inert={filesMaximized || undefined}
             >
-              {/* Conversation tabs now live in the title bar (FolderTitleBar). */}
-              <div className="relative flex-1 min-h-0 overflow-hidden">
+              {/* Conversation column top bar: left window chrome (only when the
+                  sidebar is collapsed, so it reflows to the window's left edge)
+                  + the conversation tab strip. The detail header + tiles render
+                  inside {children}, directly below this row. */}
+              <div className="flex h-10 shrink-0 items-stretch border-b border-border">
+                {!sidebarOpen && <LeftEdgeChrome reserveMacInset />}
+                <div className="flex min-w-0 flex-1 items-stretch">
+                  {hasConvTabs ? (
+                    <TabBar embedded />
+                  ) : (
+                    // No tabs → TabBar renders null; keep a drag region so the
+                    // empty bar can still move the window.
+                    <div
+                      data-tauri-drag-region
+                      className="h-full min-w-0 flex-1"
+                    />
+                  )}
+                </div>
+                {convHostsRightChrome && <RightEdgeChrome />}
+                {convReservesControls && (
+                  <div
+                    data-tauri-drag-region
+                    className="h-full w-[138px] shrink-0"
+                  />
+                )}
+              </div>
+              {/* Pane activation lives on the CONTENT, not the top bar: clicking
+                  edge chrome (terminal/settings/toggles) or grabbing a drag
+                  region stays pane-neutral so it never hijacks close-tab /
+                  next-tab routing. Tabs self-activate via switchTab. */}
+              <div
+                className="relative flex-1 min-h-0 overflow-hidden"
+                onPointerDownCapture={markConversationActive}
+                onFocusCapture={markConversationActive}
+              >
                 {children}
               </div>
             </section>
@@ -310,16 +365,36 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                 "flex h-full min-h-0 flex-col overflow-hidden",
                 filesMaximized && "absolute inset-0 z-30 bg-background"
               )}
-              onPointerDownCapture={markFileActive}
-              onFocusCapture={markFileActive}
               aria-hidden={mode === "conversation"}
             >
-              {/* File tabs now live in the title bar (FolderTitleBar); the
-                  per-file actions (preview/open-in-browser/maximize) live in
-                  this header, above every FileWorkspacePanel render branch. */}
-              <FileWorkspaceHeader />
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <FileWorkspacePanel />
+              {/* File column top bar: the file tab strip + right-edge window
+                  chrome (only when the aux panel is collapsed, so it reflows to
+                  the window's right edge). Per-file actions live in
+                  FileWorkspaceHeader below, above every FileWorkspacePanel
+                  render branch. */}
+              <div className="flex h-10 shrink-0 items-stretch border-b border-border">
+                <div className="flex min-w-0 flex-1 items-stretch">
+                  <FileWorkspaceTabBar embedded />
+                </div>
+                {fileHostsRightChrome && <RightEdgeChrome />}
+                {fileReservesControls && (
+                  <div
+                    data-tauri-drag-region
+                    className="h-full w-[138px] shrink-0"
+                  />
+                )}
+              </div>
+              {/* Pane activation on the file content + its detail header, not
+                  the top bar (see the conversation section). */}
+              <div
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
+                onPointerDownCapture={markFileActive}
+                onFocusCapture={markFileActive}
+              >
+                <FileWorkspaceHeader />
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  <FileWorkspacePanel />
+                </div>
               </div>
             </section>
           </ResizablePanel>
@@ -454,6 +529,8 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     maxHeight: terminalMaxHeight,
     setHeight: setTerminalHeight,
   } = useTerminalContext()
+  const { isMac, isWindows, isLinux } = usePlatform()
+  const winLinuxControls = isDesktop() && (isWindows || isLinux)
 
   const sidebarAnimating = usePanelSlideOnToggle(sidebarOpen, sidebarRestored)
   const auxAnimating = usePanelSlideOnToggle(auxOpen, auxRestored)
@@ -768,7 +845,11 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
           maxSize={sidebarOpen ? sidebarSizeRange.maxSize : 0}
         >
           <div className="h-full min-h-0 overflow-hidden">
-            <Sidebar />
+            <Sidebar
+              headerChrome={
+                sidebarOpen ? <LeftEdgeChrome reserveMacInset /> : undefined
+              }
+            />
           </div>
         </ResizablePanel>
 
@@ -849,7 +930,10 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
           maxSize={auxOpen ? auxSizeRange.maxSize : 0}
         >
           <div className="h-full min-h-0 overflow-hidden">
-            <AuxPanel />
+            <AuxPanel
+              headerChrome={isMac && auxOpen ? <RightEdgeChrome /> : undefined}
+              reserveWindowControls={winLinuxControls}
+            />
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
@@ -862,13 +946,28 @@ function FolderLayoutShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="fixed inset-0 flex flex-col overflow-hidden bg-background text-foreground pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]">
-      <FolderTitleBar />
+      {/* Global shortcuts + the search / remote-directory dialogs (formerly
+          owned by the full-width FolderTitleBar). Mounted on both platforms. */}
+      <WorkspaceChromeController />
       {isMobile ? (
-        <MobileFolderWorkspaceShell>{children}</MobileFolderWorkspaceShell>
+        <>
+          {/* Mobile keeps the visible full-width bar; desktop moved its buttons
+              into per-column edge clusters (LeftEdgeChrome / RightEdgeChrome). */}
+          <FolderTitleBar />
+          <MobileFolderWorkspaceShell>{children}</MobileFolderWorkspaceShell>
+        </>
       ) : (
         <FolderWorkspaceShell>{children}</FolderWorkspaceShell>
       )}
       <StatusBar />
+      {/* Windows/Linux caption buttons (min/max/close). Self-nulls on macOS/web.
+          Pinned to the window's top-right corner above whichever column sits
+          there; those columns reserve pr-[138px] beneath it. Desktop only. */}
+      {!isMobile && (
+        <div className="absolute right-0 top-0 z-50 h-10">
+          <WindowControls />
+        </div>
+      )}
       <AppToaster
         position="bottom-right"
         duration={TOAST_DURATION_MS}
