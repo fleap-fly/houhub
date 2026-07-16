@@ -189,14 +189,26 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
 
           ln -s /Applications "$dmg_dir/fixed-src/Applications"
-          hdiutil create \
-            -volname houhub \
-            -srcfolder "$dmg_dir/fixed-src" \
-            -ov \
-            -format UDZO \
-            "$dmg_dir/fixed-out/$dmg_name"
+          repaired_dmg="$dmg_dir/fixed-out/$dmg_name"
+          for attempt in 1 2 3; do
+            rm -f "$repaired_dmg"
+            if hdiutil create \
+              -volname houhub \
+              -srcfolder "$dmg_dir/fixed-src" \
+              -ov \
+              -format UDZO \
+              "$repaired_dmg"; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "hdiutil create failed after $attempt attempts" >&2
+              exit 1
+            fi
+            echo "hdiutil create attempt $attempt failed; retrying in 5 seconds" >&2
+            sleep 5
+          done
 
-          mv "$dmg_dir/fixed-out/$dmg_name" "$dmg_path"
+          mv "$repaired_dmg" "$dmg_path"
           hdiutil verify "$dmg_path"
 
       - name: Create macOS updater artifact
