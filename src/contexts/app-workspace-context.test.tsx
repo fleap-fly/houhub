@@ -119,6 +119,7 @@ function makeFolder(
     color: "inherit",
     parent_id: null,
     kind: "regular",
+    alias: null,
     ...overrides,
   }
 }

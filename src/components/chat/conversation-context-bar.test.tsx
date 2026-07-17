@@ -63,6 +63,7 @@ function mkFolder(
     color: "#3b82f6",
     parent_id: null,
     kind: "regular",
+    alias: null,
     ...rest,
   }
 }

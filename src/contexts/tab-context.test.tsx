@@ -92,6 +92,7 @@ const defaultFoldersMock: FolderDetail[] = [
     color: "blue",
     parent_id: null,
     kind: "regular",
+    alias: null,
   },
   {
     id: 2,
@@ -104,6 +105,7 @@ const defaultFoldersMock: FolderDetail[] = [
     color: "green",
     parent_id: null,
     kind: "regular",
+    alias: null,
   },
 ]
 
@@ -379,6 +381,7 @@ describe("TabProvider tab state transitions", () => {
       color: "inherit",
       parent_id: null,
       kind: "chat",
+      alias: null,
     }
     foldersMock = defaultFoldersMock
     allFoldersMock = [...defaultFoldersMock, chatFolder]
@@ -408,6 +411,7 @@ describe("TabProvider tab state transitions", () => {
       color: "inherit",
       parent_id: null,
       kind: "chat",
+      alias: null,
     }
     foldersMock = defaultFoldersMock // open list excludes the chat folder
     allFoldersMock = [...defaultFoldersMock, chatFolder]
