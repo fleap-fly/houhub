@@ -33,6 +33,7 @@ import { ConversationRuntimeProvider } from "@/contexts/conversation-runtime-con
 import { TabProvider, useTabContext } from "@/contexts/tab-context"
 import { SessionStatsProvider } from "@/contexts/session-stats-context"
 import { SidebarProvider, useSidebarContext } from "@/contexts/sidebar-context"
+import { ConversationLocateProvider } from "@/contexts/conversation-locate-context"
 import { SearchDialogProvider } from "@/contexts/search-dialog-context"
 import { AutomationsViewProvider } from "@/contexts/automations-view-context"
 import {
@@ -82,6 +83,11 @@ import {
 } from "@/components/ui/resizable"
 import { cn } from "@/lib/utils"
 import { isDesktop } from "@/lib/platform"
+import {
+  WINDOW_CAPTION_WIDTH,
+  leftChromeReserve,
+  rightChromeReserve,
+} from "@/lib/window-chrome"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { usePlatform } from "@/hooks/use-platform"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
@@ -256,18 +262,20 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
   const { tabs } = useTabContext()
   const hasConvTabs = tabs.length > 0
   const winLinuxControls = isDesktop() && (isWindows || isLinux)
-  // Right-edge chrome (terminal/aux/settings) lives in the AuxPanel header when
-  // the aux panel owns the window's right edge (macOS only — see plan D3);
-  // otherwise it lives in the right-most middle column's top bar (file in
-  // fusion, else conversation).
-  const rightChromeInMiddle = isMac ? !auxOpen : true
-  const convHostsRightChrome = rightChromeInMiddle && mode === "conversation"
-  const fileHostsRightChrome = rightChromeInMiddle && mode === "fusion"
-  // The right-most middle column reserves the Win/Linux caption-button strip
-  // only when it (not the aux panel) is the window's right edge.
-  const middleReservesControls = winLinuxControls && !auxOpen
-  const convReservesControls = middleReservesControls && mode === "conversation"
-  const fileReservesControls = middleReservesControls && mode === "fusion"
+  // The window chrome (toggle/remote left, terminal/aux/settings right) now
+  // lives in fixed corner overlays (see FolderLayoutShell) that never move on
+  // panel toggles. Each edge column just reserves the overlay's width so its
+  // tabs never render underneath.
+  const leftReserve = leftChromeReserve(isMac && isDesktop())
+  const rightReserve = rightChromeReserve(winLinuxControls)
+  // A middle column reserves the right overlay only when it (not the aux panel)
+  // is the window's right edge: the file column in fusion, else conversation.
+  const convReservesRight = !auxOpen && mode === "conversation"
+  const fileReservesRight = !auxOpen && mode === "fusion"
+  // Maximizing files overlays the whole middle area, so the file column then
+  // also owns the window's LEFT edge when the sidebar is collapsed — reserve the
+  // left overlay too (normally that's the conversation column's job).
+  const fileReservesLeft = filesMaximized && !sidebarOpen
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
@@ -294,12 +302,22 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
               )}
               inert={filesMaximized || undefined}
             >
-              {/* Conversation column top bar: left window chrome (only when the
-                  sidebar is collapsed, so it reflows to the window's left edge)
-                  + the conversation tab strip. The detail header + tiles render
-                  inside {children}, directly below this row. */}
-              <div className="flex h-10 shrink-0 items-stretch border-b border-border">
-                {!sidebarOpen && <LeftEdgeChrome reserveMacInset />}
+              {/* Conversation column top bar: the tab strip, plus a left reserve
+                  (only when the sidebar is collapsed, so this column owns the
+                  window's left edge) and a right reserve (only when it's the
+                  window's right edge) for the fixed corner overlays. The detail
+                  header + tiles render inside {children}, directly below.
+                  `bg-muted` shades the strip like a browser tab bar (matching
+                  the bottom StatusBar) — the active tab (bg-background) reads as
+                  a white tab seated on it, with reverse bottom corners. */}
+              <div className="flex h-10 shrink-0 items-stretch bg-muted">
+                {!sidebarOpen && (
+                  <div
+                    data-tauri-drag-region
+                    className="h-full shrink-0"
+                    style={{ width: leftReserve }}
+                  />
+                )}
                 <div className="flex min-w-0 flex-1 items-stretch">
                   {hasConvTabs ? (
                     <TabBar embedded />
@@ -312,11 +330,11 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                     />
                   )}
                 </div>
-                {convHostsRightChrome && <RightEdgeChrome />}
-                {convReservesControls && (
+                {convReservesRight && (
                   <div
                     data-tauri-drag-region
-                    className="h-full w-[138px] shrink-0"
+                    className="h-full shrink-0"
+                    style={{ width: rightReserve }}
                   />
                 )}
               </div>
@@ -367,20 +385,29 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
               )}
               aria-hidden={mode === "conversation"}
             >
-              {/* File column top bar: the file tab strip + right-edge window
-                  chrome (only when the aux panel is collapsed, so it reflows to
-                  the window's right edge). Per-file actions live in
-                  FileWorkspaceHeader below, above every FileWorkspacePanel
-                  render branch. */}
-              <div className="flex h-10 shrink-0 items-stretch border-b border-border">
+              {/* File column top bar: the file tab strip + a right reserve for
+                  the fixed corner overlay (only when the aux panel is collapsed,
+                  so this column owns the window's right edge). Per-file actions
+                  live in FileWorkspaceHeader below, above every
+                  FileWorkspacePanel render branch. `bg-muted` shades the strip
+                  like a browser tab bar (matches the conversation column and the
+                  bottom StatusBar). */}
+              <div className="flex h-10 shrink-0 items-stretch bg-muted">
+                {fileReservesLeft && (
+                  <div
+                    data-tauri-drag-region
+                    className="h-full shrink-0"
+                    style={{ width: leftReserve }}
+                  />
+                )}
                 <div className="flex min-w-0 flex-1 items-stretch">
                   <FileWorkspaceTabBar embedded />
                 </div>
-                {fileHostsRightChrome && <RightEdgeChrome />}
-                {fileReservesControls && (
+                {fileReservesRight && (
                   <div
                     data-tauri-drag-region
-                    className="h-full w-[138px] shrink-0"
+                    className="h-full shrink-0"
+                    style={{ width: rightReserve }}
                   />
                 )}
               </div>
@@ -401,8 +428,14 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
         </ResizablePanelGroup>
       </div>
       {!isConversations ? (
-        <div className="absolute inset-0 z-40 bg-background">
-          <WorkbenchRoutePage />
+        <div className="absolute inset-0 z-40 flex flex-col bg-background">
+          {/* Reserve the fixed window-chrome overlays' h-10 corner strip so
+              route content (e.g. the Automations enable switch at the top-right)
+              never renders beneath them. The strip is a window-drag region. */}
+          <div data-tauri-drag-region className="h-10 shrink-0" />
+          <div className="min-h-0 flex-1">
+            <WorkbenchRoutePage />
+          </div>
         </div>
       ) : null}
     </div>
@@ -529,8 +562,6 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     maxHeight: terminalMaxHeight,
     setHeight: setTerminalHeight,
   } = useTerminalContext()
-  const { isMac, isWindows, isLinux } = usePlatform()
-  const winLinuxControls = isDesktop() && (isWindows || isLinux)
 
   const sidebarAnimating = usePanelSlideOnToggle(sidebarOpen, sidebarRestored)
   const auxAnimating = usePanelSlideOnToggle(auxOpen, auxRestored)
@@ -844,12 +875,13 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
           minSize={sidebarOpen ? sidebarSizeRange.minSize : 0}
           maxSize={sidebarOpen ? sidebarSizeRange.maxSize : 0}
         >
-          <div className="h-full min-h-0 overflow-hidden">
-            <Sidebar
-              headerChrome={
-                sidebarOpen ? <LeftEdgeChrome reserveMacInset /> : undefined
-              }
-            />
+          {/* `bg-sidebar` on the wrapper (not just the Sidebar surface) so the
+              collapse never flashes white: Sidebar `return null`s the instant
+              it closes, but the panel keeps a shrinking width for the 240ms
+              slide — an un-backed wrapper would show the root `bg-background`
+              (white) through that gap. */}
+          <div className="h-full min-h-0 overflow-hidden bg-sidebar">
+            <Sidebar />
           </div>
         </ResizablePanel>
 
@@ -929,11 +961,13 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
           minSize={auxOpen ? auxSizeRange.minSize : 0}
           maxSize={auxOpen ? auxSizeRange.maxSize : 0}
         >
-          <div className="h-full min-h-0 overflow-hidden">
-            <AuxPanel
-              headerChrome={isMac && auxOpen ? <RightEdgeChrome /> : undefined}
-              reserveWindowControls={winLinuxControls}
-            />
+          {/* `bg-muted` on the wrapper matches the aux panel's top strip (and
+              the neighbouring file strip) so the collapse never flashes white:
+              AuxPanel `return null`s the instant it closes while the panel keeps
+              a shrinking width for the 240ms slide, and an un-backed wrapper
+              would show the root `bg-background` (white) through that gap. */}
+          <div className="h-full min-h-0 overflow-hidden bg-muted">
+            <AuxPanel />
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
@@ -943,6 +977,8 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
 
 function FolderLayoutShell({ children }: { children: React.ReactNode }) {
   const isMobile = useIsMobile()
+  const { isWindows, isLinux } = usePlatform()
+  const winLinuxControls = isDesktop() && (isWindows || isLinux)
 
   return (
     <div className="fixed inset-0 flex flex-col overflow-hidden bg-background text-foreground pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]">
@@ -952,7 +988,7 @@ function FolderLayoutShell({ children }: { children: React.ReactNode }) {
       {isMobile ? (
         <>
           {/* Mobile keeps the visible full-width bar; desktop moved its buttons
-              into per-column edge clusters (LeftEdgeChrome / RightEdgeChrome). */}
+              into fixed corner overlays (LeftEdgeChrome / RightEdgeChrome). */}
           <FolderTitleBar />
           <MobileFolderWorkspaceShell>{children}</MobileFolderWorkspaceShell>
         </>
@@ -960,13 +996,28 @@ function FolderLayoutShell({ children }: { children: React.ReactNode }) {
         <FolderWorkspaceShell>{children}</FolderWorkspaceShell>
       )}
       <StatusBar />
-      {/* Windows/Linux caption buttons (min/max/close). Self-nulls on macOS/web.
-          Pinned to the window's top-right corner above whichever column sits
-          there; those columns reserve pr-[138px] beneath it. Desktop only. */}
+      {/* Desktop window chrome, pinned to the window corners so it never moves —
+          or re-mounts — when the side panels open/close (that re-parenting is
+          what made the old in-header clusters flicker). Left = sidebar toggle +
+          remote; right = terminal/aux/settings, sitting to the LEFT of the
+          Windows/Linux caption buttons; then the caption buttons themselves
+          (self-null on macOS/web). Each edge column reserves the matching width
+          beneath these (see leftChromeReserve / rightChromeReserve). */}
       {!isMobile && (
-        <div className="absolute right-0 top-0 z-50 h-10">
-          <WindowControls />
-        </div>
+        <>
+          <div className="absolute left-0 top-0 z-50 h-10">
+            <LeftEdgeChrome />
+          </div>
+          <div
+            className="absolute top-0 z-50 h-10"
+            style={{ right: winLinuxControls ? WINDOW_CAPTION_WIDTH : 0 }}
+          >
+            <RightEdgeChrome />
+          </div>
+          <div className="absolute right-0 top-0 z-50 h-10">
+            <WindowControls />
+          </div>
+        </>
       )}
       <AppToaster
         position="bottom-right"
@@ -1006,59 +1057,54 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
   return (
     <AppWorkspaceProvider>
       <WorkbenchAutoMount />
-      <ActiveFolderProvider>
-        <AlertProvider>
-          <GitCredentialProvider>
-            <TaskProvider>
-              <AcpConnectionsProvider>
-                <DelegationProvider>
-                  <ConversationStatusEventBridge />
-                  <ConversationRuntimeProvider>
-                    <WorkspaceProvider>
-                      <TabProvider>
-                        <WorkspaceDocumentTitle />
-                        <TabKeysSync />
-                        <HeavyPluginsWarmup />
-                        <DeepLinkBootstrap />
-                        <PetFocusBridge />
-                        {/* Always mounted: external-change conflicts must be
-                            resolvable even with the aux file tree closed. */}
-                        <ExternalConflictDialog />
-                        <SessionStatsProvider>
-                          <SidebarProvider>
-                            <AuxPanelProvider>
-                              <TerminalProvider>
-                                <SearchDialogProvider>
-                                  <AutomationsViewProvider>
-                                    <WorkbenchRouteProvider>
-                                      <WorkbenchCloudProvider>
-                                        <HouflowCloudWorkspaceProvider>
-                                          <WorkbenchRouteConversationSync />
-                                          {/* Inside WorkbenchRouteProvider: the
-                                            listener calls openConversations() to
-                                            surface a launcher-opened folder. */}
-                                          <WorkspaceOpenFolderListener />
+      <AlertProvider>
+        <GitCredentialProvider>
+          <TaskProvider>
+            <AcpConnectionsProvider>
+              <DelegationProvider>
+                <ConversationStatusEventBridge />
+                <ConversationRuntimeProvider>
+                  <WorkspaceProvider>
+                    <TabProvider>
+                      <WorkspaceDocumentTitle />
+                      <TabKeysSync />
+                      <HeavyPluginsWarmup />
+                      <DeepLinkBootstrap />
+                      <PetFocusBridge />
+                      <ExternalConflictDialog />
+                      <SessionStatsProvider>
+                        <SidebarProvider>
+                          <AuxPanelProvider>
+                            <TerminalProvider>
+                              <SearchDialogProvider>
+                                <AutomationsViewProvider>
+                                  <WorkbenchRouteProvider>
+                                    <WorkbenchCloudProvider>
+                                      <HouflowCloudWorkspaceProvider>
+                                        <WorkbenchRouteConversationSync />
+                                        <WorkspaceOpenFolderListener />
+                                        <ConversationLocateProvider>
                                           <FolderLayoutShell>
                                             {children}
                                           </FolderLayoutShell>
-                                        </HouflowCloudWorkspaceProvider>
-                                      </WorkbenchCloudProvider>
-                                    </WorkbenchRouteProvider>
-                                  </AutomationsViewProvider>
-                                </SearchDialogProvider>
-                              </TerminalProvider>
-                            </AuxPanelProvider>
-                          </SidebarProvider>
-                        </SessionStatsProvider>
-                      </TabProvider>
-                    </WorkspaceProvider>
-                  </ConversationRuntimeProvider>
-                </DelegationProvider>
-              </AcpConnectionsProvider>
-            </TaskProvider>
-          </GitCredentialProvider>
-        </AlertProvider>
-      </ActiveFolderProvider>
+                                        </ConversationLocateProvider>
+                                      </HouflowCloudWorkspaceProvider>
+                                    </WorkbenchCloudProvider>
+                                  </WorkbenchRouteProvider>
+                                </AutomationsViewProvider>
+                              </SearchDialogProvider>
+                            </TerminalProvider>
+                          </AuxPanelProvider>
+                        </SidebarProvider>
+                      </SessionStatsProvider>
+                    </TabProvider>
+                  </WorkspaceProvider>
+                </ConversationRuntimeProvider>
+              </DelegationProvider>
+            </AcpConnectionsProvider>
+          </TaskProvider>
+        </GitCredentialProvider>
+      </AlertProvider>
     </AppWorkspaceProvider>
   )
 }

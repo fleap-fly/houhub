@@ -37,6 +37,7 @@ import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspace } from "@/contexts/app-workspace-context"
 import { useTabContext } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useConversationLocate } from "@/contexts/conversation-locate-context"
 import { useTaskContext } from "@/contexts/task-context"
 import { useTerminalContext } from "@/contexts/terminal-context"
 import { useThemeColor, useZoomLevel } from "@/hooks/use-appearance"
@@ -559,6 +560,7 @@ export function SidebarConversationList({
   const { resolvedTheme } = useTheme()
   const { themeColor: appThemeColor } = useThemeColor()
   const { createTerminalInDirectory } = useTerminalContext()
+  const { registerLocate } = useConversationLocate()
   useZoomLevel()
   const {
     folders,
@@ -983,6 +985,15 @@ export function SidebarConversationList({
       })
     },
   }))
+
+  // Publish scrollToActive to the locate context so the conversation detail
+  // header's "locate" button (which lives in another column) can reach it. The
+  // registered wrapper is stable; it always reads the current scrollToActiveRef.
+  useEffect(() => {
+    const scrollToActive = () => scrollToActiveRef.current()
+    registerLocate(scrollToActive)
+    return () => registerLocate(null)
+  }, [registerLocate])
 
   useEffect(() => {
     scrollToActiveRef.current = () => {

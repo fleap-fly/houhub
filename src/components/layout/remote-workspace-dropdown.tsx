@@ -48,7 +48,14 @@ const EN_COPY: RemoteWorkspaceCopy = {
   houflowTargets: "cloud targets",
 }
 
-export function RemoteWorkspaceDropdown() {
+export function RemoteWorkspaceDropdown({
+  // Default keeps the original mobile look (this component is shared with the
+  // mobile FolderTitleBar). The desktop LeftEdgeChrome passes a darker-hover
+  // variant so the button is visible against its bg-muted strip.
+  triggerClassName = "h-6 w-6 hover:text-foreground/80",
+}: {
+  triggerClassName?: string
+} = {}) {
   const t = useTranslations("RemoteWorkspace")
   const locale = useLocale()
   const copy = useMemo(
@@ -125,7 +132,7 @@ export function RemoteWorkspaceDropdown() {
           <Button
             variant="ghost"
             size="icon"
-            className="relative h-6 w-6 hover:text-foreground/80"
+            className={`${triggerClassName} relative`}
             title={triggerTitle}
           >
             <MonitorCloud

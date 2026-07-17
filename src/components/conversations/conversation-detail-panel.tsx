@@ -1806,7 +1806,7 @@ export function ConversationDetailPanel() {
           canTile
             ? cn(
                 "relative h-full min-w-[24rem] flex-1 overflow-hidden",
-                index > 0 && "border-l border-border"
+                index > 0 && "border-l border-border/50"
               )
             : active
               ? "h-full"
