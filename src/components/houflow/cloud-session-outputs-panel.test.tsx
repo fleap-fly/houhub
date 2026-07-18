@@ -30,7 +30,7 @@ vi.mock("@/contexts/workspace-context", () => ({
 }))
 
 vi.mock("@/houflow", () => ({
-  useHouflowDesktop: () => ({
+  useHouflowDesktopStore: () => ({
     session: {
       status: "signed_in",
       workspaceId: "workspace-1",
@@ -40,12 +40,20 @@ vi.mock("@/houflow", () => ({
 }))
 
 vi.mock("@/houflow/cloud-workspace-context", () => ({
-  useHouflowCloudWorkspace: () => ({
-    selectedSession: { id: "session-1" },
-    selectedHostedCommand: null,
-    selectedOutputRequest: null,
-    removeSession: mocks.removeSession,
-  }),
+  selectHouflowCloudSelectedSession: Symbol("selected-session"),
+  selectHouflowCloudSelectedHostedCommand: Symbol("selected-command"),
+  useHouflowCloudWorkspaceStore: (selector: unknown) => {
+    if (typeof selector === "symbol") {
+      return selector.description === "selected-session"
+        ? { id: "session-1" }
+        : null
+    }
+    const state = {
+      selectedOutputRequest: null,
+      removeSession: mocks.removeSession,
+    }
+    return (selector as (value: typeof state) => unknown)(state)
+  },
 }))
 
 vi.mock("@/houflow/cloud-sessions", () => ({

@@ -2,18 +2,20 @@
 
 import { useEffect, useRef } from "react"
 
-import { useAppWorkspace } from "@/contexts/app-workspace-context"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 
 import { psRootPath } from "./space-fs"
-import { useWorkbench } from "./workbench-provider"
+import { useWorkbenchStore } from "./workbench-provider"
 
 // Auto-mounts the active workbench project's cloud space as a folder in the
 // sidebar once the user is signed in (and re-mounts on project switch). The
 // mount is a synthetic `ps://<projectId>` folder; `openFolder` upserts by path
 // so this is idempotent. Must render inside AppWorkspaceProvider.
 export function WorkbenchAutoMount() {
-  const { status, session } = useWorkbench()
-  const { openFolder, folders } = useAppWorkspace()
+  const status = useWorkbenchStore((state) => state.status)
+  const session = useWorkbenchStore((state) => state.session)
+  const openFolder = useAppWorkspaceStore((s) => s.openFolder)
+  const folders = useAppWorkspaceStore((s) => s.folders)
   const inFlight = useRef<Set<string>>(new Set())
 
   useEffect(() => {

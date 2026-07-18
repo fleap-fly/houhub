@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
+  Boxes,
   Folder,
   FolderPen,
   GitCommit,
@@ -9,10 +10,7 @@ import {
   type LucideIcon,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
-import {
-  useAuxPanelContext,
-  type AuxPanelTab,
-} from "@/contexts/aux-panel-context"
+import { useAuxPanelStore, type AuxPanelTab } from "@/stores/aux-panel-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -34,20 +32,28 @@ import { FileTreeTab } from "./aux-panel-file-tree-tab"
 import { CloudSessionOutputsPanel } from "../houflow/cloud-session-outputs-panel"
 import { GitChangesTab } from "./aux-panel-git-changes-tab"
 import { GitLogTab } from "./aux-panel-git-log-tab"
+import { WorkspaceResourcesPanel } from "./workspace-resources-panel"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 
-const LAZY_TABS: AuxPanelTab[] = ["file_tree", "changes", "git_log"]
+const LAZY_TABS: AuxPanelTab[] = [
+  "workspace_resources",
+  "file_tree",
+  "changes",
+  "git_log",
+]
 
 // Visible order + icon for every aux tab. Both the desktop segmented control
 // and the collapsed picker map over this, so the two surfaces can never drift.
 const TAB_ORDER: AuxPanelTab[] = [
   "session_details",
+  "workspace_resources",
   "file_tree",
   "changes",
   "git_log",
 ]
 const TAB_ICONS: Record<AuxPanelTab, LucideIcon> = {
   session_details: ReceiptText,
+  workspace_resources: Boxes,
   file_tree: Folder,
   changes: FolderPen,
   git_log: GitCommit,
@@ -56,7 +62,7 @@ const TAB_ICONS: Record<AuxPanelTab, LucideIcon> = {
 // session details resolves from its own (Folder.sessionDetails.menuLabel). The
 // value type is the literal key union so next-intl's typed `t()` accepts it.
 const FOLDER_TAB_LABEL_KEY: Record<
-  Exclude<AuxPanelTab, "session_details">,
+  Exclude<AuxPanelTab, "session_details" | "workspace_resources">,
   "files" | "changes" | "commits"
 > = {
   file_tree: "files",
@@ -64,12 +70,12 @@ const FOLDER_TAB_LABEL_KEY: Record<
   git_log: "commits",
 }
 
-// The desktop segmented control needs ~130px (4 icon triggers + gaps + track
+// The desktop segmented control needs ~162px (5 icon triggers + gaps + track
 // padding). It's pinned to the strip's LEFT while the fixed window-chrome
 // overlay (terminal/aux/settings, plus the native caption on Windows/Linux)
 // floats over the RIGHT edge. Once the panel is too narrow to seat the control
 // left of that reserved region, we swap it for a single icon-button + dropdown.
-const SEGMENTED_TABS_WIDTH = 130
+const SEGMENTED_TABS_WIDTH = 162
 const TAB_STRIP_GUTTER = 12 // pl-3
 const TAB_STRIP_GAP = 12 // breathing room before the chrome overlay
 
@@ -95,10 +101,9 @@ export function shouldCollapseAuxTabs(
  * Decide which aux-panel tabs are available and which to actually show.
  *
  * The folder-scoped tabs (files/changes/commits) only make sense with a real
- * folder workspace open, so chat sessions and the folderless state collapse to
- * just the Session Details tab. `effectiveTab` keeps the rendered selection
- * valid even when the stored `activeTab` is a now-hidden folder tab, avoiding a
- * one-frame flash before the reconciling effect corrects the stored value.
+ * folder workspace open. Session Details and workspace resources remain
+ * available everywhere. `effectiveTab` keeps the rendered selection valid when
+ * a stored folder tab becomes hidden.
  */
 export function resolveAuxTabView(
   activeTab: AuxPanelTab,
@@ -108,14 +113,22 @@ export function resolveAuxTabView(
   const showFolderTabs = activeFolderId != null && !isChatMode
   return {
     showFolderTabs,
-    effectiveTab: showFolderTabs ? activeTab : "session_details",
+    effectiveTab:
+      showFolderTabs ||
+      activeTab === "session_details" ||
+      activeTab === "workspace_resources"
+        ? activeTab
+        : "session_details",
   }
 }
 
 export function AuxPanel() {
   const t = useTranslations("Folder.auxPanel.tabs")
   const tDetails = useTranslations("Folder.sessionDetails")
-  const { isOpen, width, activeTab, setActiveTab } = useAuxPanelContext()
+  const isOpen = useAuxPanelStore((state) => state.isOpen)
+  const width = useAuxPanelStore((state) => state.width)
+  const activeTab = useAuxPanelStore((state) => state.activeTab)
+  const setActiveTab = useAuxPanelStore((state) => state.setActiveTab)
   const { routeId } = useWorkbenchRoute()
   const isCloudRoute = routeId === "cloud"
   const { activeFolderId } = useActiveFolder()
@@ -146,13 +159,25 @@ export function AuxPanel() {
     return () => observer.disconnect()
   }, [isOpen])
 
-  const localTabView = resolveAuxTabView(
-    activeTab,
-    activeFolderId,
-    isChatMode
-  )
+  const localTabView = resolveAuxTabView(activeTab, activeFolderId, isChatMode)
   const showFolderTabs = !isCloudRoute && localTabView.showFolderTabs
-  const effectiveTab = isCloudRoute ? "file_tree" : localTabView.effectiveTab
+  const availableTabs = isCloudRoute
+    ? (["workspace_resources", "file_tree"] as AuxPanelTab[])
+    : TAB_ORDER.filter(
+        (tab) =>
+          tab === "session_details" ||
+          tab === "workspace_resources" ||
+          showFolderTabs
+      )
+  const effectiveTab = availableTabs.includes(
+    isCloudRoute ? activeTab : localTabView.effectiveTab
+  )
+    ? isCloudRoute
+      ? activeTab
+      : localTabView.effectiveTab
+    : isCloudRoute
+      ? "file_tree"
+      : "session_details"
 
   // Ensure the shown tab is mounted (covers both user clicks and programmatic changes)
   if (
@@ -167,10 +192,8 @@ export function AuxPanel() {
   // chat session), so other consumers of `activeTab` stay in sync with what's
   // shown. Done in an effect — never a render-time setState on the provider.
   useEffect(() => {
-    if (!isCloudRoute && !showFolderTabs && activeTab !== "session_details") {
-      setActiveTab("session_details")
-    }
-  }, [isCloudRoute, showFolderTabs, activeTab, setActiveTab])
+    if (activeTab !== effectiveTab) setActiveTab(effectiveTab)
+  }, [activeTab, effectiveTab, setActiveTab])
 
   const handleTabValueChange = useCallback(
     (value: string) => {
@@ -178,12 +201,6 @@ export function AuxPanel() {
     },
     [setActiveTab]
   )
-
-  useEffect(() => {
-    if (isCloudRoute && activeTab !== "file_tree") {
-      setActiveTab("file_tree")
-    }
-  }, [activeTab, isCloudRoute, setActiveTab])
 
   // The window-chrome overlay claims a fixed strip on the panel's right edge;
   // on desktop Windows/Linux the native caption buttons sit beyond it. The
@@ -194,7 +211,7 @@ export function AuxPanel() {
   const rightReserve = rightChromeReserve(winLinuxControls)
   const collapsed =
     !isMobile &&
-    showFolderTabs &&
+    availableTabs.length > 1 &&
     shouldCollapseAuxTabs(
       measuredWidth > 0 ? measuredWidth : width,
       rightReserve
@@ -204,7 +221,9 @@ export function AuxPanel() {
     (tab: AuxPanelTab) =>
       tab === "session_details"
         ? tDetails("menuLabel")
-        : t(FOLDER_TAB_LABEL_KEY[tab]),
+        : tab === "workspace_resources"
+          ? t("resources")
+          : t(FOLDER_TAB_LABEL_KEY[tab]),
     [t, tDetails]
   )
 
@@ -215,22 +234,7 @@ export function AuxPanel() {
     const triggerClassName = compact
       ? "h-6 flex-none rounded-md px-2"
       : undefined
-    if (isCloudRoute) {
-      return (
-        <TabsTrigger
-          value="file_tree"
-          title={t("files")}
-          aria-label={t("files")}
-          className={triggerClassName}
-        >
-          <Folder className="h-3.5 w-3.5" />
-        </TabsTrigger>
-      )
-    }
-
-    return TAB_ORDER.filter(
-      (tab) => tab === "session_details" || showFolderTabs
-    ).map((tab) => {
+    return availableTabs.map((tab) => {
       const Icon = TAB_ICONS[tab]
       const label = tabLabel(tab)
       return (
@@ -272,7 +276,7 @@ export function AuxPanel() {
             value={effectiveTab}
             onValueChange={handleTabValueChange}
           >
-            {TAB_ORDER.map((tab) => {
+            {availableTabs.map((tab) => {
               const Icon = TAB_ICONS[tab]
               return (
                 <DropdownMenuRadioItem key={tab} value={tab}>
@@ -350,7 +354,7 @@ export function AuxPanel() {
               variant="default"
               className={cn(
                 "h-7 gap-0.5 rounded-lg bg-foreground/[0.06] p-0.5 group-data-horizontal/tabs:h-7",
-                !isCloudRoute && (!showFolderTabs || collapsed) && "hidden"
+                (availableTabs.length <= 1 || collapsed) && "hidden"
               )}
             >
               {renderTabTriggers(true)}
@@ -379,6 +383,15 @@ export function AuxPanel() {
             ) : (
               <FileTreeTab />
             )
+          ) : null}
+        </TabsContent>
+        <TabsContent
+          value="workspace_resources"
+          forceMount
+          className="mt-0 flex-1 min-h-0 overflow-hidden"
+        >
+          {mountedTabs.has("workspace_resources") ? (
+            <WorkspaceResourcesPanel />
           ) : null}
         </TabsContent>
         <TabsContent

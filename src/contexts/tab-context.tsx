@@ -2,7 +2,6 @@
 
 import { useEffect, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
-import { useShallow } from "zustand/react/shallow"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
@@ -190,99 +189,4 @@ export function TabProvider({ children }: TabProviderProps) {
   }, [rawTabs, activeTabId, tabsHydrated])
 
   return <>{children}</>
-}
-
-export interface TabContextValue {
-  tabs: TabItem[]
-  activeTabId: string | null
-  tabsHydrated: boolean
-  isTileMode: boolean
-  openTab: (
-    folderId: number,
-    conversationId: number,
-    agentType: TabItem["agentType"],
-    pin?: boolean,
-    title?: string
-  ) => void
-  closeTab: (tabId: string) => void
-  closeConversationTab: (
-    folderId: number,
-    conversationId: number,
-    agentType: TabItem["agentType"]
-  ) => void
-  closeOtherTabs: (tabId: string) => void
-  closeAllTabs: () => void
-  closeTabsByFolder: (folderId: number) => void
-  switchTab: (tabId: string) => void
-  pinTab: (tabId: string) => void
-  toggleTileMode: () => void
-  consumeRemoteActivation: () => boolean
-  openNewConversationTab: (
-    folderId: number,
-    workingDir: string,
-    options?: {
-      inheritFromActive?: boolean
-      folderDefaultAgent?: TabItem["agentType"] | null
-    }
-  ) => void
-  openChatModeTab: () => void
-  setChatDraftWorkingDir: (tabId: string, workingDir: string) => void
-  confirmDraftAgent: (tabId: string, agentType: TabItem["agentType"]) => void
-  setDraftAgentFromFallback: (
-    tabId: string,
-    agentType: TabItem["agentType"]
-  ) => void
-  bindConversationTab: (
-    tabId: string,
-    conversationId: number,
-    agentType: TabItem["agentType"],
-    title: string,
-    runtimeConversationId?: number,
-    folderId?: number,
-    workingDir?: string
-  ) => void
-  setTabRuntimeConversationId: (
-    tabId: string,
-    runtimeConversationId: number
-  ) => void
-  reorderTabs: (reorderedTabs: TabItem[]) => void
-  onPreviewTabReplaced: (callback: (tabId: string) => void) => () => void
-}
-
-/**
- * Backwards-compatible whole-value accessor over the tab store. Kept so existing
- * consumers keep working during the incremental selector migration; new/hot
- * consumers should read `useTabStore(selector)` / `useTabActions()` directly to
- * subscribe to the narrowest slice they render. `useShallow` keeps the returned
- * object stable, so this re-renders only when a read field (tabs/activeTabId/
- * tabsHydrated/isTileMode) changes — matching the former context's behavior.
- */
-export function useTabContext(): TabContextValue {
-  return useTabStore(
-    useShallow((s) => ({
-      tabs: s.tabs,
-      activeTabId: s.activeTabId,
-      tabsHydrated: s.tabsHydrated,
-      isTileMode: s.isTileMode,
-      openTab: s.openTab,
-      closeTab: s.closeTab,
-      closeConversationTab: s.closeConversationTab,
-      closeOtherTabs: s.closeOtherTabs,
-      closeAllTabs: s.closeAllTabs,
-      closeTabsByFolder: s.closeTabsByFolder,
-      switchTab: s.switchTab,
-      pinTab: s.pinTab,
-      toggleTileMode: s.toggleTileMode,
-      consumeRemoteActivation: s.consumeRemoteActivation,
-      openNewConversationTab: s.openNewConversationTab,
-      openChatModeTab: s.openChatModeTab,
-      setChatDraftWorkingDir: s.setChatDraftWorkingDir,
-      confirmDraftAgent: s.confirmDraftAgent,
-      setDraftAgentFromFallback: s.setDraftAgentFromFallback,
-      bindConversationTab: s.bindConversationTab,
-      setTabRuntimeConversationId: s.setTabRuntimeConversationId,
-      reorderTabs: s.reorderTabs,
-      onPreviewTabReplaced: s.onPreviewTabReplaced,
-    }))
-  )
 }

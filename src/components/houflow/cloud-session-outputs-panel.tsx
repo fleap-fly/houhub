@@ -10,16 +10,21 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
+import { useShallow } from "zustand/react/shallow"
 import { Button } from "@/components/ui/button"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
-import { useHouflowDesktop } from "@/houflow"
+import { useHouflowDesktopStore } from "@/houflow"
 import {
   isCloudImageOutput,
   isCloudTextOutput,
   mediaTypeForCloudOutputBlob,
   outputMatchesTarget,
 } from "@/houflow/cloud-session-output-links"
-import { useHouflowCloudWorkspace } from "@/houflow/cloud-workspace-context"
+import {
+  selectHouflowCloudSelectedHostedCommand,
+  selectHouflowCloudSelectedSession,
+  useHouflowCloudWorkspaceStore,
+} from "@/houflow/cloud-workspace-context"
 import {
   getHouflowCloudSessionOutputBytes,
   getHouflowCloudSessionOutputText,
@@ -36,8 +41,24 @@ import { cn } from "@/lib/utils"
 
 export function CloudSessionOutputsPanel() {
   const t = useTranslations("HouflowCloud")
-  const houflow = useHouflowDesktop()
-  const cloud = useHouflowCloudWorkspace()
+  const houflow = useHouflowDesktopStore(
+    useShallow((state) => ({
+      session: state.session,
+      secret: state.secret,
+    }))
+  )
+  const selectedSession = useHouflowCloudWorkspaceStore(
+    selectHouflowCloudSelectedSession
+  )
+  const selectedHostedCommand = useHouflowCloudWorkspaceStore(
+    selectHouflowCloudSelectedHostedCommand
+  )
+  const selectedOutputRequest = useHouflowCloudWorkspaceStore(
+    (state) => state.selectedOutputRequest
+  )
+  const removeSession = useHouflowCloudWorkspaceStore(
+    (state) => state.removeSession
+  )
   const { openReadonlyFilePreview } = useWorkspaceActions()
   const [outputs, setOutputs] = useState<HouflowCloudSessionOutput[]>([])
   const [loading, setLoading] = useState(false)
@@ -51,11 +72,10 @@ export function CloudSessionOutputsPanel() {
   const wasActiveRef = useRef(false)
   const openedSelectionNonceRef = useRef<number | null>(null)
 
-  const selectedCloudSessionId = cloud.selectedSession?.id ?? null
+  const selectedCloudSessionId = selectedSession?.id ?? null
   const selectedSessionId =
     selectedCloudSessionId ??
-    houflowHostedCommandOutputSessionId(cloud.selectedHostedCommand)
-  const selectedOutputRequest = cloud.selectedOutputRequest
+    houflowHostedCommandOutputSessionId(selectedHostedCommand)
   const selectedOutput = useMemo(
     () =>
       selectedOutputId
@@ -65,8 +85,8 @@ export function CloudSessionOutputsPanel() {
   )
 
   const outputsActive =
-    isCloudSessionActive(cloud.selectedSession) ||
-    isHouflowHostedCommandActive(cloud.selectedHostedCommand)
+    isCloudSessionActive(selectedSession) ||
+    isHouflowHostedCommandActive(selectedHostedCommand)
 
   const refreshOutputs = useCallback(
     async (background = false) => {
@@ -107,7 +127,7 @@ export function CloudSessionOutputsPanel() {
           // selected managed session was removed elsewhere, unlike a 404 while
           // fetching one individual output file.
           if (selectedCloudSessionId && isHouflowCloudSessionNotFound(err)) {
-            cloud.removeSession(selectedCloudSessionId)
+            removeSession(selectedCloudSessionId)
             setOutputs([])
             return
           }
@@ -122,9 +142,9 @@ export function CloudSessionOutputsPanel() {
       }
     },
     [
-      cloud,
       houflow.secret,
       houflow.session,
+      removeSession,
       selectedCloudSessionId,
       selectedSessionId,
     ]

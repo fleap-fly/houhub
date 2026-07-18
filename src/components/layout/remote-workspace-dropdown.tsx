@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react"
 import { Check, Cloud, Loader2, MonitorCloud, Settings } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
 import { toast } from "sonner"
+import { useShallow } from "zustand/react/shallow"
 import {
   listRemoteWorkspaceConnections,
   openRemoteWorkspace,
@@ -11,7 +12,7 @@ import {
 import { toErrorMessage } from "@/lib/app-error"
 import type { RemoteWorkspaceConnection } from "@/lib/types"
 import { isDesktop } from "@/lib/platform"
-import { useHouflowDesktop } from "@/houflow"
+import { useHouflowDesktopStore } from "@/houflow"
 import { isHouflowCloudWorkspaceTarget } from "@/houflow/agent-hub-conversation-target"
 import { Button } from "@/components/ui/button"
 import {
@@ -62,7 +63,14 @@ export function RemoteWorkspaceDropdown({
     () => (locale.toLowerCase().startsWith("zh") ? ZH_COPY : EN_COPY),
     [locale]
   )
-  const houflow = useHouflowDesktop()
+  const houflow = useHouflowDesktopStore(
+    useShallow((state) => ({
+      status: state.status,
+      session: state.session,
+      snapshot: state.snapshot,
+      selectWorkspace: state.selectWorkspace,
+    }))
+  )
   const [connections, setConnections] = useState<RemoteWorkspaceConnection[]>(
     []
   )

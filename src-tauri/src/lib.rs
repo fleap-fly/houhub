@@ -1262,6 +1262,8 @@ mod tauri_app {
                 workbench_commands::workbench_ai_create_session,
                 workbench_commands::workbench_ai_get_session,
                 workbench_commands::workbench_ai_send_message,
+                workbench_commands::workbench_open_suite,
+                workbench_commands::workbench_list_client_suites,
                 web::start_web_server,
                 web::stop_web_server,
                 web::get_web_server_status,

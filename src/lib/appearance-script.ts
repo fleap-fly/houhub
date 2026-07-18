@@ -25,19 +25,19 @@ export const STORAGE_KEY_TERMINAL_FONT_CUSTOM = "houhub-terminal-font-custom"
 export const STORAGE_KEY_TERMINAL_FONT_SIZE = "houhub-terminal-font-size"
 export const STORAGE_KEY_TERMINAL_LIGATURES = "houhub-terminal-ligatures"
 
-// Workspace 背景图片。图片本身存磁盘（~/.codeg/backgrounds/），localStorage 只存
+// Workspace 背景图片。图片本身存磁盘（~/.houhub/backgrounds/），localStorage 只存
 // 展示配置。仅 enabled 与 panel-opacity 需要预水合（它们作用于首帧就存在的结构性
 // 表面）；mask/blur/fill 水合后才有意义（图片异步到达），不进 inline 脚本。
-export const STORAGE_KEY_WORKSPACE_BG_ENABLED = "codeg-workspace-bg-enabled"
-export const STORAGE_KEY_WORKSPACE_BG_MASK = "codeg-workspace-bg-mask"
-export const STORAGE_KEY_WORKSPACE_BG_BLUR = "codeg-workspace-bg-blur"
-export const STORAGE_KEY_WORKSPACE_BG_FILL = "codeg-workspace-bg-fill"
+export const STORAGE_KEY_WORKSPACE_BG_ENABLED = "houhub-workspace-bg-enabled"
+export const STORAGE_KEY_WORKSPACE_BG_MASK = "houhub-workspace-bg-mask"
+export const STORAGE_KEY_WORKSPACE_BG_BLUR = "houhub-workspace-bg-blur"
+export const STORAGE_KEY_WORKSPACE_BG_FILL = "houhub-workspace-bg-fill"
 export const STORAGE_KEY_WORKSPACE_BG_PANEL_OPACITY =
-  "codeg-workspace-bg-panel-opacity"
+  "houhub-workspace-bg-panel-opacity"
 // 图片存磁盘、写盘无跨窗口信号（外观设置是独立窗口）。用这个版本戳广播失效：
 // 写/换/删图后 bump，让 workspace 窗口经 storage 事件重新读盘。不需预水合。
 export const STORAGE_KEY_WORKSPACE_BG_IMAGE_VERSION =
-  "codeg-workspace-bg-image-version"
+  "houhub-workspace-bg-image-version"
 
 /**
  * 同步执行的 inline 脚本，由 layout.tsx 通过 dangerouslySetInnerHTML 注入。

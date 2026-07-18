@@ -11,8 +11,12 @@ import {
 } from "lucide-react"
 import { useLocale } from "next-intl"
 import { toast } from "sonner"
+import { useShallow } from "zustand/react/shallow"
 
-import { HOUFLOW_DEFAULT_CONTROL_BASE_URL, useHouflowDesktop } from "@/houflow"
+import {
+  HOUFLOW_DEFAULT_CONTROL_BASE_URL,
+  useHouflowDesktopStore,
+} from "@/houflow"
 import { gatewayDailyQuotaDisplay } from "@/houflow/quota-display"
 import type { HouflowWorkspaceQuota } from "@/houflow/types"
 import { Button } from "@/components/ui/button"
@@ -129,7 +133,17 @@ export function HouflowAccountButton() {
     () => (locale.toLowerCase().startsWith("zh") ? ZH_COPY : EN_COPY),
     [locale]
   )
-  const houflow = useHouflowDesktop()
+  const houflow = useHouflowDesktopStore(
+    useShallow((state) => ({
+      status: state.status,
+      session: state.session,
+      snapshot: state.snapshot,
+      error: state.error,
+      signInWithHouflow: state.signInWithHouflow,
+      refresh: state.refresh,
+      signOut: state.signOut,
+    }))
+  )
   const [openingLogin, setOpeningLogin] = useState(false)
 
   const isBusy =

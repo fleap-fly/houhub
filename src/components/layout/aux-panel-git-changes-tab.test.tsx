@@ -160,7 +160,6 @@ vi.mock("@/contexts/active-folder-context", () => ({
 }))
 
 vi.mock("@/contexts/tab-context", () => ({
-  useTabContext: () => ({ tabs: [], activeTabId: null }),
   useTabStore: (selector: (s: { tabs: []; activeTabId: null }) => unknown) =>
     selector({ tabs: [], activeTabId: null }),
 }))

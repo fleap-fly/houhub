@@ -19,7 +19,7 @@ vi.mock("@/components/agent-icon", () => ({ AgentIcon: () => null }))
 // the API so an accidental call is inert rather than a real transport hit.
 vi.mock("@/lib/api", () => ({ getFolderConversation: vi.fn() }))
 
-vi.mock("@/contexts/aux-panel-context", () => ({ useAuxPanelContext: vi.fn() }))
+vi.mock("@/stores/aux-panel-store", () => ({ useAuxPanelStore: vi.fn() }))
 vi.mock("@/contexts/active-folder-context", () => ({
   useActiveFolder: vi.fn(),
 }))
@@ -39,7 +39,7 @@ vi.mock("@/stores/app-workspace-store", () => ({
 }))
 
 import { SessionDetailsTab } from "./aux-panel-session-details-tab"
-import { useAuxPanelContext } from "@/contexts/aux-panel-context"
+import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -47,7 +47,7 @@ import { useTabStore } from "@/contexts/tab-context"
 import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 
-const mockAux = useAuxPanelContext as unknown as Mock
+const mockAux = useAuxPanelStore as unknown as Mock
 const mockFolder = useActiveFolder as unknown as Mock
 const mockChat = useIsActiveChatMode as unknown as Mock
 const mockMobile = useIsMobile as unknown as Mock
@@ -81,7 +81,6 @@ function summary(
     git_branch: "main",
     external_id: "ext-abc",
     message_count: 12,
-    child_count: 0,
     created_at: "2026-06-10T10:00:00.000Z",
     updated_at: "2026-06-12T12:00:00.000Z",
     pinned_at: null,
@@ -95,7 +94,10 @@ function setupScene(opts: {
   hasActiveConversation: boolean
   isMobile?: boolean
 }) {
-  mockAux.mockReturnValue({ isOpen: true, activeTab: "session_details" })
+  mockAux.mockImplementation(
+    (selector: (state: { isOpen: boolean; activeTab: string }) => unknown) =>
+      selector({ isOpen: true, activeTab: "session_details" })
+  )
   mockFolder.mockReturnValue({ activeFolderId: opts.activeFolderId })
   mockChat.mockReturnValue(opts.isChatMode)
   mockMobile.mockReturnValue(opts.isMobile ?? false)

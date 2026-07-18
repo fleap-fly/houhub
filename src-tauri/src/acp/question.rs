@@ -424,7 +424,7 @@ pub fn build_outcome(questions: &[QuestionSpec], answer: &QuestionAnswer) -> Que
 }
 
 /// Grok's native `ask_user_question` tool has NO `header` (the short category
-/// chip codeg renders); synthesize one from the leading characters of the
+/// chip Houhub renders); synthesize one from the leading characters of the
 /// question text, bounded to [`MAX_HEADER_CHARS`]. Always returns a non-empty,
 /// in-bounds string so [`validate_specs`] accepts it.
 fn synthesize_grok_header(question: &str) -> String {
@@ -437,13 +437,13 @@ fn synthesize_grok_header(question: &str) -> String {
     }
 }
 
-/// Convert grok's native `_x.ai/ask_user_question` ext-request params into codeg
+/// Convert grok's native `_x.ai/ask_user_question` ext-request params into Houhub
 /// [`QuestionSpec`]s, so grok's own questions render in the SAME interactive card
-/// as the `codeg-mcp` ask tool (grok emits an ACP ext request and blocks on the
-/// reply; if codeg doesn't answer it, grok falls back to inert fire-and-forget
+/// as the built-in MCP ask tool (grok emits an ACP ext request and blocks on the
+/// reply; if Houhub doesn't answer it, grok falls back to inert fire-and-forget
 /// rendering — see the connection handler). Grok's wire shape per question is
 /// `{question, options:[{label, description}], multiSelect}` — no `header`, which
-/// we synthesize. Counts are clamped to codeg's bounds because
+/// we synthesize. Counts are clamped to Houhub's bounds because
 /// [`crate::acp::manager::ConnectionManager::register_question`] re-runs
 /// [`validate_specs`] and would otherwise decline the whole ask: more than
 /// [`MAX_QUESTIONS`] questions or [`MAX_OPTIONS`] options are truncated (logged,
@@ -576,7 +576,7 @@ pub fn grok_ext_skip_response() -> Value {
 }
 
 /// Build the `raw_input` (questions) for the in-stream `AskQuestionResultCard`
-/// codeg synthesizes for a grok native ask. Grok never emits a *completed* tool
+/// Houhub synthesizes for a grok native ask. Grok never emits a *completed* tool
 /// result into the ACP `updates.jsonl` stream (it resolves the answer over the
 /// `_x.ai/ask_user_question` ext round-trip instead), so the connection handler
 /// emits this itself once the user submits — see `handle_grok_ask_user_question`.
@@ -603,7 +603,7 @@ pub fn grok_result_card_input(specs: &[QuestionSpec]) -> Value {
 }
 
 /// Build the `raw_output` (`{answers, declined}` envelope) for the in-stream
-/// `AskQuestionResultCard` — the codeg-mcp `structuredContent` shape the frontend
+/// `AskQuestionResultCard` — the built-in MCP `structuredContent` shape the frontend
 /// already parses (`parseAskQuestionOutcome`). Emits `header:""` to match
 /// [`grok_result_card_input`] (see its docs). Companion to [`grok_result_card_input`].
 pub fn grok_result_card_output(outcome: &QuestionOutcome) -> Value {
@@ -1009,7 +1009,7 @@ mod tests {
 
     #[test]
     fn parse_grok_ext_clamps_questions_and_options_to_bounds() {
-        // 6 questions, each with 6 options — both past codeg's maxima.
+        // 6 questions, each with 6 options — both past Houhub's maxima.
         let many: Vec<Value> = (0..6)
             .map(|qi| {
                 let opts: Vec<Value> = (0..6)

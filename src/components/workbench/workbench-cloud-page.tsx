@@ -43,7 +43,12 @@ import {
 } from "@/lib/adapters/ai-elements-adapter"
 import { toErrorMessage } from "@/lib/app-error"
 import type { PromptCapabilitiesInfo, PromptDraft } from "@/lib/types"
-import { useWorkbench, useWorkbenchCloud } from "@/workbench"
+import {
+  selectWorkbenchCloudSelectedAssistant,
+  selectWorkbenchCloudSelectedSession,
+  useWorkbenchCloudStore,
+  useWorkbenchStore,
+} from "@/workbench"
 import {
   createWorkbenchAiSession,
   getWorkbenchAiSession,
@@ -63,8 +68,14 @@ const WORKBENCH_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
 
 export function WorkbenchCloudPage() {
   const t = useTranslations("WorkbenchCloud")
-  const workbench = useWorkbench()
-  const cloud = useWorkbenchCloud()
+  const workbench = useWorkbenchStore()
+  const cloud = useWorkbenchCloudStore()
+  const selectedAssistant = useWorkbenchCloudStore(
+    selectWorkbenchCloudSelectedAssistant
+  )
+  const selectedSession = useWorkbenchCloudStore(
+    selectWorkbenchCloudSelectedSession
+  )
   const [messages, setMessages] = useState<WorkbenchAiMessage[]>([])
   const [messagesLoading, setMessagesLoading] = useState(false)
   const [messagesError, setMessagesError] = useState<string | null>(null)
@@ -81,8 +92,6 @@ export function WorkbenchCloudPage() {
     workbench.session.status === "signed_in"
       ? workbench.session.activeProjectId
       : null
-  const selectedAssistant = cloud.selectedAssistant
-  const selectedSession = cloud.selectedSession
   const selectedSessionId = cloud.selectedSessionId
 
   const projectName = useMemo(() => {
@@ -318,7 +327,7 @@ export function WorkbenchCloudPage() {
 }
 
 function useWorkbenchSessionLinkSafety(): LinkSafetyConfig {
-  const workbench = useWorkbench()
+  const workbench = useWorkbenchStore()
   const { openFilePreview } = useWorkspaceActions()
   const openExternal = useOpenLinkOrFile()
   const projectId =

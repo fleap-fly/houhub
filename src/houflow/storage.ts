@@ -5,6 +5,8 @@ import {
 } from "./types"
 
 const SESSION_KEY = "houhub:houflow-session:v1"
+const LOCAL_AGENT_REPORT_SELECTION_KEY =
+  "houhub:houflow-local-agent-report-selection:v1"
 
 export function loadHouflowSessionMetadata(): HouflowDesktopSession {
   if (typeof window === "undefined") return HOUFLOW_SIGNED_OUT_SESSION
@@ -27,6 +29,49 @@ export function saveHouflowSessionMetadata(
 export function clearHouflowSessionMetadata(): void {
   if (typeof window === "undefined") return
   window.localStorage.removeItem(SESSION_KEY)
+}
+
+export function loadHouflowLocalAgentReportSelection(
+  workspaceId: string
+): string[] {
+  if (typeof window === "undefined") return []
+  const normalizedWorkspaceId = workspaceId.trim()
+  if (!normalizedWorkspaceId) return []
+  const raw = window.localStorage.getItem(LOCAL_AGENT_REPORT_SELECTION_KEY)
+  if (!raw) return []
+  try {
+    const selectionByWorkspace = objectValue(JSON.parse(raw))
+    const selection = selectionByWorkspace[normalizedWorkspaceId]
+    if (!Array.isArray(selection)) return []
+    return [...new Set(selection.map(stringValue).filter(Boolean))]
+  } catch {
+    return []
+  }
+}
+
+export function saveHouflowLocalAgentReportSelection(
+  workspaceId: string,
+  localAgentRefs: string[]
+): void {
+  if (typeof window === "undefined") return
+  const normalizedWorkspaceId = workspaceId.trim()
+  if (!normalizedWorkspaceId) return
+  let selectionByWorkspace: Record<string, unknown> = {}
+  const raw = window.localStorage.getItem(LOCAL_AGENT_REPORT_SELECTION_KEY)
+  if (raw) {
+    try {
+      selectionByWorkspace = objectValue(JSON.parse(raw))
+    } catch {
+      selectionByWorkspace = {}
+    }
+  }
+  selectionByWorkspace[normalizedWorkspaceId] = [
+    ...new Set(localAgentRefs.map(stringValue).filter(Boolean)),
+  ]
+  window.localStorage.setItem(
+    LOCAL_AGENT_REPORT_SELECTION_KEY,
+    JSON.stringify(selectionByWorkspace)
+  )
 }
 
 function normalizeSession(value: unknown): HouflowDesktopSession {

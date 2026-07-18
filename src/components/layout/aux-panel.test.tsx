@@ -22,6 +22,13 @@ describe("resolveAuxTabView", () => {
     })
   })
 
+  it("keeps workspace resources available without a folder", () => {
+    expect(resolveAuxTabView("workspace_resources", null, false)).toEqual({
+      showFolderTabs: false,
+      effectiveTab: "workspace_resources",
+    })
+  })
+
   it("collapses to Session Details when no folder is open", () => {
     expect(resolveAuxTabView("changes", null, false)).toEqual({
       showFolderTabs: false,
@@ -45,7 +52,7 @@ describe("shouldCollapseAuxTabs", () => {
   const WIN_LINUX_RESERVE = 254
 
   it("keeps the segmented control when the panel has room", () => {
-    // 320 − 12 gutter − 116 = 192 available ≥ 130 control + 12 gap.
+    // 320 − 12 gutter − 116 = 192 available ≥ 162 control + 12 gap.
     expect(shouldCollapseAuxTabs(320, MAC_WEB_RESERVE)).toBe(false)
   })
 

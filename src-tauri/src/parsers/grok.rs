@@ -629,7 +629,7 @@ fn read_grok_ask_answers(
     out
 }
 
-/// Parse a grok `ask_user_question` `tool_result` content string into the codeg
+/// Parse a grok `ask_user_question` `tool_result` content string into the Houhub
 /// `{answers, declined}` envelope (the shape `parseAskQuestionOutcome` reads).
 ///
 /// Verified against grok-0.2.101. The accepted template is `User has answered

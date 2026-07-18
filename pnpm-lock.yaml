@@ -33,8 +33,8 @@ importers:
         specifier: file:vendor/houflow-agent-connector-0.1.5.tgz
         version: file:vendor/houflow-agent-connector-0.1.5.tgz
       '@houshan/agent-hub-network-sdk':
-        specifier: file:vendor/houshan-agent-hub-network-sdk-0.1.8.tgz
-        version: file:vendor/houshan-agent-hub-network-sdk-0.1.8.tgz(@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.2.tgz)
+        specifier: file:vendor/houshan-agent-hub-network-sdk-0.1.9.tgz
+        version: file:vendor/houshan-agent-hub-network-sdk-0.1.9.tgz(@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.2.tgz)
       '@houshan/agent-hub-sdk':
         specifier: file:vendor/houshan-agent-hub-sdk-0.1.2.tgz
         version: file:vendor/houshan-agent-hub-sdk-0.1.2.tgz
@@ -795,12 +795,15 @@ packages:
     bundledDependencies:
       - '@houshan/agent-hub-network-sdk'
 
-  '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.8.tgz':
-    resolution: {integrity: sha512-yWNMZokUku3/M7kFFz8iUe52KS3QscqTzvE6uOKf/mHcpoN+tyAEOHKxLTJomwoCXCfYpXrqDIZFQYfKvXW4tw==, tarball: file:vendor/houshan-agent-hub-network-sdk-0.1.8.tgz}
-    version: 0.1.8
+  '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.9.tgz':
+    resolution: {integrity: sha512-X2uJBN33vFs798BKZhPts1xhWuk9vMNkj04A6qKlbMLleWLXzaFO+qhwYT208OdjUrKC8JWTtOFaJqrtRlLtwA==, tarball: file:vendor/houshan-agent-hub-network-sdk-0.1.9.tgz}
+    version: 0.1.9
     engines: {node: '>=20'}
     peerDependencies:
-      '@houshan/agent-hub-sdk': ^0.1.0
+      '@houshan/agent-hub-sdk': ^0.1.2
+    peerDependenciesMeta:
+      '@houshan/agent-hub-sdk':
+        optional: true
 
   '@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.2.tgz':
     resolution: {integrity: sha512-FTC5oTrj6BfY//ZzqwwEefxFicl+KAiPwdj/bGv8JycrlULdGtDTnWRTW9IxRoq0TZzarLWk50VxEavxr6nhRQ==, tarball: file:vendor/houshan-agent-hub-sdk-0.1.2.tgz}
@@ -7174,7 +7177,7 @@ snapshots:
 
   '@houflow/agent-connector@file:vendor/houflow-agent-connector-0.1.5.tgz': {}
 
-  '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.8.tgz(@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.2.tgz)':
+  '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.9.tgz(@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.2.tgz)':
     dependencies:
       '@houshan/agent-hub-sdk': file:vendor/houshan-agent-hub-sdk-0.1.2.tgz
 

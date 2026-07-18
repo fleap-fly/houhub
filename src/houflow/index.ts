@@ -1,3 +1,5 @@
 export * from "./types"
 export * from "./houflow-desktop-provider"
 export * from "./cloud-workspace-context"
+export * from "./workbench-client-capability-provider"
+export * from "./workbench-client-capability-store"

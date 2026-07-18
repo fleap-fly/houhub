@@ -1,7 +1,7 @@
 export {
   WorkbenchProvider,
-  useWorkbench,
-  type WorkbenchContextValue,
+  useWorkbenchStore,
+  type WorkbenchStoreState,
   type WorkbenchSignInOptions,
   type WorkbenchStatus,
 } from "./workbench-provider"
@@ -37,7 +37,9 @@ export {
 } from "./space-types"
 export {
   WorkbenchCloudProvider,
-  useWorkbenchCloud,
+  selectWorkbenchCloudSelectedAssistant,
+  selectWorkbenchCloudSelectedSession,
+  useWorkbenchCloudStore,
 } from "./workbench-cloud-context"
 export {
   createWorkbenchAiSession,
@@ -50,3 +52,6 @@ export {
   type WorkbenchAiSessionDetail,
   type WorkbenchAssistant,
 } from "./ai"
+export { createTauriWorkbenchSuiteHost } from "./suite-host"
+export { listWorkbenchClientSuites, type WorkbenchClientSuite } from "./client"
+export { useWorkbenchClientSuiteStore } from "./client-suite-store"

@@ -37,6 +37,8 @@ export interface HouflowWorkspace {
   slug: string | null
   role: string | null
   isActive: boolean
+  projectId?: string | null
+  scopeOwnerSystem?: string | null
 }
 
 export interface HouflowWorkspaceQuota {
@@ -126,10 +128,20 @@ export interface HouflowConnectorSummary {
   dispatchAgentCount: number
   commandAgentCount: number
   boundAgentCount: number
+  reportedAgents?: HouflowConnectorAgentEvidence[]
   lastHeartbeatAt: string | null
   lastError: string | null
   error: string | null
   syncedAt: string
+}
+
+export interface HouflowConnectorAgentEvidence {
+  localAgentRef: string
+  name: string
+  provider: string
+  status: string
+  capabilities: string[]
+  boundConnectedAgentId: string | null
 }
 
 export interface HouflowControlSnapshot {

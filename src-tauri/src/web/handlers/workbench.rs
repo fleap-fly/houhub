@@ -7,12 +7,13 @@ use crate::commands::workbench::{
     workbench_ai_create_session_core, workbench_ai_get_session_core,
     workbench_ai_list_assistants_core, workbench_ai_list_sessions_core,
     workbench_ai_send_message_core, workbench_begin_device_auth_core, workbench_get_session_core,
-    workbench_list_projects_core, workbench_poll_device_auth_core,
+    workbench_list_client_suites_core, workbench_list_projects_core,
+    workbench_poll_device_auth_core,
     workbench_set_active_project_core, workbench_sign_out_core,
     workbench_space_complete_upload_core, workbench_space_create_folder_core,
     workbench_space_delete_file_core, workbench_space_download_url_core, workbench_space_list_core,
     workbench_space_presign_upload_core, workbench_space_usage_core, DeviceAuthPollResult,
-    DeviceAuthStart, WorkbenchSession,
+    DeviceAuthStart, WorkbenchClientSuite, WorkbenchSession,
 };
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +45,18 @@ pub async fn workbench_poll_device_auth(
 
 pub async fn workbench_get_session() -> Result<Json<WorkbenchSession>, AppCommandError> {
     Ok(Json(workbench_get_session_core()))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchClientSuitesInput {
+    pub project_id: String,
+}
+
+pub async fn workbench_list_client_suites(
+    Json(input): Json<WorkbenchClientSuitesInput>,
+) -> Result<Json<Vec<WorkbenchClientSuite>>, AppCommandError> {
+    Ok(Json(workbench_list_client_suites_core(input.project_id).await?))
 }
 
 pub async fn workbench_list_projects() -> Result<Json<JsonValue>, AppCommandError> {

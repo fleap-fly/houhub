@@ -29,6 +29,7 @@ interface WorkspaceDto {
   name?: unknown
   slug?: unknown
   role?: unknown
+  metadata?: unknown
 }
 
 interface ProviderModelsPage {
@@ -389,6 +390,22 @@ async function loadConnectorSummary(
     dispatchAgentCount,
     commandAgentCount,
     boundAgentCount: boundAgents.length,
+    reportedAgents: reportedAgents.map((agent) => {
+      const binding = boundAgents.find(
+        (candidate) => candidate.local_agent_ref === agent.local_agent_ref
+      )
+      return {
+        localAgentRef: agent.local_agent_ref,
+        name: agent.name,
+        provider: agent.provider,
+        status: agent.status,
+        capabilities: Object.entries(agent.capabilities)
+          .filter(([, enabled]) => enabled === true)
+          .map(([capability]) => capability)
+          .sort(),
+        boundConnectedAgentId: binding?.connected_agent_id ?? null,
+      }
+    }),
     lastHeartbeatAt: active.last_seen_at ?? null,
     lastError: null,
     error: null,
@@ -402,12 +419,17 @@ function workspaceFromDto(
 ): HouflowWorkspace | null {
   const id = stringValue(value.id)
   if (!id) return null
+  const metadata = objectValue(value.metadata)
+  const projectId = stringValue(metadata.projectId) || null
+  const scopeOwnerSystem = stringValue(metadata.scopeOwnerSystem) || null
   return {
     id,
     name: stringValue(value.name) || stringValue(value.slug) || id,
     slug: stringValue(value.slug) || null,
     role: stringValue(value.role) || null,
     isActive: id === activeWorkspaceId,
+    ...(projectId ? { projectId } : {}),
+    ...(scopeOwnerSystem ? { scopeOwnerSystem } : {}),
   }
 }
 

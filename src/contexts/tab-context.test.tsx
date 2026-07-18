@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react"
 import { useEffect } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { TabProvider, useTabContext } from "@/contexts/tab-context"
+import { TabProvider, useTabStore } from "@/contexts/tab-context"
 import { CONVERSATION_CHANGED_EVENT, TABS_CHANGED_EVENT } from "@/lib/types"
 import type {
   AgentType,
@@ -125,7 +125,6 @@ const defaultConversationsMock: DbConversationSummary[] = [
     git_branch: null,
     external_id: null,
     message_count: 1,
-    child_count: 0,
     created_at: "2026-05-24T00:00:00Z",
     updated_at: "2026-05-24T00:00:00Z",
     pinned_at: null,
@@ -142,7 +141,6 @@ const defaultConversationsMock: DbConversationSummary[] = [
     git_branch: null,
     external_id: null,
     message_count: 1,
-    child_count: 0,
     created_at: "2026-05-24T00:00:00Z",
     updated_at: "2026-05-24T00:00:00Z",
     pinned_at: null,
@@ -159,7 +157,6 @@ const defaultConversationsMock: DbConversationSummary[] = [
     git_branch: null,
     external_id: null,
     message_count: 1,
-    child_count: 0,
     created_at: "2026-05-24T00:00:00Z",
     updated_at: "2026-05-24T00:00:00Z",
     pinned_at: null,
@@ -189,10 +186,10 @@ function seedWorkspaceStore() {
   resetTabStore()
 }
 
-let latestContext: ReturnType<typeof useTabContext> | null = null
+let latestContext: ReturnType<typeof useTabStore.getState> | null = null
 
 function Probe() {
-  const ctx = useTabContext()
+  const ctx = useTabStore((s) => s)
   const activeTab = ctx.tabs.find((tab) => tab.id === ctx.activeTabId)
 
   useEffect(() => {
@@ -1384,7 +1381,6 @@ describe("TabProvider sub-session tabs", () => {
       git_branch: null,
       external_id: null,
       message_count: 0,
-      child_count: 0,
       created_at: "2026-05-24T00:00:00Z",
       updated_at: "2026-05-24T00:00:00Z",
       pinned_at: null,

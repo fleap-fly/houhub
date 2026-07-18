@@ -286,16 +286,20 @@ describe("AppWorkspaceProvider conversation://changed sync", () => {
     emit({ kind: "upsert", summary: makeSummary({ id: 1, message_count: 3 }) })
     emit({ kind: "upsert", summary: makeSummary({ id: 2, message_count: 4 }) })
     await act(async () => {})
-    const statsBefore = ctx?.stats
-    const conversationsBefore = ctx?.conversations
+    const statsBefore = useAppWorkspaceStore.getState().stats
+    const conversationsBefore = useAppWorkspaceStore.getState().conversations
 
     act(() => {
-      ctx?.updateConversationLocal(1, { status: "pending_review" })
+      useAppWorkspaceStore
+        .getState()
+        .updateConversationLocal(1, { status: "pending_review" })
     })
     await act(async () => {})
 
-    expect(ctx?.stats).toBe(statsBefore)
-    expect(ctx?.conversations).not.toBe(conversationsBefore)
+    expect(useAppWorkspaceStore.getState().stats).toBe(statsBefore)
+    expect(useAppWorkspaceStore.getState().conversations).not.toBe(
+      conversationsBefore
+    )
     expect(screen.getByTestId("statuses")).toHaveTextContent(
       "2:in_progress,1:pending_review"
     )

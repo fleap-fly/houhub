@@ -1,7 +1,11 @@
 "use client"
 
 import { useEffect } from "react"
-import { useConversationRuntime } from "@/contexts/conversation-runtime-context"
+import { useShallow } from "zustand/react/shallow"
+import {
+  useConversationRuntimeActions,
+  useConversationRuntimeStore,
+} from "@/stores/conversation-runtime-store"
 import type { DbConversationDetail } from "@/lib/types"
 
 function isVirtualConversationId(conversationId: number): boolean {
@@ -28,28 +32,33 @@ export function useConversationDetail(
   acpLoadError: string | null
 } {
   const enabled = options?.enabled ?? true
-  const { getSession, fetchDetail } = useConversationRuntime()
-  const session = getSession(conversationId)
+  const { detail, detailLoading, detailError, acpLoadError, hasSession } =
+    useConversationRuntimeStore(
+      useShallow((s) => {
+        const session = s.byConversationId.get(conversationId)
+        return {
+          detail: session?.detail ?? null,
+          detailLoading: session?.detailLoading ?? false,
+          detailError: session?.detailError ?? null,
+          acpLoadError: session?.acpLoadError ?? null,
+          hasSession: session != null,
+        }
+      })
+    )
+  const { fetchDetail } = useConversationRuntimeActions()
   const isVirtual = isVirtualConversationId(conversationId)
 
   useEffect(() => {
     if (!enabled) return
     if (isVirtual) return
-    if (session?.detail || session?.detailLoading) return
+    if (detail || detailLoading) return
     fetchDetail(conversationId)
-  }, [
-    enabled,
-    conversationId,
-    isVirtual,
-    session?.detail,
-    session?.detailLoading,
-    fetchDetail,
-  ])
+  }, [enabled, conversationId, isVirtual, detail, detailLoading, fetchDetail])
 
   return {
-    detail: session?.detail ?? null,
-    loading: session ? session.detailLoading : !isVirtual,
-    error: session?.detailError ?? null,
-    acpLoadError: session?.acpLoadError ?? null,
+    detail,
+    loading: hasSession ? detailLoading : !isVirtual,
+    error: detailError,
+    acpLoadError,
   }
 }

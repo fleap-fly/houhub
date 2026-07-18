@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
+import { useShallow } from "zustand/react/shallow"
 import type { LinkSafetyConfig, LinkSafetyModalProps } from "streamdown"
 import {
   DirectLinkOpen,
@@ -29,10 +30,14 @@ import { ContentPartsRenderer } from "@/components/message/content-parts-rendere
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { WorkbenchCloudPage } from "@/components/workbench/workbench-cloud-page"
-import { useAuxPanelContext } from "@/contexts/aux-panel-context"
-import { useHouflowDesktop } from "@/houflow"
-import { useHouflowCloudWorkspace } from "@/houflow/cloud-workspace-context"
-import { useWorkbench, useWorkbenchCloud } from "@/workbench"
+import { useAuxPanelStore } from "@/stores/aux-panel-store"
+import { useHouflowDesktopStore } from "@/houflow"
+import {
+  selectHouflowCloudSelectedHostedCommand,
+  selectHouflowCloudSelectedSession,
+  useHouflowCloudWorkspaceStore,
+} from "@/houflow/cloud-workspace-context"
+import { useWorkbenchCloudStore, useWorkbenchStore } from "@/workbench"
 import {
   Command,
   CommandEmpty,
@@ -106,21 +111,23 @@ const CLOUD_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
 }
 
 function useCloudSessionLinkSafety(sessionId: string | null): LinkSafetyConfig {
-  const cloud = useHouflowCloudWorkspace()
-  const { openTab } = useAuxPanelContext()
+  const openSessionOutput = useHouflowCloudWorkspaceStore(
+    (state) => state.openSessionOutput
+  )
+  const openTab = useAuxPanelStore((state) => state.openTab)
   const openExternal = useOpenLinkOrFile()
 
   const openCloudScopedTarget = useCallback(
     async (url: string) => {
       const outputTarget = normalizeCloudOutputTarget(url)
       if (outputTarget && sessionId) {
-        cloud.openSessionOutput(sessionId, url)
+        openSessionOutput(sessionId, url)
         openTab("file_tree")
         return
       }
       await openExternal(url)
     },
-    [cloud, openExternal, openTab, sessionId]
+    [openExternal, openSessionOutput, openTab, sessionId]
   )
 
   const renderModal = useCallback(
@@ -144,10 +151,39 @@ export function CloudSessionPage() {
   const t = useTranslations("HouflowCloud")
   const sharedT = useTranslations("Folder.chat.shared")
   const configT = useTranslations("AcpAgentSettings")
-  const houflow = useHouflowDesktop()
-  const cloud = useHouflowCloudWorkspace()
-  const workbench = useWorkbench()
-  const workbenchCloud = useWorkbenchCloud()
+  const houflow = useHouflowDesktopStore(
+    useShallow((state) => ({
+      session: state.session,
+      secret: state.secret,
+      snapshot: state.snapshot,
+      refresh: state.refresh,
+    }))
+  )
+  const cloud = useHouflowCloudWorkspaceStore(
+    useShallow((state) => ({
+      hostedCommands: state.hostedCommands,
+      selectedTargetKey: state.selectedTargetKey,
+      selectedSessionId: state.selectedSessionId,
+      selectedHostedCommandId: state.selectedHostedCommandId,
+      loading: state.loading,
+      refreshSessions: state.refreshSessions,
+      refreshHostedCommand: state.refreshHostedCommand,
+      rememberHostedCommand: state.rememberHostedCommand,
+      rememberSession: state.rememberSession,
+      removeSession: state.removeSession,
+      selectTarget: state.selectTarget,
+      selectSession: state.selectSession,
+      selectHostedCommand: state.selectHostedCommand,
+    }))
+  )
+  const selected = useHouflowCloudWorkspaceStore(
+    selectHouflowCloudSelectedSession
+  )
+  const hostedCommand = useHouflowCloudWorkspaceStore(
+    selectHouflowCloudSelectedHostedCommand
+  )
+  const workbench = useWorkbenchStore()
+  const workbenchCloud = useWorkbenchCloudStore()
   const [events, setEvents] = useState<HouflowCloudSessionEvent[]>([])
   const [approvals, setApprovals] = useState<HouflowCloudApproval[]>([])
   const [eventsLoading, setEventsLoading] = useState(false)
@@ -172,8 +208,6 @@ export function CloudSessionPage() {
     createMessageTurnAdapter()
   )
 
-  const selected = cloud.selectedSession
-  const hostedCommand = cloud.selectedHostedCommand
   const hostedThreadCommands = useMemo(
     () =>
       hostedCommand

@@ -608,7 +608,7 @@ export function monacoWsbgThemeName(baseTheme: string, alpha: number): string {
 }
 
 // Recover (color, dark) from a base name produced by `monacoThemeName`
-// (`codeg-{light|dark}-{color}`).
+// (`houhub-{light|dark}-{color}`).
 function parseMonacoThemeName(baseTheme: string): {
   color: ThemeColor
   dark: boolean

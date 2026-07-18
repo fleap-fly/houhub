@@ -29,11 +29,11 @@ vi.mock("./client", () => ({
   signOutWorkbench: mocks.signOutWorkbench,
 }))
 
-import { WorkbenchProvider, useWorkbench } from "./workbench-provider"
+import { WorkbenchProvider, useWorkbenchStore } from "./workbench-provider"
 import { WORKBENCH_SIGNED_OUT_SESSION } from "./types"
 
 function Probe() {
-  const workbench = useWorkbench()
+  const workbench = useWorkbenchStore()
   return <div data-testid="status">{workbench.status}</div>
 }
 

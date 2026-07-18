@@ -1,7 +1,7 @@
 //! Filesystem-backed workspace background-image repository.
 //!
 //! A single user-selected image is stored at
-//! `paths::codeg_backgrounds_root()/background.img`. The repository is
+//! `paths::houhub_backgrounds_root()/background.img`. The repository is
 //! **decoupled from Tauri** so the same routines back the desktop and
 //! standalone-server runtimes, mirroring `crate::pets` — simplified to one
 //! image with no id/manifest, and with relaxed validation: any dimensions are
@@ -16,7 +16,7 @@ use image::{ImageFormat, ImageReader};
 
 use crate::app_error::AppCommandError;
 use crate::models::background::BackgroundAsset;
-use crate::paths::codeg_backgrounds_root;
+use crate::paths::houhub_backgrounds_root;
 
 /// Smallest plausible image payload; rejecting tiny inputs early avoids
 /// decoding random files.
@@ -33,7 +33,7 @@ const MAX_BG_PIXELS: u64 = 40_000_000;
 const BACKGROUND_FILENAME: &str = "background.img";
 
 fn background_path() -> PathBuf {
-    codeg_backgrounds_root().join(BACKGROUND_FILENAME)
+    houhub_backgrounds_root().join(BACKGROUND_FILENAME)
 }
 
 /// Verify the payload is a real, bounded image before it touches disk. Accepts
@@ -82,7 +82,7 @@ pub fn validate_background(bytes: &[u8]) -> Result<(), AppCommandError> {
 }
 
 fn ensure_backgrounds_root() -> Result<PathBuf, AppCommandError> {
-    let root = codeg_backgrounds_root();
+    let root = houhub_backgrounds_root();
     if !root.exists() {
         fs::create_dir_all(&root).map_err(AppCommandError::io)?;
     }
@@ -158,7 +158,7 @@ pub fn clear_background() -> Result<(), AppCommandError> {
 mod tests {
     use super::*;
 
-    // Filesystem-touching paths depend on the global `CODEG_HOME`/`CODEG_DATA_DIR`
+    // Filesystem-touching paths depend on the global `HOUHUB_HOME`/`HOUHUB_DATA_DIR`
     // env (shared, races under parallel tests), so — like `pets::tests` — we
     // exercise the pure validation surface here and cover disk I/O via manual
     // smoke tests.

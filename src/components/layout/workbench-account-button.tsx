@@ -5,7 +5,7 @@ import { Building2, Check, Loader2, LogOut, RefreshCw } from "lucide-react"
 import { useLocale } from "next-intl"
 import { toast } from "sonner"
 
-import { useWorkbench } from "@/workbench"
+import { useWorkbenchStore } from "@/workbench"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -191,7 +191,7 @@ function resolveCopy(locale: string): WorkbenchAccountCopy {
 export function WorkbenchAccountButton() {
   const locale = useLocale()
   const copy = useMemo(() => resolveCopy(locale), [locale])
-  const workbench = useWorkbench()
+  const workbench = useWorkbenchStore()
   const [opening, setOpening] = useState(false)
 
   const isBusy =

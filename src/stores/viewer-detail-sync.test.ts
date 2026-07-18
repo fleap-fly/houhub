@@ -62,7 +62,6 @@ function detail(
       git_branch: null,
       external_id: "ext-1",
       message_count: turns.length,
-      child_count: 0,
       created_at: "2026-07-18T00:00:00.000Z",
       updated_at: "2026-07-18T00:00:00.000Z",
       pinned_at: null,

@@ -2,7 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   HouflowDesktopProvider,
-  useHouflowDesktop,
+  useHouflowDesktopStore,
 } from "./houflow-desktop-provider"
 import type { HouflowControlSnapshot, HouflowDesktopSession } from "./types"
 
@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   getHouflowConnectorStatus: vi.fn(),
   acpListAgents: vi.fn(),
   publishHouflowExternalAgent: vi.fn(),
+  loadHouflowLocalAgentReportSelection: vi.fn(),
+  saveHouflowLocalAgentReportSelection: vi.fn(),
 }))
 
 vi.mock("./control-client", () => ({
@@ -26,6 +28,10 @@ vi.mock("./storage", () => ({
   loadHouflowSessionMetadata: () => session("workspace_1"),
   saveHouflowSessionMetadata: mocks.saveHouflowSessionMetadata,
   clearHouflowSessionMetadata: vi.fn(),
+  loadHouflowLocalAgentReportSelection:
+    mocks.loadHouflowLocalAgentReportSelection,
+  saveHouflowLocalAgentReportSelection:
+    mocks.saveHouflowLocalAgentReportSelection,
 }))
 
 vi.mock("./secret-store", () => ({
@@ -68,6 +74,9 @@ describe("HouflowDesktopProvider workspace selection", () => {
     mocks.getHouflowConnectorStatus.mockReset()
     mocks.acpListAgents.mockReset()
     mocks.publishHouflowExternalAgent.mockReset()
+    mocks.loadHouflowLocalAgentReportSelection.mockReset()
+    mocks.saveHouflowLocalAgentReportSelection.mockReset()
+    mocks.loadHouflowLocalAgentReportSelection.mockReturnValue([])
     mocks.fetchOpenAiCompatibleModels.mockRejectedValue(
       new Error("401 Unauthorized: request rejected")
     )
@@ -144,7 +153,7 @@ describe("HouflowDesktopProvider workspace selection", () => {
     )
   })
 
-  it("publishes local connector agents with Agent Hub canonical refs", async () => {
+  it("discovers local agents without reporting them until explicitly selected", async () => {
     mocks.loadHouflowControlSnapshot.mockImplementation(
       async (nextSession: HouflowDesktopSession, _secret, options) =>
         snapshot(
@@ -187,6 +196,35 @@ describe("HouflowDesktopProvider workspace selection", () => {
     )
 
     await screen.findByText("ready:workspace_1:default")
+    expect(useHouflowDesktopStore.getState().localAgents).toEqual([
+      expect.objectContaining({
+        localAgentRef: "claude:cli",
+        provider: "claude",
+        runtimeProvider: "claude",
+      }),
+      expect.objectContaining({
+        localAgentRef: "codex:cli",
+        provider: "codex",
+        runtimeProvider: "codex",
+      }),
+      expect.objectContaining({
+        localAgentRef: "pi:cli",
+        provider: "pi",
+        runtimeProvider: "pi",
+      }),
+    ])
+    expect(mocks.syncHouflowConnectorLocalAgents).not.toHaveBeenCalled()
+    expect(mocks.publishHouflowExternalAgent).not.toHaveBeenCalled()
+
+    act(() => {
+      useHouflowDesktopStore
+        .getState()
+        .setLocalAgentReportSelection(["claude:cli", "pi:cli"])
+    })
+    await act(async () => {
+      await useHouflowDesktopStore.getState().reportSelectedLocalAgents()
+    })
+
     expect(mocks.syncHouflowConnectorLocalAgents).toHaveBeenCalledWith({
       heartbeat: true,
       agents: [
@@ -194,11 +232,6 @@ describe("HouflowDesktopProvider workspace selection", () => {
           localAgentRef: "claude:cli",
           provider: "claude",
           runtimeProvider: "claude",
-        }),
-        expect.objectContaining({
-          localAgentRef: "codex:cli",
-          provider: "codex",
-          runtimeProvider: "codex",
         }),
         expect.objectContaining({
           localAgentRef: "pi:cli",
@@ -221,25 +254,65 @@ describe("HouflowDesktopProvider workspace selection", () => {
       expect.anything(),
       expect.objectContaining({
         connectorId: "cac_desktop",
-        localAgentRef: "codex:cli",
-        provider: "codex",
-      })
-    )
-    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: "workspace_1" }),
-      expect.anything(),
-      expect.objectContaining({
-        connectorId: "cac_desktop",
         localAgentRef: "pi:cli",
         provider: "pi",
       })
     )
-    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledTimes(3)
+    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledTimes(2)
+    expect(mocks.saveHouflowLocalAgentReportSelection).toHaveBeenCalledWith(
+      "workspace_1",
+      ["claude:cli", "pi:cli"]
+    )
+  })
+
+  it("loads local-agent reporting consent independently for each workspace", async () => {
+    mocks.loadHouflowControlSnapshot.mockImplementation(
+      async (nextSession: HouflowDesktopSession, _secret, options) =>
+        snapshot(
+          nextSession.workspaceId ?? "workspace_1",
+          options?.gatewayCatalogMode === "skip" ? null : gatewayCatalog(),
+          connectorSummary()
+        )
+    )
+    mocks.acpListAgents.mockResolvedValue([
+      {
+        agent_type: "codex",
+        name: "OpenAI Codex CLI",
+        enabled: true,
+        available: true,
+      },
+    ])
+    mocks.loadHouflowLocalAgentReportSelection.mockImplementation(
+      (workspaceId: string) =>
+        workspaceId === "workspace_1" ? ["codex:cli"] : []
+    )
+
+    render(
+      <HouflowDesktopProvider>
+        <Probe />
+      </HouflowDesktopProvider>
+    )
+
+    await screen.findByText("ready:workspace_1:default")
+    expect(useHouflowDesktopStore.getState().selectedLocalAgentRefs).toEqual([
+      "codex:cli",
+    ])
+
+    await act(async () => {
+      await useHouflowDesktopStore.getState().selectWorkspace("workspace_2")
+    })
+
+    expect(useHouflowDesktopStore.getState().selectedLocalAgentRefs).toEqual([])
+    expect(mocks.loadHouflowLocalAgentReportSelection).toHaveBeenCalledWith(
+      "workspace_2"
+    )
+    expect(mocks.syncHouflowConnectorLocalAgents).not.toHaveBeenCalled()
+    expect(mocks.publishHouflowExternalAgent).not.toHaveBeenCalled()
   })
 })
 
 function Probe() {
-  const houflow = useHouflowDesktop()
+  const houflow = useHouflowDesktopStore()
   return (
     <div>
       <div>

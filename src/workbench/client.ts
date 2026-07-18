@@ -59,6 +59,23 @@ export async function signOutWorkbench(): Promise<void> {
   await getTransport().call("workbench_sign_out")
 }
 
+export interface WorkbenchClientSuite {
+  code: string
+  name: string
+  viewId: string
+  projectId: string
+  url: string
+}
+
+export async function listWorkbenchClientSuites(
+  projectId: string
+): Promise<WorkbenchClientSuite[]> {
+  return getTransport().call<WorkbenchClientSuite[]>(
+    "workbench_list_client_suites",
+    { projectId }
+  )
+}
+
 export interface PollUntilCompleteOptions {
   deviceCode: string
   pollIntervalSeconds: number

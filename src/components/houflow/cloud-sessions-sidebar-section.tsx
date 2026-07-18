@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
+import { useShallow } from "zustand/react/shallow"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -37,9 +38,9 @@ import {
 } from "@/components/ui/context-menu"
 import { CloudTargetIcon } from "@/components/houflow/cloud-target-status"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
-import { useHouflowDesktop } from "@/houflow"
-import { useHouflowCloudWorkspace } from "@/houflow/cloud-workspace-context"
-import { useWorkbench, useWorkbenchCloud } from "@/workbench"
+import { useHouflowDesktopStore } from "@/houflow"
+import { useHouflowCloudWorkspaceStore } from "@/houflow/cloud-workspace-context"
+import { useWorkbenchCloudStore, useWorkbenchStore } from "@/workbench"
 import type { WorkbenchAiSession, WorkbenchAssistant } from "@/workbench/ai"
 import type {
   HouflowCloudHostedCommand,
@@ -60,10 +61,34 @@ const INITIAL_SESSION_COUNT = 4
 
 export function CloudSessionsSidebarSection() {
   const t = useTranslations("HouflowCloud")
-  const houflow = useHouflowDesktop()
-  const cloud = useHouflowCloudWorkspace()
-  const workbench = useWorkbench()
-  const workbenchCloud = useWorkbenchCloud()
+  const houflow = useHouflowDesktopStore(
+    useShallow((state) => ({
+      session: state.session,
+      snapshot: state.snapshot,
+      refresh: state.refresh,
+    }))
+  )
+  const cloud = useHouflowCloudWorkspaceStore(
+    useShallow((state) => ({
+      sessions: state.sessions,
+      hostedCommands: state.hostedCommands,
+      selectedTargetKey: state.selectedTargetKey,
+      selectedSessionId: state.selectedSessionId,
+      selectedHostedCommandId: state.selectedHostedCommandId,
+      loading: state.loading,
+      error: state.error,
+      refreshSessions: state.refreshSessions,
+      archiveSession: state.archiveSession,
+      deleteSession: state.deleteSession,
+      deleteHostedCommand: state.deleteHostedCommand,
+      refreshHostedCommands: state.refreshHostedCommands,
+      selectTarget: state.selectTarget,
+      selectSession: state.selectSession,
+      selectHostedCommand: state.selectHostedCommand,
+    }))
+  )
+  const workbench = useWorkbenchStore()
+  const workbenchCloud = useWorkbenchCloudStore()
   const { routeId, setRoute } = useWorkbenchRoute()
   const [sectionExpanded, setSectionExpanded] = useState(true)
   const [managedExpanded, setManagedExpanded] = useState(true)

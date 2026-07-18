@@ -2,15 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { openSettingsWindow } from "@/lib/api"
-import { useAppWorkspace } from "@/contexts/app-workspace-context"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
-import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { isDesktop, openFileDialog } from "@/lib/platform"
 import { getActiveRemoteConnectionId } from "@/lib/transport"
 import { useSidebarContext } from "@/contexts/sidebar-context"
-import { useAuxPanelContext } from "@/contexts/aux-panel-context"
+import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { useTerminalContext } from "@/contexts/terminal-context"
-import { useTabContext } from "@/contexts/tab-context"
+import { useTabActions } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useSearchDialog } from "@/contexts/search-dialog-context"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
@@ -27,13 +26,12 @@ import { DirectoryBrowserDialog } from "@/components/shared/directory-browser-di
  * visible bar. Renders no visible chrome — only the dialogs.
  */
 export function WorkspaceChromeController() {
-  const { openFolder } = useAppWorkspace()
+  const openFolder = useAppWorkspaceStore((s) => s.openFolder)
   const { activeFolder } = useActiveFolder()
-  const isChatMode = useIsActiveChatMode()
   const { toggle } = useSidebarContext()
-  const { toggle: toggleAuxPanel } = useAuxPanelContext()
+  const toggleAuxPanel = useAuxPanelStore((state) => state.toggle)
   const { toggle: toggleTerminal } = useTerminalContext()
-  const { openNewConversationTab } = useTabContext()
+  const { openNewConversationTab } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const { shortcuts } = useShortcutSettings()
   // Search open-state is shared (see search-dialog-context): the trigger lives
@@ -87,9 +85,6 @@ export function WorkspaceChromeController() {
         return
       }
       if (matchShortcutEvent(e, shortcuts.toggle_aux_panel)) {
-        // The aux panel hosts the Session Details tab, so it's usable in chat
-        // mode too; only suppress the toggle when there's nothing to show.
-        if (!activeFolder && !isChatMode) return
         e.preventDefault()
         toggleAuxPanel()
         return
@@ -126,7 +121,6 @@ export function WorkspaceChromeController() {
     toggle,
     toggleAuxPanel,
     toggleTerminal,
-    isChatMode,
   ])
 
   return (

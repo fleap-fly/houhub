@@ -328,7 +328,7 @@ describe("MessageInput file-tree drag-and-drop", () => {
     kind: "file" | "dir"
   }) {
     const store = new Map<string, string>([
-      ["application/x-codeg-tree-entry", JSON.stringify(payload)],
+      ["application/x-houhub-tree-entry", JSON.stringify(payload)],
       ["text/plain", payload.absPath],
     ])
     return {

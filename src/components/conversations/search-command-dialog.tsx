@@ -5,7 +5,7 @@ import { formatDistanceToNow } from "date-fns"
 import { enUS, zhCN, zhTW } from "date-fns/locale"
 import { File, Folder } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
-import { useAuxPanelContext } from "@/contexts/aux-panel-context"
+import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions } from "@/contexts/tab-context"
@@ -60,7 +60,7 @@ export function SearchCommandDialog({
   const { openTab } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const { openFilePreview } = useWorkspaceActions()
-  const { revealInFileTree } = useAuxPanelContext()
+  const revealInFileTree = useAuxPanelStore((state) => state.revealInFileTree)
 
   const [activeTab, setActiveTab] = useState<SearchTab>("conversations")
   const [query, setQuery] = useState("")

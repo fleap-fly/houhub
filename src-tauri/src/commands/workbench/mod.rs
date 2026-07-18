@@ -17,6 +17,7 @@ mod auth;
 mod client;
 mod space;
 mod store;
+mod suite_host;
 mod types;
 
 pub use ai::{
@@ -32,6 +33,10 @@ pub use space::{
     workbench_space_complete_upload_core, workbench_space_create_folder_core,
     workbench_space_delete_file_core, workbench_space_download_url_core, workbench_space_list_core,
     workbench_space_presign_upload_core, workbench_space_usage_core,
+};
+pub use suite_host::{
+    workbench_list_client_suites_core, WorkbenchClientSuite, WorkbenchSuiteHostResult,
+    WorkbenchSuiteOpenRequest,
 };
 pub use types::{DeviceAuthPollResult, DeviceAuthStart, WorkbenchSession};
 
@@ -198,4 +203,21 @@ pub async fn workbench_ai_send_message(
     query: String,
 ) -> Result<JsonValue, AppCommandError> {
     workbench_ai_send_message_core(project_id, assistant_id, session_id, query).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn workbench_open_suite(
+    app: tauri::AppHandle,
+    input: WorkbenchSuiteOpenRequest,
+) -> Result<WorkbenchSuiteHostResult, AppCommandError> {
+    suite_host::workbench_open_suite_core(app, input).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn workbench_list_client_suites(
+    project_id: String,
+) -> Result<Vec<WorkbenchClientSuite>, AppCommandError> {
+    workbench_list_client_suites_core(project_id).await
 }

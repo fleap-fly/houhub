@@ -34,6 +34,7 @@ import {
 import { isDesktop, openUrl } from "@/lib/platform"
 import { getActiveRemoteConnectionId } from "@/lib/transport"
 import { toast } from "sonner"
+import { useShallow } from "zustand/react/shallow"
 import { AgentIcon } from "@/components/agent-icon"
 import {
   AlertDialog,
@@ -119,7 +120,7 @@ import { getInstallErrorHintKey } from "@/lib/agent-install-error"
 import { modelReasoningEfforts } from "@/lib/reasoning-effort-capabilities"
 import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
 import { OpencodePluginsModal } from "./opencode-plugins-modal"
-import { useHouflowDesktop, type HouflowAgentTarget } from "@/houflow"
+import { useHouflowDesktopStore, type HouflowAgentTarget } from "@/houflow"
 import { CodeBuddyConfigPanel } from "./codebuddy-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
 import { CodexModelListEditor } from "./codex-model-list-editor"
@@ -3268,7 +3269,14 @@ function AgentHubTargetsSummary() {
         : AGENT_HUB_TARGET_COPY.en,
     [locale]
   )
-  const houflow = useHouflowDesktop()
+  const houflow = useHouflowDesktopStore(
+    useShallow((state) => ({
+      status: state.status,
+      session: state.session,
+      snapshot: state.snapshot,
+      error: state.error,
+    }))
+  )
   const targets = houflow.snapshot?.targets ?? EMPTY_AGENT_HUB_TARGETS
   const counts = useMemo(
     () =>
@@ -4039,7 +4047,13 @@ export function AcpAgentSettings() {
   const rawTranslator = t as unknown as AcpTranslator
   acpTranslator = (key, values) => rawTranslator(key, values)
   const searchParams = useSearchParams()
-  const houflow = useHouflowDesktop()
+  const houflow = useHouflowDesktopStore(
+    useShallow((state) => ({
+      status: state.status,
+      session: state.session,
+      snapshot: state.snapshot,
+    }))
+  )
   const [agents, setAgents] = useState<AcpAgentInfo[]>([])
   const [loadingAgents, setLoadingAgents] = useState(true)
   const [loadingError, setLoadingError] = useState<string | null>(null)

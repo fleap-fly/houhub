@@ -4,16 +4,16 @@ import { useMemo } from "react"
 import { useTranslations } from "next-intl"
 import { useShallow } from "zustand/react/shallow"
 import type { MessageTurn } from "@/lib/types"
-import { useTabContext } from "@/contexts/tab-context"
+import { useTabStore } from "@/contexts/tab-context"
 import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
-import { useAppWorkspace } from "@/contexts/app-workspace-context"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { resolveActiveSessionDetails } from "@/components/conversations/active-session-details"
 import { SessionDetailsContent } from "@/components/conversations/session-details-content"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { useIsMobile } from "@/hooks/use-mobile"
-import { useAuxPanelContext } from "@/contexts/aux-panel-context"
+import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { cn } from "@/lib/utils"
 import { BranchDropdown } from "./branch-dropdown"
 import { CommandDropdown } from "./command-dropdown"
@@ -36,12 +36,14 @@ const EMPTY_TURNS: MessageTurn[] = []
  */
 export function SessionDetailsTab() {
   const t = useTranslations("Folder.sessionDetails")
-  const { isOpen, activeTab } = useAuxPanelContext()
+  const isOpen = useAuxPanelStore((state) => state.isOpen)
+  const activeTab = useAuxPanelStore((state) => state.activeTab)
   const { activeFolderId } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
   const isMobile = useIsMobile()
 
-  const { tabs, activeTabId } = useTabContext()
+  const tabs = useTabStore((s) => s.tabs)
+  const activeTabId = useTabStore((s) => s.activeTabId)
   const activeConversationTab = useMemo(
     () =>
       tabs.find(
@@ -76,7 +78,7 @@ export function SessionDetailsTab() {
       }
     })
   )
-  const { conversations } = useAppWorkspace()
+  const conversations = useAppWorkspaceStore((s) => s.conversations)
   const { summary, stats, model } = resolveActiveSessionDetails(
     activeConversationTab,
     (id) => (id === activeRuntimeId ? runtimeSlice : null),

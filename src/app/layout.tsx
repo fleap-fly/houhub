@@ -14,7 +14,10 @@ import { OverlayScrollbarsInit } from "@/components/overlay-scrollbars-init"
 import { ClipboardFallbackInit } from "@/components/clipboard-fallback-init"
 import { WebConnectionGuard } from "@/components/connection/web-connection-guard"
 import { WindowResizeGrips } from "@/components/layout/window-resize-grips"
-import { HouflowDesktopProvider } from "@/houflow"
+import {
+  HouflowDesktopProvider,
+  WorkbenchClientCapabilityProvider,
+} from "@/houflow"
 import { WorkbenchProvider } from "@/workbench"
 
 export const viewport: Viewport = {
@@ -71,6 +74,7 @@ export default async function RootLayout({
               <AppearanceProvider>
                 <HouflowDesktopProvider>
                   <WorkbenchProvider>
+                    <WorkbenchClientCapabilityProvider />
                     <OverlayScrollbarsInit />
                     <ClipboardFallbackInit />
                     <WebConnectionGuard />

@@ -39,10 +39,8 @@ import {
 } from "@/contexts/workbench-route-context"
 import { HouflowCloudWorkspaceProvider } from "@/houflow"
 import { WorkbenchRoutePage } from "@/components/workbench/workbench-content"
-import {
-  AuxPanelProvider,
-  useAuxPanelContext,
-} from "@/contexts/aux-panel-context"
+import { useAuxPanelStore } from "@/stores/aux-panel-store"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
   TerminalProvider,
   useTerminalContext,
@@ -130,6 +128,21 @@ function TabKeysSync() {
   useEffect(() => {
     registerOpenTabKeys(keys)
   }, [keys, registerOpenTabKeys])
+  return null
+}
+
+function AuxPanelStoreLifecycle() {
+  const activeFolderId = useAppWorkspaceStore((state) => state.activeFolderId)
+  const hydrate = useAuxPanelStore((state) => state.hydrate)
+  const resetPendingRevealPath = useAuxPanelStore(
+    (state) => state.resetPendingRevealPath
+  )
+
+  useEffect(() => hydrate(), [hydrate])
+  useEffect(
+    () => resetPendingRevealPath(),
+    [activeFolderId, resetPendingRevealPath]
+  )
   return null
 }
 
@@ -256,10 +269,9 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
 
   const { isConversations } = useWorkbenchRoute()
   const { isOpen: sidebarOpen } = useSidebarContext()
-  const { isOpen: auxOpen } = useAuxPanelContext()
+  const auxOpen = useAuxPanelStore((state) => state.isOpen)
   const { isMac, isWindows, isLinux } = usePlatform()
-  const { tabs } = useTabContext()
-  const hasConvTabs = tabs.length > 0
+  const hasConvTabs = useTabStore((s) => s.tabs.length > 0)
   const winLinuxControls = isDesktop() && (isWindows || isLinux)
   // The window chrome (toggle/remote left, terminal/aux/settings right) now
   // lives in fixed corner overlays (see FolderLayoutShell) that never move on
@@ -506,11 +518,7 @@ function MobileFolderWorkspaceShell({
     restored: sidebarRestored,
     toggle: toggleSidebar,
   } = useSidebarContext()
-  const {
-    isOpen: auxOpen,
-    restored: auxRestored,
-    toggle: toggleAux,
-  } = useAuxPanelContext()
+  const { isOpen: auxOpen, restored: auxRestored } = useAuxPanelStore()
   const { isOpen: terminalOpen, toggle: toggleTerminal } = useTerminalContext()
 
   return (
@@ -530,7 +538,10 @@ function MobileFolderWorkspaceShell({
         <MobileWorkspaceContent>{children}</MobileWorkspaceContent>
       </main>
 
-      <Sheet open={auxRestored && auxOpen} onOpenChange={toggleAux}>
+      <Sheet
+        open={auxRestored && auxOpen}
+        onOpenChange={useAuxPanelStore.getState().setOpen}
+      >
         <SheetContent
           side="right"
           showCloseButton={false}
@@ -573,7 +584,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     minWidth: auxMinWidth,
     maxWidth: auxMaxWidth,
     setWidth: setAuxWidth,
-  } = useAuxPanelContext()
+  } = useAuxPanelStore()
   const {
     isOpen: terminalOpen,
     height: terminalHeight,
@@ -1128,33 +1139,32 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                     <TabProvider>
                       <WorkspaceDocumentTitle />
                       <TabKeysSync />
+                      <AuxPanelStoreLifecycle />
                       <HeavyPluginsWarmup />
                       <DeepLinkBootstrap />
                       <PetFocusBridge />
                       <ExternalConflictDialog />
                       <SessionStatsProvider>
                         <SidebarProvider>
-                          <AuxPanelProvider>
-                            <TerminalProvider>
-                              <SearchDialogProvider>
-                                <AutomationsViewProvider>
-                                  <WorkbenchRouteProvider>
-                                    <WorkbenchCloudProvider>
-                                      <HouflowCloudWorkspaceProvider>
-                                        <WorkbenchRouteConversationSync />
-                                        <WorkspaceOpenFolderListener />
-                                        <ConversationLocateProvider>
-                                          <FolderLayoutShell>
-                                            {children}
-                                          </FolderLayoutShell>
-                                        </ConversationLocateProvider>
-                                      </HouflowCloudWorkspaceProvider>
-                                    </WorkbenchCloudProvider>
-                                  </WorkbenchRouteProvider>
-                                </AutomationsViewProvider>
-                              </SearchDialogProvider>
-                            </TerminalProvider>
-                          </AuxPanelProvider>
+                          <TerminalProvider>
+                            <SearchDialogProvider>
+                              <AutomationsViewProvider>
+                                <WorkbenchRouteProvider>
+                                  <WorkbenchCloudProvider>
+                                    <HouflowCloudWorkspaceProvider>
+                                      <WorkbenchRouteConversationSync />
+                                      <WorkspaceOpenFolderListener />
+                                      <ConversationLocateProvider>
+                                        <FolderLayoutShell>
+                                          {children}
+                                        </FolderLayoutShell>
+                                      </ConversationLocateProvider>
+                                    </HouflowCloudWorkspaceProvider>
+                                  </WorkbenchCloudProvider>
+                                </WorkbenchRouteProvider>
+                              </AutomationsViewProvider>
+                            </SearchDialogProvider>
+                          </TerminalProvider>
                         </SidebarProvider>
                       </SessionStatsProvider>
                     </TabProvider>

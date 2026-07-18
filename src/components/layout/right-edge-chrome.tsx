@@ -6,9 +6,8 @@ import { useTranslations } from "next-intl"
 import { openSettingsWindow } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { useActiveFolder } from "@/contexts/active-folder-context"
-import { useAuxPanelContext } from "@/contexts/aux-panel-context"
+import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { useTerminalContext } from "@/contexts/terminal-context"
-import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { useIsMac } from "@/hooks/use-is-mac"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { formatShortcutLabel } from "@/lib/keyboard-shortcuts"
@@ -26,8 +25,8 @@ import { RIGHT_CHROME_CLUSTER } from "@/lib/window-chrome"
 export function RightEdgeChrome() {
   const tTitleBar = useTranslations("Folder.folderTitleBar")
   const { activeFolder } = useActiveFolder()
-  const isChatMode = useIsActiveChatMode()
-  const { isOpen: auxPanelOpen, toggle: toggleAuxPanel } = useAuxPanelContext()
+  const auxPanelOpen = useAuxPanelStore((state) => state.isOpen)
+  const toggleAuxPanel = useAuxPanelStore((state) => state.toggle)
   const { isOpen: terminalOpen, toggle: toggleTerminal } = useTerminalContext()
   const isMac = useIsMac()
   const { shortcuts } = useShortcutSettings()
@@ -64,7 +63,6 @@ export function RightEdgeChrome() {
           size="icon"
           className={`h-6 w-6 hover:bg-foreground/10 hover:text-foreground/80 dark:hover:bg-foreground/10 ${auxPanelOpen ? "bg-accent" : ""}`}
           onClick={toggleAuxPanel}
-          disabled={!activeFolder && !isChatMode}
           title={tTitleBar("withShortcut", {
             label: tTitleBar("toggleAuxPanel"),
             shortcut: formatShortcutLabel(shortcuts.toggle_aux_panel, isMac),

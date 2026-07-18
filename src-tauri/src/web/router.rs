@@ -1114,6 +1114,10 @@ pub fn build_router(
             post(handlers::workbench::workbench_get_session),
         )
         .route(
+            "/workbench_list_client_suites",
+            post(handlers::workbench::workbench_list_client_suites),
+        )
+        .route(
             "/workbench_list_projects",
             post(handlers::workbench::workbench_list_projects),
         )

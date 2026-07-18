@@ -2093,7 +2093,7 @@ async fn run_connection(
     let state_outer = Arc::clone(&state);
     // Grok's native `ask_user_question` (verified against 0.2.101) arrives as an
     // `_x.ai/ask_user_question` ACP ext request that BLOCKS on the reply — rather
-    // than the codeg-mcp tool. Capture the shared question access + feature toggle
+    // than the built-in MCP tool. Capture the shared question access + feature toggle
     // (both live on the delegation injection) so the ext handler can register the
     // questions through the SAME interactive-card pipeline and answer grok once the
     // user submits. `None` when the companion isn't injected — the handler then
@@ -2880,8 +2880,8 @@ async fn run_connection(
 /// Store the permission responder and emit event to frontend.
 /// Grok's native `ask_user_question` tool issues this ACP ext request
 /// (`_x.ai/ask_user_question`) and BLOCKS on the reply — it does NOT go through
-/// the codeg-mcp ask tool. Transparent over the raw params object
-/// (`{sessionId, toolCallId, questions, mode}`); the fields codeg needs are read
+/// the built-in MCP ask tool. Transparent over the raw params object
+/// (`{sessionId, toolCallId, questions, mode}`); the fields Houhub needs are read
 /// by [`crate::acp::question::parse_grok_ext_questions`]. sacp routes typed
 /// handlers on the RAW wire method, so the derive keeps the leading `_`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcRequest)]
@@ -2889,10 +2889,10 @@ async fn run_connection(
 #[serde(transparent)]
 struct GrokAskUserQuestionRequest(serde_json::Value);
 
-/// Bridge grok's native `_x.ai/ask_user_question` ext request into codeg's
-/// interactive question card. Grok blocks on the reply, so codeg registers the
+/// Bridge grok's native `_x.ai/ask_user_question` ext request into Houhub's
+/// interactive question card. Grok blocks on the reply, so Houhub registers the
 /// questions through the shared [`crate::acp::question::SessionQuestionAccess`] —
-/// the SAME path the codeg-mcp ask tool uses (it sets `pending_question`,
+/// the SAME path the built-in MCP ask tool uses (it sets `pending_question`,
 /// broadcasts `QuestionRequest`, and the `AskQuestionCard` renders) — then answers
 /// the ext request with the user's choice, serialized to grok's own format, once
 /// they submit. Every early return responds with an error, which makes grok fall
@@ -2913,7 +2913,7 @@ async fn handle_grok_ask_user_question(
         let _ = responder.respond_with_internal_error("ask_user_question bridge unavailable");
         return;
     };
-    // Same kill switch as the codeg-mcp ask tool: when off, let grok fall back.
+    // Same kill switch as the built-in MCP ask tool: when off, let grok fall back.
     if !ask_cfg.is_enabled().await {
         let _ = responder.respond_with_internal_error("ask_user_question is disabled");
         return;
@@ -2951,7 +2951,7 @@ async fn handle_grok_ask_user_question(
     tokio::spawn(async move {
         match registered.answer_rx.await {
             Ok(outcome) => {
-                // Surface the answered "提问回答" capsule in-stream — the codeg-mcp
+                // Surface the answered "提问回答" capsule in-stream — the built-in MCP
                 // ask parity grok's native tool never emits into the ACP stream (it
                 // resolves the answer over THIS ext round-trip). Emit BEFORE
                 // unblocking grok so the card lands ahead of grok's follow-up text;
@@ -5349,7 +5349,7 @@ struct CodeBuddyLiveState {
 }
 
 /// True when a tool call's ACP `_meta` marks it as grok's native
-/// `ask_user_question` (`x.ai/tool.kind == "ask_user"`). Codeg answers grok's
+/// `ask_user_question` (`x.ai/tool.kind == "ask_user"`). Houhub answers grok's
 /// blocking `_x.ai/ask_user_question` ext request by rendering the interactive
 /// `AskQuestionCard` (see `handle_grok_ask_user_question`), so the parallel
 /// `tool_call` stream grok emits for the same call is redundant — it is dropped
@@ -5579,7 +5579,7 @@ async fn emit_conversation_update(
         SessionUpdate::ToolCall(tc) => {
             let tool_call_id = tc.tool_call_id.to_string();
             // Grok emits a redundant `tool_call` for its native ask_user_question
-            // alongside the blocking `_x.ai/ask_user_question` ext request codeg
+            // alongside the blocking `_x.ai/ask_user_question` ext request Houhub
             // answers with the interactive card; drop it here (remembering the id so
             // later status-only updates that lost the meta are dropped too).
             if grok_meta_marks_ask_user(agent_type, tc.meta.as_ref()) {
@@ -5966,7 +5966,7 @@ mod tests {
         use sacp::JsonRpcMessage;
         // Routing: the derive matches ONLY the underscore-prefixed ext method
         // (sacp routes typed handlers on the raw wire method — verified against
-        // grok 0.2.101, where the missing underscore made codeg answer "unhandled"
+        // grok 0.2.101, where the missing underscore made Houhub answer "unhandled"
         // and grok fall back to inert rendering).
         assert!(GrokAskUserQuestionRequest::matches_method(
             "_x.ai/ask_user_question"
