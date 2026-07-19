@@ -20,7 +20,11 @@ import {
   connectWorkspace,
 } from "@/workspace-resources/connection"
 
-export function WorkspaceConnectionButton() {
+export function WorkspaceConnectionButton({
+  showLabel = false,
+}: {
+  showLabel?: boolean
+}) {
   const t = useTranslations("WorkspaceResources")
   const houflowStatus = useHouflowDesktopStore((state) => state.status)
   const houflowSessionStatus = useHouflowDesktopStore(
@@ -95,9 +99,10 @@ export function WorkspaceConnectionButton() {
     <Button
       type="button"
       variant="ghost"
-      size="icon"
+      size={showLabel ? "sm" : "icon"}
       className={cn(
-        "relative h-6 w-6 hover:bg-foreground/10 hover:text-foreground/80 dark:hover:bg-foreground/10",
+        "relative hover:bg-foreground/10 hover:text-foreground/80 dark:hover:bg-foreground/10",
+        showLabel ? "h-8 rounded-md px-3 text-xs" : "h-6 w-6",
         connected && !hasError && "text-emerald-600",
         hasError && "text-destructive"
       )}
@@ -117,6 +122,7 @@ export function WorkspaceConnectionButton() {
       ) : (
         <Link2 className="h-3.5 w-3.5" />
       )}
+      {showLabel ? <span>{title}</span> : null}
       <span
         className={cn(
           "absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-background",

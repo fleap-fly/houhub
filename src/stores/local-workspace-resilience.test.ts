@@ -1,0 +1,68 @@
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+import type { DbConversationSummary } from "@/lib/types"
+import {
+  resetAppWorkspaceStore,
+  useAppWorkspaceStore,
+} from "./app-workspace-store"
+
+const h = vi.hoisted(() => ({
+  listAllConversations: vi.fn(async () => [] as DbConversationSummary[]),
+}))
+
+vi.mock("@/lib/api", () => ({
+  getFolder: vi.fn(),
+  listAllConversations: h.listAllConversations,
+  listAllFolderDetails: vi.fn(async () => []),
+  listOpenFolderDetails: vi.fn(async () => []),
+  openFolder: vi.fn(),
+  openFolderById: vi.fn(),
+  openWorktreeFolder: vi.fn(),
+  removeFolderFromWorkspace: vi.fn(),
+  reorderFolders: vi.fn(),
+}))
+
+function makeSummary(id: number): DbConversationSummary {
+  return {
+    id,
+    folder_id: 1,
+    title: "cached",
+    title_locked: false,
+    agent_type: "claude_code",
+    status: "in_progress",
+    kind: "regular",
+    model: null,
+    git_branch: null,
+    external_id: null,
+    message_count: 0,
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    pinned_at: null,
+    parent_id: null,
+    parent_tool_use_id: null,
+    delegation_call_id: null,
+  }
+}
+
+describe("HouHub local workspace resilience", () => {
+  beforeEach(() => {
+    h.listAllConversations.mockReset().mockResolvedValue([])
+    resetAppWorkspaceStore()
+  })
+
+  it("keeps cached conversations visible when a refresh fails", async () => {
+    const cached = makeSummary(41)
+    useAppWorkspaceStore.setState({
+      conversations: [cached],
+      conversationsError: null,
+    })
+    h.listAllConversations.mockRejectedValueOnce(
+      new Error("database error: malformed row")
+    )
+
+    await useAppWorkspaceStore.getState().refreshConversations()
+
+    expect(useAppWorkspaceStore.getState().conversations).toEqual([cached])
+    expect(useAppWorkspaceStore.getState().conversationsError).toBeNull()
+  })
+})

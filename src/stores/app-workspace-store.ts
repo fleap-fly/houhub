@@ -2,9 +2,6 @@ import { create } from "zustand"
 import { registerBackendScopedStoreReset } from "@/stores/backend-scoped-store-reset"
 import {
   getFolder as apiGetFolder,
-  listAllConversations,
-  listAllFolderDetails,
-  listOpenFolderDetails,
   openFolder as apiOpenFolder,
   openFolderById as apiOpenFolderById,
   openWorktreeFolder as apiOpenWorktreeFolder,
@@ -12,6 +9,11 @@ import {
   reorderFolders as apiReorderFolders,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import {
+  listAllConversations,
+  listAllFolderDetails,
+  listOpenFolderDetails,
+} from "@/stores/local-workspace-read"
 import type {
   AgentStats,
   AgentType,
@@ -185,7 +187,15 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
         const list = await listAllConversations()
         set({ ...withConversations(list), conversationsError: null })
       } catch (err) {
-        set({ conversationsError: toErrorMessage(err) })
+        if (get().conversations.length === 0) {
+          set({ conversationsError: toErrorMessage(err) })
+        } else {
+          console.error(
+            "[AppWorkspace] keeping cached conversations after refresh failure:",
+            err
+          )
+          set({ conversationsError: null })
+        }
       } finally {
         set({ conversationsLoading: false })
       }
