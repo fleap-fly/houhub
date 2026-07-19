@@ -30,7 +30,7 @@
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@houflow/agent-connector": "file:vendor/houflow-agent-connector-0.1.5.tgz",
     "@houshan/agent-hub-network-sdk": "file:vendor/houshan-agent-hub-network-sdk-0.1.12.tgz",
-    "@houshan/agent-hub-sdk": "file:vendor/houshan-agent-hub-sdk-0.1.6.tgz",
+    "@houshan/agent-hub-sdk": "file:vendor/houshan-agent-hub-sdk-0.1.7.tgz",
     "@monaco-editor/react": "^4.7.0",
     "@radix-ui/react-use-controllable-state": "^1.2.2",
     "@streamdown/cjk": "^1.0.2",

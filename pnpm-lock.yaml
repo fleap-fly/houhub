@@ -34,10 +34,10 @@ importers:
         version: file:vendor/houflow-agent-connector-0.1.5.tgz
       '@houshan/agent-hub-network-sdk':
         specifier: file:vendor/houshan-agent-hub-network-sdk-0.1.12.tgz
-        version: file:vendor/houshan-agent-hub-network-sdk-0.1.12.tgz(@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.6.tgz)
+        version: file:vendor/houshan-agent-hub-network-sdk-0.1.12.tgz(@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.7.tgz)
       '@houshan/agent-hub-sdk':
-        specifier: file:vendor/houshan-agent-hub-sdk-0.1.6.tgz
-        version: file:vendor/houshan-agent-hub-sdk-0.1.6.tgz
+        specifier: file:vendor/houshan-agent-hub-sdk-0.1.7.tgz
+        version: file:vendor/houshan-agent-hub-sdk-0.1.7.tgz
       '@monaco-editor/react':
         specifier: ^4.7.0
         version: 4.7.0(monaco-editor@0.55.1)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -812,9 +812,9 @@ packages:
       '@houshan/agent-hub-sdk':
         optional: true
 
-  '@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.6.tgz':
-    resolution: {integrity: sha512-EUIIBDeRllxAEn9A0WcBNo8agELyfaP+hWPoD+pFPU/SrW8Ybc2F1opncmjT+ZMKhGfz7VqqbDwMIFolwSQC2Q==, tarball: file:vendor/houshan-agent-hub-sdk-0.1.6.tgz}
-    version: 0.1.6
+  '@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.7.tgz':
+    resolution: {integrity: sha512-i4B5ObeKdhAWriXMX34gXrp3dXdbg0bOWzHN7zwUNbhMEJju76aHu/MK7hc3l+QR2GOeGP43i7kPhu9bk/fz/g==, tarball: file:vendor/houshan-agent-hub-sdk-0.1.7.tgz}
+    version: 0.1.7
 
   '@humanfs/core@0.19.1':
     resolution: {integrity: sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA==}
@@ -7221,11 +7221,11 @@ snapshots:
 
   '@houflow/agent-connector@file:vendor/houflow-agent-connector-0.1.5.tgz': {}
 
-  '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.12.tgz(@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.6.tgz)':
+  '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.12.tgz(@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.7.tgz)':
     optionalDependencies:
-      '@houshan/agent-hub-sdk': file:vendor/houshan-agent-hub-sdk-0.1.6.tgz
+      '@houshan/agent-hub-sdk': file:vendor/houshan-agent-hub-sdk-0.1.7.tgz
 
-  '@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.6.tgz': {}
+  '@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.7.tgz': {}
 
   '@humanfs/core@0.19.1': {}
 
