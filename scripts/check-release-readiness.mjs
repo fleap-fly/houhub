@@ -438,20 +438,29 @@ async function checkRemoteState() {
     if (!signature) fail(`production manifest has empty signature for ${url}`)
   }
 
-  const installerRoutes = [
+  const installerRouteSpecs = [
     {
-      route: "https://houflow.com/downloads/houhub/macos-arm64",
+      path: "/downloads/houhub/macos-arm64",
       suffix: `houhub_${expectedVersion}_aarch64.dmg`,
     },
     {
-      route: "https://houflow.com/downloads/houhub/macos-x64",
+      path: "/downloads/houhub/macos-x64",
       suffix: `houhub_${expectedVersion}_x64.dmg`,
     },
     {
-      route: "https://houflow.com/downloads/houhub/windows-x64",
+      path: "/downloads/houhub/windows-x64",
       suffix: `houhub_${expectedVersion}_x64-setup.exe`,
     },
   ]
+  const installerRoutes = [
+    "https://houflow.com",
+    "https://agent.houflow.com",
+  ].flatMap((origin) =>
+    installerRouteSpecs.map(({ path, suffix }) => ({
+      route: `${origin}${path}`,
+      suffix,
+    }))
+  )
   for (const item of installerRoutes) {
     const routeCheck = await fetchText(item.route, { redirect: "manual" })
     if (routeCheck.error) {
