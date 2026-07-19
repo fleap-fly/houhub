@@ -457,6 +457,8 @@ function connectorRuntimeForAgent(agentType: AgentType): {
       return runner("pi:cli", "pi", "pi")
     case "grok":
       return runner("grok:cli", "grok", "grok")
+    case "cursor":
+      return runner("cursor:cli", "cursor", "cursor")
     case "cline":
       return visibleOnly("cline:vscode", "cline")
     case "code_buddy":

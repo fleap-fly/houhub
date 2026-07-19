@@ -643,14 +643,6 @@ export function MessageInput({
     promptCapabilities.image || promptCapabilities.embedded_context
 
   useEffect(() => {
-    if (isActive && !disabled && !isPrompting) {
-      requestAnimationFrame(() => {
-        editorRef.current?.focus()
-      })
-    }
-  }, [isActive, disabled, isPrompting])
-
-  useEffect(() => {
     disabledRef.current = disabled
   }, [disabled])
 
@@ -841,6 +833,17 @@ export function MessageInput({
     effectiveDraftStorageKey,
     hydrateFromBlocks,
   ])
+
+  // Focus the composer the moment the editor exists and this tab is active, so
+  // the caret lands as soon as the chat opens without waiting for the ACP
+  // connection. Sending remains gated in handleSend, not editor focus.
+  useEffect(() => {
+    if (isActive && composerReady && !isPrompting) {
+      requestAnimationFrame(() => {
+        editorRef.current?.focus()
+      })
+    }
+  }, [isActive, composerReady, isPrompting])
 
   // Re-hydrate when the user (re)edits a *different* queue item after the
   // initial mount hydration above. Keyed on the item id (not display text) so

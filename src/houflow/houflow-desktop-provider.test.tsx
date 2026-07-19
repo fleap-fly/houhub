@@ -174,6 +174,12 @@ describe("HouflowDesktopProvider workspace selection", () => {
         enabled: true,
         available: true,
       },
+      {
+        agent_type: "cursor",
+        name: "Cursor Agent",
+        enabled: true,
+        available: true,
+      },
     ])
 
     render(
@@ -205,6 +211,12 @@ describe("HouflowDesktopProvider workspace selection", () => {
         runtimeProvider: null,
         runtimeRunner: false,
         capabilities: [],
+      }),
+      expect.objectContaining({
+        localAgentRef: "cursor:cli",
+        provider: "cursor",
+        runtimeProvider: "cursor",
+        runtimeRunner: true,
       }),
     ])
     expect(mocks.syncHouflowConnectorLocalAgents).not.toHaveBeenCalled()

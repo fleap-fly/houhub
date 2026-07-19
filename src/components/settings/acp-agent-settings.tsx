@@ -122,6 +122,7 @@ import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
 import { OpencodePluginsModal } from "./opencode-plugins-modal"
 import { useHouflowDesktopStore, type HouflowAgentTarget } from "@/houflow"
 import { CodeBuddyConfigPanel } from "./codebuddy-config-panel"
+import { CursorConfigPanel } from "./cursor-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
 import { CodexModelListEditor } from "./codex-model-list-editor"
 
@@ -9758,6 +9759,22 @@ supports_websockets = false`}
                     }
                     onSaved={refreshAgents}
                     modelProviders={modelProviders}
+                  />
+                ) : selectedAgent.agent_type === "cursor" ? (
+                  <CursorConfigPanel
+                    agent={selectedAgent}
+                    saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                    onSaveEnv={(env, enabled, modelProviderId) =>
+                      persistEnv(
+                        selectedAgent.agent_type,
+                        enabled,
+                        envMapToText(env),
+                        modelProviderId
+                      )
+                    }
+                    onSaved={refreshAgents}
+                    onAffectedSessions={reportAffectedSessions}
+                    modelProviders={selectedModelProviders}
                   />
                 ) : selectedAgent.agent_type === "grok" ? (
                   <div className="space-y-3 rounded-md border bg-muted/10 p-3">
