@@ -15,10 +15,7 @@ import { openUrl } from "@/lib/platform"
 import { cn } from "@/lib/utils"
 import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { useWorkbenchClientSuiteStore, useWorkbenchStore } from "@/workbench"
-import {
-  alignWorkspaceToActiveProject,
-  connectWorkspace,
-} from "@/workspace-resources/connection"
+import { connectWorkspace } from "@/workspace-resources/connection"
 
 export function WorkspaceConnectionButton({
   showLabel = false,
@@ -73,7 +70,6 @@ export function WorkspaceConnectionButton({
           useWorkbenchStore.getState().signIn({
             openAuthorizationUrl: openUrl,
           }),
-        alignWorkspace: alignWorkspaceToActiveProject,
         activeProjectId: () =>
           useWorkbenchStore.getState().session.activeProjectId,
         refreshSuites: (projectId) =>

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use serde_json::Value as JsonValue;
 
 use crate::app_error::AppCommandError;
@@ -21,7 +22,7 @@ pub(super) const DESKTOP_SESSION_HEADER: &str = "x-ps-desktop-session";
 pub(super) const PROJECT_ID_HEADER: &str = "x-auth-project-id";
 pub(super) const CLIENT_ID: &str = "houhub-desktop";
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const STREAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const STREAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Maps a pending `deviceCode` to the host it was created against, so `poll`
 /// can target the same PS deployment without the webview threading the host
@@ -167,17 +168,18 @@ pub(super) async fn ps_admin_post(
     parse_json(resp).await
 }
 
-/// Authenticated POST that returns the raw response text. Used for admin PS
-/// chat because `/admin/ai/agents/:id/messages` streams newline-delimited JSON
-/// instead of a single JSON document.
-pub(super) async fn ps_admin_post_text(
+/// Authenticated POST that consumes the response as newline-delimited JSON.
+/// Complete lines are forwarded immediately so project-agent output is not
+/// buffered until the whole turn finishes.
+pub(super) async fn ps_admin_post_ndjson(
     host: &str,
     token: &str,
     project_id: &str,
     path: &str,
     query: &[(&str, &str)],
     body: JsonValue,
-) -> Result<String, AppCommandError> {
+    mut on_line: impl FnMut(&str),
+) -> Result<(), AppCommandError> {
     let mut owned_query: Vec<(&str, &str)> = Vec::with_capacity(query.len() + 1);
     owned_query.push(("projectId", project_id));
     owned_query.extend_from_slice(query);
@@ -195,15 +197,38 @@ pub(super) async fn ps_admin_post_text(
         .send()
         .await
         .map_err(request_error)?;
-    let status = resp.status();
-    let text = resp.text().await.map_err(request_error)?;
-    if !status.is_success() {
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.map_err(request_error)?;
         return Err(AppCommandError::external_command(
             "project-system returned an error",
             format!("status {status}: {text}"),
         ));
     }
-    Ok(text)
+
+    let mut pending = Vec::<u8>::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        pending.extend_from_slice(&chunk.map_err(request_error)?);
+        while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+            let mut line = pending.drain(..=newline).collect::<Vec<_>>();
+            while matches!(line.last(), Some(b'\n' | b'\r')) {
+                line.pop();
+            }
+            if !line.is_empty() {
+                let line = String::from_utf8_lossy(&line);
+                on_line(line.as_ref());
+            }
+        }
+    }
+    if !pending.is_empty() {
+        let line = String::from_utf8_lossy(&pending);
+        let line = line.trim_end_matches(['\r', '\n']);
+        if !line.is_empty() {
+            on_line(line);
+        }
+    }
+    Ok(())
 }
 
 /// Authenticated DELETE against a `/business{path}` PS endpoint. PS replies 204

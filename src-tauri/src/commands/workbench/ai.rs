@@ -4,12 +4,24 @@
 //! reuse HouFlow credentials or HouFlow cloud targets: PS has its own users,
 //! project membership, and assistant publish policy.
 
+use serde::Serialize;
 use serde_json::{json, Value as JsonValue};
 
 use crate::app_error::AppCommandError;
+use crate::web::event_bridge::{emit_event, EventEmitter};
 
-use super::client::{ps_admin_get, ps_admin_post, ps_admin_post_text};
+use super::client::{ps_admin_get, ps_admin_post, ps_admin_post_ndjson};
 use super::space::{require_project_id, require_session};
+
+pub const WORKBENCH_AI_MESSAGE_STREAM_EVENT: &str = "workbench-ai://message-stream";
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkbenchAiMessageStreamFrame<'a> {
+    request_id: &'a str,
+    status: &'a str,
+    response: &'a str,
+}
 
 pub async fn workbench_ai_list_assistants_core(
     project_id: String,
@@ -106,6 +118,25 @@ pub async fn workbench_ai_send_message_core(
     session_id: String,
     query: String,
 ) -> Result<JsonValue, AppCommandError> {
+    workbench_ai_send_message_stream_core(
+        project_id,
+        assistant_id,
+        session_id,
+        query,
+        String::new(),
+        EventEmitter::Noop,
+    )
+    .await
+}
+
+pub async fn workbench_ai_send_message_stream_core(
+    project_id: String,
+    assistant_id: String,
+    session_id: String,
+    query: String,
+    request_id: String,
+    emitter: EventEmitter,
+) -> Result<JsonValue, AppCommandError> {
     let project_id = require_project_id(&project_id)?;
     let assistant_id = require_assistant_id(&assistant_id)?;
     let session_id = require_session_id(&session_id)?;
@@ -115,7 +146,9 @@ pub async fn workbench_ai_send_message_core(
     }
     let session = require_session()?;
     let path = format!("/ai/agents/{}/messages", urlencoding::encode(&assistant_id));
-    let raw = ps_admin_post_text(
+    let mut output = String::new();
+    let mut stream_error = None;
+    ps_admin_post_ndjson(
         &session.host,
         &session.session_token,
         &project_id,
@@ -125,9 +158,47 @@ pub async fn workbench_ai_send_message_core(
             "threadId": session_id,
             "query": query,
         }),
+        |line| {
+            if let Some(message) = chat_error_line(line) {
+                stream_error = Some(message);
+                return;
+            }
+            let Some((status, response)) = chat_response_line(line) else {
+                return;
+            };
+            merge_response_chunk(&mut output, &response);
+            if !request_id.is_empty() && !response.is_empty() {
+                emit_event(
+                    &emitter,
+                    WORKBENCH_AI_MESSAGE_STREAM_EVENT,
+                    WorkbenchAiMessageStreamFrame {
+                        request_id: &request_id,
+                        status: &status,
+                        response: &response,
+                    },
+                );
+            }
+        },
     )
     .await?;
-    Ok(json!({ "text": aggregate_chat_response(&raw) }))
+    if let Some(message) = stream_error {
+        return Err(AppCommandError::external_command(
+            "project assistant failed",
+            message,
+        ));
+    }
+    if !request_id.is_empty() {
+        emit_event(
+            &emitter,
+            WORKBENCH_AI_MESSAGE_STREAM_EVENT,
+            WorkbenchAiMessageStreamFrame {
+                request_id: &request_id,
+                status: "finished",
+                response: &output,
+            },
+        );
+    }
+    Ok(json!({ "text": output }))
 }
 
 fn require_assistant_id(value: &str) -> Result<String, AppCommandError> {
@@ -161,36 +232,42 @@ fn extract_agent_id_from_session_id(value: &str) -> Option<String> {
     }
 }
 
-fn aggregate_chat_response(raw: &str) -> String {
-    let mut output = String::new();
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_str::<JsonValue>(trimmed) {
-            if value
-                .get("status")
-                .and_then(|status| status.as_str())
-                .is_some_and(|status| status == "loading" || status == "finished")
-            {
-                if let Some(response) = value.get("response").and_then(|item| item.as_str()) {
-                    merge_response_chunk(&mut output, response);
-                }
-                continue;
-            }
-            if let Some(text) = value
-                .get("text")
-                .or_else(|| value.get("message"))
-                .and_then(|item| item.as_str())
-            {
-                merge_response_chunk(&mut output, text);
-            }
-            continue;
-        }
-        merge_response_chunk(&mut output, trimmed);
+fn chat_response_line(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
     }
-    output
+    let Ok(value) = serde_json::from_str::<JsonValue>(trimmed) else {
+        return Some(("loading".to_string(), trimmed.to_string()));
+    };
+    let status = value
+        .get("status")
+        .and_then(|item| item.as_str())
+        .unwrap_or("loading");
+    if status == "error" || status == "init" {
+        return None;
+    }
+    value
+        .get("response")
+        .or_else(|| value.get("text"))
+        .or_else(|| value.get("message"))
+        .and_then(|item| item.as_str())
+        .map(|response| (status.to_string(), response.to_string()))
+}
+
+fn chat_error_line(line: &str) -> Option<String> {
+    let value = serde_json::from_str::<JsonValue>(line.trim()).ok()?;
+    if value.get("status").and_then(|item| item.as_str()) != Some("error") {
+        return None;
+    }
+    Some(
+        value
+            .get("error_message")
+            .or_else(|| value.get("message"))
+            .and_then(|item| item.as_str())
+            .unwrap_or("Project assistant failed")
+            .to_string(),
+    )
 }
 
 fn merge_response_chunk(output: &mut String, chunk: &str) {

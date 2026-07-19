@@ -3813,6 +3813,7 @@
     "emptyMessages": "Select an agent or start a project conversation.",
     "emptyResponse": "No response returned.",
     "messagePlaceholder": "Message the project agent...",
+    "waitingForReply": "Waiting for project reply...",
     "sendFailed": "Failed to send message",
     "newSession": "New project conversation",
     "untitled": "Untitled conversation",

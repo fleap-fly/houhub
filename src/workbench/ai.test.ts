@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const callMock = vi.fn()
+const subscribeMock = vi.fn()
 
 vi.mock("@/lib/transport", () => ({
-  getTransport: () => ({ call: callMock }),
+  getTransport: () => ({ call: callMock, subscribe: subscribeMock }),
 }))
 
 import {
@@ -16,6 +17,7 @@ import {
 describe("workbench ai client", () => {
   beforeEach(() => {
     callMock.mockReset()
+    subscribeMock.mockReset()
   })
 
   it("lists assistants with the active project scope", async () => {
@@ -108,5 +110,59 @@ describe("workbench ai client", () => {
       { timeoutMs: 120_000 }
     )
     expect(response).toBe("hello world")
+  })
+
+  it("streams project assistant chunks over the active desktop transport", async () => {
+    let onFrame:
+      | ((frame: {
+          requestId: string
+          status: string
+          response: string
+        }) => void)
+      | null = null
+    const unsubscribe = vi.fn()
+    subscribeMock.mockImplementationOnce(async (_event, handler) => {
+      onFrame = handler
+      return unsubscribe
+    })
+    callMock.mockImplementationOnce(async (_command, args) => {
+      const requestId = args.requestId as string
+      onFrame?.({ requestId, status: "loading", response: "hello " })
+      onFrame?.({ requestId, status: "loading", response: "hello world" })
+      onFrame?.({
+        requestId: "another-request",
+        status: "loading",
+        response: "ignored",
+      })
+      return { text: "hello world" }
+    })
+    const chunks: string[] = []
+
+    const response = await sendWorkbenchAiMessage({
+      projectId: "project-1",
+      assistantId: "agent-1",
+      sessionId: "agent-1:emp_u1_2",
+      query: "hi",
+      onChunk: (text) => chunks.push(text),
+    })
+
+    expect(subscribeMock).toHaveBeenCalledWith(
+      "workbench-ai://message-stream",
+      expect.any(Function)
+    )
+    expect(callMock).toHaveBeenCalledWith(
+      "workbench_ai_send_message",
+      {
+        projectId: "project-1",
+        assistantId: "agent-1",
+        sessionId: "agent-1:emp_u1_2",
+        query: "hi",
+        requestId: expect.any(String),
+      },
+      { timeoutMs: 600_000 }
+    )
+    expect(chunks).toEqual(["hello ", "hello world"])
+    expect(response).toBe("hello world")
+    expect(unsubscribe).toHaveBeenCalledOnce()
   })
 })

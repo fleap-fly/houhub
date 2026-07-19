@@ -212,6 +212,13 @@ describe("HouflowDesktopProvider workspace selection", () => {
         provider: "pi",
         runtimeProvider: "pi",
       }),
+      expect.objectContaining({
+        localAgentRef: "cline:vscode",
+        provider: "cline",
+        runtimeProvider: null,
+        runtimeRunner: false,
+        capabilities: [],
+      }),
     ])
     expect(mocks.syncHouflowConnectorLocalAgents).not.toHaveBeenCalled()
     expect(mocks.publishHouflowExternalAgent).not.toHaveBeenCalled()
@@ -219,7 +226,7 @@ describe("HouflowDesktopProvider workspace selection", () => {
     act(() => {
       useHouflowDesktopStore
         .getState()
-        .setLocalAgentReportSelection(["claude:cli", "pi:cli"])
+        .setLocalAgentReportSelection(["claude:cli", "pi:cli", "cline:vscode"])
     })
     await act(async () => {
       await useHouflowDesktopStore.getState().reportSelectedLocalAgents()
@@ -237,6 +244,13 @@ describe("HouflowDesktopProvider workspace selection", () => {
           localAgentRef: "pi:cli",
           provider: "pi",
           runtimeProvider: "pi",
+        }),
+        expect.objectContaining({
+          localAgentRef: "cline:vscode",
+          provider: "cline",
+          runtimeProvider: null,
+          runtimeRunner: false,
+          capabilities: [],
         }),
       ],
     })
@@ -258,10 +272,24 @@ describe("HouflowDesktopProvider workspace selection", () => {
         provider: "pi",
       })
     )
-    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledTimes(2)
+    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "workspace_1" }),
+      expect.anything(),
+      expect.objectContaining({
+        connectorId: "cac_desktop",
+        localAgentRef: "cline:vscode",
+        provider: "cline",
+        capabilities: {
+          dispatch: false,
+          workspace_message: false,
+          lifecycle: false,
+        },
+      })
+    )
+    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledTimes(3)
     expect(mocks.saveHouflowLocalAgentReportSelection).toHaveBeenCalledWith(
       "workspace_1",
-      ["claude:cli", "pi:cli"]
+      ["claude:cli", "pi:cli", "cline:vscode"]
     )
   })
 

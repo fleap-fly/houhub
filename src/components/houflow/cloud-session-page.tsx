@@ -20,7 +20,10 @@ import {
 } from "@/components/ai-elements/link-safety"
 import { Message, MessageContent } from "@/components/ai-elements/message"
 import { MessageInput } from "@/components/chat/message-input"
-import { CloudMessageThread } from "@/components/houflow/cloud-message-thread"
+import {
+  CloudMessageThread,
+  CloudWaitingMessage,
+} from "@/components/houflow/cloud-message-thread"
 import {
   CloudTargetCapabilityBadges,
   CloudTargetIcon,
@@ -972,7 +975,9 @@ export function CloudSessionPage() {
               turns={turns}
               linkSafety={cloudLinkSafety}
             />
-            {sending ? <CloudWaitingMessage /> : null}
+            {sending ? (
+              <CloudWaitingMessage label={t("waitingForCloudReply")} />
+            ) : null}
           </div>
         )}
       </div>
@@ -997,20 +1002,6 @@ export function CloudSessionPage() {
         </div>
       </footer>
     </section>
-  )
-}
-
-function CloudWaitingMessage() {
-  const t = useTranslations("HouflowCloud")
-  return (
-    <Message from="assistant" className="max-w-full opacity-80">
-      <MessageContent>
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          <span>{t("waitingForCloudReply")}</span>
-        </div>
-      </MessageContent>
-    </Message>
   )
 }
 
@@ -1179,7 +1170,7 @@ function HostedCommandPage({
             linkSafety={commandLinkSafety}
           />
           {sending || (active && !latestCommandHasAssistantReply) ? (
-            <CloudWaitingMessage />
+            <CloudWaitingMessage label={t("waitingForCloudReply")} />
           ) : null}
         </div>
       </div>
@@ -1467,7 +1458,7 @@ function CloudSessionStarter({
                   </MessageContent>
                 </Message>
               ))}
-              <CloudWaitingMessage />
+              <CloudWaitingMessage label={t("waitingForCloudReply")} />
             </div>
           ) : null}
           <MessageInput

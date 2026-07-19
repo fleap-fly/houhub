@@ -23,7 +23,7 @@ mod types;
 pub use ai::{
     workbench_ai_create_session_core, workbench_ai_get_session_core,
     workbench_ai_list_assistants_core, workbench_ai_list_sessions_core,
-    workbench_ai_send_message_core,
+    workbench_ai_send_message_core, workbench_ai_send_message_stream_core,
 };
 pub use auth::{
     workbench_begin_device_auth_core, workbench_get_session_core, workbench_list_projects_core,
@@ -197,12 +197,22 @@ pub async fn workbench_ai_get_session(
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn workbench_ai_send_message(
+    app: tauri::AppHandle,
     project_id: String,
     assistant_id: String,
     session_id: String,
     query: String,
+    request_id: Option<String>,
 ) -> Result<JsonValue, AppCommandError> {
-    workbench_ai_send_message_core(project_id, assistant_id, session_id, query).await
+    workbench_ai_send_message_stream_core(
+        project_id,
+        assistant_id,
+        session_id,
+        query,
+        request_id.unwrap_or_default(),
+        crate::web::event_bridge::EventEmitter::Tauri(app),
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]

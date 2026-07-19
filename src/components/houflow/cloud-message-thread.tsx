@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo } from "react"
+import { Loader2 } from "lucide-react"
 import type { LinkSafetyConfig } from "streamdown"
 import { StreamdownLinkSafetyProvider } from "@/components/ai-elements/link-safety"
 import { Message, MessageContent } from "@/components/ai-elements/message"
@@ -65,6 +66,19 @@ export function CloudMessageThread({
         )
       })}
     </>
+  )
+}
+
+export function CloudWaitingMessage({ label }: { label: string }) {
+  return (
+    <Message from="assistant" className="max-w-full opacity-80">
+      <MessageContent>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <span>{label}</span>
+        </div>
+      </MessageContent>
+    </Message>
   )
 }
 

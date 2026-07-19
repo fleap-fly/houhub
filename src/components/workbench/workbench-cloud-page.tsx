@@ -1,39 +1,20 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import {
-  Bot,
-  BriefcaseBusiness,
-  Check,
-  ChevronDown,
-  Loader2,
-  RefreshCw,
-} from "lucide-react"
+import { BriefcaseBusiness, Loader2, RefreshCw } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
 import {
   DirectLinkOpen,
-  StreamdownLinkSafetyProvider,
   useOpenLinkOrFile,
 } from "@/components/ai-elements/link-safety"
 import type { LinkSafetyConfig, LinkSafetyModalProps } from "streamdown"
 import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import { Message, MessageContent } from "@/components/ai-elements/message"
+  CloudMessageThread,
+  CloudWaitingMessage,
+} from "@/components/houflow/cloud-message-thread"
 import { MessageInput } from "@/components/chat/message-input"
-import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
@@ -55,10 +36,8 @@ import {
   sendWorkbenchAiMessage,
   workbenchAiMessagesToTurns,
   type WorkbenchAiMessage,
-  type WorkbenchAssistant,
 } from "@/workbench/ai"
 import { psRootPath } from "@/workbench/space-fs"
-import { cn } from "@/lib/utils"
 
 const WORKBENCH_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
   image: true,
@@ -80,7 +59,6 @@ export function WorkbenchCloudPage() {
   const [messagesLoading, setMessagesLoading] = useState(false)
   const [messagesError, setMessagesError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
-  const [selectorOpen, setSelectorOpen] = useState(false)
   const requestRef = useRef(0)
   const linkSafety = useWorkbenchSessionLinkSafety()
   const sharedT = useTranslations("Folder.chat.shared")
@@ -109,9 +87,10 @@ export function WorkbenchCloudPage() {
     }),
     [sharedT]
   )
+  const turns = useMemo(() => workbenchAiMessagesToTurns(messages), [messages])
   const adaptedMessages = useMemo(
-    () => turnAdapter.adapt(workbenchAiMessagesToTurns(messages), adapterText),
-    [adapterText, messages, turnAdapter]
+    () => turnAdapter.adapt(turns, adapterText),
+    [adapterText, turnAdapter, turns]
   )
 
   const refreshMessages = useCallback(async () => {
@@ -169,6 +148,7 @@ export function WorkbenchCloudPage() {
         }
 
         const now = new Date().toISOString()
+        const assistantMessageId = `local-assistant-${Date.now()}`
         setMessages((current) => [
           ...current,
           {
@@ -184,18 +164,21 @@ export function WorkbenchCloudPage() {
           assistantId: selectedAssistant.id,
           sessionId,
           query,
+          onChunk: (text) => {
+            setMessages((current) =>
+              upsertStreamingAssistantMessage(current, assistantMessageId, text)
+            )
+          },
         })
         const assistantText = response || t("emptyResponse")
-        setMessages((current) => [
-          ...current,
-          {
-            id: `local-assistant-${Date.now()}`,
-            role: "assistant",
-            content: assistantText,
-            blocks: [{ type: "text", text: assistantText }],
-            timestamp: new Date().toISOString(),
-          },
-        ])
+        setMessages((current) =>
+          upsertStreamingAssistantMessage(
+            current,
+            assistantMessageId,
+            assistantText,
+            new Date().toISOString()
+          )
+        )
         await cloud.refreshSessions(selectedAssistant.id)
       } catch (err) {
         toast.error(t("sendFailed"), { description: toErrorMessage(err) })
@@ -268,48 +251,29 @@ export function WorkbenchCloudPage() {
           </div>
         ) : (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
-            {adaptedMessages.map((message) => (
-              <Message
-                key={message.id}
-                from={messageRoleForView(message.role)}
-                className={cn(
-                  message.role === "assistant" && "max-w-full",
-                  message.role === "system" && "max-w-full opacity-80"
-                )}
-              >
-                <MessageContent>
-                  <StreamdownLinkSafetyProvider value={linkSafety}>
-                    <ContentPartsRenderer
-                      parts={message.content}
-                      role={message.role}
-                    />
-                  </StreamdownLinkSafetyProvider>
-                  <div className="text-[0.6875rem] text-muted-foreground">
-                    {formatTimestamp(message.timestamp)}
-                  </div>
-                </MessageContent>
-              </Message>
-            ))}
+            <CloudMessageThread
+              messages={adaptedMessages}
+              turns={turns}
+              linkSafety={linkSafety}
+            />
+            {sending ? (
+              <CloudWaitingMessage label={t("waitingForReply")} />
+            ) : null}
           </div>
         )}
       </div>
 
       <footer className="shrink-0 border-t border-border p-3">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
-          <WorkbenchAssistantSelector
-            assistants={cloud.assistants}
-            open={selectorOpen}
-            selectedAssistant={selectedAssistant}
-            selectedAssistantId={cloud.selectedAssistantId}
-            onOpenChange={setSelectorOpen}
-            onChange={(assistantId) => {
-              cloud.selectAssistant(assistantId)
-              setSelectorOpen(false)
-            }}
-          />
+        <div className="mx-auto w-full max-w-3xl">
           <MessageInput
             onSend={(draft) => void handleSend(draft)}
             promptCapabilities={WORKBENCH_PROMPT_CAPABILITIES}
+            enableWorkspaceReferences={false}
+            contextLocation={
+              projectName
+                ? { label: projectName, title: projectId ?? projectName }
+                : null
+            }
             disabled={sending || !selectedAssistant}
             placeholder={t("messagePlaceholder")}
             draftStorageKey={
@@ -433,78 +397,6 @@ function isProjectSpacePathLike(url: string): boolean {
   return trimmed.includes("/") || /\.[a-zA-Z0-9]{1,8}(?:[#?].*)?$/.test(trimmed)
 }
 
-function WorkbenchAssistantSelector({
-  assistants,
-  open,
-  selectedAssistant,
-  selectedAssistantId,
-  onOpenChange,
-  onChange,
-}: {
-  assistants: WorkbenchAssistant[]
-  open: boolean
-  selectedAssistant: WorkbenchAssistant | null
-  selectedAssistantId: string | null
-  onOpenChange: (open: boolean) => void
-  onChange: (assistantId: string) => void
-}) {
-  const t = useTranslations("WorkbenchCloud")
-  return (
-    <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          className="h-9 min-w-0 max-w-full justify-between gap-2 px-3"
-        >
-          <span className="flex min-w-0 items-center gap-2">
-            <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 truncate text-sm">
-              {selectedAssistant?.name ?? t("agentPlaceholder")}
-            </span>
-          </span>
-          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        className="w-[min(28rem,calc(100vw-2rem))] p-0"
-      >
-        <Command>
-          <CommandInput placeholder={t("agentSearch")} />
-          <CommandList>
-            <CommandEmpty>{t("emptyAgents")}</CommandEmpty>
-            <CommandGroup heading={t("agents")}>
-              {assistants.map((assistant) => (
-                <CommandItem
-                  key={assistant.id}
-                  value={assistant.id}
-                  keywords={[assistant.name, assistant.description ?? ""]}
-                  onSelect={() => onChange(assistant.id)}
-                  className="min-h-11"
-                >
-                  <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{assistant.name}</span>
-                    {assistant.description ? (
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {assistant.description}
-                      </span>
-                    ) : null}
-                  </span>
-                  {selectedAssistantId === assistant.id ? (
-                    <Check className="h-4 w-4 text-primary" />
-                  ) : null}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
 function promptDraftToWorkbenchQuery(draft: PromptDraft): string {
   const notes: string[] = []
   for (const block of draft.blocks) {
@@ -523,13 +415,22 @@ function promptDraftToWorkbenchQuery(draft: PromptDraft): string {
     .join("\n\n")
 }
 
-function formatTimestamp(value: string | null): string {
-  if (!value) return ""
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ""
-  return date.toLocaleString()
-}
-
-function messageRoleForView(role: string): "user" | "assistant" | "system" {
-  return role === "user" || role === "system" ? role : "assistant"
+function upsertStreamingAssistantMessage(
+  messages: WorkbenchAiMessage[],
+  id: string,
+  text: string,
+  timestamp: string | null = null
+): WorkbenchAiMessage[] {
+  const next: WorkbenchAiMessage = {
+    id,
+    role: "assistant",
+    content: text,
+    blocks: [{ type: "text", text }],
+    timestamp,
+  }
+  const index = messages.findIndex((message) => message.id === id)
+  if (index < 0) return [...messages, next]
+  return messages.map((message, candidate) =>
+    candidate === index ? next : message
+  )
 }

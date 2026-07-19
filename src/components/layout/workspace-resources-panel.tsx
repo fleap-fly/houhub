@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Boxes,
   CheckCircle2,
@@ -53,7 +53,6 @@ import {
   useWorkspaceResourceStore,
   type WorkspaceResourceSection,
 } from "@/workspace-resources/store"
-import { alignWorkspaceToActiveProject } from "@/workspace-resources/connection"
 import { WorkspaceConnectionButton } from "./workspace-connection-button"
 
 const suiteHost = createTauriWorkbenchSuiteHost()
@@ -72,7 +71,9 @@ export function WorkspaceResourcesPanel() {
       localAgentDiscoveryError: state.localAgentDiscoveryError,
       reportingLocalAgents: state.reportingLocalAgents,
       localAgentReportError: state.localAgentReportError,
+      startingConnector: state.startingConnector,
       refresh: state.refresh,
+      startConnector: state.startConnector,
       selectWorkspace: state.selectWorkspace,
       setSelection: state.setLocalAgentReportSelection,
       reportSelected: state.reportSelectedLocalAgents,
@@ -112,14 +113,16 @@ export function WorkspaceResourcesPanel() {
     (state) => state.setActiveSection
   )
   const [openingSuiteCode, setOpeningSuiteCode] = useState<string | null>(null)
+  const localDiscoveryRefreshed = useRef(false)
 
-  const connected =
-    houflow.session.status === "signed_in" &&
-    workbench.session.status === "signed_in"
-  const activeProjectId =
-    workbench.session.status === "signed_in"
-      ? workbench.session.activeProjectId
-      : null
+  const houflowConnected = houflow.session.status === "signed_in"
+  const workbenchConnected = workbench.session.status === "signed_in"
+  // Houflow and PS are intentionally independent identities. Houflow owns
+  // cloud/local Agent Hub resources; PS owns project assistants and suites.
+  const connected = houflowConnected || workbenchConnected
+  const activeProjectId = workbenchConnected
+    ? workbench.session.activeProjectId
+    : null
   const connector = houflow.snapshot?.connector ?? null
   const localResources = useMemo(
     () =>
@@ -143,21 +146,49 @@ export function WorkspaceResourcesPanel() {
     [suites.items]
   )
 
+  // The panel is lazy-mounted. Refresh once when it is opened so an agent
+  // configured moments earlier in the Agent settings is visible without
+  // requiring a second sign-in; the explicit footer refresh remains available
+  // for subsequent configuration changes.
   useEffect(() => {
-    if (!connected || !activeProjectId) {
+    if (!houflowConnected || localDiscoveryRefreshed.current) return
+    localDiscoveryRefreshed.current = true
+    void houflow.refresh()
+  }, [houflow, houflowConnected])
+
+  useEffect(() => {
+    if (!workbenchConnected || !activeProjectId) {
       suites.reset()
       return
     }
     if (suites.projectId !== activeProjectId) {
       void suites.refresh(activeProjectId)
     }
-  }, [activeProjectId, connected, suites])
+  }, [activeProjectId, suites, workbenchConnected])
+
+  useEffect(() => {
+    if (!connected) return
+    const fallbackSection =
+      !houflowConnected && workbenchConnected
+        ? "suites"
+        : !workbenchConnected && houflowConnected
+          ? "local"
+          : null
+    if (fallbackSection && activeSection !== fallbackSection) {
+      setActiveSection(fallbackSection)
+    }
+  }, [
+    activeSection,
+    connected,
+    houflowConnected,
+    setActiveSection,
+    workbenchConnected,
+  ])
 
   const handleProjectChange = useCallback(
     async (projectId: string) => {
       try {
         await workbench.selectProject(projectId)
-        await alignWorkspaceToActiveProject()
         await suites.refresh(projectId)
       } catch (error) {
         toast.error(t("connectFailed"), {
@@ -170,36 +201,44 @@ export function WorkspaceResourcesPanel() {
 
   const handleRefresh = useCallback(async () => {
     try {
-      await Promise.all([houflow.refresh(), workbench.refresh()])
-      await alignWorkspaceToActiveProject()
+      await Promise.all([
+        houflowConnected ? houflow.refresh() : Promise.resolve(),
+        workbenchConnected ? workbench.refresh() : Promise.resolve(),
+      ])
       const projectId = useWorkbenchStore.getState().session.activeProjectId
-      if (projectId) await suites.refresh(projectId)
+      if (workbenchConnected && projectId) await suites.refresh(projectId)
       toast.success(t("refreshed"))
     } catch (error) {
       toast.error(t("connectFailed"), {
         description: toErrorMessage(error),
       })
     }
-  }, [houflow, suites, t, workbench])
+  }, [houflow, houflowConnected, suites, t, workbench, workbenchConnected])
 
   const handleReport = useCallback(async () => {
     try {
-      await houflow.reportSelected()
+      if (connector?.running !== true) {
+        await houflow.startConnector()
+      }
+      await useHouflowDesktopStore.getState().reportSelectedLocalAgents()
     } catch (error) {
       toast.error(t("reportFailed"), {
         description: toErrorMessage(error),
       })
     }
-  }, [houflow, t])
+  }, [connector?.running, houflow, t])
 
   const handleOpenSuite = useCallback(
     async (suite: WorkbenchClientSuite) => {
       setOpeningSuiteCode(suite.code)
       try {
+        const currentHouflow = useHouflowDesktopStore.getState()
+        const workspaceMatches = (
+          currentHouflow.snapshot?.workspaces ?? []
+        ).filter((workspace) => workspace.projectId === suite.projectId)
         const workspaceId =
-          useHouflowDesktopStore.getState().session.workspaceId
-        if (isDesktop() && !isRemoteDesktopMode()) {
-          if (!workspaceId) throw new Error(t("workspaceRequired"))
+          workspaceMatches.length === 1 ? workspaceMatches[0]!.id : null
+        if (isDesktop() && !isRemoteDesktopMode() && workspaceId) {
           await suiteHost.openSuite(
             {
               url: suite.url,
@@ -232,10 +271,10 @@ export function WorkspaceResourcesPanel() {
   }, [houflow, suites, workbench])
 
   const errors = [
-    houflow.error,
-    workbench.error,
-    capability.lastError,
-    suites.error,
+    houflowConnected ? houflow.error : null,
+    workbenchConnected ? workbench.error : null,
+    houflowConnected ? capability.lastError : null,
+    workbenchConnected ? suites.error : null,
   ].filter((error): error is string => Boolean(error))
   const busy = houflow.status === "refreshing" || workbench.status === "loading"
 
@@ -245,8 +284,17 @@ export function WorkspaceResourcesPanel() {
         <div className="min-w-0">
           <div className="truncate text-xs font-medium">{t("title")}</div>
           {connected ? (
-            <div className="truncate text-[11px] text-muted-foreground">
-              {workbench.session.user?.label || houflow.session.userLabel}
+            <div className="space-y-0.5 truncate text-[11px] text-muted-foreground">
+              {workbenchConnected && workbench.session.user?.label ? (
+                <div className="truncate">
+                  PS · {workbench.session.user.label}
+                </div>
+              ) : null}
+              {houflowConnected && houflow.session.userLabel ? (
+                <div className="truncate">
+                  Houflow · {houflow.session.userLabel}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -261,24 +309,30 @@ export function WorkspaceResourcesPanel() {
       ) : (
         <>
           <div className="shrink-0 space-y-2 border-b border-border/60 px-3 py-3">
-            <LabeledSelect
-              label={t("project")}
-              value={workbench.session.activeProjectId ?? ""}
-              items={workbench.session.projects.map((project) => ({
-                value: project.projectId,
-                label: project.name,
-              }))}
-              onValueChange={(value) => void handleProjectChange(value)}
-            />
-            <LabeledSelect
-              label={t("workspace")}
-              value={houflow.session.workspaceId ?? ""}
-              items={(houflow.snapshot?.workspaces ?? []).map((workspace) => ({
-                value: workspace.id,
-                label: workspace.name,
-              }))}
-              onValueChange={(value) => void houflow.selectWorkspace(value)}
-            />
+            {workbenchConnected ? (
+              <LabeledSelect
+                label={t("project")}
+                value={workbench.session.activeProjectId ?? ""}
+                items={workbench.session.projects.map((project) => ({
+                  value: project.projectId,
+                  label: project.name,
+                }))}
+                onValueChange={(value) => void handleProjectChange(value)}
+              />
+            ) : null}
+            {houflowConnected ? (
+              <LabeledSelect
+                label={t("workspace")}
+                value={houflow.session.workspaceId ?? ""}
+                items={(houflow.snapshot?.workspaces ?? []).map(
+                  (workspace) => ({
+                    value: workspace.id,
+                    label: workspace.name,
+                  })
+                )}
+                onValueChange={(value) => void houflow.selectWorkspace(value)}
+              />
+            ) : null}
           </div>
 
           <Tabs
@@ -292,24 +346,30 @@ export function WorkspaceResourcesPanel() {
               variant="line"
               className="h-9 w-full shrink-0 justify-start border-b border-border/60 px-2 group-data-horizontal/tabs:h-9"
             >
-              <ResourceTab
-                value="local"
-                icon={Laptop}
-                label={t("localAgents")}
-                count={localResources.length}
-              />
-              <ResourceTab
-                value="cloud"
-                icon={Cloud}
-                label={t("cloudAgents")}
-                count={cloudResources.length}
-              />
-              <ResourceTab
-                value="suites"
-                icon={Boxes}
-                label={t("suites")}
-                count={suiteResources.length}
-              />
+              {houflowConnected ? (
+                <>
+                  <ResourceTab
+                    value="local"
+                    icon={Laptop}
+                    label={t("localAgents")}
+                    count={localResources.length}
+                  />
+                  <ResourceTab
+                    value="cloud"
+                    icon={Cloud}
+                    label={t("cloudAgents")}
+                    count={cloudResources.length}
+                  />
+                </>
+              ) : null}
+              {workbenchConnected ? (
+                <ResourceTab
+                  value="suites"
+                  icon={Boxes}
+                  label={t("suites")}
+                  count={suiteResources.length}
+                />
+              ) : null}
             </TabsList>
 
             <TabsContent value="local" className="mt-0 min-h-0 overflow-hidden">
@@ -324,12 +384,14 @@ export function WorkspaceResourcesPanel() {
                       className="h-7 rounded-md px-2 text-xs"
                       disabled={
                         houflow.reportingLocalAgents ||
+                        houflow.startingConnector ||
                         houflow.selectedLocalAgentRefs.length === 0 ||
-                        connector?.running !== true
+                        !houflowConnected
                       }
                       onClick={() => void handleReport()}
                     >
-                      {houflow.reportingLocalAgents ? (
+                      {houflow.reportingLocalAgents ||
+                      houflow.startingConnector ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : (
                         <Send className="h-3.5 w-3.5" />

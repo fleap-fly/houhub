@@ -3389,6 +3389,12 @@ export async function getHouflowConnectorStatus(): Promise<HouflowConnectorStatu
   return getTransport().call("houflow_connector_status")
 }
 
+export async function startHouflowConnector(): Promise<unknown> {
+  return getTransport().call("houflow_connector_up", undefined, {
+    timeoutMs: 30_000,
+  })
+}
+
 export async function syncHouflowConnectorLocalAgents(params: {
   agents: HouflowConnectorLocalAgentSyncInput[]
   heartbeat?: boolean | null

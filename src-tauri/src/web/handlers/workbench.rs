@@ -1,15 +1,17 @@
-use axum::Json;
+use std::sync::Arc;
+
+use axum::{extract::Extension, Json};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use crate::app_error::AppCommandError;
+use crate::app_state::AppState;
 use crate::commands::workbench::{
     workbench_ai_create_session_core, workbench_ai_get_session_core,
     workbench_ai_list_assistants_core, workbench_ai_list_sessions_core,
-    workbench_ai_send_message_core, workbench_begin_device_auth_core, workbench_get_session_core,
-    workbench_list_client_suites_core, workbench_list_projects_core,
-    workbench_poll_device_auth_core,
-    workbench_set_active_project_core, workbench_sign_out_core,
+    workbench_ai_send_message_stream_core, workbench_begin_device_auth_core,
+    workbench_get_session_core, workbench_list_client_suites_core, workbench_list_projects_core,
+    workbench_poll_device_auth_core, workbench_set_active_project_core, workbench_sign_out_core,
     workbench_space_complete_upload_core, workbench_space_create_folder_core,
     workbench_space_delete_file_core, workbench_space_download_url_core, workbench_space_list_core,
     workbench_space_presign_upload_core, workbench_space_usage_core, DeviceAuthPollResult,
@@ -289,17 +291,22 @@ pub struct AiSendMessageInput {
     pub assistant_id: String,
     pub session_id: String,
     pub query: String,
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 pub async fn workbench_ai_send_message(
+    Extension(state): Extension<Arc<AppState>>,
     Json(input): Json<AiSendMessageInput>,
 ) -> Result<Json<JsonValue>, AppCommandError> {
     Ok(Json(
-        workbench_ai_send_message_core(
+        workbench_ai_send_message_stream_core(
             input.project_id,
             input.assistant_id,
             input.session_id,
             input.query,
+            input.request_id.unwrap_or_default(),
+            state.emitter.clone(),
         )
         .await?,
     ))

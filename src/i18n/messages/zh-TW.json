@@ -3813,6 +3813,7 @@
     "emptyMessages": "选择智能体或开始一个项目会话。",
     "emptyResponse": "未返回响应。",
     "messagePlaceholder": "向项目智能体发送消息…",
+    "waitingForReply": "等待項目智能體回覆…",
     "sendFailed": "发送消息失败",
     "newSession": "新项目会话",
     "untitled": "未命名会话",

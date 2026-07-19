@@ -5,6 +5,9 @@ import {
 } from "@/houflow/cloud-session-turns"
 import { getTransport } from "@/lib/transport"
 import type { ContentBlock, MessageTurn } from "@/lib/types"
+import { randomUUID } from "@/lib/utils"
+
+const WORKBENCH_AI_MESSAGE_STREAM_EVENT = "workbench-ai://message-stream"
 
 export interface WorkbenchAssistant {
   id: string
@@ -158,18 +161,43 @@ export async function sendWorkbenchAiMessage(input: {
   assistantId: string
   sessionId: string
   query: string
+  onChunk?: (text: string) => void
 }): Promise<string> {
-  const raw = await getTransport().call(
-    "workbench_ai_send_message",
-    {
+  const transport = getTransport()
+  const requestId = input.onChunk ? randomUUID() : null
+  let streamed = ""
+  const unsubscribe = requestId
+    ? await transport.subscribe<WorkbenchAiMessageStreamFrame>(
+        WORKBENCH_AI_MESSAGE_STREAM_EVENT,
+        (frame) => {
+          if (frame.requestId !== requestId || !frame.response) return
+          streamed = mergeResponseChunk(streamed, frame.response)
+          input.onChunk?.(streamed)
+        }
+      )
+    : () => {}
+  try {
+    const request = {
       projectId: input.projectId,
       assistantId: input.assistantId,
       sessionId: input.sessionId,
       query: input.query,
-    },
-    { timeoutMs: 120_000 }
-  )
-  return parseChatResponse(raw)
+      ...(requestId ? { requestId } : {}),
+    }
+    const raw = await transport.call("workbench_ai_send_message", request, {
+      timeoutMs: requestId ? 600_000 : 120_000,
+    })
+    const response = parseChatResponse(raw)
+    return mergeResponseChunk(streamed, response)
+  } finally {
+    unsubscribe()
+  }
+}
+
+interface WorkbenchAiMessageStreamFrame {
+  requestId: string
+  status: string
+  response: string
 }
 
 function parseChatResponse(raw: unknown): string {

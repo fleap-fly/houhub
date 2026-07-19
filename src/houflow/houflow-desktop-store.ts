@@ -31,6 +31,7 @@ import {
 import {
   acpListAgents,
   getHouflowConnectorStatus,
+  startHouflowConnector,
   syncHouflowConnectorLocalAgents,
   syncHouflowManagedGateway,
 } from "@/lib/api"
@@ -52,10 +53,10 @@ export interface HouflowLocalAgent {
   localAgentRef: string
   provider: string
   name: string
-  runtimeProvider: string
-  runtimeRunner: true
-  useDefaultSkillsDirectory: true
-  capabilities: ["dispatch", "workspace_message", "lifecycle"]
+  runtimeProvider: string | null
+  runtimeRunner: boolean
+  useDefaultSkillsDirectory: boolean
+  capabilities: string[]
 }
 
 export interface HouflowDesktopStoreState {
@@ -69,12 +70,14 @@ export interface HouflowDesktopStoreState {
   localAgentDiscoveryError: string | null
   reportingLocalAgents: boolean
   localAgentReportError: string | null
+  startingConnector: boolean
   initialize: () => Promise<void>
   signInWithHouflow: (options?: HouflowSignInOptions) => Promise<void>
   refresh: () => Promise<void>
   selectWorkspace: (workspaceId: string) => Promise<void>
   setLocalAgentReportSelection: (localAgentRefs: string[]) => void
   reportSelectedLocalAgents: () => Promise<void>
+  startConnector: () => Promise<void>
   signOut: () => Promise<void>
 }
 
@@ -97,6 +100,7 @@ const initialState = {
   localAgentDiscoveryError: null,
   reportingLocalAgents: false,
   localAgentReportError: null,
+  startingConnector: false,
 }
 
 export const useHouflowDesktopStore = create<HouflowDesktopStoreState>()((
@@ -296,9 +300,10 @@ export const useHouflowDesktopStore = create<HouflowDesktopStoreState>()((
               name: agent.name,
               provider: agent.provider,
               capabilities: {
-                dispatch: true,
-                workspace_message: true,
-                lifecycle: true,
+                dispatch: agent.capabilities.includes("dispatch"),
+                workspace_message:
+                  agent.capabilities.includes("workspace_message"),
+                lifecycle: agent.capabilities.includes("lifecycle"),
               },
             })
           )
@@ -315,6 +320,21 @@ export const useHouflowDesktopStore = create<HouflowDesktopStoreState>()((
         throw err instanceof Error ? err : new Error(message)
       } finally {
         set({ reportingLocalAgents: false })
+      }
+    },
+
+    startConnector: async () => {
+      if (get().startingConnector) return
+      set({ startingConnector: true, localAgentReportError: null })
+      try {
+        await startHouflowConnector()
+        await get().refresh()
+      } catch (err) {
+        const message = toErrorMessage(err)
+        set({ localAgentReportError: message })
+        throw err instanceof Error ? err : new Error(message)
+      } finally {
+        set({ startingConnector: false })
       }
     },
 
@@ -369,7 +389,7 @@ async function discoverLocalConnectorAgents(
   snapshot: HouflowControlSnapshot
 ): Promise<HouflowLocalAgent[]> {
   const connectorId = snapshot.connector?.connectorId?.trim()
-  if (!connectorId || snapshot.connector?.running !== true) return []
+  if (!connectorId) return []
 
   const localConnector = await getHouflowConnectorStatus()
   const localConnectorId = connectorIdFromStatusSnapshot(
@@ -399,73 +419,60 @@ function localAgentSyncInput(agent: AcpAgentInfo): HouflowLocalAgent | null {
     provider: runtime.provider,
     name: agent.name,
     runtimeProvider: runtime.runtimeProvider,
-    runtimeRunner: true,
-    useDefaultSkillsDirectory: true,
-    capabilities: ["dispatch", "workspace_message", "lifecycle"],
+    runtimeRunner: runtime.runtimeRunner,
+    useDefaultSkillsDirectory: runtime.runtimeRunner,
+    capabilities: runtime.capabilities,
   }
 }
 
-function connectorRuntimeForAgent(
-  agentType: AgentType
-): { localAgentRef: string; provider: string; runtimeProvider: string } | null {
+function connectorRuntimeForAgent(agentType: AgentType): {
+  localAgentRef: string
+  provider: string
+  runtimeProvider: string | null
+  runtimeRunner: boolean
+  capabilities: string[]
+} | null {
+  const runner = (
+    localAgentRef: string,
+    provider: string,
+    runtimeProvider: string
+  ) => ({
+    localAgentRef,
+    provider,
+    runtimeProvider,
+    runtimeRunner: true,
+    capabilities: ["dispatch", "workspace_message", "lifecycle"],
+  })
+  const visibleOnly = (localAgentRef: string, provider: string) => ({
+    localAgentRef,
+    provider,
+    runtimeProvider: null,
+    runtimeRunner: false,
+    capabilities: [],
+  })
   switch (agentType) {
     case "claude_code":
-      return {
-        localAgentRef: "claude:cli",
-        provider: "claude",
-        runtimeProvider: "claude",
-      }
+      return runner("claude:cli", "claude", "claude")
     case "codex":
-      return {
-        localAgentRef: "codex:cli",
-        provider: "codex",
-        runtimeProvider: "codex",
-      }
+      return runner("codex:cli", "codex", "codex")
     case "open_code":
-      return {
-        localAgentRef: "opencode:cli",
-        provider: "opencode",
-        runtimeProvider: "opencode",
-      }
+      return runner("opencode:cli", "opencode", "opencode")
     case "gemini":
-      return {
-        localAgentRef: "gemini:cli",
-        provider: "gemini",
-        runtimeProvider: "gemini",
-      }
+      return runner("gemini:cli", "gemini", "gemini")
     case "open_claw":
-      return {
-        localAgentRef: "openclaw:cli",
-        provider: "openclaw",
-        runtimeProvider: "openclaw",
-      }
+      return runner("openclaw:cli", "openclaw", "openclaw")
     case "hermes":
-      return {
-        localAgentRef: "hermes:cli",
-        provider: "hermes",
-        runtimeProvider: "hermes",
-      }
+      return runner("hermes:cli", "hermes", "hermes")
     case "kimi_code":
-      return {
-        localAgentRef: "kimi:api",
-        provider: "kimi",
-        runtimeProvider: "kimi",
-      }
+      return runner("kimi:api", "kimi", "kimi")
     case "pi":
-      return {
-        localAgentRef: "pi:cli",
-        provider: "pi",
-        runtimeProvider: "pi",
-      }
+      return runner("pi:cli", "pi", "pi")
     case "grok":
-      return {
-        localAgentRef: "grok:cli",
-        provider: "grok",
-        runtimeProvider: "grok",
-      }
+      return runner("grok:cli", "grok", "grok")
     case "cline":
+      return visibleOnly("cline:vscode", "cline")
     case "code_buddy":
-      return null
+      return visibleOnly("code_buddy:local", "code_buddy")
   }
 }
 
