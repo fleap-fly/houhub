@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   buildCursorEnv,
   CursorConfigPanel,
+  cursorLoginCommand,
+  inferCursorMode,
   isCursorForceEnabled,
 } from "./cursor-config-panel"
 import {
@@ -12,7 +14,7 @@ import {
   acpCursorListModels,
   acpUpdateAgentConfig,
 } from "@/lib/api"
-import type { AcpAgentInfo, ModelProviderInfo } from "@/lib/types"
+import type { AcpAgentInfo } from "@/lib/types"
 import enMessages from "@/i18n/messages/en.json"
 
 vi.mock("@/lib/api", () => ({
@@ -22,24 +24,26 @@ vi.mock("@/lib/api", () => ({
 }))
 
 describe("buildCursorEnv", () => {
-  it("sets every managed knob and preserves unrelated keys", () => {
+  it("API-key mode writes the Cursor key + model and scrubs the IDE-only base URL", () => {
     const env = buildCursorEnv(
-      { OTHER: "x" },
-      "sk-key",
-      "https://api.example.com//",
-      "gpt-5",
+      { OTHER: "x", CURSOR_API_BASE_URL: "https://stale" },
+      "custom",
+      "  sk-key  ",
+      "claude-opus-4-8-high",
       true
     )
     expect(env).toEqual({
       OTHER: "x",
+      CURSOR_AUTH_MODE: "custom",
       CURSOR_API_KEY: "sk-key",
-      CURSOR_API_BASE_URL: "https://api.example.com",
-      CURSOR_MODEL: "gpt-5",
+      CURSOR_MODEL: "claude-opus-4-8-high",
       CURSOR_FORCE: "1",
     })
+    // Agent CLI does not consume the IDE's OpenAI base URL setting.
+    expect(env).not.toHaveProperty("CURSOR_API_BASE_URL")
   })
 
-  it("removes every managed key when cleared", () => {
+  it("API-key mode with a blank key clears it but keeps the mode + unrelated keys", () => {
     const env = buildCursorEnv(
       {
         CURSOR_API_KEY: "old",
@@ -48,12 +52,56 @@ describe("buildCursorEnv", () => {
         CURSOR_FORCE: "1",
         KEEP: "y",
       },
+      "custom",
       " ",
-      "",
       "",
       false
     )
-    expect(env).toEqual({ KEEP: "y" })
+    expect(env).toEqual({ KEEP: "y", CURSOR_AUTH_MODE: "custom" })
+  })
+
+  it("subscription mode drops the key + base URL but keeps the model", () => {
+    // The key arg is ignored in subscription mode — the launch uses browser
+    // login, so shipping a key (or a base URL) would be wrong.
+    const env = buildCursorEnv(
+      { CURSOR_API_KEY: "old", CURSOR_API_BASE_URL: "https://old", KEEP: "y" },
+      "subscription",
+      "ignored-key",
+      "auto",
+      false
+    )
+    expect(env).toEqual({
+      KEEP: "y",
+      CURSOR_AUTH_MODE: "subscription",
+      CURSOR_MODEL: "auto",
+    })
+  })
+})
+
+describe("inferCursorMode", () => {
+  it("prefers the explicit knob over key presence", () => {
+    expect(
+      inferCursorMode({ CURSOR_AUTH_MODE: "subscription", CURSOR_API_KEY: "k" })
+    ).toBe("subscription")
+    expect(inferCursorMode({ CURSOR_AUTH_MODE: "custom" })).toBe("custom")
+  })
+
+  it("infers custom from a saved API key, else subscription (legacy rows)", () => {
+    expect(inferCursorMode({ CURSOR_API_KEY: "k" })).toBe("custom")
+    expect(inferCursorMode({})).toBe("subscription")
+  })
+})
+
+describe("cursorLoginCommand", () => {
+  it("quotes a path with whitespace and falls back when absent", () => {
+    expect(cursorLoginCommand("/Applications/My App/cursor-agent")).toBe(
+      '"/Applications/My App/cursor-agent" login'
+    )
+    expect(cursorLoginCommand("/usr/local/bin/cursor-agent")).toBe(
+      "/usr/local/bin/cursor-agent login"
+    )
+    expect(cursorLoginCommand(null)).toBe("cursor-agent login")
+    expect(cursorLoginCommand("")).toBe("cursor-agent login")
   })
 })
 
@@ -67,43 +115,54 @@ describe("isCursorForceEnabled", () => {
   })
 })
 
-describe("CursorConfigPanel unified save", () => {
-  const originalEnv = { CURSOR_API_KEY: "old-key" }
-  const agent = {
+describe("CursorConfigPanel", () => {
+  const baseAgent = {
     agent_type: "cursor",
     enabled: true,
-    env: originalEnv,
+    env: {} as Record<string, string>,
     cursor_settings: {
       sandbox_mode: null,
       permissions_allow: [],
       permissions_deny: [],
     },
     cursor_cli_config_json: null,
-  } as unknown as AcpAgentInfo
+  }
 
   function renderPanel(overrides?: {
+    env?: Record<string, string>
     onSaveEnv?: ReturnType<typeof vi.fn>
     onSaved?: ReturnType<typeof vi.fn>
     onAffectedSessions?: ReturnType<typeof vi.fn>
-    agent?: AcpAgentInfo
-    modelProviders?: ModelProviderInfo[]
   }) {
     const onSaveEnv = overrides?.onSaveEnv ?? vi.fn().mockResolvedValue(0)
     const onSaved = overrides?.onSaved ?? vi.fn()
     const onAffectedSessions = overrides?.onAffectedSessions ?? vi.fn()
+    const agent = {
+      ...baseAgent,
+      env: overrides?.env ?? baseAgent.env,
+    } as unknown as AcpAgentInfo
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
         <CursorConfigPanel
-          agent={overrides?.agent ?? agent}
+          agent={agent}
           saving={false}
           onSaveEnv={onSaveEnv}
           onSaved={onSaved}
           onAffectedSessions={onAffectedSessions}
-          modelProviders={overrides?.modelProviders ?? []}
         />
       </NextIntlClientProvider>
     )
     return { onSaveEnv, onSaved, onAffectedSessions }
+  }
+
+  const authenticated = {
+    installed: true,
+    is_authenticated: true,
+    raw_status: "authenticated",
+    email: "itpkcn@gmail.com",
+    membership: null,
+    error: null,
+    binary_path: "/cache/cursor-agent",
   }
 
   beforeEach(() => {
@@ -115,6 +174,7 @@ describe("CursorConfigPanel unified save", () => {
       email: null,
       membership: null,
       error: null,
+      binary_path: null,
     })
     vi.mocked(acpCursorListModels).mockResolvedValue({
       models: [],
@@ -124,12 +184,13 @@ describe("CursorConfigPanel unified save", () => {
     vi.mocked(acpUpdateAgentConfig).mockResolvedValue(0)
   })
 
-  it("rolls the env back when the rules write fails", async () => {
-    // The widening hazard: the env step already persisted (e.g. Run
-    // Everything turned on) but the deny rules never landed. The save must
-    // restore the previous env instead of leaving the half-applied state.
+  it("rolls the env back when the rules write fails (API-key mode)", async () => {
+    // A saved API key opens the panel in API-key mode. The widening hazard: the
+    // env step already persisted (e.g. Run Everything on) but the deny rules
+    // never landed — the save must restore the previous env.
     vi.mocked(acpUpdateAgentConfig).mockRejectedValue(new Error("disk full"))
-    const { onSaveEnv, onSaved } = renderPanel()
+    const originalEnv = { CURSOR_API_KEY: "old-key" }
+    const { onSaveEnv, onSaved } = renderPanel({ env: originalEnv })
     await screen.findByText(enMessages.AcpAgentSettings.cursor.authNotInstalled)
 
     fireEvent.change(
@@ -145,21 +206,52 @@ describe("CursorConfigPanel unified save", () => {
     )
 
     await waitFor(() => expect(onSaveEnv).toHaveBeenCalledTimes(2))
-    expect(onSaveEnv.mock.calls[0]).toEqual([
-      { CURSOR_API_KEY: "new-key" },
-      true,
-      null,
-    ])
+    // No CURSOR_API_BASE_URL is ever written; CURSOR_FORCE defaults to "1"
+    // (Run Everything) because the saved env never set it.
+    expect(onSaveEnv.mock.calls[0][0]).toEqual({
+      CURSOR_AUTH_MODE: "custom",
+      CURSOR_API_KEY: "new-key",
+      CURSOR_FORCE: "1",
+    })
     // Rollback restores the exact prior env map.
     expect(onSaveEnv.mock.calls[1][0]).toEqual(originalEnv)
-    expect(onSaveEnv.mock.calls[1][2]).toBeNull()
     expect(onSaved).not.toHaveBeenCalled()
   })
 
-  it("reports the rules write's affected-session count on success", async () => {
-    vi.mocked(acpUpdateAgentConfig).mockResolvedValue(3)
-    const { onSaveEnv, onSaved, onAffectedSessions } = renderPanel()
+  it("blocks an API-key save with no key", async () => {
+    const { onSaveEnv } = renderPanel({ env: { CURSOR_AUTH_MODE: "custom" } })
     await screen.findByText(enMessages.AcpAgentSettings.cursor.authNotInstalled)
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: enMessages.AcpAgentSettings.cursor.saveConfig,
+      })
+    )
+    // Validation short-circuits before any persistence.
+    await waitFor(() =>
+      expect(vi.mocked(acpUpdateAgentConfig)).not.toHaveBeenCalled()
+    )
+    expect(onSaveEnv).not.toHaveBeenCalled()
+  })
+
+  it("subscription mode shows the runnable login command and saves login-only env", async () => {
+    vi.mocked(acpCursorAuthStatus).mockResolvedValue({
+      installed: true,
+      is_authenticated: false,
+      raw_status: "unauthenticated",
+      email: null,
+      membership: null,
+      error: null,
+      binary_path:
+        "/Users/x/Library/Caches/com.houflow.houhub/acp-binaries/cursor/dist-package/cursor-agent",
+    })
+    // Empty env → subscription mode.
+    const { onSaveEnv, onSaved } = renderPanel({ env: {} })
+
+    // The login command uses the resolved binary path, not a bare name.
+    await screen.findByText(
+      "/Users/x/Library/Caches/com.houflow.houhub/acp-binaries/cursor/dist-package/cursor-agent login"
+    )
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -169,45 +261,22 @@ describe("CursorConfigPanel unified save", () => {
 
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
     expect(onSaveEnv).toHaveBeenCalledTimes(1)
-    expect(onAffectedSessions).toHaveBeenCalledWith(3)
+    // Subscription persists the mode only — no credential. A fresh agent
+    // defaults the permission mode to Run Everything (CURSOR_FORCE="1").
+    expect(onSaveEnv.mock.calls[0][0]).toEqual({
+      CURSOR_AUTH_MODE: "subscription",
+      CURSOR_FORCE: "1",
+    })
   })
 
-  it("saves a bound built-in provider without probing Cursor account models", async () => {
-    vi.mocked(acpCursorAuthStatus).mockResolvedValue({
-      installed: true,
-      is_authenticated: true,
-      raw_status: null,
-      email: "cursor@example.com",
-      membership: "pro",
-      error: null,
-    })
-    const provider = {
-      id: 42,
-      name: "Houflow Gateway",
-      api_url: "https://api.houshanai.com/v1",
-      api_key: "gateway-key",
-      api_key_masked: "gate...-key",
-      agent_types: ["cursor"],
-      agent_type: "cursor",
-      models: ["gpt-5", "gpt-5", ""],
-      model: "gpt-5",
-      created_at: "2026-07-19T00:00:00Z",
-      updated_at: "2026-07-19T00:00:00Z",
-    } as ModelProviderInfo
-    const boundAgent = {
-      ...agent,
-      model_provider_id: provider.id,
-      env: {
-        CURSOR_API_KEY: "old-manual-key",
-        CURSOR_API_BASE_URL: "https://old.example.com",
-      },
-    } as AcpAgentInfo
+  it("respects an explicit CURSOR_FORCE=0 (Ask before running) instead of defaulting on", async () => {
+    // A saved "0" means the user chose Ask — the Run-Everything default must
+    // not override it, so the save drops CURSOR_FORCE rather than writing "1".
     const { onSaveEnv, onSaved } = renderPanel({
-      agent: boundAgent,
-      modelProviders: [provider],
+      env: { CURSOR_AUTH_MODE: "subscription", CURSOR_FORCE: "0" },
     })
+    await screen.findByText(enMessages.AcpAgentSettings.cursor.authNotInstalled)
 
-    await screen.findByText("cursor@example.com")
     fireEvent.click(
       screen.getByRole("button", {
         name: enMessages.AcpAgentSettings.cursor.saveConfig,
@@ -215,11 +284,47 @@ describe("CursorConfigPanel unified save", () => {
     )
 
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
-    expect(onSaveEnv).toHaveBeenCalledWith(
-      { CURSOR_MODEL: "gpt-5" },
-      true,
-      provider.id
-    )
-    expect(acpCursorListModels).not.toHaveBeenCalled()
+    expect(onSaveEnv.mock.calls[0][0]).toEqual({
+      CURSOR_AUTH_MODE: "subscription",
+    })
+  })
+
+  it("subscription mode probes with an empty key to use browser login", async () => {
+    renderPanel({ env: {} })
+    await waitFor(() => expect(acpCursorAuthStatus).toHaveBeenCalled())
+    // An empty string forces the login credential and strips any inherited key.
+    expect(acpCursorAuthStatus).toHaveBeenCalledWith("")
+  })
+
+  it("hides the model picker (and hints to sign in) when no models are fetched", async () => {
+    // Authenticated, but the models probe returns nothing → no picker.
+    vi.mocked(acpCursorAuthStatus).mockResolvedValue(authenticated)
+    vi.mocked(acpCursorListModels).mockResolvedValue({
+      models: [],
+      default_model: null,
+      error: null,
+    })
+    renderPanel({ env: { CURSOR_AUTH_MODE: "subscription" } })
+
+    await screen.findByText(enMessages.AcpAgentSettings.cursor.modelsNeedAuth)
+    expect(
+      screen.queryByText(enMessages.AcpAgentSettings.cursor.modelTitle)
+    ).toBeNull()
+  })
+
+  it("shows the model picker once real models load", async () => {
+    vi.mocked(acpCursorAuthStatus).mockResolvedValue(authenticated)
+    vi.mocked(acpCursorListModels).mockResolvedValue({
+      models: [
+        { id: "auto", label: "Auto", is_default: true },
+        { id: "claude-opus-4-8-high", label: "Opus 4.8 1M", is_default: false },
+      ],
+      default_model: "auto",
+      error: null,
+    })
+    renderPanel({ env: { CURSOR_AUTH_MODE: "subscription" } })
+
+    // The picker card (with its header) appears after the catalog loads.
+    await screen.findByText(enMessages.AcpAgentSettings.cursor.modelTitle)
   })
 })

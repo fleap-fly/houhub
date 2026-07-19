@@ -74,6 +74,29 @@ fn merge_agent_env(
     merged.into_iter().collect()
 }
 
+/// Cursor subscription-mode launch policy. When the user picked the official
+/// subscription (browser login), guarantee the launched CLI sees NONE of the
+/// Cursor API credentials - not even a stale `CURSOR_API_KEY` /
+/// `CURSOR_API_BASE_URL` inherited from this process's environment (e.g. a dev
+/// shell export). cursor-agent would otherwise validate that leaked key and
+/// refuse to fall back to the login credential. An empty value tells the spawn
+/// layer (vendored sacp-tokio) to `env_remove` the inherited var.
+///
+/// Gated on the explicit `CURSOR_AUTH_MODE` knob (written by the Cursor panel),
+/// so legacy rows and operator-provided container env are left untouched.
+fn apply_cursor_env_policy(
+    merged: &mut Vec<(String, String)>,
+    runtime_env: &BTreeMap<String, String>,
+) {
+    if runtime_env.get("CURSOR_AUTH_MODE").map(String::as_str) != Some("subscription") {
+        return;
+    }
+    for key in ["CURSOR_API_KEY", "CURSOR_API_BASE_URL"] {
+        merged.retain(|(k, _)| k != key);
+        merged.push((key.to_string(), String::new()));
+    }
+}
+
 fn prepend_path_value(current: Option<&str>, dirs: impl IntoIterator<Item = PathBuf>) -> String {
     let sep = if cfg!(windows) { ";" } else { ":" };
     let mut parts: Vec<String> = Vec::new();
@@ -426,10 +449,7 @@ async fn build_agent(
             let binary_path = match cached {
                 Some((path, cached_version)) => {
                     if cached_version == registry_version {
-                        tracing::info!(
-                            "[ACP][{}] Using cached binary {cached_version}",
-                            meta.name
-                        );
+                        tracing::info!("[ACP][{}] Using cached binary {cached_version}", meta.name);
                     } else {
                         tracing::info!(
                             "[ACP][{}] Using cached binary {cached_version} (registry recommends {registry_version})",
@@ -495,7 +515,10 @@ async fn build_agent(
             if !cmd_args.is_empty() {
                 server = server.args(cmd_args);
             }
-            let merged_env = sanitize_agent_env(agent_type, merge_agent_env(env, runtime_env));
+            let mut merged_env = sanitize_agent_env(agent_type, merge_agent_env(env, runtime_env));
+            if agent_type == AgentType::Cursor {
+                apply_cursor_env_policy(&mut merged_env, runtime_env);
+            }
             let env_key_list: Vec<&str> = merged_env.iter().map(|(k, _)| k.as_str()).collect();
             if !merged_env.is_empty() {
                 let env_vars: Vec<sacp::schema::EnvVariable> = merged_env
@@ -5276,7 +5299,10 @@ fn cursor_companion_title_from_content(content: Option<&str>) -> Option<&'static
     let is_report_item = |t: &serde_json::Value| {
         t.get("task_id").and_then(|x| x.as_str()).is_some()
             && t.get("status").and_then(|x| x.as_str()).is_some_and(|s| {
-                matches!(s, "running" | "completed" | "failed" | "canceled" | "unknown")
+                matches!(
+                    s,
+                    "running" | "completed" | "failed" | "canceled" | "unknown"
+                )
             })
     };
     if !tasks.is_empty() && tasks.iter().all(is_report_item) {
@@ -6228,7 +6254,9 @@ mod tests {
         assert!(!GrokAskUserQuestionRequest::matches_method(
             "x.ai/ask_user_question"
         ));
-        assert!(!GrokAskUserQuestionRequest::matches_method("session/prompt"));
+        assert!(!GrokAskUserQuestionRequest::matches_method(
+            "session/prompt"
+        ));
 
         // The exact params grok sends (captured from a real 0.2.101 run): the
         // transparent newtype must deserialize them and the raw object must parse
@@ -6337,6 +6365,43 @@ mod tests {
             ),
             None,
         );
+    }
+
+    #[test]
+    fn cursor_env_policy_clears_inherited_creds_only_in_subscription() {
+        let sub: BTreeMap<String, String> =
+            [("CURSOR_AUTH_MODE".to_string(), "subscription".to_string())].into();
+
+        // No configured creds → both injected empty (⇒ spawn strips inherited).
+        let mut merged = vec![("PATH".to_string(), "/usr/bin".to_string())];
+        apply_cursor_env_policy(&mut merged, &sub);
+        assert!(merged
+            .iter()
+            .any(|(k, v)| k == "CURSOR_API_KEY" && v.is_empty()));
+        assert!(merged
+            .iter()
+            .any(|(k, v)| k == "CURSOR_API_BASE_URL" && v.is_empty()));
+
+        // Even an inconsistent legacy row cannot override subscription mode.
+        let mut with_key = vec![("CURSOR_API_KEY".to_string(), "sk-x".to_string())];
+        apply_cursor_env_policy(&mut with_key, &sub);
+        assert!(with_key
+            .iter()
+            .any(|(k, v)| k == "CURSOR_API_KEY" && v.is_empty()));
+        assert!(with_key
+            .iter()
+            .any(|(k, v)| k == "CURSOR_API_BASE_URL" && v.is_empty()));
+
+        // Custom mode and legacy/no-mode rows are left untouched.
+        for mode in [Some("custom"), None] {
+            let rt: BTreeMap<String, String> = mode
+                .map(|m| [("CURSOR_AUTH_MODE".to_string(), m.to_string())].into())
+                .unwrap_or_default();
+            let mut env = vec![("PATH".to_string(), "/usr/bin".to_string())];
+            apply_cursor_env_policy(&mut env, &rt);
+            assert!(!env.iter().any(|(k, _)| k == "CURSOR_API_KEY"));
+            assert!(!env.iter().any(|(k, _)| k == "CURSOR_API_BASE_URL"));
+        }
     }
 
     #[test]
@@ -7237,7 +7302,8 @@ mod tests {
             Some("houhub-mcp__get_delegation_status")
         );
         // Mixed batch with a running item still resolves.
-        let mixed = r#"{"tasks":[{"task_id":"a","status":"running"},{"task_id":"b","status":"unknown"}]}"#;
+        let mixed =
+            r#"{"tasks":[{"task_id":"a","status":"running"},{"task_id":"b","status":"unknown"}]}"#;
         assert_eq!(
             cursor_companion_title_from_content(Some(mixed)),
             Some("houhub-mcp__get_delegation_status")
@@ -7263,9 +7329,7 @@ mod tests {
         assert_eq!(cursor_companion_title_from_content(None), None);
         // Ack prefix must match from the start, not mid-string.
         assert_eq!(
-            cursor_companion_title_from_content(Some(
-                "Note: Delegation successful. task_id=x."
-            )),
+            cursor_companion_title_from_content(Some("Note: Delegation successful. task_id=x.")),
             None
         );
     }

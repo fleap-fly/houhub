@@ -528,22 +528,10 @@ pub async fn houflow_sync_managed_gateway_core(
 
     let bind_agents = input.bind_agents.unwrap_or(true);
     let mut bound_agent_types = Vec::new();
-    let auto_bind_agent_types = gateway_auto_bind_agent_types();
-    // Cursor speaks Cursor's own Connect/protobuf protocol at its endpoint.
-    // Advertise the built-in providers in settings, but leave the official
-    // Cursor account binding intact until the user explicitly selects one.
-    let skipped_agent_types = if bind_agents {
-        agent_types
-            .iter()
-            .filter(|agent_type| !auto_bind_agent_types.contains(agent_type))
-            .copied()
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let skipped_agent_types = Vec::new();
 
     if bind_agents {
-        for agent_type in auto_bind_agent_types {
+        for agent_type in agent_types {
             let setting = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
                 .await
                 .map_err(AppCommandError::from)?;
@@ -888,15 +876,7 @@ fn gateway_agent_types() -> Vec<AgentType> {
         AgentType::Gemini,
         AgentType::Pi,
         AgentType::Grok,
-        AgentType::Cursor,
     ]
-}
-
-fn gateway_auto_bind_agent_types() -> Vec<AgentType> {
-    gateway_agent_types()
-        .into_iter()
-        .filter(|agent_type| *agent_type != AgentType::Cursor)
-        .collect()
 }
 
 fn synced_gateway_model(
@@ -1138,7 +1118,7 @@ fn default_skills_directory(provider: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{gateway_agent_types, gateway_auto_bind_agent_types, synced_gateway_model};
+    use super::{gateway_agent_types, synced_gateway_model};
     use crate::models::agent::AgentType;
     use crate::models::model_provider::ModelProviderInfo;
 
@@ -1162,8 +1142,7 @@ mod tests {
     fn gateway_sync_includes_supported_agents() {
         assert!(gateway_agent_types().contains(&AgentType::Pi));
         assert!(gateway_agent_types().contains(&AgentType::Grok));
-        assert!(gateway_agent_types().contains(&AgentType::Cursor));
-        assert!(!gateway_auto_bind_agent_types().contains(&AgentType::Cursor));
+        assert!(!gateway_agent_types().contains(&AgentType::Cursor));
     }
 
     #[test]

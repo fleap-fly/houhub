@@ -9764,17 +9764,16 @@ supports_websockets = false`}
                   <CursorConfigPanel
                     agent={selectedAgent}
                     saving={Boolean(savingEnv[selectedAgent.agent_type])}
-                    onSaveEnv={(env, enabled, modelProviderId) =>
+                    onSaveEnv={(env, enabled) =>
                       persistEnv(
                         selectedAgent.agent_type,
                         enabled,
                         envMapToText(env),
-                        modelProviderId
+                        null
                       )
                     }
                     onSaved={refreshAgents}
                     onAffectedSessions={reportAffectedSessions}
-                    modelProviders={selectedModelProviders}
                   />
                 ) : selectedAgent.agent_type === "grok" ? (
                   <div className="space-y-3 rounded-md border bg-muted/10 p-3">

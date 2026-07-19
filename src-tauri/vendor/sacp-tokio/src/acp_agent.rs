@@ -191,7 +191,19 @@ impl AcpAgent {
                     cmd.current_dir(current_dir);
                 }
                 for env_var in &stdio.env {
-                    cmd.env(&env_var.name, &env_var.value);
+                    // HouHub convention: an empty value means "ensure this var is
+                    // ABSENT from the child" (strip an inherited value) rather
+                    // than setting it empty. The child otherwise inherits this
+                    // process's environment, so this lets the launch layer
+                    // deterministically clear a leaked credential — e.g. Cursor
+                    // subscription mode removing an inherited CURSOR_API_KEY so
+                    // the CLI uses its browser-login credential. No current
+                    // caller passes an intentional empty value.
+                    if env_var.value.is_empty() {
+                        cmd.env_remove(&env_var.name);
+                    } else {
+                        cmd.env(&env_var.name, &env_var.value);
+                    }
                 }
                 #[cfg(windows)]
                 {
@@ -309,10 +321,10 @@ impl<Counterpart: AcpAgentCounterpartRole> sacp::ConnectTo<Counterpart> for AcpA
         self,
         client: impl sacp::ConnectTo<Counterpart::Counterpart>,
     ) -> Result<(), sacp::Error> {
+        use futures::io::BufReader;
         use futures::AsyncBufReadExt;
         use futures::AsyncWriteExt;
         use futures::StreamExt;
-        use futures::io::BufReader;
 
         let (child_stdin, child_stdout, child_stderr, child) = self.spawn_process()?;
 
@@ -334,11 +346,8 @@ impl<Counterpart: AcpAgentCounterpartRole> sacp::ConnectTo<Counterpart> for AcpA
                     }
                     // Always collect for error reporting
                     if !collected.is_empty() {
-                        truncated |= append_limited_utf8(
-                            &mut collected,
-                            "\n",
-                            MAX_STDERR_CAPTURE_BYTES,
-                        );
+                        truncated |=
+                            append_limited_utf8(&mut collected, "\n", MAX_STDERR_CAPTURE_BYTES);
                     }
                     truncated |=
                         append_limited_utf8(&mut collected, &line, MAX_STDERR_CAPTURE_BYTES);
