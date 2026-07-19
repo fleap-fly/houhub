@@ -30,7 +30,7 @@
     "noSuites": "No purchased suites are available for this project",
     "reportSelected": "Report selected",
     "reporting": "Reporting",
-    "connectorOffline": "Local connector is not ready",
+    "connectorOffline": "Remote dispatch connector is not running",
     "discovered": "Discovered",
     "selected": "Selected",
     "reported": "Reported",

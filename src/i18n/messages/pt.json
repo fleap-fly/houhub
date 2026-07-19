@@ -30,7 +30,7 @@
     "noSuites": "Nenhuma suíte comprada está disponível para este projeto",
     "reportSelected": "Reportar seleção",
     "reporting": "Reportando",
-    "connectorOffline": "O conector local não está pronto",
+    "connectorOffline": "O conector de execução remota não foi iniciado",
     "discovered": "Descoberto",
     "selected": "Selecionado",
     "reported": "Reportado",

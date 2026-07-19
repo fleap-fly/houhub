@@ -30,7 +30,7 @@
     "noSuites": "このプロジェクトで購入済みのスイートはありません",
     "reportSelected": "選択項目を報告",
     "reporting": "報告中",
-    "connectorOffline": "ローカルコネクタの準備ができていません",
+    "connectorOffline": "リモート実行コネクタは起動していません",
     "discovered": "検出済み",
     "selected": "選択済み",
     "reported": "報告済み",

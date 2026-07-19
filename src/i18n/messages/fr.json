@@ -30,7 +30,7 @@
     "noSuites": "Aucune suite achetée n’est disponible pour ce projet",
     "reportSelected": "Signaler la sélection",
     "reporting": "Signalement",
-    "connectorOffline": "Le connecteur local n’est pas prêt",
+    "connectorOffline": "Le connecteur d’exécution à distance n’est pas démarré",
     "discovered": "Détecté",
     "selected": "Sélectionné",
     "reported": "Signalé",

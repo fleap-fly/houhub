@@ -30,7 +30,6 @@ import {
 } from "./types"
 import {
   acpListAgents,
-  getHouflowConnectorStatus,
   startHouflowConnector,
   syncHouflowConnectorLocalAgents,
   syncHouflowManagedGateway,
@@ -149,7 +148,7 @@ export const useHouflowDesktopStore = create<HouflowDesktopStoreState>()((
       let localAgentDiscoveryError: string | null = null
       if (shouldSyncLocalShellState()) {
         try {
-          localAgents = await discoverLocalConnectorAgents(snapshotWithGateway)
+          localAgents = await discoverLocalAgents()
         } catch (err) {
           localAgentDiscoveryError = toErrorMessage(err)
         }
@@ -385,18 +384,7 @@ async function syncGatewayProvider(
   })
 }
 
-async function discoverLocalConnectorAgents(
-  snapshot: HouflowControlSnapshot
-): Promise<HouflowLocalAgent[]> {
-  const connectorId = snapshot.connector?.connectorId?.trim()
-  if (!connectorId) return []
-
-  const localConnector = await getHouflowConnectorStatus()
-  const localConnectorId = connectorIdFromStatusSnapshot(
-    localConnector.snapshot
-  )
-  if (localConnectorId !== connectorId) return []
-
+async function discoverLocalAgents(): Promise<HouflowLocalAgent[]> {
   return (await acpListAgents())
     .filter((agent) => agent.enabled && agent.available)
     .map(localAgentSyncInput)
@@ -474,19 +462,6 @@ function connectorRuntimeForAgent(agentType: AgentType): {
     case "code_buddy":
       return visibleOnly("code_buddy:local", "code_buddy")
   }
-}
-
-function connectorIdFromStatusSnapshot(value: unknown): string | null {
-  const snapshot = objectValue(value)
-  const connector = objectValue(snapshot.connector)
-  const id = connector.id
-  return typeof id === "string" && id.trim() ? id.trim() : null
-}
-
-function objectValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
 }
 
 function hasUsableSecret(secret: HouflowAuthSecret | null): boolean {

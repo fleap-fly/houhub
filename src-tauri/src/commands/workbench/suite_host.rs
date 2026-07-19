@@ -7,6 +7,8 @@ use super::store::load_stored;
 
 const MAX_IDENTIFIER_LENGTH: usize = 200;
 const MAX_CALL_ID_LENGTH: usize = 128;
+const SUITE_ROUTE_PATH: &str = "/operations/suites";
+const DESKTOP_SUITE_HOST: &str = "desktop";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +44,7 @@ struct ValidatedSuiteOpen {
     redirect_path: String,
     window_label: String,
     project_id: String,
+    suite_code: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -164,11 +167,24 @@ pub async fn workbench_open_suite_core(
         &validated.redirect_path,
     )
     .await?;
+    let allowed_launch_url = launch_url.clone();
+    let allowed_suite_url = validated.canonical_url.clone();
+    let allowed_suite_code = validated.suite_code.clone();
+    let allowed_project_id = validated.project_id.clone();
     WebviewWindowBuilder::new(
         &app,
         &validated.window_label,
         WebviewUrl::External(launch_url),
     )
+    .on_navigation(move |url| {
+        is_allowed_suite_navigation(
+            url,
+            &allowed_launch_url,
+            &allowed_suite_url,
+            &allowed_suite_code,
+            &allowed_project_id,
+        )
+    })
     .title("HouHub Workbench")
     .inner_size(1440.0, 900.0)
     .min_inner_size(900.0, 640.0)
@@ -203,8 +219,18 @@ fn validate_suite_open(
             "Suite project does not match the active Workbench project",
         ));
     }
-    bounded_identifier(&input.suite_code, "suiteCode")?;
-    bounded_identifier(&input.view_id, "viewId")?;
+    let suite_code = bounded_identifier(&input.suite_code, "suiteCode")?;
+    let view_id = bounded_identifier(&input.view_id, "viewId")?;
+    if canonical_url.path() != SUITE_ROUTE_PATH
+        || !has_single_query_value(&canonical_url, "host", DESKTOP_SUITE_HOST)
+        || !has_single_query_value(&canonical_url, "suite", &suite_code)
+        || !has_single_query_value(&canonical_url, "view", &view_id)
+        || !has_single_query_value(&canonical_url, "psProjectId", &project_id)
+    {
+        return Err(AppCommandError::permission_denied(
+            "Suite URL does not match the authorized desktop suite target",
+        ));
+    }
     let call_id = validated_call_id(&input.call_id)?;
     let mut redirect_path = canonical_url.path().to_string();
     if let Some(query) = canonical_url.query() {
@@ -220,7 +246,32 @@ fn validate_suite_open(
         redirect_path,
         window_label: format!("workbench-suite-{call_id}"),
         project_id,
+        suite_code,
     })
+}
+
+fn is_allowed_suite_navigation(
+    candidate: &reqwest::Url,
+    launch_url: &reqwest::Url,
+    suite_url: &reqwest::Url,
+    suite_code: &str,
+    project_id: &str,
+) -> bool {
+    if candidate == launch_url {
+        return true;
+    }
+    candidate.origin() == suite_url.origin()
+        && candidate.path() == SUITE_ROUTE_PATH
+        && has_single_query_value(candidate, "host", DESKTOP_SUITE_HOST)
+        && has_single_query_value(candidate, "suite", suite_code)
+        && has_single_query_value(candidate, "psProjectId", project_id)
+}
+
+fn has_single_query_value(url: &reqwest::Url, key: &str, expected: &str) -> bool {
+    let mut values = url
+        .query_pairs()
+        .filter_map(|(candidate_key, value)| (candidate_key == key).then_some(value));
+    matches!(values.next(), Some(value) if value == expected) && values.next().is_none()
 }
 
 async fn create_browser_launch(
@@ -310,6 +361,12 @@ fn validated_call_id(value: &str) -> Result<String, AppCommandError> {
 mod tests {
     use super::*;
 
+    fn suite_url(origin: &str, view_id: &str) -> String {
+        format!(
+            "{origin}/operations/suites?suite=creative_design_studio&view={view_id}&psProjectId=project_1&host=desktop"
+        )
+    }
+
     fn request(url: &str) -> WorkbenchSuiteOpenRequest {
         WorkbenchSuiteOpenRequest {
             url: url.to_string(),
@@ -325,11 +382,20 @@ mod tests {
         let validated = validate_suite_open(
             "https://project.example.test",
             "project_1",
-            &request("https://project.example.test/operations/suites?x=1#canvas"),
+            &request(&format!(
+                "{}#canvas",
+                suite_url(
+                    "https://project.example.test",
+                    "suite.creative_design_studio.workspace"
+                )
+            )),
         )
         .expect("valid suite request");
         assert_eq!(validated.window_label, "workbench-suite-wbcc_1");
-        assert_eq!(validated.redirect_path, "/operations/suites?x=1#canvas");
+        assert_eq!(
+            validated.redirect_path,
+            "/operations/suites?suite=creative_design_studio&view=suite.creative_design_studio.workspace&psProjectId=project_1&host=desktop#canvas"
+        );
     }
 
     #[test]
@@ -337,12 +403,18 @@ mod tests {
         let origin_error = validate_suite_open(
             "https://project.example.test",
             "project_1",
-            &request("https://other.example.test/operations/suites"),
+            &request(&suite_url(
+                "https://other.example.test",
+                "suite.creative_design_studio.workspace",
+            )),
         )
         .expect_err("cross-origin URL must fail");
         assert!(origin_error.message.contains("origin"));
 
-        let mut mismatched = request("https://project.example.test/operations/suites");
+        let mut mismatched = request(&suite_url(
+            "https://project.example.test",
+            "suite.creative_design_studio.workspace",
+        ));
         mismatched.project_id = "project_2".to_string();
         let project_error =
             validate_suite_open("https://project.example.test", "project_1", &mismatched)
@@ -364,11 +436,98 @@ mod tests {
             &request("https://user:secret@project.example.test/suite"),
         )
         .is_err());
-        let mut invalid_call = request("https://project.example.test/suite");
+        let mut invalid_call = request(&suite_url(
+            "https://project.example.test",
+            "suite.creative_design_studio.workspace",
+        ));
         invalid_call.call_id = "../main".to_string();
         assert!(
             validate_suite_open("https://project.example.test", "project_1", &invalid_call,)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn rejects_unpinned_or_mismatched_suite_urls() {
+        let missing_host = request(
+            "https://project.example.test/operations/suites?suite=creative_design_studio&view=suite.creative_design_studio.workspace&psProjectId=project_1",
+        );
+        assert!(
+            validate_suite_open("https://project.example.test", "project_1", &missing_host)
+                .is_err()
+        );
+
+        let wrong_suite = request(
+            "https://project.example.test/operations/suites?suite=other_suite&view=suite.creative_design_studio.workspace&psProjectId=project_1&host=desktop",
+        );
+        assert!(
+            validate_suite_open("https://project.example.test", "project_1", &wrong_suite).is_err()
+        );
+
+        let duplicate_project = request(
+            "https://project.example.test/operations/suites?suite=creative_design_studio&view=suite.creative_design_studio.workspace&psProjectId=project_1&psProjectId=project_2&host=desktop",
+        );
+        assert!(validate_suite_open(
+            "https://project.example.test",
+            "project_1",
+            &duplicate_project,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn navigation_policy_allows_only_the_authorized_suite() {
+        let launch_url = reqwest::Url::parse(
+            "https://project.example.test/api/project-system/public/desktop/browser-launches/consume?code=one-time",
+        )
+        .unwrap();
+        let initial_suite_url = reqwest::Url::parse(&suite_url(
+            "https://project.example.test",
+            "suite.creative_design_studio.workspace",
+        ))
+        .unwrap();
+        let other_view = reqwest::Url::parse(
+            "https://project.example.test/operations/suites?suite=creative_design_studio&view=suite.creative_design_studio.assets&psProjectId=project_1&host=desktop#asset",
+        )
+        .unwrap();
+
+        assert!(is_allowed_suite_navigation(
+            &launch_url,
+            &launch_url,
+            &initial_suite_url,
+            "creative_design_studio",
+            "project_1",
+        ));
+        assert!(is_allowed_suite_navigation(
+            &initial_suite_url,
+            &launch_url,
+            &initial_suite_url,
+            "creative_design_studio",
+            "project_1",
+        ));
+        assert!(is_allowed_suite_navigation(
+            &other_view,
+            &launch_url,
+            &initial_suite_url,
+            "creative_design_studio",
+            "project_1",
+        ));
+
+        for blocked in [
+            "https://project.example.test/operations/suites?suite=other_suite&view=suite.other.workspace&psProjectId=project_1&host=desktop",
+            "https://project.example.test/operations/suites?suite=creative_design_studio&view=suite.creative_design_studio.workspace&psProjectId=project_2&host=desktop",
+            "https://project.example.test/operations/suites?suite=creative_design_studio&view=suite.creative_design_studio.workspace&psProjectId=project_1",
+            "https://project.example.test/settings/integrations?psProjectId=project_1",
+            "https://other.example.test/operations/suites?suite=creative_design_studio&view=suite.creative_design_studio.workspace&psProjectId=project_1&host=desktop",
+        ] {
+            let candidate = reqwest::Url::parse(blocked).unwrap();
+            assert!(!is_allowed_suite_navigation(
+                &candidate,
+                &launch_url,
+                &initial_suite_url,
+                "creative_design_studio",
+                "project_1",
+            ));
+        }
     }
 }

@@ -30,7 +30,7 @@
     "noSuites": "لا توجد حزم مشتراة متاحة لهذا المشروع",
     "reportSelected": "إبلاغ المحدد",
     "reporting": "جارٍ الإبلاغ",
-    "connectorOffline": "الموصل المحلي غير جاهز",
+    "connectorOffline": "موصل التنفيذ عن بُعد غير مشغّل",
     "discovered": "مكتشف",
     "selected": "محدد",
     "reported": "تم الإبلاغ",

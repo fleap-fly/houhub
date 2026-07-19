@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   CircleAlert,
   Cloud,
+  Info,
   Laptop,
   Loader2,
   LogOut,
@@ -117,6 +118,7 @@ export function WorkspaceResourcesPanel() {
 
   const houflowConnected = houflow.session.status === "signed_in"
   const workbenchConnected = workbench.session.status === "signed_in"
+  const projectSelectionLocked = houflowConnected && workbenchConnected
   // Houflow and PS are intentionally independent identities. Houflow owns
   // cloud/local Agent Hub resources; PS owns project assistants and suites.
   const connected = houflowConnected || workbenchConnected
@@ -281,23 +283,7 @@ export function WorkspaceResourcesPanel() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <header className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/50 px-3">
-        <div className="min-w-0">
-          <div className="truncate text-xs font-medium">{t("title")}</div>
-          {connected ? (
-            <div className="space-y-0.5 truncate text-[11px] text-muted-foreground">
-              {workbenchConnected && workbench.session.user?.label ? (
-                <div className="truncate">
-                  PS · {workbench.session.user.label}
-                </div>
-              ) : null}
-              {houflowConnected && houflow.session.userLabel ? (
-                <div className="truncate">
-                  Houflow · {houflow.session.userLabel}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        <div className="min-w-0 truncate text-xs font-medium">{t("title")}</div>
         {connected ? <CapabilityState status={capability.status} /> : null}
       </header>
 
@@ -318,6 +304,7 @@ export function WorkspaceResourcesPanel() {
                   label: project.name,
                 }))}
                 onValueChange={(value) => void handleProjectChange(value)}
+                disabled={projectSelectionLocked}
               />
             ) : null}
             {houflowConnected ? (
@@ -402,8 +389,9 @@ export function WorkspaceResourcesPanel() {
                     </Button>
                   </div>
                   {connector?.running !== true ? (
-                    <InlineError text={t("connectorOffline")} />
-                  ) : localResources.length === 0 ? (
+                    <InlineNotice text={t("connectorOffline")} />
+                  ) : null}
+                  {localResources.length === 0 ? (
                     <EmptyState>{t("noLocalAgents")}</EmptyState>
                   ) : (
                     <div className="divide-y divide-border/60">
@@ -615,10 +603,16 @@ function ResourceTab({
   count: number
 }) {
   return (
-    <TabsTrigger value={value} className="h-7 min-w-0 px-2 text-xs">
+    <TabsTrigger
+      value={value}
+      title={`${label} (${count})`}
+      className="h-7 min-w-0 flex-1 gap-1 px-1.5 text-xs"
+    >
       <Icon className="h-3.5 w-3.5" />
-      <span className="truncate">{label}</span>
-      <span className="text-[10px] text-muted-foreground">{count}</span>
+      <span className="min-w-0 truncate">{label}</span>
+      <span className="shrink-0 text-[10px] text-muted-foreground">
+        {count}
+      </span>
     </TabsTrigger>
   )
 }
@@ -628,21 +622,28 @@ function LabeledSelect({
   value,
   items,
   onValueChange,
+  disabled = false,
 }: {
   label: string
   value: string
   items: Array<{ value: string; label: string }>
   onValueChange: (value: string) => void
+  disabled?: boolean
 }) {
+  const selectedLabel = items.find((item) => item.value === value)?.label
   return (
     <div className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-2">
       <span className="text-xs text-muted-foreground">{label}</span>
       <Select
         value={value}
         onValueChange={onValueChange}
-        disabled={items.length < 2}
+        disabled={disabled || items.length < 2}
       >
-        <SelectTrigger size="sm" className="h-8 w-full rounded-md px-2 text-xs">
+        <SelectTrigger
+          size="sm"
+          title={selectedLabel}
+          className="h-8 w-full rounded-md px-2 text-xs"
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent position="popper" className="rounded-md">
@@ -706,6 +707,7 @@ function CapabilityState({
   >["status"]
 }) {
   const t = useTranslations("WorkspaceResources")
+  if (status === "disabled") return null
   if (status === "connecting" || status === "executing") {
     return <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
   }
@@ -730,6 +732,15 @@ function InlineError({ text }: { text: string }) {
   return (
     <p className="mt-1 flex items-start gap-1.5 text-[11px] text-destructive">
       <CircleAlert className="mt-0.5 h-3 w-3 shrink-0" />
+      <span className="min-w-0 break-words">{text}</span>
+    </p>
+  )
+}
+
+function InlineNotice({ text }: { text: string }) {
+  return (
+    <p className="mt-1 flex items-start gap-1.5 text-[11px] text-muted-foreground">
+      <Info className="mt-0.5 h-3 w-3 shrink-0" />
       <span className="min-w-0 break-words">{text}</span>
     </p>
   )

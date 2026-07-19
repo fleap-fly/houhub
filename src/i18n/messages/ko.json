@@ -30,7 +30,7 @@
     "noSuites": "이 프로젝트에 구매한 스위트가 없습니다",
     "reportSelected": "선택 항목 보고",
     "reporting": "보고 중",
-    "connectorOffline": "로컬 커넥터가 준비되지 않았습니다",
+    "connectorOffline": "원격 실행 커넥터가 시작되지 않았습니다",
     "discovered": "발견됨",
     "selected": "선택됨",
     "reported": "보고됨",

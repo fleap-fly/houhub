@@ -198,7 +198,7 @@ export function WorkbenchCloudPage() {
   }
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-background">
+    <section className="flex h-full min-h-0 flex-col bg-background ws-transparent-bg">
       <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-border px-4">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
           <BriefcaseBusiness className="h-4 w-4" />

@@ -890,7 +890,7 @@ export function CloudSessionPage() {
   }
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-background">
+    <section className="flex h-full min-h-0 flex-col bg-background ws-transparent-bg">
       <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-border px-4">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
           <Cloud className="h-4 w-4" />
@@ -1115,7 +1115,7 @@ function HostedCommandPage({
   )
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-background">
+    <section className="flex h-full min-h-0 flex-col bg-background ws-transparent-bg">
       <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-border px-4">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
           {target ? (
@@ -1399,7 +1399,7 @@ function CloudSessionStarter({
   )
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-background">
+    <section className="flex h-full min-h-0 flex-col bg-background ws-transparent-bg">
       <div className="relative isolate flex h-full min-h-0 flex-col overflow-x-hidden overflow-y-auto">
         <div className="flex-1" />
         <div className="mx-auto flex w-full max-w-3xl shrink-0 flex-col gap-6 px-4 py-4">

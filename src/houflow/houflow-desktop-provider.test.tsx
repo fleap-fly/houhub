@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
   saveHouflowSessionMetadata: vi.fn(),
   syncHouflowManagedGateway: vi.fn(),
   syncHouflowConnectorLocalAgents: vi.fn(),
-  getHouflowConnectorStatus: vi.fn(),
   acpListAgents: vi.fn(),
   publishHouflowExternalAgent: vi.fn(),
   loadHouflowLocalAgentReportSelection: vi.fn(),
@@ -51,7 +50,6 @@ vi.mock("./auth", () => ({
 vi.mock("@/lib/api", () => ({
   acpListAgents: mocks.acpListAgents,
   fetchOpenAiCompatibleModels: mocks.fetchOpenAiCompatibleModels,
-  getHouflowConnectorStatus: mocks.getHouflowConnectorStatus,
   syncHouflowConnectorLocalAgents: mocks.syncHouflowConnectorLocalAgents,
   syncHouflowManagedGateway: mocks.syncHouflowManagedGateway,
 }))
@@ -71,7 +69,6 @@ describe("HouflowDesktopProvider workspace selection", () => {
     mocks.saveHouflowSessionMetadata.mockReset()
     mocks.syncHouflowManagedGateway.mockReset()
     mocks.syncHouflowConnectorLocalAgents.mockReset()
-    mocks.getHouflowConnectorStatus.mockReset()
     mocks.acpListAgents.mockReset()
     mocks.publishHouflowExternalAgent.mockReset()
     mocks.loadHouflowLocalAgentReportSelection.mockReset()
@@ -80,16 +77,6 @@ describe("HouflowDesktopProvider workspace selection", () => {
     mocks.fetchOpenAiCompatibleModels.mockRejectedValue(
       new Error("401 Unauthorized: request rejected")
     )
-    mocks.getHouflowConnectorStatus.mockResolvedValue({
-      installed: true,
-      executable: "/usr/local/bin/hou-agent-connector",
-      version: "0.1.5",
-      snapshot: {
-        connector: { id: "cac_desktop" },
-      },
-      diagnosis: null,
-      error: null,
-    })
     mocks.acpListAgents.mockResolvedValue([])
     mocks.syncHouflowConnectorLocalAgents.mockResolvedValue({
       agents: [],
@@ -291,6 +278,46 @@ describe("HouflowDesktopProvider workspace selection", () => {
       "workspace_1",
       ["claude:cli", "pi:cli", "cline:vscode"]
     )
+  })
+
+  it("discovers enabled local agents before a connector is running", async () => {
+    mocks.acpListAgents.mockResolvedValue([
+      {
+        agent_type: "codex",
+        name: "OpenAI Codex CLI",
+        enabled: true,
+        available: true,
+      },
+      {
+        agent_type: "pi",
+        name: "Pi Coding Agent",
+        enabled: false,
+        available: true,
+      },
+      {
+        agent_type: "gemini",
+        name: "Gemini CLI",
+        enabled: true,
+        available: false,
+      },
+    ])
+
+    render(
+      <HouflowDesktopProvider>
+        <Probe />
+      </HouflowDesktopProvider>
+    )
+
+    await screen.findByText("ready:workspace_1:default")
+    expect(useHouflowDesktopStore.getState().snapshot?.connector).toBeNull()
+    expect(useHouflowDesktopStore.getState().localAgents).toEqual([
+      expect.objectContaining({
+        localAgentRef: "codex:cli",
+        provider: "codex",
+      }),
+    ])
+    expect(mocks.syncHouflowConnectorLocalAgents).not.toHaveBeenCalled()
+    expect(mocks.publishHouflowExternalAgent).not.toHaveBeenCalled()
   })
 
   it("loads local-agent reporting consent independently for each workspace", async () => {

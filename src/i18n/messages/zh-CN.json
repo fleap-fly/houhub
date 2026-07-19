@@ -30,7 +30,7 @@
     "noSuites": "当前项目暂无已购套件",
     "reportSelected": "上报所选",
     "reporting": "正在上报",
-    "connectorOffline": "本地连接未就绪",
+    "connectorOffline": "远程调度连接未启动",
     "discovered": "已发现",
     "selected": "已选择",
     "reported": "已上报",

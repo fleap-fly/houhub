@@ -30,7 +30,7 @@
     "noSuites": "Für dieses Projekt sind keine gekauften Suites verfügbar",
     "reportSelected": "Auswahl melden",
     "reporting": "Wird gemeldet",
-    "connectorOffline": "Lokaler Connector ist nicht bereit",
+    "connectorOffline": "Connector für Remote-Ausführung ist nicht gestartet",
     "discovered": "Gefunden",
     "selected": "Ausgewählt",
     "reported": "Gemeldet",
