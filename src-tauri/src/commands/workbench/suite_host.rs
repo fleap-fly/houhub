@@ -257,7 +257,7 @@ fn is_allowed_suite_navigation(
     suite_code: &str,
     project_id: &str,
 ) -> bool {
-    if candidate == launch_url {
+    if candidate == launch_url || is_browser_internal_document(candidate) {
         return true;
     }
     candidate.origin() == suite_url.origin()
@@ -265,6 +265,10 @@ fn is_allowed_suite_navigation(
         && has_single_query_value(candidate, "host", DESKTOP_SUITE_HOST)
         && has_single_query_value(candidate, "suite", suite_code)
         && has_single_query_value(candidate, "psProjectId", project_id)
+}
+
+fn is_browser_internal_document(candidate: &reqwest::Url) -> bool {
+    matches!(candidate.as_str(), "about:blank" | "about:srcdoc")
 }
 
 fn has_single_query_value(url: &reqwest::Url, key: &str, expected: &str) -> bool {
@@ -512,6 +516,16 @@ mod tests {
             "creative_design_studio",
             "project_1",
         ));
+        for internal_document in ["about:blank", "about:srcdoc"] {
+            let candidate = reqwest::Url::parse(internal_document).unwrap();
+            assert!(is_allowed_suite_navigation(
+                &candidate,
+                &launch_url,
+                &initial_suite_url,
+                "creative_design_studio",
+                "project_1",
+            ));
+        }
 
         for blocked in [
             "https://project.example.test/operations/suites?suite=other_suite&view=suite.other.workspace&psProjectId=project_1&host=desktop",
@@ -519,6 +533,11 @@ mod tests {
             "https://project.example.test/operations/suites?suite=creative_design_studio&view=suite.creative_design_studio.workspace&psProjectId=project_1",
             "https://project.example.test/settings/integrations?psProjectId=project_1",
             "https://other.example.test/operations/suites?suite=creative_design_studio&view=suite.creative_design_studio.workspace&psProjectId=project_1&host=desktop",
+            "about:config",
+            "about:blank?unexpected=true",
+            "data:text/html,<h1>not allowed</h1>",
+            "file:///tmp/suite.html",
+            "javascript:document.body.textContent='not allowed'",
         ] {
             let candidate = reqwest::Url::parse(blocked).unwrap();
             assert!(!is_allowed_suite_navigation(
