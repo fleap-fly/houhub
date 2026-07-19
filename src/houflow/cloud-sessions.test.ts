@@ -38,6 +38,18 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./control-client", () => ({
   HouflowControlClient: class {
+    readonly sdk = {
+      sessions: {
+        listEvents: async (
+          sessionId: string,
+          params: { limit?: number; order?: string }
+        ) =>
+          this.json(
+            `/v1/sessions/${encodeURIComponent(sessionId)}/events?limit=${params.limit ?? 100}&order=${params.order ?? "asc"}`
+          ),
+      },
+    }
+
     async json<T>(path: string, options: RequestOptions = {}): Promise<T> {
       mocks.calls.push({ path, options })
       if (mocks.responses.length === 0) {

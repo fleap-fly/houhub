@@ -276,11 +276,10 @@ export async function listHouflowCloudSessionEvents(
 ): Promise<HouflowCloudSessionEvent[]> {
   assertHouflowSignedIn(session)
   const client = new HouflowControlClient(session, secret)
-  const page = await client.json<PageCursor<SessionEventDto>>(
-    `/v1/sessions/${encodeURIComponent(
-      sessionId
-    )}/events?limit=${encodeURIComponent(String(limit))}&order=asc`
-  )
+  const page = await client.sdk.sessions.listEvents(sessionId, {
+    limit: Math.min(200, Math.max(1, Math.floor(limit))),
+    order: "asc",
+  })
   return Array.isArray(page.data)
     ? page.data.map(eventFromDto).filter(isPresent)
     : []
