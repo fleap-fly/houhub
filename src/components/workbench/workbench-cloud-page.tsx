@@ -199,17 +199,17 @@ export function WorkbenchCloudPage() {
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background ws-transparent-bg">
-      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-border px-4">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-          <BriefcaseBusiness className="h-4 w-4" />
+      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border/50 px-3">
+        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <BriefcaseBusiness className="h-3.5 w-3.5" />
         </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-semibold">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <h2 className="min-w-0 truncate text-sm font-medium text-foreground/90">
             {selectedSession?.title ||
               selectedAssistant?.name ||
               t("newSession")}
           </h2>
-          <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+          <div className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
             <span className="truncate">
               {projectName ?? t("projectFallback")}
             </span>
@@ -240,31 +240,33 @@ export function WorkbenchCloudPage() {
         </Button>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3">
-        {messagesError ? (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {messagesError}
-          </div>
-        ) : adaptedMessages.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            {messagesLoading ? t("loadingMessages") : t("emptyMessages")}
-          </div>
-        ) : (
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
-            <CloudMessageThread
-              messages={adaptedMessages}
-              turns={turns}
-              linkSafety={linkSafety}
-            />
-            {sending ? (
-              <CloudWaitingMessage label={t("waitingForReply")} />
-            ) : null}
-          </div>
-        )}
+      <div className="flex-1 overflow-y-auto py-3">
+        <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-5 px-4">
+          {messagesError ? (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {messagesError}
+            </div>
+          ) : adaptedMessages.length === 0 ? (
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+              {messagesLoading ? t("loadingMessages") : t("emptyMessages")}
+            </div>
+          ) : (
+            <>
+              <CloudMessageThread
+                messages={adaptedMessages}
+                turns={turns}
+                linkSafety={linkSafety}
+              />
+              {sending ? (
+                <CloudWaitingMessage label={t("waitingForReply")} />
+              ) : null}
+            </>
+          )}
+        </div>
       </div>
 
-      <footer className="shrink-0 border-t border-border p-3">
-        <div className="mx-auto w-full max-w-3xl">
+      <footer className="shrink-0">
+        <div className="mx-auto w-full max-w-3xl px-4 pb-1">
           <MessageInput
             onSend={(draft) => void handleSend(draft)}
             promptCapabilities={WORKBENCH_PROMPT_CAPABILITIES}

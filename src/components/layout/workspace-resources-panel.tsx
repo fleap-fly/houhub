@@ -234,13 +234,7 @@ export function WorkspaceResourcesPanel() {
     async (suite: WorkbenchClientSuite) => {
       setOpeningSuiteCode(suite.code)
       try {
-        const currentHouflow = useHouflowDesktopStore.getState()
-        const workspaceMatches = (
-          currentHouflow.snapshot?.workspaces ?? []
-        ).filter((workspace) => workspace.projectId === suite.projectId)
-        const workspaceId =
-          workspaceMatches.length === 1 ? workspaceMatches[0]!.id : null
-        if (isDesktop() && !isRemoteDesktopMode() && workspaceId) {
+        if (isDesktop() && !isRemoteDesktopMode()) {
           await suiteHost.openSuite(
             {
               url: suite.url,
@@ -249,7 +243,6 @@ export function WorkspaceResourcesPanel() {
               project_id: suite.projectId,
             },
             {
-              workspaceId,
               callId: manualSuiteWindowId(suite),
             }
           )

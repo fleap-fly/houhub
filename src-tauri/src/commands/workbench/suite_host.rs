@@ -150,6 +150,9 @@ pub async fn workbench_open_suite_core(
     if let Some(existing) = app.get_webview_window(&validated.window_label) {
         let _ = existing.unminimize();
         let _ = existing.show();
+        existing.maximize().map_err(|error| {
+            AppCommandError::window("Failed to maximize Workbench suite", error.to_string())
+        })?;
         existing.set_focus().map_err(|error| {
             AppCommandError::window("Failed to focus Workbench suite", error.to_string())
         })?;
@@ -171,7 +174,6 @@ pub async fn workbench_open_suite_core(
     let allowed_suite_url = validated.canonical_url.clone();
     let allowed_suite_code = validated.suite_code.clone();
     let allowed_project_id = validated.project_id.clone();
-    let (window_width, window_height) = suite_window_size(&app);
     WebviewWindowBuilder::new(
         &app,
         &validated.window_label,
@@ -187,9 +189,8 @@ pub async fn workbench_open_suite_core(
         )
     })
     .title("HouHub Workbench")
-    .inner_size(window_width, window_height)
     .min_inner_size(900.0, 640.0)
-    .center()
+    .maximized(true)
     .build()
     .map_err(|error| {
         AppCommandError::window("Failed to open Workbench suite", error.to_string())
@@ -200,18 +201,6 @@ pub async fn workbench_open_suite_core(
         normalized_url: validated.canonical_url.to_string(),
         host_status: "opened".to_string(),
     })
-}
-
-#[cfg(feature = "tauri-runtime")]
-fn suite_window_size<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> (f64, f64) {
-    let fallback = (1440.0, 860.0);
-    let Ok(Some(monitor)) = app.primary_monitor() else {
-        return fallback;
-    };
-    let logical = monitor.size().to_logical::<f64>(monitor.scale_factor());
-    let width = (logical.width - 64.0).clamp(900.0, 1440.0);
-    let height = (logical.height - 96.0).clamp(640.0, 860.0);
-    (width, height)
 }
 
 fn validate_suite_open(

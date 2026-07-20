@@ -11,10 +11,10 @@ import {
 } from "./window-chrome"
 
 describe("window chrome geometry", () => {
-  it("reserves the full shared left control cluster", () => {
-    expect(LEFT_CHROME_CLUSTER).toBe(132)
-    expect(leftChromeReserve(false)).toBe(132)
-    expect(leftChromeReserve(true)).toBe(208)
+  it("matches the upstream two-control left cluster", () => {
+    expect(LEFT_CHROME_CLUSTER).toBe(80)
+    expect(leftChromeReserve(false)).toBe(80)
+    expect(leftChromeReserve(true)).toBe(156)
   })
 
   it("keeps native insets fixed while scaling the button clusters", () => {

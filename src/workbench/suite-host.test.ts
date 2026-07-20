@@ -34,7 +34,7 @@ describe("createTauriWorkbenchSuiteHost", () => {
         view_id: "suite.creative_design_studio.workspace",
         project_id: "project_1",
       },
-      { workspaceId: "wks_1", callId: "wbcc_1" }
+      { callId: "wbcc_1" }
     )
 
     expect(mocks.call).toHaveBeenCalledWith("workbench_open_suite", {

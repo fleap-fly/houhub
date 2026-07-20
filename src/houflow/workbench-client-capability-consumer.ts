@@ -36,7 +36,7 @@ export interface WorkbenchSuiteHostResult {
 export interface WorkbenchSuiteHostPort {
   openSuite(
     input: WorkbenchSuiteOpenInput,
-    context: { workspaceId: string; callId: string }
+    context: { callId: string; workspaceId?: string }
   ): Promise<WorkbenchSuiteHostResult>
 }
 

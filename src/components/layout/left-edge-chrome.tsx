@@ -12,7 +12,6 @@ import { useZoomLevel } from "@/hooks/use-appearance"
 import { formatShortcutLabel } from "@/lib/keyboard-shortcuts"
 import { MAC_TRAFFIC_LIGHT_INSET, leftChromeReserve } from "@/lib/window-chrome"
 import { RemoteWorkspaceDropdown } from "./remote-workspace-dropdown"
-import { HouhubWorkspaceIdentityControls } from "./houhub-workspace-identity-controls"
 
 /**
  * Contents of the window's fixed top-LEFT chrome overlay: the sidebar toggle +
@@ -69,7 +68,6 @@ export function LeftEdgeChrome() {
           <PanelLeft className="h-3.5 w-3.5" />
         </Button>
         <RemoteWorkspaceDropdown triggerClassName="h-6 w-6 hover:bg-foreground/10 hover:text-foreground/80 dark:hover:bg-foreground/10" />
-        <HouhubWorkspaceIdentityControls />
       </div>
       {/* Empty tail is a window-drag region. */}
       <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
