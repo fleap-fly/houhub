@@ -43,6 +43,13 @@ describe("resolveAuxTabView", () => {
       "session_details"
     )
   })
+
+  it("does not expose a stale cloud runtime-log selection on local routes", () => {
+    expect(resolveAuxTabView("runtime_logs", 1, false)).toEqual({
+      showFolderTabs: true,
+      effectiveTab: "session_details",
+    })
+  })
 })
 
 describe("shouldCollapseAuxTabs", () => {

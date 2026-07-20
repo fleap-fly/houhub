@@ -1,13 +1,11 @@
 import type { SessionConfigOptionInfo } from "@/lib/types"
+import type { AgentHubConversationSessionSnapshot } from "@houshan/agent-hub-network-sdk"
 import {
   MODEL_REASONING_EFFORTS,
   modelReasoningEfforts,
 } from "@/lib/reasoning-effort-capabilities"
 import type { HouflowAgentTarget, HouflowGatewayCatalog } from "./types"
-import type {
-  HouflowCloudHostedCommand,
-  HouflowCloudSessionEvent,
-} from "./cloud-sessions"
+import type { HouflowCloudSessionEvent } from "./cloud-sessions"
 
 export const HOUFLOW_CLOUD_REASONING_EFFORTS = MODEL_REASONING_EFFORTS
 
@@ -152,10 +150,11 @@ export function houflowCloudModelSettingsFromEvents(
   return null
 }
 
-export function houflowCloudModelSettingsFromHostedCommand(
-  command: HouflowCloudHostedCommand | null | undefined
+export function houflowCloudModelSettingsFromConversationSession(
+  snapshot: AgentHubConversationSessionSnapshot | null | undefined
 ): Partial<HouflowCloudModelSettings> | null {
-  return command ? modelSettingsFromRecord(recordValue(command.input)) : null
+  const turn = snapshot?.turns[snapshot.turns.length - 1]
+  return turn ? modelSettingsFromRecord(recordValue(turn.input)) : null
 }
 
 export function houflowCloudTargetSupportsModelSettings(

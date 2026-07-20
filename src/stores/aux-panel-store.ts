@@ -15,6 +15,7 @@ export type AuxPanelTab =
   | "file_tree"
   | "changes"
   | "git_log"
+  | "runtime_logs"
 
 interface AuxPanelStoreState {
   isOpen: boolean

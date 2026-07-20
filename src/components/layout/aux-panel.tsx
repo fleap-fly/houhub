@@ -7,6 +7,7 @@ import {
   FolderPen,
   GitCommit,
   ReceiptText,
+  ScrollText,
   type LucideIcon,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -15,6 +16,7 @@ import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { usePlatform } from "@/hooks/use-platform"
+import { useZoomLevel } from "@/hooks/use-appearance"
 import { isDesktop } from "@/lib/platform"
 import { rightChromeReserve } from "@/lib/window-chrome"
 import { cn } from "@/lib/utils"
@@ -30,6 +32,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { SessionDetailsTab } from "./aux-panel-session-details-tab"
 import { FileTreeTab } from "./aux-panel-file-tree-tab"
 import { CloudSessionOutputsPanel } from "../houflow/cloud-session-outputs-panel"
+import { CloudRuntimeLogsPanel } from "../houflow/cloud-runtime-logs-panel"
 import { GitChangesTab } from "./aux-panel-git-changes-tab"
 import { GitLogTab } from "./aux-panel-git-log-tab"
 import { WorkspaceResourcesPanel } from "./workspace-resources-panel"
@@ -40,6 +43,7 @@ const LAZY_TABS: AuxPanelTab[] = [
   "file_tree",
   "changes",
   "git_log",
+  "runtime_logs",
 ]
 
 // Visible order + icon for every aux tab. Both the desktop segmented control
@@ -57,12 +61,16 @@ const TAB_ICONS: Record<AuxPanelTab, LucideIcon> = {
   file_tree: Folder,
   changes: FolderPen,
   git_log: GitCommit,
+  runtime_logs: ScrollText,
 }
 // The three folder-scoped tabs share one label namespace (Folder.auxPanel.tabs);
 // session details resolves from its own (Folder.sessionDetails.menuLabel). The
 // value type is the literal key union so next-intl's typed `t()` accepts it.
 const FOLDER_TAB_LABEL_KEY: Record<
-  Exclude<AuxPanelTab, "session_details" | "workspace_resources">,
+  Exclude<
+    AuxPanelTab,
+    "session_details" | "workspace_resources" | "runtime_logs"
+  >,
   "files" | "changes" | "commits"
 > = {
   file_tree: "files",
@@ -114,13 +122,19 @@ export function resolveAuxTabView(
   return {
     showFolderTabs,
     effectiveTab:
-      showFolderTabs ||
       activeTab === "session_details" ||
-      activeTab === "workspace_resources"
+      activeTab === "workspace_resources" ||
+      (showFolderTabs && FOLDER_SCOPED_TABS.has(activeTab))
         ? activeTab
         : "session_details",
   }
 }
+
+const FOLDER_SCOPED_TABS = new Set<AuxPanelTab>([
+  "file_tree",
+  "changes",
+  "git_log",
+])
 
 export function AuxPanel() {
   const t = useTranslations("Folder.auxPanel.tabs")
@@ -135,6 +149,7 @@ export function AuxPanel() {
   const isChatMode = useIsActiveChatMode()
   const isMobile = useIsMobile()
   const { isWindows, isLinux } = usePlatform()
+  const { zoomLevel } = useZoomLevel()
   const [mountedTabs, setMountedTabs] = useState<Set<AuxPanelTab>>(
     () => new Set(LAZY_TABS.filter((tab) => tab === activeTab))
   )
@@ -162,7 +177,7 @@ export function AuxPanel() {
   const localTabView = resolveAuxTabView(activeTab, activeFolderId, isChatMode)
   const showFolderTabs = !isCloudRoute && localTabView.showFolderTabs
   const availableTabs = isCloudRoute
-    ? (["workspace_resources", "file_tree"] as AuxPanelTab[])
+    ? (["workspace_resources", "file_tree", "runtime_logs"] as AuxPanelTab[])
     : TAB_ORDER.filter(
         (tab) =>
           tab === "session_details" ||
@@ -208,7 +223,7 @@ export function AuxPanel() {
   // a dropdown. Only relevant to the desktop layout (mobile is a full-width
   // Sheet), and only when there's more than the lone Session Details tab.
   const winLinuxControls = isDesktop() && (isWindows || isLinux)
-  const rightReserve = rightChromeReserve(winLinuxControls)
+  const rightReserve = rightChromeReserve(winLinuxControls, zoomLevel)
   const collapsed =
     !isMobile &&
     availableTabs.length > 1 &&
@@ -223,7 +238,9 @@ export function AuxPanel() {
         ? tDetails("menuLabel")
         : tab === "workspace_resources"
           ? t("resources")
-          : t(FOLDER_TAB_LABEL_KEY[tab]),
+          : tab === "runtime_logs"
+            ? t("runtimeLogs")
+            : t(FOLDER_TAB_LABEL_KEY[tab]),
     [t, tDetails]
   )
 
@@ -399,6 +416,15 @@ export function AuxPanel() {
         >
           {mountedTabs.has("workspace_resources") ? (
             <WorkspaceResourcesPanel />
+          ) : null}
+        </TabsContent>
+        <TabsContent
+          value="runtime_logs"
+          forceMount
+          className="mt-0 flex-1 min-h-0 overflow-hidden"
+        >
+          {isCloudRoute && mountedTabs.has("runtime_logs") ? (
+            <CloudRuntimeLogsPanel />
           ) : null}
         </TabsContent>
         <TabsContent

@@ -1,25 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   AgentHubNetworkError,
+  type AgentHubConversationSessionSnapshot,
   type RequestOptions,
 } from "@houshan/agent-hub-network-sdk"
 import {
   archiveHouflowCloudSession,
-  decideHouflowCloudSessionApproval,
+  createHouflowConversationSession,
+  createHouflowManagedCloudSession,
   deleteHouflowCloudSession,
-  deleteHouflowHostedAgentCommand,
+  deleteHouflowConversationSession,
   getHouflowCloudSessionOutputBytes,
   getHouflowCloudSessionOutputText,
-  listHouflowCloudSessionApprovals,
-  listHouflowHostedAgentCommands,
+  houflowConversationOutputSessionId,
+  isHouflowCloudSessionNotFound,
   listHouflowCloudSessionEvents,
   listHouflowCloudSessionOutputs,
   listHouflowCloudSessions,
-  createHouflowManagedCloudSession,
-  houflowHostedCommandOutputSessionId,
-  isHouflowCloudSessionNotFound,
+  listHouflowConversationSessions,
+  loadHouflowConversationSessionTurns,
+  refreshHouflowConversationSession,
+  sendHouflowConversationSessionMessage,
   sendHouflowCloudSessionMessage,
-  startHouflowCloudTargetSession,
+  streamHouflowCloudSessionEvents,
 } from "./cloud-sessions"
 import type {
   HouflowAgentTarget,
@@ -29,10 +32,14 @@ import type {
 
 const mocks = vi.hoisted(() => ({
   calls: [] as Array<{ path: string; options: RequestOptions }>,
-  realtimeCalls: [] as Array<{ commandId: string; params: unknown }>,
   responses: [] as unknown[],
-  streamFrames: [] as unknown[],
-  dispatchAgentHubTarget: vi.fn(),
+  sseFrames: [] as Array<{ event: string; data: unknown }>,
+  createConversation: vi.fn(),
+  listConversations: vi.fn(),
+  loadTurns: vi.fn(),
+  sendConversation: vi.fn(),
+  refreshConversation: vi.fn(),
+  deleteConversation: vi.fn(),
   dispatchManagedAgent: vi.fn(),
 }))
 
@@ -40,48 +47,41 @@ vi.mock("./control-client", () => ({
   HouflowControlClient: class {
     readonly sdk = {
       sessions: {
-        listEvents: async (
-          sessionId: string,
-          params: { limit?: number; order?: string }
-        ) =>
+        listEvents: async (sessionId: string, params: { limit?: number }) =>
           this.json(
-            `/v1/sessions/${encodeURIComponent(sessionId)}/events?limit=${params.limit ?? 100}&order=${params.order ?? "asc"}`
+            `/v1/sessions/${encodeURIComponent(sessionId)}/events?limit=${params.limit ?? 100}`
           ),
+      },
+      conversationSessions: {
+        createSession: mocks.createConversation,
+        listPage: mocks.listConversations,
+        loadTurns: mocks.loadTurns,
+        send: mocks.sendConversation,
+        refresh: mocks.refreshConversation,
+        deleteSession: mocks.deleteConversation,
       },
     }
 
     async json<T>(path: string, options: RequestOptions = {}): Promise<T> {
       mocks.calls.push({ path, options })
-      if (mocks.responses.length === 0) {
-        throw new Error("Missing fake response")
-      }
+      if (mocks.responses.length === 0) throw new Error("Missing fake response")
       return mocks.responses.shift() as T
     }
 
     async text(path: string, options: RequestOptions = {}): Promise<string> {
-      mocks.calls.push({ path, options })
-      if (mocks.responses.length === 0) {
-        throw new Error("Missing fake response")
-      }
-      return mocks.responses.shift() as string
+      return this.json(path, options)
     }
 
     async bytes(
       path: string,
       options: RequestOptions = {}
     ): Promise<Uint8Array> {
-      mocks.calls.push({ path, options })
-      if (mocks.responses.length === 0) {
-        throw new Error("Missing fake response")
-      }
-      return mocks.responses.shift() as Uint8Array
+      return this.json(path, options)
     }
 
-    async *streamConnectorCommandRealtime(commandId: string, params?: unknown) {
-      mocks.realtimeCalls.push({ commandId, params })
-      while (mocks.streamFrames.length > 0) {
-        yield mocks.streamFrames.shift()
-      }
+    async *sse(path: string, options: RequestOptions = {}) {
+      mocks.calls.push({ path, options })
+      while (mocks.sseFrames.length > 0) yield mocks.sseFrames.shift()
     }
   },
 }))
@@ -89,29 +89,27 @@ vi.mock("./control-client", () => ({
 vi.mock("./agent-hub-dispatch-adapter", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("./agent-hub-dispatch-adapter")>()
-  return {
-    ...actual,
-    dispatchAgentHubTarget: mocks.dispatchAgentHubTarget,
-    dispatchManagedAgent: mocks.dispatchManagedAgent,
-  }
+  return { ...actual, dispatchManagedAgent: mocks.dispatchManagedAgent }
 })
 
-describe("Houflow cloud sessions", () => {
+describe("Houflow cloud session adapters", () => {
   beforeEach(() => {
     mocks.calls.length = 0
-    mocks.realtimeCalls.length = 0
     mocks.responses.length = 0
-    mocks.streamFrames.length = 0
-    mocks.dispatchAgentHubTarget.mockReset()
+    mocks.sseFrames.length = 0
+    mocks.createConversation.mockReset()
+    mocks.listConversations.mockReset()
+    mocks.loadTurns.mockReset()
+    mocks.sendConversation.mockReset()
+    mocks.refreshConversation.mockReset()
+    mocks.deleteConversation.mockReset()
     mocks.dispatchManagedAgent.mockReset()
   })
 
-  it("recognizes typed SDK 404 responses for session-level reconciliation", () => {
+  it("recognizes only typed session 404 responses", () => {
     expect(
       isHouflowCloudSessionNotFound(
-        new AgentHubNetworkError("Session not found", 404, {
-          error: { code: "not_found" },
-        })
+        new AgentHubNetworkError("Session not found", 404, {})
       )
     ).toBe(true)
     expect(
@@ -119,922 +117,191 @@ describe("Houflow cloud sessions", () => {
         new AgentHubNetworkError("Unauthorized", 401, {})
       )
     ).toBe(false)
-    expect(isHouflowCloudSessionNotFound(new Error("Session not found"))).toBe(
-      false
-    )
+    expect(isHouflowCloudSessionNotFound(new Error("not found"))).toBe(false)
   })
 
-  it("lists Agent Hub sessions for the active Houflow workspace", async () => {
-    mocks.responses.push({
-      data: [
-        {
-          id: "ses_1",
-          status: "running",
-          title: "云端任务",
-          environment_id: "env_1",
-          agent: { id: "agt_1", name: "云端助手" },
-          created_at: "2026-06-28T00:00:00.000Z",
-          updated_at: "2026-06-28T00:01:00.000Z",
-          archived_at: null,
-        },
-        { id: "", environment_id: "env_skip" },
-      ],
-    })
-
-    const sessions = await listHouflowCloudSessions(session(), secret(), 25)
-
-    expect(mocks.calls).toEqual([
-      { path: "/v1/sessions?limit=25", options: {} },
-    ])
-    expect(sessions).toEqual([
+  it("lists, archives, and deletes managed sessions through canonical routes", async () => {
+    mocks.responses.push(
       {
-        id: "ses_1",
-        status: "running",
-        title: "云端任务",
-        environmentId: "env_1",
-        agentId: "agt_1",
-        agentName: "云端助手",
-        createdAt: "2026-06-28T00:00:00.000Z",
-        updatedAt: "2026-06-28T00:01:00.000Z",
-        archivedAt: null,
+        data: [sessionDto()],
+        has_more: false,
+        first_id: "ses_1",
+        last_id: "ses_1",
       },
-    ])
-  })
-
-  it("lists archived Agent Hub sessions when requested", async () => {
-    mocks.responses.push({
-      data: [
-        {
-          id: "ses_archived",
-          status: "terminated",
-          title: "Archived task",
-          environment_id: "env_1",
-          agent: { id: "agt_1", name: "Cloud helper" },
-          archived_at: "2026-06-28T00:02:00.000Z",
-        },
-      ],
-    })
-
-    const sessions = await listHouflowCloudSessions(
-      session(),
-      secret(),
-      50,
-      true
+      sessionDto({ status: "idle", archived_at: "2026-07-20T01:00:00.000Z" }),
+      {}
     )
-
-    expect(mocks.calls).toEqual([
-      {
-        path: "/v1/sessions?limit=50&include_archived=true",
-        options: {},
-      },
-    ])
-    expect(sessions[0]?.archivedAt).toBe("2026-06-28T00:02:00.000Z")
-  })
-
-  it("archives and deletes sessions through Agent Hub session endpoints", async () => {
-    mocks.responses.push({
-      id: "ses_1",
-      status: "terminated",
-      title: "Archived task",
-      environment_id: "env_1",
-      agent: { id: "agt_1", name: "Cloud helper" },
-      archived_at: "2026-06-28T00:02:00.000Z",
-    })
-    mocks.responses.push({ status: "deleted" })
-
-    const archived = await archiveHouflowCloudSession(
-      session(),
-      secret(),
-      "ses_1"
-    )
+    expect(
+      await listHouflowCloudSessions(session(), secret(), 20, true)
+    ).toMatchObject([{ id: "ses_1", agentId: "agent_1" }])
+    await archiveHouflowCloudSession(session(), secret(), "ses_1")
     await deleteHouflowCloudSession(session(), secret(), "ses_1")
-
-    expect(archived?.archivedAt).toBe("2026-06-28T00:02:00.000Z")
-    expect(mocks.calls).toEqual([
-      {
-        path: "/v1/sessions/ses_1/archive",
-        options: { method: "POST", body: {} },
-      },
-      {
-        path: "/v1/sessions/ses_1",
-        options: { method: "DELETE" },
-      },
-    ])
-  })
-
-  it("deletes hosted connector commands through Agent Hub command endpoints", async () => {
-    mocks.responses.push({
-      id: "cmd_1",
-      type: "connected_agent_connector_command",
-      connected_agent_id: "cag_1",
-      local_agent_ref: "resident",
-      action: "workspace_message",
-      status: "deleted",
-      input: { message: "继续" },
-      output: null,
-      error: null,
-      events: [],
-      created_at: "2026-06-28T00:00:00.000Z",
-      updated_at: "2026-06-28T00:00:01.000Z",
-    })
-
-    await deleteHouflowHostedAgentCommand(session(), secret(), "cmd_1")
-
-    expect(mocks.calls).toEqual([
-      {
-        path: "/v1/connected-agent-connector-commands/cmd_1/delete",
-        options: { method: "POST", body: {} },
-      },
-    ])
-  })
-
-  it("does not infer missing session titles from non-contract fields", async () => {
-    mocks.responses.push({
-      data: [
-        {
-          id: "ses_named",
-          status: "idle",
-          name: "诗歌裁决 2",
-          environment_id: "env_1",
-          agent: { id: "agt_1", name: "云端助手" },
-          created_at: "2026-06-28T00:00:00.000Z",
-          updated_at: "2026-06-28T00:01:00.000Z",
-          archived_at: null,
-        },
-        {
-          id: "ses_meta",
-          status: "idle",
-          environment_id: "env_1",
-          metadata: { title: "试卷渲染检查" },
-          agent: { id: "agt_1", name: "云端助手" },
-        },
-      ],
-    })
-
-    const sessions = await listHouflowCloudSessions(session(), secret())
-
-    expect(sessions.map((item) => item.title)).toEqual([null, null])
-  })
-
-  it("lists and decides session approval intents through Agent Hub approval endpoints", async () => {
-    mocks.responses.push({
-      data: [
-        {
-          id: "apr_1",
-          session_id: "ses_1",
-          tool_use_id: "call_1",
-          tool_name: "web_fetch",
-          tool_input: { url: "https://example.com" },
-          status: "pending",
-          result_event_id: null,
-          created_at: "2026-06-28T00:05:00.000Z",
-          decided_at: null,
-        },
-      ],
-    })
-    mocks.responses.push({
-      id: "apr_1",
-      session_id: "ses_1",
-      tool_use_id: "call_1",
-      tool_name: "web_fetch",
-      tool_input: { url: "https://example.com" },
-      status: "approved",
-      result_event_id: null,
-      created_at: "2026-06-28T00:05:00.000Z",
-      decided_at: "2026-06-28T00:06:00.000Z",
-    })
-
-    const approvals = await listHouflowCloudSessionApprovals(
-      session(),
-      secret(),
-      "ses_1"
-    )
-    const approved = await decideHouflowCloudSessionApproval(
-      session(),
-      secret(),
-      "ses_1",
-      "apr_1",
-      "approve"
-    )
-
-    expect(mocks.calls).toEqual([
-      { path: "/v1/sessions/ses_1/approvals", options: {} },
-      {
-        path: "/v1/sessions/ses_1/approvals/apr_1/approve",
-        options: { method: "POST", body: {} },
-      },
-    ])
-    expect(approvals).toMatchObject([
-      {
-        id: "apr_1",
-        sessionId: "ses_1",
-        toolUseId: "call_1",
-        toolName: "web_fetch",
-        toolInput: { url: "https://example.com" },
-        status: "pending",
-      },
-    ])
-    expect(approved).toMatchObject({
-      id: "apr_1",
-      status: "approved",
-      decidedAt: "2026-06-28T00:06:00.000Z",
-    })
-  })
-
-  it("maps session events into compact sidebar/page data", async () => {
-    mocks.responses.push({
-      data: [
-        {
-          id: "evt_1",
-          type: "message",
-          role: "assistant",
-          content: [{ type: "text", text: "完成" }],
-          created_at: "2026-06-28T00:02:00.000Z",
-        },
-      ],
-    })
-
-    const events = await listHouflowCloudSessionEvents(
-      session(),
-      secret(),
-      "ses_1",
-      10
-    )
-
-    expect(mocks.calls[0]?.path).toBe(
-      "/v1/sessions/ses_1/events?limit=10&order=asc"
-    )
-    expect(events).toMatchObject([
-      {
-        id: "evt_1",
-        type: "message",
-        role: "assistant",
-        text: "完成",
-        createdAt: "2026-06-28T00:02:00.000Z",
-      },
-    ])
-  })
-
-  it("lists session output metadata without downloading content", async () => {
-    mocks.responses.push({
-      data: [
-        {
-          id: "out_1",
-          file_id: "file_1",
-          filename: "report.md",
-          media_type: "text/markdown",
-          size_bytes: 120,
-          kind: "file",
-          metadata: { relative_path: "reports/report.md" },
-          created_at: "2026-06-28T00:03:00.000Z",
-          updated_at: "2026-06-28T00:04:00.000Z",
-        },
-      ],
-    })
-
-    const outputs = await listHouflowCloudSessionOutputs(
-      session(),
-      secret(),
-      "ses_1",
-      5
-    )
-
-    expect(mocks.calls[0]?.path).toBe("/v1/sessions/ses_1/outputs?limit=5")
-    expect(outputs).toEqual([
-      {
-        id: "out_1",
-        fileId: "file_1",
-        filename: "report.md",
-        mediaType: "text/markdown",
-        sizeBytes: 120,
-        kind: "file",
-        relativePath: "reports/report.md",
-        createdAt: "2026-06-28T00:03:00.000Z",
-        updatedAt: "2026-06-28T00:04:00.000Z",
-      },
-    ])
-  })
-
-  it("downloads output previews and files only on demand", async () => {
-    mocks.responses.push("# Report\n", new Uint8Array([1, 2, 3]))
-
-    await expect(
-      getHouflowCloudSessionOutputText(
-        session(),
-        secret(),
-        "ses_1",
-        "report.md"
-      )
-    ).resolves.toBe("# Report\n")
-    await expect(
-      getHouflowCloudSessionOutputBytes(
-        session(),
-        secret(),
-        "ses_1",
-        "report.md"
-      )
-    ).resolves.toEqual(new Uint8Array([1, 2, 3]))
-
     expect(mocks.calls.map((call) => call.path)).toEqual([
-      "/v1/sessions/ses_1/outputs/report.md",
-      "/v1/sessions/ses_1/outputs/report.md",
+      "/v1/sessions?limit=20&include_archived=true",
+      "/v1/sessions/ses_1/archive",
+      "/v1/sessions/ses_1",
     ])
   })
 
-  it("reuses the managed Agent Hub dispatch path when messaging a cloud session", async () => {
-    mocks.dispatchManagedAgent.mockResolvedValue({
-      surface: "agent_hub",
-      kind: "managed",
-      status: "queued",
-      sessionId: "ses_1",
+  it("streams managed session events without polling", async () => {
+    mocks.sseFrames.push({
+      event: "session.event",
+      data: {
+        id: "event_1",
+        type: "agent.message",
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        created_at: "2026-07-20T00:00:01.000Z",
+      },
     })
-
-    await sendHouflowCloudSessionMessage(
+    const events: unknown[] = []
+    await streamHouflowCloudSessionEvents(
       session(),
       secret(),
-      {
-        id: "ses_1",
-        status: "idle",
-        title: "云端任务",
-        environmentId: "env_1",
-        agentId: "agt_1",
-        agentName: "云端助手",
-        createdAt: null,
-        updatedAt: null,
-        archivedAt: null,
-      },
-      "继续"
+      "ses_1",
+      (event) => events.push(event)
     )
-
-    expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
-      expect.any(Object),
-      {
-        surface: "agent_hub",
-        kind: "managed",
-        targetKey: "managed:agt_1",
-        targetId: "agt_1",
-        name: "云端助手",
-      },
-      {
-        sessionId: "ses_1",
-        workspaceId: "ws_1",
-        message: "继续",
-      }
-    )
+    expect(events).toMatchObject([{ id: "event_1", text: "done" }])
+    expect(mocks.calls[0].path).toBe("/v1/sessions/ses_1/stream")
   })
 
-  it("passes rich content when messaging a cloud session", async () => {
-    mocks.dispatchManagedAgent.mockResolvedValue({
-      surface: "agent_hub",
-      kind: "managed",
-      status: "queued",
-      sessionId: "ses_1",
-    })
-
-    await sendHouflowCloudSessionMessage(
-      session(),
-      secret(),
+  it("loads event and output data only from selected managed session", async () => {
+    mocks.responses.push(
+      { data: [{ id: "event_1", type: "runtime.status", created_at: "now" }] },
       {
-        id: "ses_1",
-        status: "idle",
-        title: "云端任务",
-        environmentId: "env_1",
-        agentId: "agt_1",
-        agentName: "云端助手",
-        createdAt: null,
-        updatedAt: null,
-        archivedAt: null,
-      },
-      {
-        message: "看图分析",
-        content: [
-          { type: "text", text: "看图分析" },
+        data: [
           {
-            type: "image",
-            data: "aW1n",
-            mime_type: "image/png",
-            uri: null,
+            id: "output_1",
+            file_id: "file_1",
+            filename: "report.html",
+            media_type: "text/html",
+            size_bytes: 10,
+            kind: "file",
           },
         ],
-      }
+      },
+      "<h1>Report</h1>",
+      new Uint8Array([1, 2])
     )
-
-    expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.any(Object),
-      {
-        sessionId: "ses_1",
-        workspaceId: "ws_1",
-        message: "看图分析",
-        content: [
-          { type: "text", text: "看图分析" },
-          {
-            type: "image",
-            data: "aW1n",
-            mime_type: "image/png",
-            uri: null,
-          },
-        ],
-      }
-    )
+    expect(
+      await listHouflowCloudSessionEvents(session(), secret(), "ses_1")
+    ).toHaveLength(1)
+    expect(
+      await listHouflowCloudSessionOutputs(session(), secret(), "ses_1")
+    ).toMatchObject([{ fileId: "file_1", filename: "report.html" }])
+    expect(
+      await getHouflowCloudSessionOutputText(
+        session(),
+        secret(),
+        "ses_1",
+        "file_1"
+      )
+    ).toBe("<h1>Report</h1>")
+    expect(
+      await getHouflowCloudSessionOutputBytes(
+        session(),
+        secret(),
+        "ses_1",
+        "file_1"
+      )
+    ).toEqual(new Uint8Array([1, 2]))
   })
 
-  it("starts a managed cloud session through the managed dispatch path", async () => {
-    mocks.dispatchManagedAgent.mockResolvedValue({
-      surface: "agent_hub",
-      kind: "managed",
-      status: "queued",
-      sessionId: "ses_new",
-      runId: "run_1",
-      interactionId: "int_1",
-      engineRunId: null,
-      raw: {
-        session: {
-          id: "ses_new",
-          status: "queued",
-          title: "请整理这个工作区",
-          environment_id: "env_default",
-          agent: { id: "agt_1", name: "云端助手" },
-          created_at: "2026-06-28T00:00:00.000Z",
-          updated_at: "2026-06-28T00:00:00.000Z",
-          archived_at: null,
-        },
-      },
+  it("routes connected sessions, cursor pages, turns, sends, refresh, and delete through SDK", async () => {
+    const snapshot = conversationSnapshot()
+    mocks.createConversation.mockResolvedValue(snapshot)
+    mocks.listConversations.mockResolvedValue({
+      data: [snapshot],
+      has_more: true,
+      next_cursor: "cursor_1",
     })
+    mocks.loadTurns.mockResolvedValue(snapshot)
+    mocks.sendConversation.mockResolvedValue(snapshot)
+    mocks.refreshConversation.mockResolvedValue(snapshot)
+    mocks.deleteConversation.mockResolvedValue(undefined)
 
-    const result = await startHouflowCloudTargetSession(
+    const created = await createHouflowConversationSession(
       session(),
       secret(),
-      managedTarget(),
-      "请整理这个工作区"
+      hostedTarget(),
+      "hello"
     )
+    const page = await listHouflowConversationSessions(
+      session(),
+      secret(),
+      hostedTarget(),
+      20,
+      "cursor_0"
+    )
+    await loadHouflowConversationSessionTurns(
+      session(),
+      secret(),
+      snapshot,
+      50,
+      "turn_cursor"
+    )
+    await sendHouflowConversationSessionMessage(
+      session(),
+      secret(),
+      snapshot,
+      "next"
+    )
+    await refreshHouflowConversationSession(session(), secret(), snapshot)
+    await deleteHouflowConversationSession(session(), secret(), snapshot)
 
-    expect(result).toMatchObject({
-      kind: "managed",
-      session: {
-        id: "ses_new",
-        environmentId: "env_default",
-        agentId: "agt_1",
-      },
-    })
-    expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
-      expect.any(Object),
-      {
-        surface: "agent_hub",
-        kind: "managed",
-        targetKey: "managed:agt_1",
-        targetId: "agt_1",
-        name: "云端助手",
-      },
-      {
-        environmentId: "env_default",
-        workspaceId: "ws_1",
-        message: "请整理这个工作区",
-        title: "请整理这个工作区",
-      }
+    expect(created).toBe(snapshot)
+    expect(page.next_cursor).toBe("cursor_1")
+    expect(mocks.createConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "connected:agent_1",
+        kind: "hosted_connected_agent",
+      }),
+      expect.objectContaining({ title: "hello" })
     )
-    expect(mocks.calls).toEqual([])
+    expect(mocks.listConversations).toHaveBeenCalledWith(expect.anything(), {
+      limit: 20,
+      cursor: "cursor_0",
+    })
+    expect(mocks.loadTurns).toHaveBeenCalledWith(snapshot, {
+      limit: 50,
+      cursor: "turn_cursor",
+    })
+    expect(mocks.sendConversation).toHaveBeenCalledWith(
+      snapshot,
+      expect.objectContaining({ message: "next" })
+    )
   })
 
-  it("creates a managed cloud session before dispatching the first message", async () => {
-    mocks.responses.push({
-      id: "ses_created",
-      status: "idle",
-      title: "开始写卷",
-      environment_id: "env_default",
-      agent: { id: "agt_1", name: "云端助手" },
-      created_at: "2026-06-28T00:00:00.000Z",
-      updated_at: "2026-06-28T00:00:00.000Z",
-      archived_at: null,
+  it("keeps the latest available output session across failed follow-ups", () => {
+    const snapshot = conversationSnapshot()
+    snapshot.turns.unshift({
+      ...snapshot.turns[0],
+      id: "turn_success",
+      status: "completed",
+      output: { runtime_response: { session_id: "runtime_session_1" } },
     })
+    expect(houflowConversationOutputSessionId(snapshot)).toBe(
+      "runtime_session_1"
+    )
+  })
 
+  it("keeps managed creation and follow-up dispatch on managed session APIs", async () => {
+    mocks.responses.push(sessionDto())
+    const target = managedTarget()
     const created = await createHouflowManagedCloudSession(
       session(),
       secret(),
-      managedTarget(),
-      "开始写卷"
+      target,
+      "hello"
     )
-
-    expect(created).toMatchObject({
-      id: "ses_created",
-      title: "开始写卷",
-      environmentId: "env_default",
-      agentId: "agt_1",
-    })
-    expect(mocks.calls).toHaveLength(1)
-    expect(mocks.calls[0]).toMatchObject({
-      path: "/v1/sessions",
-      options: { method: "POST" },
-    })
-    expect(mocks.calls[0]?.options.body).toEqual({
-      agent: "agt_1",
-      environment_id: "env_default",
-      workspace_id: "ws_1",
-      title: "开始写卷",
-    })
-  })
-
-  it("passes managed target vault ids when starting a cloud session", async () => {
-    mocks.dispatchManagedAgent.mockResolvedValue({
-      surface: "agent_hub",
-      kind: "managed",
-      status: "queued",
-      sessionId: "ses_new",
-      runId: "run_1",
-      interactionId: "int_1",
-      engineRunId: null,
-      raw: {
-        session: {
-          id: "ses_new",
-          status: "queued",
-          title: "识别试卷",
-          environment_id: "env_default",
-          agent: { id: "agt_1", name: "诗歌智能体" },
-          created_at: "2026-06-28T00:00:00.000Z",
-          updated_at: "2026-06-28T00:00:00.000Z",
-          archived_at: null,
-        },
-      },
-    })
-
-    await startHouflowCloudTargetSession(
-      session(),
-      secret(),
-      {
-        ...managedTarget(),
-        name: "诗歌智能体",
-        metadata: {
-          default_environment_id: "env_default",
-          vault_ids: "vlt_ocr,vlt_files",
-        },
-      },
-      "识别试卷"
-    )
-
+    mocks.dispatchManagedAgent.mockResolvedValue({ kind: "managed", raw: {} })
+    await sendHouflowCloudSessionMessage(session(), secret(), created, "next")
+    expect(created.id).toBe("ses_1")
     expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.any(Object),
-      expect.objectContaining({
-        environmentId: "env_default",
-        vaultIds: ["vlt_ocr", "vlt_files"],
-      })
+      expect.anything(),
+      expect.objectContaining({ kind: "managed" }),
+      expect.objectContaining({ sessionId: "ses_1", message: "next" })
     )
-  })
-
-  it("sends the canonical managed target environment", async () => {
-    mocks.dispatchManagedAgent.mockResolvedValue({
-      surface: "agent_hub",
-      kind: "managed",
-      status: "queued",
-      sessionId: "ses_new",
-      runId: "run_1",
-      interactionId: "int_1",
-      engineRunId: null,
-      raw: {
-        session: {
-          id: "ses_new",
-          status: "queued",
-          title: "开始",
-          environment_id: "env_server_default",
-          agent: { id: "agt_1", name: "云端助手" },
-          created_at: "2026-06-28T00:00:00.000Z",
-          updated_at: "2026-06-28T00:00:00.000Z",
-          archived_at: null,
-        },
-      },
-    })
-    const target = managedTarget()
-
-    await startHouflowCloudTargetSession(session(), secret(), target, "开始")
-
-    expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.any(Object),
-      expect.objectContaining({ environmentId: "env_default" })
-    )
-  })
-
-  it("creates managed cloud sessions with the target environment", async () => {
-    mocks.responses.push({
-      id: "ses_server_default",
-      status: "idle",
-      title: "开始",
-      environment_id: "env_server_default",
-      agent: { id: "agt_1", name: "云端助手" },
-      created_at: "2026-06-28T00:00:00.000Z",
-      updated_at: "2026-06-28T00:00:00.000Z",
-      archived_at: null,
-    })
-    const target = {
-      ...managedTarget(),
-      metadata: {},
-    }
-
-    await createHouflowManagedCloudSession(session(), secret(), target, "开始")
-
-    expect(mocks.calls[0]).toMatchObject({ path: "/v1/sessions" })
-    expect(mocks.calls[0]?.options.body).toEqual({
-      agent: "agt_1",
-      environment_id: "env_default",
-      workspace_id: "ws_1",
-      title: "开始",
-    })
-  })
-
-  it("does not accept managed target environment metadata as the launch environment", async () => {
-    mocks.dispatchManagedAgent.mockResolvedValue({
-      surface: "agent_hub",
-      kind: "managed",
-      status: "queued",
-      sessionId: "ses_new",
-      runId: "run_1",
-      interactionId: "int_1",
-      engineRunId: null,
-      raw: {
-        session: {
-          id: "ses_new",
-          status: "queued",
-          title: "开始",
-          environment_id: "env_metadata",
-          agent: { id: "agt_1", name: "云端助手" },
-          created_at: "2026-06-28T00:00:00.000Z",
-          updated_at: "2026-06-28T00:00:00.000Z",
-          archived_at: null,
-        },
-      },
-    })
-
-    await startHouflowCloudTargetSession(
-      session(),
-      secret(),
-      {
-        ...managedTarget(),
-        defaultEnvironmentId: "env_default",
-        metadata: { environment_id: "env_metadata" },
-      },
-      "开始"
-    )
-
-    expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.any(Object),
-      expect.objectContaining({ environmentId: "env_default" })
-    )
-  })
-
-  it("starts a hosted resident agent through hosted dispatch", async () => {
-    mocks.dispatchAgentHubTarget.mockResolvedValue({
-      surface: "agent_hub",
-      kind: "hosted_connected",
-      targetKey: "hosted_connected:cag_1",
-      targetId: "cag_1",
-      status: "queued",
-      commandId: "cmd_1",
-      action: "dispatch",
-      raw: { id: "cmd_1", status: "queued" },
-    })
-
-    const result = await startHouflowCloudTargetSession(
-      session(),
-      secret(),
-      {
-        key: "hosted_connected:cag_1",
-        kind: "hosted_connected",
-        id: "cag_1",
-        defaultEnvironmentId: "env_resident",
-        name: "常驻助手",
-        provider: "agent-hub",
-        status: "active",
-        capabilities: ["dispatch"],
-        source: "agent_hub",
-        metadata: { environment_id: "env_resident" },
-      },
-      "跑一次检查"
-    )
-
-    expect(result).toMatchObject({
-      kind: "hosted_connected",
-      dispatch: { commandId: "cmd_1" },
-    })
-    expect(mocks.dispatchAgentHubTarget).toHaveBeenCalledWith(
-      expect.any(Object),
-      {
-        surface: "agent_hub",
-        kind: "hosted_connected",
-        targetKey: "hosted_connected:cag_1",
-        targetId: "cag_1",
-        name: "常驻助手",
-      },
-      {
-        action: "workspace_message",
-        environmentId: "env_resident",
-        message: "跑一次检查",
-        channelRef: "houhub/desktop/ws_1/target/cag_1",
-        metadata: { source: "houhub" },
-      }
-    )
-  })
-
-  it("passes hosted resident runtime environment when dispatching", async () => {
-    mocks.dispatchAgentHubTarget.mockResolvedValue({
-      surface: "agent_hub",
-      kind: "hosted_connected",
-      targetKey: "hosted_connected:cag_1",
-      targetId: "cag_1",
-      status: "queued",
-      commandId: "cmd_1",
-      action: "workspace_message",
-      raw: { id: "cmd_1", status: "queued" },
-    })
-
-    await startHouflowCloudTargetSession(
-      session(),
-      secret(),
-      {
-        key: "hosted_connected:cag_1",
-        kind: "hosted_connected",
-        id: "cag_1",
-        defaultEnvironmentId: "env_resident",
-        name: "常驻助手",
-        provider: "agent-hub",
-        status: "active",
-        capabilities: ["workspace_message"],
-        source: "agent_hub",
-        metadata: { environment_id: "env_resident" },
-      },
-      "跑一次检查"
-    )
-
-    expect(mocks.dispatchAgentHubTarget).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.any(Object),
-      expect.objectContaining({ environmentId: "env_resident" })
-    )
-  })
-
-  it("reuses an explicit hosted resident channel ref for follow-up turns", async () => {
-    mocks.dispatchAgentHubTarget.mockResolvedValue({
-      surface: "agent_hub",
-      kind: "hosted_connected",
-      targetKey: "hosted_connected:cag_1",
-      targetId: "cag_1",
-      status: "queued",
-      commandId: "cmd_2",
-      action: "workspace_message",
-      raw: { id: "cmd_2", status: "queued" },
-    })
-
-    await startHouflowCloudTargetSession(
-      session(),
-      secret(),
-      {
-        key: "hosted_connected:cag_1",
-        kind: "hosted_connected",
-        id: "cag_1",
-        defaultEnvironmentId: null,
-        name: "常驻助手",
-        provider: "agent-hub",
-        status: "active",
-        capabilities: ["workspace_message"],
-        source: "agent_hub",
-        metadata: {},
-      },
-      {
-        message: "继续",
-        channelRef: "houhub/desktop/ws_1/target/cag_1/thread/thread_1",
-      }
-    )
-
-    expect(mocks.dispatchAgentHubTarget).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.any(Object),
-      {
-        action: "workspace_message",
-        message: "继续",
-        channelRef: "houhub/desktop/ws_1/target/cag_1/thread/thread_1",
-        metadata: { source: "houhub" },
-      }
-    )
-  })
-
-  it("starts an external local agent through connector dispatch", async () => {
-    mocks.dispatchAgentHubTarget.mockResolvedValue({
-      surface: "agent_hub",
-      kind: "external_local",
-      targetKey: "external_local:cag_2:codex",
-      targetId: "cag_2",
-      status: "queued",
-      commandId: "cmd_2",
-      action: "workspace_message",
-      connectorId: "con_1",
-      localAgentRef: "codex",
-      raw: { id: "cmd_2", status: "queued" },
-    })
-
-    const result = await startHouflowCloudTargetSession(
-      session(),
-      secret(),
-      {
-        key: "external_local:cag_2:codex",
-        kind: "external_local",
-        id: "cag_2",
-        defaultEnvironmentId: null,
-        name: "本机 Codex",
-        provider: "codex",
-        status: "active",
-        capabilities: ["dispatch", "workspace_message"],
-        source: "agent_hub",
-        metadata: {
-          connector_id: "con_1",
-          local_agent_ref: "codex",
-        },
-      },
-      "跑一次本机任务"
-    )
-
-    expect(result).toMatchObject({
-      kind: "external_local",
-      dispatch: { commandId: "cmd_2" },
-    })
-    expect(mocks.dispatchAgentHubTarget).toHaveBeenCalledWith(
-      expect.any(Object),
-      {
-        surface: "agent_hub",
-        kind: "external_local",
-        targetKey: "external_local:cag_2:codex",
-        targetId: "cag_2",
-        name: "本机 Codex",
-        connectorId: "con_1",
-        localAgentRef: "codex",
-      },
-      {
-        action: "workspace_message",
-        message: "跑一次本机任务",
-        channelRef: "houhub/desktop/ws_1/target/cag_2",
-        metadata: { source: "houhub" },
-      }
-    )
-  })
-
-  it("lists hosted resident commands on demand", async () => {
-    mocks.responses.push({
-      data: [
-        {
-          id: "cmd_1",
-          type: "connected_agent_connector_command",
-          connected_agent_id: "cag_1",
-          local_agent_ref: "resident",
-          action: "workspace_message",
-          status: "running",
-          input: { message: "继续" },
-          output: null,
-          error: null,
-          events: [],
-          created_at: "2026-06-28T00:00:00.000Z",
-          updated_at: "2026-06-28T00:00:01.000Z",
-        },
-      ],
-    })
-
-    const commands = await listHouflowHostedAgentCommands(
-      session(),
-      secret(),
-      "cag_1",
-      8
-    )
-
-    expect(mocks.calls[0]?.path).toBe(
-      "/v1/connected-agent-connector-commands?connected_agent_id=cag_1&limit=8"
-    )
-    expect(commands).toHaveLength(1)
-    expect(commands[0]?.id).toBe("cmd_1")
-  })
-
-  it("reads hosted resident output files from the explicit runtime session id", () => {
-    expect(
-      houflowHostedCommandOutputSessionId({
-        output: {
-          runtime_response: {
-            evidence: {
-              session_id: "cag_resident_1",
-            },
-          },
-        },
-      } as never)
-    ).toBe("cag_resident_1")
-  })
-
-  it("does not infer hosted output files from the command channel ref", () => {
-    expect(
-      houflowHostedCommandOutputSessionId({
-        input: {
-          channel_ref: "houhub/desktop/ws_1/target/cag_1/thread/t1",
-        },
-        output: {
-          text: "done",
-        },
-      } as never)
-    ).toBeNull()
   })
 })
 
@@ -1042,32 +309,89 @@ function session(): HouflowDesktopSession {
   return {
     status: "signed_in",
     actorRef: { type: "houflow_user", id: "user_1" },
-    workspaceId: "ws_1",
-    consoleBaseUrl: "https://agent.houflow.com",
+    workspaceId: "workspace_1",
+    consoleBaseUrl: "https://agent.example.com",
     expiresAt: null,
-    userLabel: "Houflow User",
+    userLabel: "User",
   }
 }
 
 function secret(): HouflowAuthSecret {
+  return { controlApiKey: "key", csrfToken: null, sessionCookie: null }
+}
+
+function sessionDto(overrides: Record<string, unknown> = {}) {
   return {
-    controlApiKey: "control-key",
-    csrfToken: "csrf",
-    sessionCookie: "sid=1",
+    id: "ses_1",
+    status: "running",
+    title: "Session",
+    environment_id: "env_1",
+    agent: { id: "agent_1", name: "Agent" },
+    created_at: "2026-07-20T00:00:00.000Z",
+    updated_at: "2026-07-20T00:00:00.000Z",
+    archived_at: null,
+    ...overrides,
   }
 }
 
 function managedTarget(): HouflowAgentTarget {
   return {
-    key: "managed:agt_1",
+    key: "managed:agent_1",
     kind: "managed",
-    id: "agt_1",
-    defaultEnvironmentId: "env_default",
-    name: "云端助手",
+    id: "agent_1",
+    defaultEnvironmentId: "env_1",
+    name: "Agent",
     provider: "agent-hub",
     status: "active",
-    capabilities: ["chat", "artifact_upload"],
+    capabilities: ["chat"],
     source: "agent_hub",
-    metadata: {},
+    metadata: { session_target_id: "agent:agent_1" },
+  }
+}
+
+function hostedTarget(): HouflowAgentTarget {
+  return {
+    ...managedTarget(),
+    key: "hosted_connected:agent_1",
+    kind: "hosted_connected",
+    capabilities: ["workspace_message"],
+    metadata: { session_target_id: "connected:agent_1" },
+  }
+}
+
+function conversationSnapshot(): AgentHubConversationSessionSnapshot {
+  return {
+    session: {
+      id: "conversation_1",
+      target_id: "connected:agent_1",
+      target_kind: "hosted_connected_agent",
+      status: "failed",
+      title: "Conversation",
+      created_at: "2026-07-20T00:00:00.000Z",
+      updated_at: "2026-07-20T00:00:01.000Z",
+      transport: {
+        kind: "connected",
+        connected_agent_id: "agent_1",
+        channel_ref: "channel_1",
+        latest_turn_id: "turn_failed",
+        stream_url: null,
+      },
+    },
+    turns: [
+      {
+        id: "turn_failed",
+        session_id: "conversation_1",
+        status: "failed",
+        input: { message: "failed follow-up" },
+        output: null,
+        error: "unauthorized",
+        events: [],
+        stream_url: null,
+        created_at: "2026-07-20T00:00:01.000Z",
+        updated_at: "2026-07-20T00:00:01.000Z",
+        completed_at: "2026-07-20T00:00:01.000Z",
+      },
+    ],
+    turns_page: { loaded: true, has_more: false, next_cursor: null },
   }
 }

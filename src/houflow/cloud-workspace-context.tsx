@@ -31,7 +31,7 @@ export function HouflowCloudWorkspaceProvider({
 }
 
 export {
-  selectHouflowCloudSelectedHostedCommand,
+  selectHouflowCloudSelectedHostedSession,
   selectHouflowCloudSelectedSession,
   useHouflowCloudWorkspaceStore,
 } from "./cloud-workspace-store"

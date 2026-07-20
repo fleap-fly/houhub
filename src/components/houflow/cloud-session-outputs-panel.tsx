@@ -21,17 +21,17 @@ import {
   outputMatchesTarget,
 } from "@/houflow/cloud-session-output-links"
 import {
-  selectHouflowCloudSelectedHostedCommand,
+  selectHouflowCloudSelectedHostedSession,
   selectHouflowCloudSelectedSession,
   useHouflowCloudWorkspaceStore,
 } from "@/houflow/cloud-workspace-context"
 import {
   getHouflowCloudSessionOutputBytes,
   getHouflowCloudSessionOutputText,
-  houflowHostedCommandOutputSessionId,
+  houflowConversationOutputSessionId,
+  isHouflowConversationSessionActive,
   isHouflowCloudSessionNotFound,
   isCloudSessionActive,
-  isHouflowHostedCommandActive,
   listHouflowCloudSessionOutputs,
   type HouflowCloudSessionOutput,
 } from "@/houflow/cloud-sessions"
@@ -50,12 +50,19 @@ export function CloudSessionOutputsPanel() {
   const selectedSession = useHouflowCloudWorkspaceStore(
     selectHouflowCloudSelectedSession
   )
-  const selectedHostedCommand = useHouflowCloudWorkspaceStore(
-    selectHouflowCloudSelectedHostedCommand
+  const selectedHostedSession = useHouflowCloudWorkspaceStore(
+    selectHouflowCloudSelectedHostedSession
   )
   const selectedOutputRequest = useHouflowCloudWorkspaceStore(
     (state) => state.selectedOutputRequest
   )
+  const latestOutputEventId = useHouflowCloudWorkspaceStore((state) => {
+    for (let index = state.runtimeEvents.length - 1; index >= 0; index -= 1) {
+      const event = state.runtimeEvents[index]
+      if (event && OUTPUT_EVENT_TYPES.has(event.type)) return event.id
+    }
+    return null
+  })
   const removeSession = useHouflowCloudWorkspaceStore(
     (state) => state.removeSession
   )
@@ -73,9 +80,12 @@ export function CloudSessionOutputsPanel() {
   const openedSelectionNonceRef = useRef<number | null>(null)
 
   const selectedCloudSessionId = selectedSession?.id ?? null
+  const selectedHostedOutputSessionId = useMemo(
+    () => houflowConversationOutputSessionId(selectedHostedSession),
+    [selectedHostedSession]
+  )
   const selectedSessionId =
-    selectedCloudSessionId ??
-    houflowHostedCommandOutputSessionId(selectedHostedCommand)
+    selectedCloudSessionId ?? selectedHostedOutputSessionId
   const selectedOutput = useMemo(
     () =>
       selectedOutputId
@@ -86,7 +96,7 @@ export function CloudSessionOutputsPanel() {
 
   const outputsActive =
     isCloudSessionActive(selectedSession) ||
-    isHouflowHostedCommandActive(selectedHostedCommand)
+    isHouflowConversationSessionActive(selectedHostedSession)
 
   const refreshOutputs = useCallback(
     async (background = false) => {
@@ -256,12 +266,11 @@ export function CloudSessionOutputsPanel() {
     if (wasActive && !outputsActive) {
       void refreshOutputs(true)
     }
-    if (!outputsActive) return
-    const timer = window.setInterval(() => {
-      void refreshOutputs(true)
-    }, 2500)
-    return () => window.clearInterval(timer)
   }, [outputsActive, refreshOutputs])
+
+  useEffect(() => {
+    if (latestOutputEventId) void refreshOutputs(true)
+  }, [latestOutputEventId, refreshOutputs])
 
   useEffect(() => {
     if (
@@ -371,6 +380,15 @@ export function CloudSessionOutputsPanel() {
     </section>
   )
 }
+
+const OUTPUT_EVENT_TYPES = new Set([
+  "file.created",
+  "file.deleted",
+  "file.promoted",
+  "session.resource_added",
+  "session.resource_updated",
+  "session.resource_deleted",
+])
 
 function SidebarMessage({ children }: { children: React.ReactNode }) {
   return (

@@ -94,18 +94,6 @@ export class HouflowControlClient {
   sse(path: string, options: Parameters<AgentHubNetworkClient["sse"]>[1] = {}) {
     return this.sdk.sse(path, options)
   }
-
-  streamConnectorCommandRealtime(
-    commandId: string,
-    params?: Parameters<
-      AgentHubNetworkClient["connectedAgents"]["streamConnectorCommandRealtime"]
-    >[1]
-  ) {
-    return this.sdk.connectedAgents.streamConnectorCommandRealtime(
-      commandId,
-      params
-    )
-  }
 }
 
 export async function loadHouflowControlSnapshot(
@@ -537,6 +525,9 @@ function managedSessionTargetFromDto(
     capabilities: ["chat", "artifact_upload"],
     source: "agent_hub",
     metadata: cleanStringRecord({
+      session_target_id: stringValue(value.id),
+      session_target_created_at: stringValue(value.created_at),
+      session_target_updated_at: stringValue(value.updated_at),
       management_mode: stringValue(agentDto.management_mode),
       vault_ids: stringListValue(agentDto.vault_ids),
       ...agentMetadata,
@@ -591,6 +582,9 @@ function connectedTargetFromDto(
         : externalConnectorCapabilities(binding?.capabilities ?? {}, value),
     source: "agent_hub",
     metadata: cleanStringRecord({
+      session_target_id: stringValue(target.id),
+      session_target_created_at: stringValue(target.created_at),
+      session_target_updated_at: stringValue(target.updated_at),
       ...stringRecord(value.metadata),
       local_agent_ref: binding?.local_agent_ref ?? "",
       connector_id: binding?.connector_id ?? "",

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   houflowCloudModelSettingsFromEvents,
-  houflowCloudModelSettingsFromHostedCommand,
+  houflowCloudModelSettingsFromConversationSession,
   houflowCloudSessionConfigOptions,
   houflowCloudTargetSupportsModelSettings,
   resolveHouflowCloudModelSettings,
@@ -174,12 +174,16 @@ describe("Houflow cloud session config", () => {
     })
 
     expect(
-      houflowCloudModelSettingsFromHostedCommand({
-        input: {
-          model_provider_id: "default",
-          model: "openai/gpt-5.6-sol",
-          reasoning_effort: "ultra",
-        },
+      houflowCloudModelSettingsFromConversationSession({
+        turns: [
+          {
+            input: {
+              model_provider_id: "default",
+              model: "openai/gpt-5.6-sol",
+              reasoning_effort: "ultra",
+            },
+          },
+        ],
       } as never)
     ).toEqual({
       modelProviderId: "default",

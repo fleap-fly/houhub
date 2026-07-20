@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  agentHubTargetFromHouflowTarget,
   conversationTargetFromHouflowTarget,
   isAgentHubDispatchableTarget,
   isHouflowCloudWorkspaceTarget,
@@ -103,6 +104,41 @@ describe("isHouflowCloudWorkspaceTarget", () => {
         })
       )
     ).toBe(false)
+  })
+})
+
+describe("agentHubTargetFromHouflowTarget", () => {
+  it("uses the canonical session target id for SDK conversation routes", () => {
+    expect(
+      agentHubTargetFromHouflowTarget(
+        houflowTarget({
+          kind: "hosted_connected",
+          id: "cag_1",
+          defaultEnvironmentId: "env_1",
+          metadata: {
+            session_target_id: "connected:cag_1",
+            local_agent_ref: "resident",
+          },
+        }),
+        "wks_1"
+      )
+    ).toMatchObject({
+      id: "connected:cag_1",
+      kind: "hosted_connected_agent",
+      connected_agent_id: "cag_1",
+      local_agent_ref: "resident",
+      workspace_id: "wks_1",
+      dispatch_mode: "hosted_dispatch",
+    })
+  })
+
+  it("rejects projections without a canonical session target id", () => {
+    expect(
+      agentHubTargetFromHouflowTarget(
+        houflowTarget({ kind: "hosted_connected" }),
+        "wks_1"
+      )
+    ).toBeNull()
   })
 })
 

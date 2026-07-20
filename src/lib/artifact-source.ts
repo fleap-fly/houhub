@@ -2,7 +2,6 @@ export type ArtifactSourceKind =
   | "local_workspace"
   | "remote_workspace"
   | "houflow_session_output"
-  | "houflow_hosted_command"
   | "workbench_project_space"
   | "workbench_agent_artifact"
 
@@ -23,12 +22,6 @@ export interface HouflowSessionOutputTarget extends ArtifactTarget {
   target: string
 }
 
-export interface HouflowHostedCommandArtifactTarget extends ArtifactTarget {
-  kind: "houflow_hosted_command"
-  commandId: string
-  target: string
-}
-
 export interface WorkbenchAgentArtifactTarget extends ArtifactTarget {
   kind: "workbench_agent_artifact"
   projectId: string
@@ -39,5 +32,4 @@ export interface WorkbenchAgentArtifactTarget extends ArtifactTarget {
 export type ResolvedArtifactTarget =
   | WorkspaceArtifactTarget
   | HouflowSessionOutputTarget
-  | HouflowHostedCommandArtifactTarget
   | WorkbenchAgentArtifactTarget

@@ -1,70 +1,96 @@
 import { create } from "zustand"
+import type { AgentHubConversationSessionSnapshot } from "@houshan/agent-hub-network-sdk"
 import { toErrorMessage } from "@/lib/app-error"
 import { useHouflowDesktopStore } from "./houflow-desktop-store"
 import {
   archiveHouflowCloudSession,
+  deleteHouflowConversationSession,
   deleteHouflowCloudSession,
-  deleteHouflowHostedAgentCommand,
   isHouflowCloudSessionNotFound,
-  listHouflowHostedAgentCommands,
   listHouflowCloudSessions,
-  type HouflowCloudHostedCommand,
+  listHouflowConversationSessions,
+  loadHouflowConversationSessionTurns,
+  refreshHouflowConversationSession,
   type HouflowCloudSession,
+  type HouflowCloudSessionEvent,
 } from "./cloud-sessions"
 import {
   reconcileHouflowCloudSessionSelection,
   type HouflowCloudOutputSelectionRequest,
 } from "./cloud-session-selection"
+import type { HouflowAgentTarget } from "./types"
 
 export interface HouflowCloudWorkspaceStoreState {
   sessions: HouflowCloudSession[]
-  hostedCommands: HouflowCloudHostedCommand[]
+  hostedSessions: AgentHubConversationSessionSnapshot[]
+  hostedSessionPages: Record<
+    string,
+    { hasMore: boolean; nextCursor: string | null }
+  >
+  runtimeEvents: HouflowCloudSessionEvent[]
   selectedTargetKey: string | null
   selectedSessionId: string | null
   selectedOutputRequest: HouflowCloudOutputSelectionRequest | null
-  selectedHostedCommandId: string | null
+  selectedHostedSessionId: string | null
   loading: boolean
   error: string | null
+  applyRuntimeEvents: (events: HouflowCloudSessionEvent[]) => void
+  appendRuntimeEvent: (event: HouflowCloudSessionEvent) => void
   applySessions: (sessions: HouflowCloudSession[]) => void
   reset: () => void
   refreshSessions: () => Promise<void>
   removeSession: (sessionId: string) => void
   archiveSession: (sessionId: string) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
-  deleteHostedCommand: (commandId: string) => Promise<void>
-  refreshHostedCommands: (
-    connectedAgentId: string,
+  deleteHostedSession: (sessionId: string) => Promise<void>
+  refreshHostedSessions: (
+    target: HouflowAgentTarget,
+    limit?: number,
+    cursor?: string
+  ) => Promise<AgentHubConversationSessionSnapshot[]>
+  loadMoreHostedSessions: (
+    target: HouflowAgentTarget,
     limit?: number
-  ) => Promise<HouflowCloudHostedCommand[]>
+  ) => Promise<AgentHubConversationSessionSnapshot[]>
   selectTarget: (targetKey: string | null) => void
   selectSession: (sessionId: string | null) => void
   rememberSession: (session: HouflowCloudSession) => void
   openSessionOutput: (sessionId: string, target: string) => void
-  selectHostedCommand: (command: HouflowCloudHostedCommand | null) => void
-  rememberHostedCommand: (command: HouflowCloudHostedCommand) => void
-  refreshHostedCommand: (
-    connectedAgentId: string,
-    commandId: string
-  ) => Promise<HouflowCloudHostedCommand | null>
+  selectHostedSession: (
+    snapshot: AgentHubConversationSessionSnapshot | null
+  ) => void
+  rememberHostedSession: (snapshot: AgentHubConversationSessionSnapshot) => void
+  refreshHostedSession: (
+    sessionId: string
+  ) => Promise<AgentHubConversationSessionSnapshot | null>
+  loadHostedSessionTurns: (
+    sessionId: string,
+    limit?: number,
+    cursor?: string
+  ) => Promise<AgentHubConversationSessionSnapshot | null>
 }
 
 const initialState = {
   sessions: [],
-  hostedCommands: [],
+  hostedSessions: [],
+  hostedSessionPages: {},
+  runtimeEvents: [],
   selectedTargetKey: null,
   selectedSessionId: null,
   selectedOutputRequest: null,
-  selectedHostedCommandId: null,
+  selectedHostedSessionId: null,
   loading: false,
   error: null,
 } satisfies Pick<
   HouflowCloudWorkspaceStoreState,
   | "sessions"
-  | "hostedCommands"
+  | "hostedSessions"
+  | "hostedSessionPages"
+  | "runtimeEvents"
   | "selectedTargetKey"
   | "selectedSessionId"
   | "selectedOutputRequest"
-  | "selectedHostedCommandId"
+  | "selectedHostedSessionId"
   | "loading"
   | "error"
 >
@@ -74,6 +100,15 @@ export const useHouflowCloudWorkspaceStore =
     ...initialState,
 
     reset: () => set(initialState),
+
+    applyRuntimeEvents: (runtimeEvents) => set({ runtimeEvents }),
+
+    appendRuntimeEvent: (event) =>
+      set((state) => ({
+        runtimeEvents: state.runtimeEvents.some((item) => item.id === event.id)
+          ? state.runtimeEvents
+          : [...state.runtimeEvents, event],
+      })),
 
     refreshSessions: async () => {
       const { session, secret } = useHouflowDesktopStore.getState()
@@ -98,14 +133,15 @@ export const useHouflowCloudWorkspaceStore =
 
     removeSession: (sessionId) => {
       const { sessions, selectedSessionId, selectedOutputRequest } = get()
+      const selectionRemoved = selectedSessionId === sessionId
       set({
         sessions: sessions.filter((session) => session.id !== sessionId),
-        selectedSessionId:
-          selectedSessionId === sessionId ? null : selectedSessionId,
+        selectedSessionId: selectionRemoved ? null : selectedSessionId,
         selectedOutputRequest:
           selectedOutputRequest?.sessionId === sessionId
             ? null
             : selectedOutputRequest,
+        ...(selectionRemoved ? { runtimeEvents: [] } : {}),
       })
     },
 
@@ -142,38 +178,63 @@ export const useHouflowCloudWorkspaceStore =
         get().removeSession(sessionId)
     },
 
-    deleteHostedCommand: async (commandId) => {
+    deleteHostedSession: async (sessionId) => {
       const { session, secret } = useHouflowDesktopStore.getState()
       if (session.status !== "signed_in") return
-      await deleteHouflowHostedAgentCommand(session, secret, commandId)
+      const snapshot = get().hostedSessions.find(
+        (item) => item.session.id === sessionId
+      )
+      if (!snapshot) return
+      await deleteHouflowConversationSession(session, secret, snapshot)
       if (!isCurrentWorkspace(session.workspaceId)) return
-      const { hostedCommands, selectedHostedCommandId } = get()
       set({
-        hostedCommands: hostedCommands.filter(
-          (command) => command.id !== commandId
+        hostedSessions: get().hostedSessions.filter(
+          (item) => item.session.id !== sessionId
         ),
-        selectedHostedCommandId:
-          selectedHostedCommandId === commandId
+        selectedHostedSessionId:
+          get().selectedHostedSessionId === sessionId
             ? null
-            : selectedHostedCommandId,
+            : get().selectedHostedSessionId,
       })
     },
 
-    refreshHostedCommands: async (connectedAgentId, limit = 20) => {
+    refreshHostedSessions: async (target, limit = 20, cursor) => {
       const { session, secret } = useHouflowDesktopStore.getState()
       if (session.status !== "signed_in") return []
-      const commands = await listHouflowHostedAgentCommands(
+      const page = await listHouflowConversationSessions(
         session,
         secret,
-        connectedAgentId,
-        limit
+        target,
+        limit,
+        cursor
       )
+      const snapshots = page.data
       if (isCurrentWorkspace(session.workspaceId)) {
+        const targetId = target.metadata.session_target_id
         set({
-          hostedCommands: mergeHostedCommands(get().hostedCommands, commands),
+          hostedSessions: cursor
+            ? mergeHostedSessions(get().hostedSessions, snapshots)
+            : replaceHostedSessionsForTarget(
+                get().hostedSessions,
+                targetId,
+                snapshots
+              ),
+          hostedSessionPages: {
+            ...get().hostedSessionPages,
+            [target.key]: {
+              hasMore: page.has_more,
+              nextCursor: page.next_cursor,
+            },
+          },
         })
       }
-      return commands
+      return snapshots
+    },
+
+    loadMoreHostedSessions: async (target, limit = 20) => {
+      const page = get().hostedSessionPages[target.key]
+      if (!page?.hasMore || !page.nextCursor) return []
+      return get().refreshHostedSessions(target, limit, page.nextCursor)
     },
 
     selectTarget: (targetKey) =>
@@ -181,14 +242,16 @@ export const useHouflowCloudWorkspaceStore =
         selectedTargetKey: targetKey,
         selectedSessionId: null,
         selectedOutputRequest: null,
-        selectedHostedCommandId: null,
+        selectedHostedSessionId: null,
+        runtimeEvents: [],
       }),
 
     selectSession: (sessionId) =>
       set({
-        selectedHostedCommandId: null,
+        selectedHostedSessionId: null,
         selectedSessionId: sessionId,
         selectedOutputRequest: null,
+        runtimeEvents: [],
       }),
 
     rememberSession: (session) =>
@@ -196,52 +259,94 @@ export const useHouflowCloudWorkspaceStore =
 
     openSessionOutput: (sessionId, target) =>
       set({
-        selectedHostedCommandId: null,
+        selectedHostedSessionId: null,
         selectedSessionId: sessionId,
         selectedOutputRequest: {
           sessionId,
           target,
           nonce: Date.now(),
         },
+        runtimeEvents: [],
       }),
 
-    selectHostedCommand: (command) =>
+    selectHostedSession: (snapshot) =>
       set({
         selectedSessionId: null,
         selectedOutputRequest: null,
-        selectedHostedCommandId: command?.id ?? null,
-        ...(command
+        selectedHostedSessionId: snapshot?.session.id ?? null,
+        runtimeEvents: [],
+        ...(snapshot
           ? {
-              hostedCommands: upsertHostedCommand(
-                get().hostedCommands,
-                command
-              ),
+              hostedSessions: mergeHostedSessions(get().hostedSessions, [
+                snapshot,
+              ]),
             }
           : {}),
       }),
 
-    rememberHostedCommand: (command) =>
+    rememberHostedSession: (snapshot) =>
       set({
-        hostedCommands: upsertHostedCommand(get().hostedCommands, command),
+        hostedSessions: mergeHostedSessions(get().hostedSessions, [snapshot]),
       }),
 
-    refreshHostedCommand: async (connectedAgentId, commandId) => {
-      const commands = await get().refreshHostedCommands(connectedAgentId, 20)
-      return commands.find((command) => command.id === commandId) ?? null
+    refreshHostedSession: async (sessionId) => {
+      const { session, secret } = useHouflowDesktopStore.getState()
+      if (session.status !== "signed_in") return null
+      const snapshot = get().hostedSessions.find(
+        (item) => item.session.id === sessionId
+      )
+      if (!snapshot) return null
+      const refreshed = await refreshHouflowConversationSession(
+        session,
+        secret,
+        snapshot
+      )
+      if (isCurrentWorkspace(session.workspaceId)) {
+        get().rememberHostedSession(refreshed)
+      }
+      return refreshed
+    },
+
+    loadHostedSessionTurns: async (sessionId, limit = 50, cursor) => {
+      const { session, secret } = useHouflowDesktopStore.getState()
+      if (session.status !== "signed_in") return null
+      const snapshot = get().hostedSessions.find(
+        (item) => item.session.id === sessionId
+      )
+      if (!snapshot) return null
+      const loaded = await loadHouflowConversationSessionTurns(
+        session,
+        secret,
+        snapshot,
+        limit,
+        cursor
+      )
+      if (isCurrentWorkspace(session.workspaceId)) {
+        get().rememberHostedSession(loaded)
+      }
+      return loaded
     },
 
     applySessions: (next: HouflowCloudSession[]) => {
       const { selectedSessionId, selectedOutputRequest } = get()
-      set({
-        sessions: next,
-        selectedSessionId: reconcileHouflowCloudSessionSelection(next, {
-          selectedSessionId,
-          selectedOutputRequest: null,
-        }).selectedSessionId,
-        selectedOutputRequest: reconcileHouflowCloudSessionSelection(next, {
+      const reconciledSessionId = reconcileHouflowCloudSessionSelection(next, {
+        selectedSessionId,
+        selectedOutputRequest: null,
+      }).selectedSessionId
+      const reconciledOutputRequest = reconcileHouflowCloudSessionSelection(
+        next,
+        {
           selectedSessionId: null,
           selectedOutputRequest,
-        }).selectedOutputRequest,
+        }
+      ).selectedOutputRequest
+      set({
+        sessions: next,
+        selectedSessionId: reconciledSessionId,
+        selectedOutputRequest: reconciledOutputRequest,
+        ...(reconciledSessionId !== selectedSessionId
+          ? { runtimeEvents: [] }
+          : {}),
       })
     },
   }))
@@ -255,12 +360,12 @@ export function selectHouflowCloudSelectedSession(
     : null
 }
 
-export function selectHouflowCloudSelectedHostedCommand(
+export function selectHouflowCloudSelectedHostedSession(
   state: HouflowCloudWorkspaceStoreState
-): HouflowCloudHostedCommand | null {
-  return state.selectedHostedCommandId
-    ? (state.hostedCommands.find(
-        (item) => item.id === state.selectedHostedCommandId
+): AgentHubConversationSessionSnapshot | null {
+  return state.selectedHostedSessionId
+    ? (state.hostedSessions.find(
+        (item) => item.session.id === state.selectedHostedSessionId
       ) ?? null)
     : null
 }
@@ -271,24 +376,27 @@ function isCurrentWorkspace(workspaceId: string | null): boolean {
   return current.status === "signed_in" && current.workspaceId === workspaceId
 }
 
-function upsertHostedCommand(
-  current: HouflowCloudHostedCommand[],
-  command: HouflowCloudHostedCommand
-): HouflowCloudHostedCommand[] {
-  return mergeHostedCommands(current, [command])
+function mergeHostedSessions(
+  current: AgentHubConversationSessionSnapshot[],
+  incoming: AgentHubConversationSessionSnapshot[]
+): AgentHubConversationSessionSnapshot[] {
+  if (incoming.length === 0) return current
+  const byId = new Map(current.map((item) => [item.session.id, item]))
+  for (const snapshot of incoming) byId.set(snapshot.session.id, snapshot)
+  return [...byId.values()].sort((left, right) =>
+    right.session.updated_at.localeCompare(left.session.updated_at)
+  )
 }
 
-function mergeHostedCommands(
-  current: HouflowCloudHostedCommand[],
-  incoming: HouflowCloudHostedCommand[]
-): HouflowCloudHostedCommand[] {
-  if (incoming.length === 0) return current
-  const byId = new Map(current.map((command) => [command.id, command]))
-  for (const command of incoming) byId.set(command.id, command)
-  return [...byId.values()].sort((left, right) =>
-    String(right.updated_at ?? right.created_at ?? "").localeCompare(
-      String(left.updated_at ?? left.created_at ?? "")
-    )
+function replaceHostedSessionsForTarget(
+  current: AgentHubConversationSessionSnapshot[],
+  targetId: string | undefined,
+  incoming: AgentHubConversationSessionSnapshot[]
+): AgentHubConversationSessionSnapshot[] {
+  if (!targetId) return mergeHostedSessions(current, incoming)
+  return mergeHostedSessions(
+    current.filter((item) => item.session.target_id !== targetId),
+    incoming
   )
 }
 

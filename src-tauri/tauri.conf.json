@@ -30,9 +30,7 @@
     "resources": {
       "../out": "web/"
     },
-    "externalBin": [
-      "binaries/houhub-mcp"
-    ],
+    "externalBin": ["binaries/houhub-mcp"],
     "windows": {
       "nsis": {
         "installerHooks": "./windows/installer-hooks.nsh"
@@ -49,9 +47,7 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDBGNkE1RDE5NDdEQzhBNTUKUldSVml0eEhHVjFxRHlFOTM3YWd6YUt3K1d6U2kxTGZRVjFTUUFHQ05ocnMrNllMYTdrR3dLK3gK",
-      "endpoints": [
-        "https://agent.houflow.com/downloads/houhub/latest.json"
-      ],
+      "endpoints": ["https://agent.houflow.com/downloads/houhub/latest.json"],
       "windows": {
         "installMode": "passive"
       }

@@ -1,6 +1,10 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  AgentHubConversationSendError,
+  type AgentHubConversationSessionSnapshot,
+} from "@houshan/agent-hub-network-sdk"
 import type { ContentBlock as AgentHubContentBlock } from "@houshan/agent-hub-sdk"
 import {
   Check,
@@ -36,7 +40,7 @@ import { WorkbenchCloudPage } from "@/components/workbench/workbench-cloud-page"
 import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { useHouflowDesktopStore } from "@/houflow"
 import {
-  selectHouflowCloudSelectedHostedCommand,
+  selectHouflowCloudSelectedHostedSession,
   selectHouflowCloudSelectedSession,
   useHouflowCloudWorkspaceStore,
 } from "@/houflow/cloud-workspace-context"
@@ -56,25 +60,25 @@ import {
 } from "@/components/ui/popover"
 import {
   decideHouflowCloudSessionApproval,
+  createHouflowConversationSession,
   createHouflowManagedCloudSession,
-  isCloudSessionActive,
+  houflowConversationOutputSessionId,
+  isHouflowConversationSessionActive,
   isHouflowCloudSessionNotFound,
   listHouflowCloudSessionApprovals,
   listHouflowCloudSessionEvents,
-  mergeHouflowHostedCommandStreamFrame,
-  houflowHostedCommandOutputSessionId,
-  startHouflowCloudTargetSession,
-  streamHouflowHostedAgentCommand,
+  sendHouflowConversationSessionMessage,
+  streamHouflowConversationSession,
+  streamHouflowCloudSessionEvents,
   streamHouflowCloudSessionMessage,
   type HouflowCloudApproval,
   type HouflowCloudDispatchDraft,
-  type HouflowCloudHostedCommand,
   type HouflowCloudSessionEvent,
 } from "@/houflow/cloud-sessions"
 import { mergeHouflowCloudSessionEvents } from "@/houflow/cloud-session-event-merge"
 import {
   houflowCloudModelSettingsFromEvents,
-  houflowCloudModelSettingsFromHostedCommand,
+  houflowCloudModelSettingsFromConversationSession,
   houflowCloudSessionConfigOptions,
   resolveHouflowCloudModelSettings,
   updateHouflowCloudModelSettings,
@@ -87,9 +91,10 @@ import type {
 } from "@/houflow/types"
 import { houflowCloudEventsToTurns } from "@/houflow/cloud-session-turns"
 import {
-  hostedCommandError,
-  hostedCommandToCloudEvents,
-} from "@/houflow/hosted-command-turns"
+  conversationSessionToCloudEvents,
+  conversationTurnError,
+  conversationTurnToCloudEvents,
+} from "@/houflow/conversation-session-turns"
 import { cloudActivityTone } from "@/houflow/cloud-session-display"
 import {
   createMessageTurnAdapter,
@@ -111,6 +116,12 @@ const CLOUD_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
   image: true,
   audio: false,
   embedded_context: false,
+}
+
+interface ConversationSendFailure {
+  sessionId: string
+  event: HouflowCloudSessionEvent
+  message: string
 }
 
 function useCloudSessionLinkSafety(sessionId: string | null): LinkSafetyConfig {
@@ -164,38 +175,43 @@ export function CloudSessionPage() {
   )
   const cloud = useHouflowCloudWorkspaceStore(
     useShallow((state) => ({
-      hostedCommands: state.hostedCommands,
       selectedTargetKey: state.selectedTargetKey,
       selectedSessionId: state.selectedSessionId,
-      selectedHostedCommandId: state.selectedHostedCommandId,
+      selectedHostedSessionId: state.selectedHostedSessionId,
       loading: state.loading,
       refreshSessions: state.refreshSessions,
-      refreshHostedCommand: state.refreshHostedCommand,
-      rememberHostedCommand: state.rememberHostedCommand,
+      refreshHostedSession: state.refreshHostedSession,
+      loadHostedSessionTurns: state.loadHostedSessionTurns,
+      applyRuntimeEvents: state.applyRuntimeEvents,
+      appendRuntimeEvent: state.appendRuntimeEvent,
+      rememberHostedSession: state.rememberHostedSession,
       rememberSession: state.rememberSession,
       removeSession: state.removeSession,
       selectTarget: state.selectTarget,
       selectSession: state.selectSession,
-      selectHostedCommand: state.selectHostedCommand,
+      selectHostedSession: state.selectHostedSession,
     }))
   )
   const selected = useHouflowCloudWorkspaceStore(
     selectHouflowCloudSelectedSession
   )
-  const hostedCommand = useHouflowCloudWorkspaceStore(
-    selectHouflowCloudSelectedHostedCommand
+  const hostedSession = useHouflowCloudWorkspaceStore(
+    selectHouflowCloudSelectedHostedSession
   )
   const workbench = useWorkbenchStore()
   const workbenchCloud = useWorkbenchCloudStore()
   const [events, setEvents] = useState<HouflowCloudSessionEvent[]>([])
   const [approvals, setApprovals] = useState<HouflowCloudApproval[]>([])
   const [eventsLoading, setEventsLoading] = useState(false)
+  const [hostedTurnsLoading, setHostedTurnsLoading] = useState(false)
   const [eventsError, setEventsError] = useState<string | null>(null)
   const [approvalsError, setApprovalsError] = useState<string | null>(null)
   const [starterPendingEvent, setStarterPendingEvent] =
     useState<HouflowCloudSessionEvent | null>(null)
   const [hostedPendingEvent, setHostedPendingEvent] =
     useState<HouflowCloudSessionEvent | null>(null)
+  const [hostedSendFailure, setHostedSendFailure] =
+    useState<ConversationSendFailure | null>(null)
   const [approvalSubmittingId, setApprovalSubmittingId] = useState<
     string | null
   >(null)
@@ -211,24 +227,8 @@ export function CloudSessionPage() {
     createMessageTurnAdapter()
   )
 
-  const hostedThreadCommands = useMemo(
-    () =>
-      hostedCommand
-        ? hostedThreadForCommand(hostedCommand, cloud.hostedCommands)
-        : [],
-    [cloud.hostedCommands, hostedCommand]
-  )
-  const hostedLatestCommand = useMemo(
-    () =>
-      hostedCommand
-        ? latestHostedCommand(hostedThreadCommands, hostedCommand)
-        : null,
-    [hostedCommand, hostedThreadCommands]
-  )
-  const hostedStreamCommand = useMemo(
-    () => latestActiveHostedCommand(hostedThreadCommands),
-    [hostedThreadCommands]
-  )
+  const hostedLatestTurn =
+    hostedSession?.turns[hostedSession.turns.length - 1] ?? null
   const selectedId = selected?.id ?? null
   const cloudTargets = useMemo(
     () =>
@@ -259,12 +259,14 @@ export function CloudSessionPage() {
   )
   const selectedHostedTarget = useMemo(
     () =>
-      hostedCommand
+      hostedSession
         ? (cloudTargets.find(
-            (target) => target.id === hostedCommand.connected_agent_id
+            (target) =>
+              target.metadata.session_target_id ===
+              hostedSession.session.target_id
           ) ?? null)
         : null,
-    [cloudTargets, hostedCommand]
+    [cloudTargets, hostedSession]
   )
   const connector = houflow.snapshot?.connector ?? null
   const cloudWorkspaceLocation = useMemo(() => {
@@ -280,26 +282,24 @@ export function CloudSessionPage() {
   }, [houflow.session.workspaceId, houflow.snapshot?.workspaces])
   const activeModelSettingsScope = selected
     ? `session:${selected.id}`
-    : hostedCommand
-      ? `hosted:${hostedCommandThreadDraftKey(hostedCommand)}`
+    : hostedSession
+      ? `hosted:${hostedSession.session.id}`
       : selectedTarget
         ? `target:${selectedTarget.key}`
         : null
   const activeModelSettingsTarget = selected
     ? selectedSessionTarget
-    : hostedCommand
+    : hostedSession
       ? selectedHostedTarget
       : selectedTarget
   const persistedModelSettings = useMemo(
     () =>
       selected
         ? houflowCloudModelSettingsFromEvents(events)
-        : hostedCommand
-          ? houflowCloudModelSettingsFromHostedCommand(
-              hostedLatestCommand ?? hostedCommand
-            )
+        : hostedSession
+          ? houflowCloudModelSettingsFromConversationSession(hostedSession)
           : null,
-    [events, hostedCommand, hostedLatestCommand, selected]
+    [events, hostedSession, selected]
   )
   const activeModelSettings = useMemo(
     () =>
@@ -384,7 +384,7 @@ export function CloudSessionPage() {
     workbench.session.status === "signed_in" &&
     !cloud.selectedTargetKey &&
     !cloud.selectedSessionId &&
-    !cloud.selectedHostedCommandId &&
+    !cloud.selectedHostedSessionId &&
     (!!workbenchCloud.selectedAssistantId ||
       !!workbenchCloud.selectedSessionId ||
       houflow.session.status !== "signed_in")
@@ -406,7 +406,11 @@ export function CloudSessionPage() {
         selectedId
       )
       if (eventsRequestRef.current === requestId) {
-        setEvents((current) => mergeHouflowCloudSessionEvents(current, next))
+        setEvents((current) => {
+          const merged = mergeHouflowCloudSessionEvents(current, next)
+          cloud.applyRuntimeEvents(merged)
+          return merged
+        })
       }
     } catch (err) {
       if (eventsRequestRef.current === requestId) {
@@ -457,6 +461,7 @@ export function CloudSessionPage() {
     setEventsError(null)
     setApprovalsError(null)
     setEventsLoading(false)
+    useHouflowCloudWorkspaceStore.getState().applyRuntimeEvents([])
   }, [houflow.session.status, houflow.session.workspaceId, selectedId])
 
   useEffect(() => {
@@ -472,7 +477,7 @@ export function CloudSessionPage() {
     ) {
       return
     }
-    if (!cloud.selectedSessionId && !cloud.selectedHostedCommandId) {
+    if (!cloud.selectedSessionId && !cloud.selectedHostedSessionId) {
       cloud.selectTarget(cloudTargets[0]?.key ?? null)
     }
   }, [
@@ -483,6 +488,31 @@ export function CloudSessionPage() {
   ])
 
   useEffect(() => {
+    if (
+      !hostedSession ||
+      hostedSession.turns_page.loaded ||
+      houflow.session.status !== "signed_in"
+    ) {
+      return
+    }
+    let cancelled = false
+    setHostedTurnsLoading(true)
+    void cloud
+      .loadHostedSessionTurns(hostedSession.session.id, 50)
+      .catch((err) => {
+        if (!cancelled) {
+          toast.error(t("loadingEvents"), { description: toErrorMessage(err) })
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHostedTurnsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [cloud, hostedSession, houflow.session.status, t])
+
+  useEffect(() => {
     void refreshEvents()
   }, [refreshEvents])
 
@@ -491,14 +521,33 @@ export function CloudSessionPage() {
   }, [refreshApprovals])
 
   useEffect(() => {
-    if (!isCloudSessionActive(selected)) return
-    const timer = window.setInterval(() => {
-      void cloud.refreshSessions()
-      void refreshEvents()
-      void refreshApprovals()
-    }, 3000)
-    return () => window.clearInterval(timer)
-  }, [cloud, refreshApprovals, refreshEvents, selected])
+    if (houflow.session.status !== "signed_in" || !selectedId) return
+    const controller = new AbortController()
+    void streamHouflowCloudSessionEvents(
+      houflow.session,
+      houflow.secret,
+      selectedId,
+      (event) => {
+        if (controller.signal.aborted) return
+        setEvents((current) => mergeHouflowCloudSessionEvents(current, [event]))
+        const store = useHouflowCloudWorkspaceStore.getState()
+        store.appendRuntimeEvent(event)
+        if (event.type.startsWith("session.status_")) {
+          void store.refreshSessions()
+        }
+        if (event.type.startsWith("approval.")) {
+          void refreshApprovals()
+        }
+      },
+      controller.signal
+    ).catch((err) => {
+      if (controller.signal.aborted) return
+      const event = cloudClientErrorEvent("session_stream", err)
+      setEventsError(event.text)
+      useHouflowCloudWorkspaceStore.getState().appendRuntimeEvent(event)
+    })
+    return () => controller.abort()
+  }, [houflow.secret, houflow.session, refreshApprovals, selectedId])
 
   const refreshCloudSessionState = useCallback(() => {
     void Promise.all([
@@ -533,38 +582,42 @@ export function CloudSessionPage() {
   )
 
   useEffect(() => {
-    if (
-      !hostedStreamCommand ||
-      !isHostedCommandActive(hostedStreamCommand.status)
-    )
+    if (!hostedSession || !isHouflowConversationSessionActive(hostedSession)) {
       return
-    let cancelled = false
-    let current = hostedStreamCommand
-    void streamHouflowHostedAgentCommand(
+    }
+    const controller = new AbortController()
+    void streamHouflowConversationSession(
       houflow.session,
       houflow.secret,
-      hostedStreamCommand.id,
-      (frame) => {
-        if (cancelled) return
-        current = mergeHouflowHostedCommandStreamFrame(current, frame)
-        cloud.rememberHostedCommand(current)
-      }
-    ).catch((err) => {
-      if (!cancelled) {
-        toast.error(t("sendFailed"), { description: toErrorMessage(err) })
-      }
-    })
+      hostedSession,
+      (snapshot) => {
+        if (controller.signal.aborted) return
+        useHouflowCloudWorkspaceStore.getState().rememberHostedSession(snapshot)
+      },
+      controller.signal
+    )
+      .then(() => {
+        if (!controller.signal.aborted) {
+          void useHouflowCloudWorkspaceStore
+            .getState()
+            .refreshHostedSession(hostedSession.session.id)
+        }
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return
+        const message = toErrorMessage(err)
+        toast.error(t("sendFailed"), { description: message })
+      })
     return () => {
-      cancelled = true
+      controller.abort()
     }
-    // Intentionally keyed by command id/status only. `rememberHostedCommand`
-    // updates the command object on each stream frame; depending on the whole
-    // object would restart the SSE stream for every received event.
+    // Stream identity is the latest turn, while state ownership remains the
+    // containing conversation session. Event merges must not restart the SSE.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    cloud,
-    hostedStreamCommand?.id,
-    hostedStreamCommand?.status,
+    hostedSession?.session.id,
+    hostedLatestTurn?.id,
+    hostedLatestTurn?.status,
     houflow.secret,
     houflow.session,
     t,
@@ -596,18 +649,17 @@ export function CloudSessionPage() {
                 removeOptimisticEventId: optimisticEvent.id,
               })
             )
+            cloud.appendRuntimeEvent(event)
           },
           optimisticEvent.id
         )
         refreshCloudSessionState()
       } catch (err) {
-        setEvents((current) =>
-          current.filter((event) => event.id !== optimisticEvent.id)
-        )
         if (isHouflowCloudSessionNotFound(err)) {
           cloud.removeSession(selected.id)
           return
         }
+        cloud.appendRuntimeEvent(cloudClientErrorEvent("send_message", err))
         toast.error(t("sendFailed"), { description: toErrorMessage(err) })
       } finally {
         if (activeStreamRef.current === streamId) {
@@ -714,6 +766,7 @@ export function CloudSessionPage() {
                     removeOptimisticEventId: optimisticEvent.id,
                   })
                 )
+                cloud.appendRuntimeEvent(event)
               },
               optimisticEvent.id
             )
@@ -723,6 +776,9 @@ export function CloudSessionPage() {
               cloud.removeSession(created.id)
               return
             }
+            cloud.appendRuntimeEvent(
+              cloudClientErrorEvent("start_session", err)
+            )
             toast.error(t("sendFailed"), { description: toErrorMessage(err) })
           } finally {
             if (activeStreamRef.current === streamId) {
@@ -734,29 +790,33 @@ export function CloudSessionPage() {
           return
         }
 
-        const result = await startHouflowCloudTargetSession(
+        const created = await createHouflowConversationSession(
           houflow.session,
           houflow.secret,
           selectedTarget,
-          selectedTarget.kind === "hosted_connected"
-            ? {
-                ...dispatchDraft,
-                channelRef: newHostedCommandChannelRef(
-                  workspaceId,
-                  selectedTarget.id
-                ),
-              }
-            : dispatchDraft
+          dispatchDraft
         )
-        if (result.kind === "managed") {
-          setStarterPendingEvent(null)
-          cloud.selectSession(result.session.id)
-        } else {
-          cloud.rememberHostedCommand(result.dispatch.raw)
-          setStarterPendingEvent(null)
-          cloud.selectHostedCommand(result.dispatch.raw)
+        cloud.rememberHostedSession(created)
+        cloud.selectHostedSession(created)
+        if (activeModelSettings) {
+          setModelSettingsByScope((current) => ({
+            ...current,
+            [`hosted:${created.session.id}`]: activeModelSettings,
+          }))
         }
+        const sent = await sendHouflowConversationSessionMessage(
+          houflow.session,
+          houflow.secret,
+          created,
+          dispatchDraft
+        )
+        cloud.rememberHostedSession(sent)
+        setStarterPendingEvent(null)
       } catch (err) {
+        if (err instanceof AgentHubConversationSendError) {
+          cloud.rememberHostedSession(err.snapshot)
+          cloud.selectHostedSession(err.snapshot)
+        }
         toast.error(t("startFailed"), { description: toErrorMessage(err) })
       } finally {
         setStarterPendingEvent(null)
@@ -776,46 +836,38 @@ export function CloudSessionPage() {
     ]
   )
 
-  const handleSendHostedCommand = useCallback(
+  const handleSendHostedSession = useCallback(
     async (draft: PromptDraft) => {
-      if (!hostedCommand || houflow.session.status !== "signed_in") return
-      const target = cloudTargets.find(
-        (item) => item.id === hostedCommand.connected_agent_id
-      )
-      if (!target) {
-        toast.error(t("startFailed"), {
-          description: "Cloud target is no longer available.",
-        })
-        return
-      }
+      if (!hostedSession || houflow.session.status !== "signed_in") return
       const optimisticEvent = optimisticCloudEventFromDraft(
         draft,
         sharedT("attachedResources")
       )
+      setHostedSendFailure(null)
       setHostedPendingEvent(optimisticEvent)
       setStarting(true)
       try {
-        const result = await startHouflowCloudTargetSession(
+        const sent = await sendHouflowConversationSessionMessage(
           houflow.session,
           houflow.secret,
-          target,
-          {
-            ...cloudDispatchDraft(draft),
-            channelRef: hostedCommandChannelRef(hostedCommand) ?? undefined,
-          }
+          hostedSession,
+          cloudDispatchDraft(draft)
         )
-        if (result.kind === "hosted_connected") {
-          setHostedPendingEvent(null)
-          cloud.rememberHostedCommand(result.dispatch.raw)
-        }
-        await cloud.refreshHostedCommand(
-          target.id,
-          result.kind === "hosted_connected"
-            ? result.dispatch.commandId
-            : hostedCommand.id
-        )
+        cloud.rememberHostedSession(sent)
+        setHostedPendingEvent(null)
+        setHostedSendFailure(null)
       } catch (err) {
-        toast.error(t("startFailed"), { description: toErrorMessage(err) })
+        const message = toErrorMessage(err)
+        if (err instanceof AgentHubConversationSendError) {
+          cloud.rememberHostedSession(err.snapshot)
+        } else {
+          setHostedSendFailure({
+            sessionId: hostedSession.session.id,
+            event: optimisticEvent,
+            message,
+          })
+        }
+        toast.error(t("startFailed"), { description: message })
       } finally {
         setHostedPendingEvent(null)
         setStarting(false)
@@ -824,8 +876,7 @@ export function CloudSessionPage() {
     [
       cloud,
       cloudDispatchDraft,
-      cloudTargets,
-      hostedCommand,
+      hostedSession,
       houflow.secret,
       houflow.session,
       sharedT,
@@ -845,23 +896,37 @@ export function CloudSessionPage() {
     )
   }
 
-  if (hostedCommand) {
+  if (hostedSession) {
     return (
-      <HostedCommandPage
-        command={hostedCommand}
-        commands={hostedThreadCommands}
+      <HostedSessionPage
+        snapshot={hostedSession}
         connector={connector}
         pendingEvent={hostedPendingEvent}
+        localFailure={
+          hostedSendFailure?.sessionId === cloud.selectedHostedSessionId
+            ? hostedSendFailure
+            : null
+        }
+        loadingHistory={hostedTurnsLoading}
         sending={starting}
         target={selectedHostedTarget ?? undefined}
         onRefresh={() => {
-          const command = hostedLatestCommand ?? hostedCommand
-          void cloud.refreshHostedCommand(
-            command.connected_agent_id,
-            command.id
-          )
+          void cloud.refreshHostedSession(hostedSession.session.id)
         }}
-        onSend={(draft) => void handleSendHostedCommand(draft)}
+        onLoadOlder={() => {
+          const cursor = hostedSession.turns_page.next_cursor
+          if (!cursor) return
+          setHostedTurnsLoading(true)
+          void cloud
+            .loadHostedSessionTurns(hostedSession.session.id, 50, cursor)
+            .catch((err) => {
+              toast.error(t("loadingEvents"), {
+                description: toErrorMessage(err),
+              })
+            })
+            .finally(() => setHostedTurnsLoading(false))
+        }}
+        onSend={(draft) => void handleSendHostedSession(draft)}
         configOptions={cloudConfigOptions}
         onConfigOptionChange={handleCloudConfigOptionChange}
         workspaceLocation={cloudWorkspaceLocation}
@@ -1005,7 +1070,7 @@ export function CloudSessionPage() {
   )
 }
 
-function HostedCommandErrorMessage({ message }: { message: string }) {
+function HostedSessionErrorMessage({ message }: { message: string }) {
   return (
     <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
       {message}
@@ -1042,26 +1107,52 @@ function optimisticCloudEventFromDraft(
   }
 }
 
-function HostedCommandPage({
-  command,
-  commands,
+function cloudClientErrorEvent(
+  phase: string,
+  error: unknown
+): HouflowCloudSessionEvent & { text: string } {
+  const message = toErrorMessage(error)
+  const createdAt = new Date().toISOString()
+  return {
+    id: `houhub-client-error:${randomUUID()}`,
+    type: "client.error",
+    role: "system",
+    text: message,
+    createdAt,
+    raw: {
+      id: `houhub-client-error:${phase}:${createdAt}`,
+      type: "client.error",
+      phase,
+      error_text: message,
+      created_at: createdAt,
+    },
+  }
+}
+
+function HostedSessionPage({
+  snapshot,
   connector,
   pendingEvent,
+  localFailure,
+  loadingHistory,
   sending,
   target,
   onRefresh,
+  onLoadOlder,
   onSend,
   configOptions,
   onConfigOptionChange,
   workspaceLocation,
 }: {
-  command: HouflowCloudHostedCommand
-  commands: HouflowCloudHostedCommand[]
+  snapshot: AgentHubConversationSessionSnapshot
   connector: HouflowConnectorSummary | null
   pendingEvent: HouflowCloudSessionEvent | null
+  localFailure: ConversationSendFailure | null
+  loadingHistory: boolean
   sending: boolean
   target: HouflowAgentTarget | undefined
   onRefresh: () => void
+  onLoadOlder: () => void
   onSend: (draft: PromptDraft) => void
   configOptions: SessionConfigOptionInfo[]
   onConfigOptionChange: (configId: string, valueId: string) => void
@@ -1072,24 +1163,16 @@ function HostedCommandPage({
   const [turnAdapter] = useState<MessageTurnAdapter>(() =>
     createMessageTurnAdapter()
   )
-  const threadCommands = useMemo(
-    () => (commands.length > 0 ? commands : [command]),
-    [command, commands]
-  )
-  const latestCommand = threadCommands[threadCommands.length - 1] ?? command
-  const outputSessionId = houflowHostedCommandOutputSessionId(latestCommand)
-  const commandLinkSafety = useCloudSessionLinkSafety(outputSessionId)
+  const latestTurn = snapshot.turns[snapshot.turns.length - 1] ?? null
+  const outputSessionId = houflowConversationOutputSessionId(snapshot)
+  const sessionLinkSafety = useCloudSessionLinkSafety(outputSessionId)
   const hostedEvents = useMemo(
-    () =>
-      pendingEvent
-        ? [
-            ...threadCommands.flatMap((item) =>
-              hostedCommandToCloudEvents(item)
-            ),
-            pendingEvent,
-          ]
-        : threadCommands.flatMap((item) => hostedCommandToCloudEvents(item)),
-    [threadCommands, pendingEvent]
+    () => [
+      ...conversationSessionToCloudEvents(snapshot),
+      ...(pendingEvent ? [pendingEvent] : []),
+      ...(localFailure ? [localFailure.event] : []),
+    ],
+    [localFailure, pendingEvent, snapshot]
   )
   const adapterText = useMemo(
     () => ({
@@ -1106,13 +1189,16 @@ function HostedCommandPage({
     () => turnAdapter.adapt(hostedTurns, adapterText),
     [adapterText, hostedTurns, turnAdapter]
   )
-  const title = hostedThreadTitle(threadCommands) || t("untitled")
-  const toneClass = statusBadgeClass(latestCommand.status)
-  const error = threadCommands.map(hostedCommandError).find(Boolean) ?? null
-  const active = isHostedCommandActive(latestCommand.status)
-  const latestCommandHasAssistantReply = hostedTurns.some(
-    (turn) => turn.role === "assistant"
-  )
+  const title = formatConversationTitle(snapshot.session.title) || t("untitled")
+  const status = latestTurn?.status ?? snapshot.session.status
+  const toneClass = statusBadgeClass(status)
+  const error = localFailure?.message ?? conversationTurnError(latestTurn)
+  const active = isHouflowConversationSessionActive(snapshot)
+  const latestTurnHasAssistantReply = latestTurn
+    ? houflowCloudEventsToTurns(conversationTurnToCloudEvents(latestTurn)).some(
+        (turn) => turn.role === "assistant"
+      )
+    : false
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background ws-transparent-bg">
@@ -1131,13 +1217,13 @@ function HostedCommandPage({
               <CloudTargetStatusDot target={target} connector={connector} />
             ) : null}
             <span className="truncate">
-              {target?.name || command.local_agent_ref || t("unknownAgent")}
+              {target?.name || t("unknownAgent")}
             </span>
             <Badge
               variant="outline"
               className={cn("h-4 rounded-md px-1.5 text-[0.625rem]", toneClass)}
             >
-              {latestCommand.status}
+              {status}
             </Badge>
             {target ? (
               <CloudTargetCapabilityBadges target={target} limit={3} />
@@ -1158,18 +1244,33 @@ function HostedCommandPage({
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
+          {snapshot.turns_page.has_more ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="self-center text-muted-foreground"
+              disabled={loadingHistory}
+              onClick={onLoadOlder}
+            >
+              {loadingHistory ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              {t("showMore", { count: 50 })}
+            </Button>
+          ) : null}
           {messages.length === 0 && !active && !error ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               {t("emptyEvents")}
             </div>
           ) : null}
-          {error ? <HostedCommandErrorMessage message={error} /> : null}
+          {error ? <HostedSessionErrorMessage message={error} /> : null}
           <CloudMessageThread
             messages={messages}
             turns={hostedTurns}
-            linkSafety={commandLinkSafety}
+            linkSafety={sessionLinkSafety}
           />
-          {sending || (active && !latestCommandHasAssistantReply) ? (
+          {sending || (active && !latestTurnHasAssistantReply) ? (
             <CloudWaitingMessage label={t("waitingForCloudReply")} />
           ) : null}
         </div>
@@ -1184,9 +1285,9 @@ function HostedCommandPage({
             onConfigOptionChange={onConfigOptionChange}
             enableWorkspaceReferences={false}
             contextLocation={workspaceLocation}
-            disabled={sending || !target}
+            disabled={sending || loadingHistory || !target}
             placeholder={t("messagePlaceholder")}
-            draftStorageKey={`houflow-hosted-command:${hostedCommandThreadDraftKey(command)}`}
+            draftStorageKey={`houflow-hosted-session:${snapshot.session.id}`}
             isActive
             className="min-h-24 max-h-60"
           />
@@ -1255,89 +1356,6 @@ function CloudApprovalsPanel({
         )
       })}
     </div>
-  )
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : ""
-}
-
-function hostedCommandTitle(command: HouflowCloudHostedCommand): string | null {
-  if (command.action !== "workspace_message") return command.action
-  const message = stringValue(command.input.message)
-  return formatConversationTitle(message) || command.action
-}
-
-function hostedThreadForCommand(
-  command: HouflowCloudHostedCommand,
-  commands: HouflowCloudHostedCommand[]
-): HouflowCloudHostedCommand[] {
-  const channelRef = hostedCommandChannelRef(command)
-  if (!channelRef) return [command]
-  const thread = commands
-    .filter(
-      (item) =>
-        item.connected_agent_id === command.connected_agent_id &&
-        hostedCommandChannelRef(item) === channelRef
-    )
-    .sort(compareHostedCommands)
-  return thread.length > 0 ? thread : [command]
-}
-
-function hostedThreadTitle(
-  commands: HouflowCloudHostedCommand[]
-): string | null {
-  const firstWorkspaceMessage =
-    commands.find((command) => command.action === "workspace_message") ??
-    commands[0]
-  return firstWorkspaceMessage
-    ? hostedCommandTitle(firstWorkspaceMessage)
-    : null
-}
-
-function latestHostedCommand(
-  commands: HouflowCloudHostedCommand[],
-  fallback: HouflowCloudHostedCommand
-): HouflowCloudHostedCommand {
-  const sorted = [...commands].sort(compareHostedCommands)
-  return sorted[sorted.length - 1] ?? fallback
-}
-
-function latestActiveHostedCommand(
-  commands: HouflowCloudHostedCommand[]
-): HouflowCloudHostedCommand | null {
-  const active = commands
-    .filter((command) => isHostedCommandActive(command.status))
-    .sort(compareHostedCommands)
-  return active[active.length - 1] ?? null
-}
-
-function hostedCommandThreadDraftKey(
-  command: HouflowCloudHostedCommand
-): string {
-  const channelRef = hostedCommandChannelRef(command)
-  return channelRef
-    ? `${command.connected_agent_id}:${channelRef}`
-    : command.connected_agent_id
-}
-
-function newHostedCommandChannelRef(workspaceId: string, targetId: string) {
-  return `houhub/desktop/${workspaceId}/target/${targetId}/thread/${randomUUID()}`
-}
-
-function hostedCommandChannelRef(
-  command: HouflowCloudHostedCommand
-): string | null {
-  if (command.action !== "workspace_message") return null
-  return stringValue(command.input.channel_ref) || null
-}
-
-function compareHostedCommands(
-  left: HouflowCloudHostedCommand,
-  right: HouflowCloudHostedCommand
-): number {
-  return String(left.created_at ?? "").localeCompare(
-    String(right.created_at ?? "")
   )
 }
 
@@ -1673,10 +1691,6 @@ function targetKindLabel(
 ): string {
   if (kind === "hosted_connected") return hostedLabel
   return managedLabel
-}
-
-function isHostedCommandActive(status: string): boolean {
-  return status === "queued" || status === "leased" || status === "running"
 }
 
 function statusBadgeClass(status: string): string {

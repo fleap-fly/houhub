@@ -171,6 +171,7 @@ pub async fn workbench_open_suite_core(
     let allowed_suite_url = validated.canonical_url.clone();
     let allowed_suite_code = validated.suite_code.clone();
     let allowed_project_id = validated.project_id.clone();
+    let (window_width, window_height) = suite_window_size(&app);
     WebviewWindowBuilder::new(
         &app,
         &validated.window_label,
@@ -186,7 +187,7 @@ pub async fn workbench_open_suite_core(
         )
     })
     .title("HouHub Workbench")
-    .inner_size(1440.0, 900.0)
+    .inner_size(window_width, window_height)
     .min_inner_size(900.0, 640.0)
     .center()
     .build()
@@ -199,6 +200,18 @@ pub async fn workbench_open_suite_core(
         normalized_url: validated.canonical_url.to_string(),
         host_status: "opened".to_string(),
     })
+}
+
+#[cfg(feature = "tauri-runtime")]
+fn suite_window_size<R: tauri::Runtime, M: tauri::Manager<R>>(app: &M) -> (f64, f64) {
+    let fallback = (1440.0, 860.0);
+    let Ok(Some(monitor)) = app.primary_monitor() else {
+        return fallback;
+    };
+    let logical = monitor.size().to_logical::<f64>(monitor.scale_factor());
+    let width = (logical.width - 64.0).clamp(900.0, 1440.0);
+    let height = (logical.height - 96.0).clamp(640.0, 860.0);
+    (width, height)
 }
 
 fn validate_suite_open(

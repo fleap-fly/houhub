@@ -3,6 +3,81 @@ import { houflowCloudEventsToTurns } from "./cloud-session-turns"
 import type { HouflowCloudSessionEvent } from "./cloud-sessions"
 
 describe("houflowCloudEventsToTurns", () => {
+  it("renders the latest Agent Hub plan snapshot with the local plan card shape", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_plan_1",
+        type: "agent.plan",
+        plan: {
+          version: "agent_hub.plan.v1",
+          plan_id: "primary",
+          state: "active",
+          explanation: null,
+          entries: [
+            { content: "实现", status: "in_progress", priority: "high" },
+            { content: "测试", status: "pending", priority: "medium" },
+          ],
+        },
+      }),
+      event({
+        id: "evt_plan_2",
+        type: "agent.plan",
+        plan: {
+          version: "agent_hub.plan.v1",
+          plan_id: "primary",
+          state: "completed",
+          explanation: "已完成",
+          entries: [
+            { content: "实现", status: "completed", priority: "high" },
+            { content: "测试", status: "completed", priority: "medium" },
+          ],
+        },
+      }),
+    ])
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]?.blocks).toEqual([
+      {
+        type: "plan",
+        entries: [
+          { content: "实现", status: "completed", priority: "high" },
+          { content: "测试", status: "completed", priority: "medium" },
+        ],
+      },
+    ])
+  })
+
+  it("removes the local plan card without leaving an empty assistant turn", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_plan_active",
+        type: "agent.plan",
+        plan: {
+          version: "agent_hub.plan.v1",
+          plan_id: "primary",
+          state: "active",
+          explanation: null,
+          entries: [
+            { content: "实现", status: "in_progress", priority: "high" },
+          ],
+        },
+      }),
+      event({
+        id: "evt_plan_removed",
+        type: "agent.plan",
+        plan: {
+          version: "agent_hub.plan.v1",
+          plan_id: "primary",
+          state: "removed",
+          explanation: null,
+          entries: [],
+        },
+      }),
+    ])
+
+    expect(turns).toEqual([])
+  })
+
   it("maps Agent Hub text, reasoning and tool events into reusable message turns", () => {
     const turns = houflowCloudEventsToTurns([
       event({

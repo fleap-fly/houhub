@@ -1,3 +1,4 @@
+import type { AgentPlanSnapshot } from "@houshan/agent-hub-sdk"
 import type { ContentBlock, MessageTurn, TurnRole } from "@/lib/types"
 import type { HouflowCloudSessionEvent } from "./cloud-sessions"
 
@@ -8,7 +9,10 @@ export function houflowCloudEventsToTurns(
     mergeAdjacentToolEvents(
       mergeAdjacentStreamingDeltas(eventsToCloudTurns(events))
     )
-  ).map(publicTurn)
+  )
+    .map(removeEmptyPlanBlocks)
+    .filter((turn) => turn.blocks.length > 0)
+    .map(publicTurn)
 }
 
 type CloudMessageTurn = MessageTurn & { sourceEventType: string }
@@ -129,7 +133,7 @@ function mergeConsecutiveAssistantTurns(
   for (const turn of turns) {
     const previous = merged[merged.length - 1]
     if (previous?.role === "assistant" && turn.role === "assistant") {
-      previous.blocks = [...previous.blocks, ...turn.blocks]
+      previous.blocks = mergeAssistantBlocks(previous.blocks, turn.blocks)
       previous.completed_at = turn.completed_at ?? previous.completed_at
       aggregateTurnMetadataInPlace(previous, turn)
       continue
@@ -137,6 +141,31 @@ function mergeConsecutiveAssistantTurns(
     merged.push({ ...turn, blocks: [...turn.blocks] })
   }
   return merged
+}
+
+function mergeAssistantBlocks(
+  current: ContentBlock[],
+  incoming: ContentBlock[]
+): ContentBlock[] {
+  let merged = [...current]
+  for (const block of incoming) {
+    if (block.type === "plan") {
+      merged = merged.filter((item) => item.type !== "plan")
+      if (block.entries.length > 0) merged.push(block)
+      continue
+    }
+    merged.push(block)
+  }
+  return merged
+}
+
+function removeEmptyPlanBlocks(turn: CloudMessageTurn): CloudMessageTurn {
+  return {
+    ...turn,
+    blocks: turn.blocks.filter(
+      (block) => block.type !== "plan" || block.entries.length > 0
+    ),
+  }
 }
 
 function canMergeToolTurn(
@@ -454,6 +483,7 @@ export function houflowCloudEventObjectToBlock(
   raw: Record<string, unknown>
 ): ContentBlock | null {
   const type = stringValue(raw.type)
+  if (type === "agent.plan") return planBlockFromEvent(raw)
   if (type === "agent.thinking" || type === "agent.thinking_chunk") {
     const text = rawText(raw)
     return text ? { type: "thinking", text } : null
@@ -514,6 +544,32 @@ export function houflowCloudEventObjectToBlock(
     }
   }
   return null
+}
+
+function planBlockFromEvent(
+  raw: Record<string, unknown>
+): Extract<ContentBlock, { type: "plan" }> | null {
+  const value = raw.plan
+  if (!isRecord(value)) return null
+  const snapshot = value as Partial<AgentPlanSnapshot>
+  if (
+    snapshot.version !== "agent_hub.plan.v1" ||
+    typeof snapshot.plan_id !== "string" ||
+    !["active", "completed", "removed"].includes(String(snapshot.state))
+  ) {
+    return null
+  }
+  const entries = Array.isArray(value.entries)
+    ? value.entries
+        .filter(isRecord)
+        .map((entry) => ({
+          content: stringValue(entry.content),
+          status: stringValue(entry.status),
+          priority: stringValue(entry.priority),
+        }))
+        .filter((entry) => entry.content && entry.status && entry.priority)
+    : []
+  return { type: "plan", entries }
 }
 
 function rawText(raw: Record<string, unknown>): string {

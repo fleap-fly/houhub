@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useMemo, useState, useTransition } from "react"
+import type { AgentHubConversationSessionSnapshot } from "@houshan/agent-hub-network-sdk"
 import {
   Archive,
   Bot,
@@ -42,10 +43,7 @@ import { useHouflowDesktopStore } from "@/houflow"
 import { useHouflowCloudWorkspaceStore } from "@/houflow/cloud-workspace-context"
 import { useWorkbenchCloudStore, useWorkbenchStore } from "@/workbench"
 import type { WorkbenchAiSession, WorkbenchAssistant } from "@/workbench/ai"
-import type {
-  HouflowCloudHostedCommand,
-  HouflowCloudSession,
-} from "@/houflow/cloud-sessions"
+import type { HouflowCloudSession } from "@/houflow/cloud-sessions"
 import { isHouflowCloudWorkspaceTarget } from "@/houflow/agent-hub-conversation-target"
 import { cloudActivityTone } from "@/houflow/cloud-session-display"
 import type {
@@ -71,20 +69,22 @@ export function CloudSessionsSidebarSection() {
   const cloud = useHouflowCloudWorkspaceStore(
     useShallow((state) => ({
       sessions: state.sessions,
-      hostedCommands: state.hostedCommands,
+      hostedSessions: state.hostedSessions,
+      hostedSessionPages: state.hostedSessionPages,
       selectedTargetKey: state.selectedTargetKey,
       selectedSessionId: state.selectedSessionId,
-      selectedHostedCommandId: state.selectedHostedCommandId,
+      selectedHostedSessionId: state.selectedHostedSessionId,
       loading: state.loading,
       error: state.error,
       refreshSessions: state.refreshSessions,
       archiveSession: state.archiveSession,
       deleteSession: state.deleteSession,
-      deleteHostedCommand: state.deleteHostedCommand,
-      refreshHostedCommands: state.refreshHostedCommands,
+      deleteHostedSession: state.deleteHostedSession,
+      refreshHostedSessions: state.refreshHostedSessions,
+      loadMoreHostedSessions: state.loadMoreHostedSessions,
       selectTarget: state.selectTarget,
       selectSession: state.selectSession,
-      selectHostedCommand: state.selectHostedCommand,
+      selectHostedSession: state.selectHostedSession,
     }))
   )
   const workbench = useWorkbenchStore()
@@ -106,29 +106,28 @@ export function CloudSessionsSidebarSection() {
   const [loadedHostedTargets, setLoadedHostedTargets] = useState<
     Record<string, boolean>
   >({})
-  const [hostedCommandErrors, setHostedCommandErrors] = useState<
+  const [hostedSessionErrors, setHostedSessionErrors] = useState<
     Record<string, string>
   >({})
   const [sessionToDelete, setSessionToDelete] =
     useState<HouflowCloudSession | null>(null)
-  const [commandsToDelete, setCommandsToDelete] = useState<
-    HouflowCloudHostedCommand[] | null
-  >(null)
+  const [hostedSessionToDelete, setHostedSessionToDelete] =
+    useState<AgentHubConversationSessionSnapshot | null>(null)
   const [isDeletingSession, setIsDeletingSession] = useState(false)
-  const [isDeletingCommand, setIsDeletingCommand] = useState(false)
-  const [isCommandPending, startCommandTransition] = useTransition()
+  const [isDeletingHostedSession, setIsDeletingHostedSession] = useState(false)
+  const [isHostedPending, startHostedTransition] = useTransition()
 
-  const loadHostedCommands = useCallback(
+  const loadHostedSessions = useCallback(
     (target: HouflowAgentTarget) => {
-      startCommandTransition(() => {
+      startHostedTransition(() => {
         void cloud
-          .refreshHostedCommands(target.id, 8)
+          .refreshHostedSessions(target, 20)
           .then(() => {
             setLoadedHostedTargets((loaded) => ({
               ...loaded,
               [target.key]: true,
             }))
-            setHostedCommandErrors((current) => {
+            setHostedSessionErrors((current) => {
               if (!current[target.key]) return current
               const next = { ...current }
               delete next[target.key]
@@ -140,7 +139,7 @@ export function CloudSessionsSidebarSection() {
               ...loaded,
               [target.key]: true,
             }))
-            setHostedCommandErrors((current) => ({
+            setHostedSessionErrors((current) => ({
               ...current,
               [target.key]: toErrorMessage(err),
             }))
@@ -195,7 +194,7 @@ export function CloudSessionsSidebarSection() {
   const selectedRoot =
     routeId === "cloud" &&
     !cloud.selectedSessionId &&
-    !cloud.selectedHostedCommandId &&
+    !cloud.selectedHostedSessionId &&
     !cloud.selectedTargetKey &&
     !workbenchCloud.selectedAssistantId &&
     !workbenchCloud.selectedSessionId
@@ -213,7 +212,7 @@ export function CloudSessionsSidebarSection() {
           onClick={() => {
             cloud.selectTarget(null)
             cloud.selectSession(null)
-            cloud.selectHostedCommand(null)
+            cloud.selectHostedSession(null)
             workbenchCloud.selectAssistant(null)
             workbenchCloud.selectSession(null)
             setRoute("cloud")
@@ -286,8 +285,9 @@ export function CloudSessionsSidebarSection() {
                 label={t("targetManaged")}
                 selectedTargetKey={cloud.selectedTargetKey}
                 sessionsByAgent={sessionsByAgent}
-                hostedCommandsByAgent={new Map()}
-                hostedCommandErrors={{}}
+                hostedSessionsByAgent={new Map()}
+                hostedSessionPages={{}}
+                hostedSessionErrors={{}}
                 showAll={showAllManaged}
                 targets={managedTargets}
                 expandedTargets={expandedTargets}
@@ -317,7 +317,7 @@ export function CloudSessionsSidebarSection() {
                   })
                 }}
                 onRequestDeleteSession={setSessionToDelete}
-                onRequestDeleteHostedCommand={() => undefined}
+                onRequestDeleteHostedSession={() => undefined}
                 onShowAllChange={setShowAllManaged}
                 onToggle={() => setManagedExpanded((value) => !value)}
                 onToggleTarget={(targetKey) =>
@@ -326,8 +326,9 @@ export function CloudSessionsSidebarSection() {
                     [targetKey]: !(current[targetKey] ?? false),
                   }))
                 }
-                onSelectHostedCommand={() => undefined}
-                onLoadHostedCommands={() => undefined}
+                onSelectHostedSession={() => undefined}
+                onLoadHostedSessions={() => undefined}
+                onLoadMoreHostedSessions={() => undefined}
               />
               <TargetGroup
                 connector={houflow.snapshot?.connector ?? null}
@@ -336,10 +337,11 @@ export function CloudSessionsSidebarSection() {
                 label={t("targetHostedResident")}
                 selectedTargetKey={cloud.selectedTargetKey}
                 sessionsByAgent={sessionsByAgent}
-                hostedCommandsByAgent={hostedCommandsByAgent(
-                  cloud.hostedCommands
+                hostedSessionsByAgent={hostedSessionsByAgent(
+                  cloud.hostedSessions
                 )}
-                hostedCommandErrors={hostedCommandErrors}
+                hostedSessionPages={cloud.hostedSessionPages}
+                hostedSessionErrors={hostedSessionErrors}
                 showAll={showAllHosted}
                 targets={hostedTargets}
                 expandedTargets={expandedTargets}
@@ -369,7 +371,7 @@ export function CloudSessionsSidebarSection() {
                   })
                 }}
                 onRequestDeleteSession={setSessionToDelete}
-                onRequestDeleteHostedCommand={setCommandsToDelete}
+                onRequestDeleteHostedSession={setHostedSessionToDelete}
                 onShowAllChange={setShowAllHosted}
                 onToggle={() => setHostedExpanded((value) => !value)}
                 onToggleTarget={(targetKey) =>
@@ -380,7 +382,7 @@ export function CloudSessionsSidebarSection() {
                         (item) => item.key === targetKey
                       )
                       if (target) {
-                        loadHostedCommands(target)
+                        loadHostedSessions(target)
                       }
                     }
                     return {
@@ -389,15 +391,28 @@ export function CloudSessionsSidebarSection() {
                     }
                   })
                 }
-                onSelectHostedCommand={(command) => {
+                onSelectHostedSession={(snapshot) => {
                   workbenchCloud.selectAssistant(null)
                   workbenchCloud.selectSession(null)
-                  cloud.selectHostedCommand(command)
+                  cloud.selectHostedSession(snapshot)
                   setRoute("cloud")
                 }}
-                onLoadHostedCommands={(target) => {
-                  if (isCommandPending) return
-                  loadHostedCommands(target)
+                onLoadHostedSessions={(target) => {
+                  if (isHostedPending) return
+                  loadHostedSessions(target)
+                }}
+                onLoadMoreHostedSessions={(target) => {
+                  if (isHostedPending) return
+                  startHostedTransition(() => {
+                    void cloud
+                      .loadMoreHostedSessions(target, 20)
+                      .catch((err) => {
+                        setHostedSessionErrors((current) => ({
+                          ...current,
+                          [target.key]: toErrorMessage(err),
+                        }))
+                      })
+                  })
                 }}
               />
             </>
@@ -425,14 +440,14 @@ export function CloudSessionsSidebarSection() {
               onSelectAssistant={(assistantId) => {
                 cloud.selectTarget(null)
                 cloud.selectSession(null)
-                cloud.selectHostedCommand(null)
+                cloud.selectHostedSession(null)
                 workbenchCloud.selectAssistant(assistantId)
                 setRoute("cloud")
               }}
               onSelectSession={(sessionId) => {
                 cloud.selectTarget(null)
                 cloud.selectSession(null)
-                cloud.selectHostedCommand(null)
+                cloud.selectHostedSession(null)
                 workbenchCloud.selectSession(sessionId)
                 setRoute("cloud")
               }}
@@ -496,9 +511,9 @@ export function CloudSessionsSidebarSection() {
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog
-        open={commandsToDelete != null}
+        open={hostedSessionToDelete != null}
         onOpenChange={(open) => {
-          if (!open && !isDeletingCommand) setCommandsToDelete(null)
+          if (!open && !isDeletingHostedSession) setHostedSessionToDelete(null)
         }}
       >
         <AlertDialogContent size="sm">
@@ -507,40 +522,38 @@ export function CloudSessionsSidebarSection() {
             <AlertDialogDescription>
               {t("deleteSessionDescription", {
                 title:
-                  hostedCommandTitle(commandsToDelete?.[0] ?? null) ||
-                  t("untitled"),
+                  formatConversationTitle(
+                    hostedSessionToDelete?.session.title ?? null
+                  ) || t("untitled"),
               })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isDeletingCommand}>
+            <AlertDialogCancel disabled={isDeletingHostedSession}>
               {t("cancel")}
             </AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              disabled={!commandsToDelete?.length || isDeletingCommand}
+              disabled={!hostedSessionToDelete || isDeletingHostedSession}
               onClick={(event) => {
                 event.preventDefault()
-                const commands = commandsToDelete
-                if (!commands?.length) return
-                setIsDeletingCommand(true)
-                void Promise.all(
-                  commands.map((command) =>
-                    cloud.deleteHostedCommand(command.id)
-                  )
-                )
+                const snapshot = hostedSessionToDelete
+                if (!snapshot) return
+                setIsDeletingHostedSession(true)
+                void cloud
+                  .deleteHostedSession(snapshot.session.id)
                   .then(() => {
-                    setCommandsToDelete(null)
+                    setHostedSessionToDelete(null)
                   })
                   .catch((err) => {
                     toast.error(t("deleteFailed"), {
                       description: toErrorMessage(err),
                     })
                   })
-                  .finally(() => setIsDeletingCommand(false))
+                  .finally(() => setIsDeletingHostedSession(false))
               }}
             >
-              {isDeletingCommand ? t("deleting") : t("deleteSession")}
+              {isDeletingHostedSession ? t("deleting") : t("deleteSession")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -556,8 +569,9 @@ function TargetGroup({
   label,
   selectedTargetKey,
   sessionsByAgent,
-  hostedCommandsByAgent,
-  hostedCommandErrors,
+  hostedSessionsByAgent,
+  hostedSessionPages,
+  hostedSessionErrors,
   showAll,
   targets,
   expandedTargets,
@@ -566,12 +580,13 @@ function TargetGroup({
   onNewSession,
   onArchiveSession,
   onRequestDeleteSession,
-  onRequestDeleteHostedCommand,
+  onRequestDeleteHostedSession,
   onShowAllChange,
   onToggle,
   onToggleTarget,
-  onSelectHostedCommand,
-  onLoadHostedCommands,
+  onSelectHostedSession,
+  onLoadHostedSessions,
+  onLoadMoreHostedSessions,
 }: {
   connector: HouflowConnectorSummary | null
   expanded: boolean
@@ -579,8 +594,12 @@ function TargetGroup({
   label: string
   selectedTargetKey: string | null
   sessionsByAgent: Map<string, HouflowCloudSession[]>
-  hostedCommandsByAgent: Map<string, HouflowCloudHostedCommand[]>
-  hostedCommandErrors: Record<string, string>
+  hostedSessionsByAgent: Map<string, AgentHubConversationSessionSnapshot[]>
+  hostedSessionPages: Record<
+    string,
+    { hasMore: boolean; nextCursor: string | null }
+  >
+  hostedSessionErrors: Record<string, string>
   showAll: boolean
   targets: HouflowAgentTarget[]
   expandedTargets: Record<string, boolean>
@@ -589,12 +608,15 @@ function TargetGroup({
   onNewSession: (targetKey: string) => void
   onArchiveSession: (sessionId: string) => void
   onRequestDeleteSession: (session: HouflowCloudSession) => void
-  onRequestDeleteHostedCommand: (commands: HouflowCloudHostedCommand[]) => void
+  onRequestDeleteHostedSession: (
+    snapshot: AgentHubConversationSessionSnapshot
+  ) => void
   onShowAllChange: (showAll: boolean) => void
   onToggle: () => void
   onToggleTarget: (targetKey: string) => void
-  onSelectHostedCommand: (command: HouflowCloudHostedCommand) => void
-  onLoadHostedCommands: (target: HouflowAgentTarget) => void
+  onSelectHostedSession: (snapshot: AgentHubConversationSessionSnapshot) => void
+  onLoadHostedSessions: (target: HouflowAgentTarget) => void
+  onLoadMoreHostedSessions: (target: HouflowAgentTarget) => void
 }) {
   const t = useTranslations("HouflowCloud")
   const visibleTargets = showAll
@@ -630,15 +652,12 @@ function TargetGroup({
         <div className="space-y-0.5">
           {visibleTargets.map((target) => {
             const sessions = sessionsByAgent.get(target.id) ?? []
-            const hostedCommands = hostedCommandsByAgent.get(target.id) ?? []
-            const hostedCommandRows =
-              target.kind === "hosted_connected"
-                ? hostedCommandThreads(hostedCommands)
-                : hostedCommands.map((command) => [command])
-            const hostedCommandError = hostedCommandErrors[target.key]
+            const hostedSessions = hostedSessionsByAgent.get(target.id) ?? []
+            const hostedPage = hostedSessionPages[target.key]
+            const hostedSessionError = hostedSessionErrors[target.key]
             const connectorTarget = target.kind !== "managed"
             const childCount = connectorTarget
-              ? hostedCommandRows.length
+              ? hostedSessions.length
               : sessions.length
             const targetExpanded = expandedTargets[target.key] ?? false
             const visibleSessions = targetExpanded
@@ -696,15 +715,15 @@ function TargetGroup({
                     <SquarePen className="h-3.5 w-3.5" />
                   </Button>
                 </div>
-                {connectorTarget && targetExpanded && hostedCommandError ? (
+                {connectorTarget && targetExpanded && hostedSessionError ? (
                   <div className="ml-6 space-y-1 px-2 py-1">
                     <div className="line-clamp-2 text-[0.6875rem] text-destructive">
-                      {hostedCommandError}
+                      {hostedSessionError}
                     </div>
                     <button
                       type="button"
                       className="text-[0.6875rem] text-muted-foreground underline-offset-2 hover:text-sidebar-foreground hover:underline"
-                      onClick={() => onLoadHostedCommands(target)}
+                      onClick={() => onLoadHostedSessions(target)}
                     >
                       {t("refresh")}
                     </button>
@@ -712,13 +731,13 @@ function TargetGroup({
                 ) : null}
                 {connectorTarget &&
                 targetExpanded &&
-                !hostedCommandError &&
-                hostedCommands.length === 0 ? (
+                !hostedSessionError &&
+                hostedSessions.length === 0 ? (
                   <div className="ml-6 px-2 py-1">
                     <button
                       type="button"
                       className="text-[0.6875rem] text-muted-foreground underline-offset-2 hover:text-sidebar-foreground hover:underline"
-                      onClick={() => onLoadHostedCommands(target)}
+                      onClick={() => onLoadHostedSessions(target)}
                     >
                       {t("loading")}
                     </button>
@@ -726,20 +745,31 @@ function TargetGroup({
                 ) : null}
                 {connectorTarget &&
                 targetExpanded &&
-                hostedCommandRows.length > 0 ? (
+                hostedSessions.length > 0 ? (
                   <div className="ml-6 space-y-0.5">
-                    {hostedCommandRows
+                    {hostedSessions
                       .slice(0, INITIAL_SESSION_COUNT)
-                      .map((commands) => (
-                        <HostedCommandRow
-                          key={hostedCommandThreadKey(commands)}
-                          commands={commands}
-                          onRequestDeleteHostedCommand={
-                            onRequestDeleteHostedCommand
+                      .map((snapshot) => (
+                        <HostedSessionRow
+                          key={snapshot.session.id}
+                          snapshot={snapshot}
+                          onRequestDeleteHostedSession={
+                            onRequestDeleteHostedSession
                           }
-                          onSelectHostedCommand={onSelectHostedCommand}
+                          onSelectHostedSession={onSelectHostedSession}
                         />
                       ))}
+                  </div>
+                ) : null}
+                {connectorTarget && targetExpanded && hostedPage?.hasMore ? (
+                  <div className="ml-6 px-2 py-1">
+                    <button
+                      type="button"
+                      className="text-[0.6875rem] text-muted-foreground underline-offset-2 hover:text-sidebar-foreground hover:underline"
+                      onClick={() => onLoadMoreHostedSessions(target)}
+                    >
+                      {t("showMore", { count: 20 })}
+                    </button>
                   </div>
                 ) : null}
                 {targetExpanded && visibleSessions.length > 0 ? (
@@ -780,17 +810,20 @@ function TargetGroup({
   )
 }
 
-function HostedCommandRow({
-  commands,
-  onRequestDeleteHostedCommand,
-  onSelectHostedCommand,
+function HostedSessionRow({
+  snapshot,
+  onRequestDeleteHostedSession,
+  onSelectHostedSession,
 }: {
-  commands: HouflowCloudHostedCommand[]
-  onRequestDeleteHostedCommand: (commands: HouflowCloudHostedCommand[]) => void
-  onSelectHostedCommand: (command: HouflowCloudHostedCommand) => void
+  snapshot: AgentHubConversationSessionSnapshot
+  onRequestDeleteHostedSession: (
+    snapshot: AgentHubConversationSessionSnapshot
+  ) => void
+  onSelectHostedSession: (snapshot: AgentHubConversationSessionSnapshot) => void
 }) {
   const t = useTranslations("HouflowCloud")
-  const command = latestHostedCommand(commands)
+  const title = formatConversationTitle(snapshot.session.title) || t("untitled")
+  const status = snapshot.session.status
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -798,16 +831,16 @@ function HostedCommandRow({
           <button
             type="button"
             className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={() => onSelectHostedCommand(command)}
+            onClick={() => onSelectHostedSession(snapshot)}
           >
             <span
               className={cn(
                 "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50",
-                activityDotClass(command.status)
+                activityDotClass(status)
               )}
             />
             <span className="min-w-0 flex-1 truncate text-[0.75rem] text-muted-foreground">
-              {hostedCommandTitle(command) || t("untitled")} · {command.status}
+              {title} · {status}
             </span>
           </button>
           <Button
@@ -817,7 +850,7 @@ function HostedCommandRow({
             className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground group-hover/hosted-row:opacity-100 focus-visible:opacity-100"
             onClick={(event) => {
               event.stopPropagation()
-              onRequestDeleteHostedCommand(commands)
+              onRequestDeleteHostedSession(snapshot)
             }}
             title={t("deleteSession")}
             aria-label={t("deleteSession")}
@@ -829,7 +862,7 @@ function HostedCommandRow({
       <ContextMenuContent className="w-40">
         <ContextMenuItem
           variant="destructive"
-          onSelect={() => onRequestDeleteHostedCommand(commands)}
+          onSelect={() => onRequestDeleteHostedSession(snapshot)}
         >
           <Trash2 className="h-4 w-4" />
           {t("deleteSession")}
@@ -1062,73 +1095,18 @@ function WorkbenchTargetGroup({
   )
 }
 
-function hostedCommandsByAgent(commands: HouflowCloudHostedCommand[]) {
-  const map = new Map<string, HouflowCloudHostedCommand[]>()
-  for (const command of commands) {
-    const list = map.get(command.connected_agent_id) ?? []
-    list.push(command)
-    map.set(command.connected_agent_id, list)
+function hostedSessionsByAgent(
+  snapshots: AgentHubConversationSessionSnapshot[]
+) {
+  const map = new Map<string, AgentHubConversationSessionSnapshot[]>()
+  for (const snapshot of snapshots) {
+    if (snapshot.session.transport.kind !== "connected") continue
+    const connectedAgentId = snapshot.session.transport.connected_agent_id
+    const list = map.get(connectedAgentId) ?? []
+    list.push(snapshot)
+    map.set(connectedAgentId, list)
   }
   return map
-}
-
-function hostedCommandThreads(
-  commands: HouflowCloudHostedCommand[]
-): HouflowCloudHostedCommand[][] {
-  const threadMap = new Map<string, HouflowCloudHostedCommand[]>()
-  for (const command of commands) {
-    const key = hostedCommandThreadKey([command])
-    const thread = threadMap.get(key) ?? []
-    thread.push(command)
-    threadMap.set(key, thread)
-  }
-  return Array.from(threadMap.values())
-    .map((thread) => thread.sort(compareHostedCommands))
-    .sort((left, right) =>
-      compareHostedCommands(
-        latestHostedCommand(right),
-        latestHostedCommand(left)
-      )
-    )
-}
-
-function hostedCommandThreadKey(commands: HouflowCloudHostedCommand[]): string {
-  const command = commands[0]
-  if (!command) return "empty"
-  const channelRef = hostedCommandChannelRef(command)
-  return channelRef ? `${command.connected_agent_id}:${channelRef}` : command.id
-}
-
-function latestHostedCommand(
-  commands: HouflowCloudHostedCommand[]
-): HouflowCloudHostedCommand {
-  const sorted = [...commands].sort(compareHostedCommands)
-  return sorted[sorted.length - 1] ?? commands[0]!
-}
-
-function hostedCommandTitle(
-  command: HouflowCloudHostedCommand | null
-): string | null {
-  if (!command) return null
-  if (command.action !== "workspace_message") return command.action
-  const message = stringValue(command.input.message)
-  return formatConversationTitle(message) || command.action
-}
-
-function hostedCommandChannelRef(
-  command: HouflowCloudHostedCommand
-): string | null {
-  if (command.action !== "workspace_message") return null
-  return stringValue(command.input.channel_ref) || null
-}
-
-function compareHostedCommands(
-  left: HouflowCloudHostedCommand,
-  right: HouflowCloudHostedCommand
-): number {
-  return String(left.created_at ?? "").localeCompare(
-    String(right.created_at ?? "")
-  )
 }
 
 function activityDotClass(status: string): string {
@@ -1137,8 +1115,4 @@ function activityDotClass(status: string): string {
   if (tone === "success") return "bg-green-600"
   if (tone === "failed") return "bg-destructive"
   return "bg-muted-foreground/50"
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : ""
 }

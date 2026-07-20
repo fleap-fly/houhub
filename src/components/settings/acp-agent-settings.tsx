@@ -175,6 +175,10 @@ interface AgentDraft {
    *  Drives the model editor + `model_catalog_json` generation on save. */
   codexModelList: CodexModelConfig
   grokConfigTomlText: string
+  // Grok authentication method (subscription via `grok login` vs XAI_API_KEY).
+  // Recorded in env as GROK_AUTH_MODE; drives which credential body renders and
+  // whether XAI_API_KEY is stripped from env on subscription.
+  grokAuthMode: GrokAuthMethod
   // Grok structured controls (empty string = "unset / use default"). Backed by
   // ~/.grok/config.toml [ui].permission_mode / [models].default_reasoning_effort;
   // merged onto the current on-disk config server-side on save.
@@ -422,6 +426,51 @@ const GROK_UNSET = "__grok_unset__"
  * what Grok's own build models use; a BYO OpenAI-compatible proxy would pick
  * `chat_completions`, an Anthropic-format endpoint `messages`. */
 const GROK_DEFAULT_API_BACKEND = "responses"
+
+/** Grok's real credential env var (mirrors the backend `agent_env_keys(Grok)`
+ * and `importantEnvKeysByAgent`). */
+const GROK_API_KEY_ENV = "XAI_API_KEY"
+
+/** HouHub-side knob recording the chosen authentication method. Read by the
+ * launch path (`apply_grok_env_policy`): in `subscription` mode it clears any
+ * inherited XAI_API_KEY so the CLI uses the `grok login` browser credential.
+ * The Grok binary itself ignores this var. Mirrors Cursor's CURSOR_AUTH_MODE. */
+const GROK_AUTH_MODE_ENV = "GROK_AUTH_MODE"
+
+/** The subscription sign-in command shown (and copied) in the auth card. Grok's
+ * `login` is a root subcommand; a bare `grok login` matches the panel's existing
+ * hint wording (HouHub doesn't resolve the managed binary path here). */
+const GROK_LOGIN_COMMAND = "grok login"
+
+/** Grok's three authentication methods:
+ *  - `subscription` — sign in with `grok login` (SuperGrok / X Premium+),
+ *    whose session lives in `~/.grok/auth.json` (untouched by HouHub);
+ *  - `api_key` — a non-interactive XAI_API_KEY from the xAI console;
+ *  - `custom` — a bring-your-own endpoint: a custom `[model.<id>]` in
+ *    ~/.grok/config.toml with its own base_url/api_key (the custom-model card). */
+export type GrokAuthMethod = "subscription" | "api_key" | "custom"
+
+/** Resolve the persisted Grok authentication method, tolerant of legacy rows:
+ * an explicit `GROK_AUTH_MODE` wins; otherwise a configured custom model implies
+ * `custom`, a saved XAI_API_KEY implies `api_key`, and an empty env means the
+ * user relies on `grok login`. `hasCustomModel` reflects whether a HouHub-managed
+ * `[model.<id>]` is set (it lives in config.toml, not env). Mirrors
+ * `inferCursorMode`. */
+export function inferGrokMode(
+  env: Record<string, string>,
+  hasCustomModel = false
+): GrokAuthMethod {
+  const explicit = (env[GROK_AUTH_MODE_ENV] ?? "").trim()
+  if (
+    explicit === "subscription" ||
+    explicit === "api_key" ||
+    explicit === "custom"
+  ) {
+    return explicit
+  }
+  if (hasCustomModel) return "custom"
+  return (env[GROK_API_KEY_ENV] ?? "").trim() ? "api_key" : "subscription"
+}
 
 function importantEnvKeysByAgent(agentType: AgentType): ImportantEnvKeys {
   if (agentType === "claude_code") {
@@ -2345,6 +2394,7 @@ function patchCodexConfigTomlText(
  * for the two managed keys.
  */
 export function buildGrokStructuredConfig(draft: {
+  grokAuthMode: GrokAuthMethod
   grokPermissionMode: string
   grokReasoningEffort: string
   grokCustomModelId: string
@@ -2354,7 +2404,12 @@ export function buildGrokStructuredConfig(draft: {
   grokCustomContextWindow: string
   grokAutoCompactThreshold: string
 }): GrokStructuredConfig {
-  const modelId = draft.grokCustomModelId.trim()
+  // The custom-model group applies only in the `custom` auth method; the
+  // subscription / api_key methods omit the HouHub-managed [model.<id>] block
+  // (an empty id → the backend removes it). Permission mode, reasoning effort
+  // and compaction below stay independent of the auth method.
+  const modelId =
+    draft.grokAuthMode === "custom" ? draft.grokCustomModelId.trim() : ""
   const positiveInt = (raw: string): number | null => {
     const n = Number.parseInt(raw.trim(), 10)
     return Number.isFinite(n) && n > 0 ? n : null
@@ -2395,6 +2450,7 @@ export function buildGrokStructuredConfig(draft: {
  */
 export function buildGrokSaveOptions(
   draft: {
+    grokAuthMode: GrokAuthMethod
     grokPermissionMode: string
     grokReasoningEffort: string
     grokCustomModelId: string
@@ -2704,15 +2760,32 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
       : agent.agent_type === "codex"
         ? inferCodexAuthMode(codexAuthJsonText)
         : "api_key"
+  const grokAuthMode: GrokAuthMethod =
+    agent.agent_type === "grok"
+      ? agent.model_provider_id != null
+        ? "api_key"
+        : inferGrokMode(
+            agent.env,
+            Boolean(agent.grok_settings?.custom_model_id?.trim())
+          )
+      : "api_key"
   const rawEnvText = envMapToText(agent.env)
-  // When codex is in official subscription mode, clean up API keys/URLs from env
+  // When codex is in official subscription mode, clean up API keys/URLs from env.
+  // Grok mirrors this: record the auth-method knob, and in subscription mode
+  // strip XAI_API_KEY so the editable env can't override the `grok login`
+  // credential (the launch path enforces the same — see apply_grok_env_policy).
   const envText =
     agent.agent_type === "codex" && codexAuthMode === "chatgpt_subscription"
       ? patchEnvText(rawEnvText, {
           OPENAI_API_KEY: "",
           OPENAI_BASE_URL: "",
         })
-      : rawEnvText
+      : agent.agent_type === "grok"
+        ? patchEnvText(rawEnvText, {
+            GROK_AUTH_MODE: grokAuthMode,
+            ...(grokAuthMode === "subscription" ? { XAI_API_KEY: "" } : {}),
+          })
+        : rawEnvText
   return {
     enabled: agent.enabled,
     envText,
@@ -2781,6 +2854,7 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
     codexConfigTomlText,
     codexModelList: parseCodexModelConfig(agent.codex_model_catalog ?? null),
     grokConfigTomlText,
+    grokAuthMode,
     grokPermissionMode,
     grokReasoningEffort,
     grokCustomModelId: agent.grok_settings?.custom_model_id ?? "",
@@ -5521,6 +5595,31 @@ export function AcpAgentSettings() {
     [selectedAgent, selectedDraft, t, updateSelectedDraft]
   )
 
+  const handleGrokAuthModeChange = useCallback(
+    (nextMode: GrokAuthMethod) => {
+      if (
+        !selectedAgent ||
+        !selectedDraft ||
+        selectedAgent.agent_type !== "grok"
+      )
+        return
+      // Record the method knob in env; on subscription strip XAI_API_KEY so the
+      // editable env can't override the `grok login` credential (the launch path
+      // enforces the same via apply_grok_env_policy). Clearing the draft apiKey
+      // keeps the now-hidden key input from resurrecting a stale value.
+      updateSelectedDraft((current) => ({
+        ...current,
+        grokAuthMode: nextMode,
+        apiKey: nextMode === "subscription" ? "" : current.apiKey,
+        envText: patchEnvText(current.envText, {
+          GROK_AUTH_MODE: nextMode,
+          ...(nextMode === "subscription" ? { XAI_API_KEY: "" } : {}),
+        }),
+      }))
+    },
+    [selectedAgent, selectedDraft, updateSelectedDraft]
+  )
+
   const handleClaudeAuthModeChange = useCallback(
     (nextMode: ClaudeAuthMode) => {
       if (
@@ -5807,17 +5906,26 @@ export function AcpAgentSettings() {
             providerModels.includes(configuredModel))
             ? configuredModel
             : (providerModels[0] ?? "")
-        updateSelectedDraft((current) => ({
-          ...current,
-          modelProviderId: effectiveProviderId,
-          model: provider ? providerModel : "",
-          envText: patchEnvByImportantKey(
+        updateSelectedDraft((current) => {
+          let envText = patchEnvByImportantKey(
             agentType,
             current.envText,
             "model",
             provider ? providerModel : ""
-          ),
-        }))
+          )
+          if (provider) {
+            envText = patchEnvText(envText, {
+              GROK_AUTH_MODE: "api_key",
+            })
+          }
+          return {
+            ...current,
+            modelProviderId: effectiveProviderId,
+            model: provider ? providerModel : "",
+            grokAuthMode: provider ? "api_key" : current.grokAuthMode,
+            envText,
+          }
+        })
       } else {
         updateSelectedDraft((current) => ({
           ...current,
@@ -9873,22 +9981,11 @@ supports_websockets = false`}
                       </div>
                     </div>
 
-                    {/* Authentication uses the same shared provider binding as
-                        the other gateway-capable agents. Manual mode keeps the
-                        native XAI_API_KEY / grok login flow. */}
-                    <div className="space-y-2 rounded-md border p-2.5">
-                      <div>
-                        <label className="text-[11px] font-medium">
-                          {t("grok.authTitle")}
-                        </label>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          {selectedGrokHasCredential
-                            ? t("grok.authKeyConfigured")
-                            : t("grok.authKeyMissing")}
-                        </p>
-                      </div>
+                    {/* A shared provider remains available in addition to Grok's
+                        native subscription, API key, and custom endpoint modes. */}
+                    <div className="space-y-2.5 rounded-md border p-2.5">
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-[11px] font-medium">
                           {t("selectModelProvider")}
                         </label>
                         <Select
@@ -9917,9 +10014,14 @@ supports_websockets = false`}
                             ))}
                           </SelectContent>
                         </Select>
+                        <p className="text-[11px] text-muted-foreground">
+                          {selectedGrokHasCredential
+                            ? t("grok.authKeyConfigured")
+                            : t("grok.authKeyMissing")}
+                        </p>
                       </div>
 
-                      {selectedCompatibleModelProviderId != null ? (
+                      {selectedCompatibleModelProviderId != null && (
                         <div className="space-y-1.5">
                           <label className="text-[11px] text-muted-foreground">
                             {t("codex.modelName")}
@@ -9959,8 +10061,86 @@ supports_websockets = false`}
                             />
                           )}
                         </div>
-                      ) : (
-                        <>
+                      )}
+                    </div>
+
+                    {/* Authentication — method selector + method-specific body.
+                        Mirrors the Cursor panel: an explicit choice between the
+                        `grok login` subscription and an XAI_API_KEY, recognized
+                        on load via inferGrokMode and recorded as GROK_AUTH_MODE. */}
+                    {selectedCompatibleModelProviderId == null && (
+                      <div className="space-y-2.5 rounded-md border p-2.5">
+                        <div className="space-y-1.5">
+                          <label className="text-[11px] font-medium">
+                            {t("grok.authTitle")}
+                          </label>
+                          <Select
+                            value={selectedDraft.grokAuthMode}
+                            disabled={grokSaving}
+                            onValueChange={(value) =>
+                              handleGrokAuthModeChange(value as GrokAuthMethod)
+                            }
+                          >
+                            <SelectTrigger
+                              className="w-full"
+                              aria-label={t("grok.authMode")}
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="subscription">
+                                {t("authModeOfficialSubscription")}
+                              </SelectItem>
+                              <SelectItem value="api_key">
+                                {t("grok.authModeApiKey")}
+                              </SelectItem>
+                              <SelectItem value="custom">
+                                {t("grok.authModeCustom")}
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p className="text-[11px] text-muted-foreground">
+                            {selectedDraft.grokAuthMode === "subscription"
+                              ? t("grok.subscriptionHint")
+                              : selectedDraft.grokAuthMode === "custom"
+                                ? t("grok.authModeCustomHint")
+                                : t("grok.authModeApiKeyHint")}
+                          </p>
+                        </div>
+
+                        {selectedDraft.grokAuthMode === "subscription" ? (
+                          // Subscription: a copyable `grok login` command. Its
+                          // session lives in ~/.grok/auth.json (untouched here); the
+                          // launch path strips any inherited XAI_API_KEY.
+                          <div className="space-y-1.5">
+                            <p className="text-[11px] text-muted-foreground">
+                              {t("grok.loginHint")}
+                            </p>
+                            <div className="flex items-center gap-2">
+                              <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-[11px] font-mono whitespace-nowrap">
+                                {GROK_LOGIN_COMMAND}
+                              </code>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 shrink-0 p-0"
+                                onClick={async () => {
+                                  const ok =
+                                    await copyTextToClipboard(
+                                      GROK_LOGIN_COMMAND
+                                    )
+                                  if (ok) toast.success(t("grok.commandCopied"))
+                                }}
+                                title={t("grok.copyCommand")}
+                                aria-label={t("grok.copyCommand")}
+                              >
+                                <Copy className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </div>
+                        ) : selectedDraft.grokAuthMode === "api_key" ? (
+                          // API key: the non-interactive XAI_API_KEY credential.
                           <div className="space-y-1.5">
                             <label className="text-[11px] text-muted-foreground">
                               XAI_API_KEY
@@ -10016,18 +10196,22 @@ supports_websockets = false`}
                                 )}
                               </Button>
                             </div>
+                            <p className="text-[11px] text-muted-foreground">
+                              {selectedDraft.apiKey.trim()
+                                ? t("grok.authKeyConfigured")
+                                : t("grok.authKeyMissing")}
+                            </p>
                           </div>
-                          <p className="text-[11px] text-muted-foreground">
-                            {t("grok.authLoginHint")}
-                          </p>
-                        </>
-                      )}
-                    </div>
+                        ) : null}
+                      </div>
+                    )}
 
                     {/* Custom model (BYO endpoint) → [model.<id>] + [models].default.
-                        A model id here registers a custom Grok model and makes it
-                        the default; empty id removes the HouHub-managed block. */}
-                    {selectedCompatibleModelProviderId == null && (
+                        Only shown (and saved) in the `custom` auth method: a model
+                        id registers a custom Grok model as the default; the other
+                        methods omit the HouHub-managed block. */}
+                    {selectedCompatibleModelProviderId == null &&
+                    selectedDraft.grokAuthMode === "custom" ? (
                       <div className="space-y-2.5 rounded-md border p-2.5">
                         <div>
                           <label className="text-[11px] font-medium">
@@ -10194,7 +10378,7 @@ supports_websockets = false`}
                           </p>
                         </div>
                       </div>
-                    )}
+                    ) : null}
 
                     {/* Compaction — session-global auto-compact threshold. */}
                     <div className="space-y-1.5">

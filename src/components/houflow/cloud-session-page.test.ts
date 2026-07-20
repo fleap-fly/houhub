@@ -10,17 +10,12 @@ const workbenchCloudSource = readFileSync(
   "utf8"
 )
 
-describe("CloudSessionPage hosted target startup", () => {
-  it("does not refresh managed sessions after a hosted or external dispatch", () => {
-    const hostedBranch = source.slice(
-      source.indexOf("const result = await startHouflowCloudTargetSession("),
-      source.indexOf(
-        "} catch (err) {",
-        source.indexOf("const result = await startHouflowCloudTargetSession(")
-      )
-    )
-
-    expect(hostedBranch).not.toContain("cloud.refreshSessions()")
+describe("CloudSessionPage connected sessions", () => {
+  it("uses the session SDK instead of command-level UI state", () => {
+    expect(source).toContain("createHouflowConversationSession(")
+    expect(source).toContain("sendHouflowConversationSessionMessage(")
+    expect(source).not.toContain("startHouflowCloudTargetSession(")
+    expect(source).not.toContain("rememberHostedCommand")
   })
 
   it("keeps cloud, hosted, and project chat canvases transparent over a workspace background", () => {

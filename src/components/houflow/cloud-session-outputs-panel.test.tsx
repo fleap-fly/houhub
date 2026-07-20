@@ -40,16 +40,17 @@ vi.mock("@/houflow", () => ({
 }))
 
 vi.mock("@/houflow/cloud-workspace-context", () => ({
-  selectHouflowCloudSelectedSession: Symbol("selected-session"),
-  selectHouflowCloudSelectedHostedCommand: Symbol("selected-command"),
+  selectHouflowCloudSelectedSession: (state: { selectedSession: unknown }) =>
+    state.selectedSession,
+  selectHouflowCloudSelectedHostedSession: (state: {
+    selectedHostedSession: unknown
+  }) => state.selectedHostedSession,
   useHouflowCloudWorkspaceStore: (selector: unknown) => {
-    if (typeof selector === "symbol") {
-      return selector.description === "selected-session"
-        ? { id: "session-1" }
-        : null
-    }
     const state = {
+      selectedSession: { id: "session-1" },
+      selectedHostedSession: null,
       selectedOutputRequest: null,
+      runtimeEvents: [],
       removeSession: mocks.removeSession,
     }
     return (selector as (value: typeof state) => unknown)(state)
@@ -60,9 +61,9 @@ vi.mock("@/houflow/cloud-sessions", () => ({
   listHouflowCloudSessionOutputs: mocks.listOutputs,
   getHouflowCloudSessionOutputText: mocks.getOutputText,
   getHouflowCloudSessionOutputBytes: mocks.getOutputBytes,
-  houflowHostedCommandOutputSessionId: () => null,
+  houflowConversationOutputSessionId: () => null,
+  isHouflowConversationSessionActive: () => false,
   isCloudSessionActive: () => false,
-  isHouflowHostedCommandActive: () => false,
   isHouflowCloudSessionNotFound: mocks.isNotFound,
 }))
 

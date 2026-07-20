@@ -1,89 +1,101 @@
-import type { ConnectedAgentConnectorCommandEvent } from "@houshan/agent-hub-network-sdk"
+import type {
+  AgentHubConversationSessionSnapshot,
+  AgentHubConversationTurn,
+  AgentHubConversationTurnEvent,
+} from "@houshan/agent-hub-network-sdk"
 import {
   houflowCloudSessionEventFromDto,
-  type HouflowCloudHostedCommand,
   type HouflowCloudSessionEvent,
 } from "./cloud-sessions"
 
-export function hostedCommandToCloudEvents(
-  command: HouflowCloudHostedCommand
+export function conversationSessionToCloudEvents(
+  snapshot: AgentHubConversationSessionSnapshot
+): HouflowCloudSessionEvent[] {
+  return snapshot.turns.flatMap(conversationTurnToCloudEvents)
+}
+
+export function conversationTurnToCloudEvents(
+  turn: AgentHubConversationTurn
 ): HouflowCloudSessionEvent[] {
   const events = dedupeAssistantEventsByText(
     [
-      hostedCommandInputToCloudEvent(command),
-      ...hostedCommandAgentEvents(command),
+      conversationTurnInputToCloudEvent(turn),
+      ...conversationTurnAgentEvents(turn),
     ].filter(isPresent)
   )
-  const outputEvent = hostedCommandOutputToCloudEvent(command, events)
+  const outputEvent = conversationTurnOutputToCloudEvent(turn, events)
   const conversationalEvents = outputEvent ? [...events, outputEvent] : events
-  const completionEvent = hostedCommandCompletionEvent(command)
+  const completionEvent = conversationTurnCompletionEvent(turn)
   return completionEvent
     ? [...conversationalEvents, completionEvent]
     : conversationalEvents
 }
 
-export function hostedCommandError(
-  command: HouflowCloudHostedCommand
+export function conversationTurnError(
+  turn: AgentHubConversationTurn | null | undefined
 ): string | null {
-  const direct = stringValue(command.error)
+  const direct = stringValue(turn?.error)
   if (direct) return direct
-
-  const events = Array.isArray(command.events) ? command.events : []
+  const events = turn?.events ?? []
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]
-    if (event?.type !== "failed") continue
+    if (event?.type !== "failed" && event?.level !== "error") continue
     const message = stringValue(event.message)
     if (message) return message
   }
   return null
 }
 
-function hostedCommandInputToCloudEvent(
-  command: HouflowCloudHostedCommand
+function conversationTurnInputToCloudEvent(
+  turn: AgentHubConversationTurn
 ): HouflowCloudSessionEvent | null {
-  const message = stringValue(command.input?.message)
+  const message = stringValue(turn.input.message)
   if (!message) return null
+  const content = Array.isArray(turn.input.content)
+    ? turn.input.content
+    : [{ type: "text", text: message }]
   const raw = {
-    id: `${command.id}:input`,
+    id: `${turn.id}:input`,
     type: "user.message",
     role: "user",
-    content: [{ type: "text", text: message }],
-    created_at: command.created_at,
+    content,
+    created_at: turn.created_at,
   }
   return {
     id: raw.id,
     type: raw.type,
     role: raw.role,
     text: message,
-    createdAt: stringValue(command.created_at) || null,
+    createdAt: stringValue(turn.created_at) || null,
     raw,
   }
 }
 
-function hostedCommandAgentEvents(
-  command: HouflowCloudHostedCommand
+function conversationTurnAgentEvents(
+  turn: AgentHubConversationTurn
 ): HouflowCloudSessionEvent[] {
-  if (!Array.isArray(command.events)) return []
-  return command.events.flatMap(hostedCommandEventToCloudEvents)
+  return turn.events.flatMap(conversationTurnEventToCloudEvents)
 }
 
-function hostedCommandOutputToCloudEvent(
-  command: HouflowCloudHostedCommand,
+function conversationTurnOutputToCloudEvent(
+  turn: AgentHubConversationTurn,
   events: HouflowCloudSessionEvent[]
 ): HouflowCloudSessionEvent | null {
-  const output = recordValue(command.output)
+  const output = recordValue(turn.output)
   const text = stringValue(output.text)
-  if (!text) return null
-  if (events.some((event) => eventContainsAssistantText(event, text))) {
+  if (
+    !text ||
+    events.some((event) => eventContainsAssistantText(event, text))
+  ) {
     return null
   }
   const createdAt =
-    stringValue(command.completed_at) ||
-    stringValue(command.updated_at) ||
-    stringValue(command.created_at) ||
+    stringValue(turn.completed_at) ||
+    stringValue(turn.updated_at) ||
+    stringValue(turn.created_at) ||
     null
   const raw = {
-    id: `${command.id}:output`,
+    id: `${turn.id}:output`,
     type: "agent.message",
     role: "assistant",
     content: [{ type: "text", text }],
@@ -99,18 +111,18 @@ function hostedCommandOutputToCloudEvent(
   }
 }
 
-function hostedCommandCompletionEvent(
-  command: HouflowCloudHostedCommand
+function conversationTurnCompletionEvent(
+  turn: AgentHubConversationTurn
 ): HouflowCloudSessionEvent | null {
-  const completedAt = stringValue(command.completed_at)
+  const completedAt = stringValue(turn.completed_at)
   if (!completedAt) return null
-  const output = recordValue(command.output)
+  const output = recordValue(turn.output)
   const response = recordValue(output.runtime_response)
   const usage = recordValue(response.usage)
-  const model = stringValue(response.model) || stringValue(command.input?.model)
-  const duration = durationMs(command.started_at, command.completed_at)
+  const model = stringValue(response.model) || stringValue(turn.input.model)
+  const duration = durationMs(turn.created_at, turn.completed_at)
   const raw = {
-    id: `${command.id}:completion`,
+    id: `${turn.id}:completion`,
     type: "span.model_request_end",
     ...(model ? { model } : {}),
     ...(Object.keys(usage).length > 0 ? { model_usage: usage } : {}),
@@ -123,6 +135,43 @@ function hostedCommandCompletionEvent(
     role: null,
     text: null,
     createdAt: completedAt,
+    raw,
+  }
+}
+
+function conversationTurnEventToCloudEvents(
+  event: AgentHubConversationTurnEvent
+): HouflowCloudSessionEvent[] {
+  return nestedCloudEventDtos(event)
+    .map((item, index) => nestedCloudEventFromDto(event, item, index))
+    .filter(isPresent)
+}
+
+function nestedCloudEventDtos(event: AgentHubConversationTurnEvent): unknown[] {
+  const payload = recordValue(event.payload)
+  const response = recordValue(payload.response)
+  const candidates: unknown[] = []
+  if (payload.runtime_event) candidates.push(payload.runtime_event)
+  if (Array.isArray(response.events)) candidates.push(...response.events)
+  if (Array.isArray(payload.events)) candidates.push(...payload.events)
+  if (payload.event) candidates.push(payload.event)
+  return candidates
+}
+
+function nestedCloudEventFromDto(
+  turnEvent: AgentHubConversationTurnEvent,
+  value: unknown,
+  index: number
+): HouflowCloudSessionEvent | null {
+  const normalized = houflowCloudSessionEventFromDto(value)
+  if (!normalized) return null
+  const raw = { ...normalized.raw }
+  if (!stringValue(raw.created_at)) raw.created_at = turnEvent.created_at
+  return {
+    ...normalized,
+    id: `${turnEvent.id}:${normalized.id || index}`,
+    createdAt:
+      normalized.createdAt || stringValue(turnEvent.created_at) || null,
     raw,
   }
 }
@@ -162,8 +211,7 @@ function eventText(event: HouflowCloudSessionEvent): string {
 }
 
 function contentItemText(value: unknown): string {
-  const item = recordValue(value)
-  return stringValue(item.text)
+  return stringValue(recordValue(value).text)
 }
 
 function normalizeText(value: string): string {
@@ -175,48 +223,6 @@ function durationMs(startValue: unknown, endValue: unknown): number | null {
   const end = Date.parse(stringValue(endValue))
   const duration = end - start
   return Number.isFinite(duration) && duration > 0 ? duration : null
-}
-
-function hostedCommandEventToCloudEvents(
-  event: ConnectedAgentConnectorCommandEvent
-): HouflowCloudSessionEvent[] {
-  const nested = nestedCloudEventDtos(event)
-  return nested
-    .map((item, index) => nestedCloudEventFromDto(event, item, index))
-    .filter(isPresent)
-}
-
-function nestedCloudEventDtos(
-  event: ConnectedAgentConnectorCommandEvent
-): unknown[] {
-  const payload = recordValue(event.payload)
-  const response = recordValue(payload.response)
-  const candidates: unknown[] = []
-
-  if (payload.runtime_event) candidates.push(payload.runtime_event)
-  if (Array.isArray(response.events)) candidates.push(...response.events)
-  if (Array.isArray(payload.events)) candidates.push(...payload.events)
-  if (payload.event) candidates.push(payload.event)
-
-  return candidates
-}
-
-function nestedCloudEventFromDto(
-  commandEvent: ConnectedAgentConnectorCommandEvent,
-  value: unknown,
-  index: number
-): HouflowCloudSessionEvent | null {
-  const normalized = houflowCloudSessionEventFromDto(value)
-  if (!normalized) return null
-  const raw = { ...normalized.raw }
-  if (!stringValue(raw.created_at)) raw.created_at = commandEvent.created_at
-  return {
-    ...normalized,
-    id: `${commandEvent.id}:${normalized.id || index}`,
-    createdAt:
-      normalized.createdAt || stringValue(commandEvent.created_at) || null,
-    raw,
-  }
 }
 
 function recordValue(value: unknown): Record<string, unknown> {
