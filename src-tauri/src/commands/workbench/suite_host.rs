@@ -203,7 +203,7 @@ pub async fn workbench_open_suite_core(
 }
 
 #[cfg(feature = "tauri-runtime")]
-fn suite_window_size<R: tauri::Runtime, M: tauri::Manager<R>>(app: &M) -> (f64, f64) {
+fn suite_window_size<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> (f64, f64) {
     let fallback = (1440.0, 860.0);
     let Ok(Some(monitor)) = app.primary_monitor() else {
         return fallback;
