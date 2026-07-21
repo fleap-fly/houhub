@@ -14,4 +14,8 @@ describe("CloudSessionsSidebarSection target rows", () => {
     expect(sidebarSource).not.toContain("target.provider")
     expect(sidebarSource).not.toContain("CloudTargetCapabilityBadges")
   })
+
+  it("aligns expanded cloud sessions with local first-level rows", () => {
+    expect(sidebarSource).not.toContain('<div className="ml-6 space-y-0.5">')
+  })
 })

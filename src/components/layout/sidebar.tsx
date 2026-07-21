@@ -23,6 +23,7 @@ import {
   type SidebarConversationListHandle,
 } from "@/components/conversations/sidebar-conversation-list"
 import { CloudSessionsSidebarSection } from "@/components/houflow/cloud-sessions-sidebar-section"
+import { HouhubAccountMenu } from "@/components/layout/houhub-account-menu"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -379,6 +380,9 @@ export function Sidebar() {
           showCompleted={showCompleted}
           sortMode={sortMode}
         />
+      </div>
+      <div className="shrink-0 border-t border-border/50 px-1.5 py-1.5">
+        <HouhubAccountMenu />
       </div>
     </aside>
   )

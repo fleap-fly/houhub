@@ -26,6 +26,9 @@ vi.mock("@/components/conversations/sidebar-conversation-list", () => ({
 vi.mock("@/components/houflow/cloud-sessions-sidebar-section", () => ({
   CloudSessionsSidebarSection: () => null,
 }))
+vi.mock("@/components/layout/houhub-account-menu", () => ({
+  HouhubAccountMenu: () => <button>Accounts</button>,
+}))
 vi.mock("@/contexts/sidebar-context", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
 }))
@@ -115,6 +118,11 @@ describe("Sidebar — fixed New chat / Search region", () => {
     // row is hovered/focused but stay in the DOM, so getByText resolves them.
     expect(getByText("Ctrl+T")).toBeTruthy()
     expect(getByText("Ctrl+K")).toBeTruthy()
+  })
+
+  it("keeps the account menu fixed in the sidebar", () => {
+    const { getByText } = renderSidebar()
+    expect(getByText("Accounts")).toBeTruthy()
   })
 
   it("falls back to chat mode (never disabled) when no folder is active", () => {

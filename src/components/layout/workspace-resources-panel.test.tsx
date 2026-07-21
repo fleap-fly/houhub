@@ -96,15 +96,6 @@ vi.mock("@/workspace-resources/store", () => ({
   ) => selector(state.resources),
 }))
 
-vi.mock("./houhub-workspace-identity-controls", () => ({
-  HouhubWorkspaceIdentityControls: () => (
-    <div>
-      <button>Houflow account</button>
-      <button>Project account</button>
-    </div>
-  ),
-}))
-
 vi.mock("./workspace-connection-button", () => ({
   WorkspaceConnectionButton: () => <button>Connect workspace</button>,
 }))
@@ -114,28 +105,6 @@ describe("WorkspaceResourcesPanel", () => {
     state.houflow.session.status = "signed_out"
     state.workbench.session.status = "signed_out"
   })
-
-  it.each([
-    ["both signed out", "signed_out", "signed_out"],
-    ["Houflow only", "signed_in", "signed_out"],
-    ["project only", "signed_out", "signed_in"],
-    ["both signed in", "signed_in", "signed_in"],
-  ])(
-    "keeps both independent identity entries visible with %s",
-    (_label, houflowStatus, workbenchStatus) => {
-      state.houflow.session.status = houflowStatus
-      state.workbench.session.status = workbenchStatus
-
-      render(<WorkspaceResourcesPanel />)
-
-      expect(
-        screen.getByRole("button", { name: "Houflow account" })
-      ).toBeInTheDocument()
-      expect(
-        screen.getByRole("button", { name: "Project account" })
-      ).toBeInTheDocument()
-    }
-  )
 
   it("retains the combined first-connect shortcut", () => {
     render(<WorkspaceResourcesPanel />)

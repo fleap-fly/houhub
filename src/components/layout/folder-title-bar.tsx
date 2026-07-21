@@ -16,7 +16,6 @@ import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { useTerminalContext } from "@/contexts/terminal-context"
 import { AppTitleBar } from "./app-title-bar"
-import { HouhubWorkspaceIdentityControls } from "./houhub-workspace-identity-controls"
 import { NewFolderDropdown } from "./new-folder-dropdown"
 import { RemoteWorkspaceDropdown } from "./remote-workspace-dropdown"
 import {
@@ -54,7 +53,6 @@ export function FolderTitleBar() {
           </Button>
           <NewFolderDropdown />
           <RemoteWorkspaceDropdown />
-          <HouhubWorkspaceIdentityControls />
         </div>
       }
       right={

@@ -762,7 +762,7 @@ function TargetGroup({
                 {connectorTarget &&
                 targetExpanded &&
                 hostedSessions.length > 0 ? (
-                  <div className="ml-6 space-y-0.5">
+                  <div className="space-y-0.5">
                     {hostedSessions
                       .slice(0, INITIAL_SESSION_COUNT)
                       .map((snapshot) => (
@@ -792,7 +792,7 @@ function TargetGroup({
                   </div>
                 ) : null}
                 {targetExpanded && visibleSessions.length > 0 ? (
-                  <div className="ml-6 space-y-0.5">
+                  <div className="space-y-0.5">
                     {visibleSessions.map((session) => (
                       <SessionRow
                         key={session.id}
@@ -1116,7 +1116,7 @@ function WorkbenchTargetGroup({
                   </button>
                 </div>
                 {visibleSessions.length > 0 ? (
-                  <div className="ml-6 space-y-0.5">
+                  <div className="space-y-0.5">
                     {visibleSessions.map((session) => (
                       <button
                         key={session.sessionId}

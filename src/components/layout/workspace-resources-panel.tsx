@@ -54,7 +54,6 @@ import {
   useWorkspaceResourceStore,
   type WorkspaceResourceSection,
 } from "@/workspace-resources/store"
-import { HouhubWorkspaceIdentityControls } from "./houhub-workspace-identity-controls"
 import { WorkspaceConnectionButton } from "./workspace-connection-button"
 
 const suiteHost = createTauriWorkbenchSuiteHost()
@@ -279,7 +278,6 @@ export function WorkspaceResourcesPanel() {
       <header className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/50 px-3">
         <div className="min-w-0 truncate text-xs font-medium">{t("title")}</div>
         <div className="flex shrink-0 items-center gap-1">
-          <HouhubWorkspaceIdentityControls />
           {connected ? <CapabilityState status={capability.status} /> : null}
         </div>
       </header>
