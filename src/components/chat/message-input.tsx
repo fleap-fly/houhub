@@ -112,11 +112,7 @@ import {
   type AttachFileToSessionDetail,
   type AppendTextToSessionDetail,
 } from "@/lib/session-attachment-events"
-import {
-  ConversationContextBar,
-  ConversationFolderBranchPicker,
-  useConversationFolderBranchPickerVisible,
-} from "@/components/chat/conversation-context-bar"
+import { ConversationContextBar } from "@/components/chat/conversation-context-bar"
 import { InlineModeSelector } from "@/components/chat/mode-selector"
 import { InlineSessionConfigSelector } from "@/components/chat/session-config-selector"
 import { ModelOptionPicker } from "@/components/chat/model-option-picker"
@@ -990,17 +986,8 @@ export function MessageInput({
   const hasAnySelector =
     showConfigLoading || hasConfigOptions || showModeLoading || showModeSelector
   const hasInlineSelectors = hasConfigOptions || showModeSelector
-  // Keep hooks unconditional, then gate the local picker at the presentation
-  // boundary. Cloud composers still share this component but must never expose
-  // the active local tab's folder merely because a local tab exists.
-  const localFolderBranchPickerVisible =
-    useConversationFolderBranchPickerVisible(attachmentTabId)
-  const hasFolderBranchPicker =
-    enableWorkspaceReferences && localFolderBranchPickerVisible
   const contextLocationLabel = contextLocation?.label.trim() ?? ""
   const hasContextLocation = contextLocationLabel.length > 0
-  const hasConversationLocation = hasFolderBranchPicker || hasContextLocation
-  const folderBranchPickerAttached = hasConversationLocation
   const imageAttachments = useMemo(
     () =>
       attachments.filter(
@@ -3024,16 +3011,10 @@ export function MessageInput({
           </div>
         </div>
       )}
-      <div
-        className={cn(
-          folderBranchPickerAttached
-            ? "overflow-hidden rounded-xl transition-colors"
-            : "contents",
-          folderBranchPickerAttached &&
-            showDragActive &&
-            "ring-1 ring-primary/40"
-        )}
-      >
+      {/* Layout-neutral group (`display:contents`): it once clipped the attached
+          mobile folder/branch row, which is retired, so it just wraps the
+          composer's context menu without affecting layout. */}
+      <div className="contents">
         <ContextMenu onOpenChange={handleContextMenuOpenChange}>
           {/* Disabled in non-secure web (no async clipboard read) so the native
               context menu — whose Paste still works over the editor text — is
@@ -3054,18 +3035,9 @@ export function MessageInput({
                 // ws-transparent-bg`: opaque surface normally, but with a
                 // workspace-bg image the composer goes transparent to reveal the
                 // real image like the rest of the canvas (no frosted treatment) —
-                // the border stays. Always on now: the folder/branch row no
-                // longer wraps the composer on desktop, so the surface has to
-                // live on the composer itself rather than the (removed) wrapper.
+                // the border stays. The surface lives on the composer itself.
                 "houhub-composer-chrome @container relative flex flex-col rounded-xl border border-foreground/20 bg-background ws-transparent-bg transition-colors",
-                // Standard focus ring — always shown when the composer is
-                // focused (the plain default input style). When the mobile
-                // folder/branch row is attached below, the composer is clipped by
-                // an `overflow-hidden` wrapper, so the ring must be inset to stay
-                // visible; standalone (desktop) it uses the normal outset ring.
-                folderBranchPickerAttached
-                  ? "focus-within:border-ring focus-within:ring-[3px] focus-within:ring-inset focus-within:ring-ring/50"
-                  : "focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
+                "focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
                 // Active session, tiled across multiple sessions: a gradient
                 // flows around the border to mark which tile is active — but ONLY
                 // while the composer itself is not focused. Focusing it hides the
@@ -3073,9 +3045,7 @@ export function MessageInput({
                 // A lone/non-tiled session (showActiveFlow=false) and inactive
                 // tiles show the plain default border.
                 showActiveFlow && "houhub-composer-flow",
-                !folderBranchPickerAttached &&
-                  showDragActive &&
-                  "ring-1 ring-primary/40",
+                showDragActive && "ring-1 ring-primary/40",
                 className
               )}
             >
@@ -3620,31 +3590,17 @@ export function MessageInput({
             </ContextMenuSub>
           </ContextMenuContent>
         </ContextMenu>
-        {hasConversationLocation && (
-          // `pl-2` mirrors the action bar's `px-2` so this row lines up with the
-          // composer above. Kept on the rem scale (no px literals) so it tracks
-          // UI zoom; the folder icon then aligns with the centered "+" icon
-          // because both buttons add the same 1px transparent border (paired
-          // with the picker buttons' `px-1.5`).
-          <div
-            className={cn(
-              "flex items-center gap-1 pl-2 text-xs text-muted-foreground",
-              folderBranchPickerAttached ? "rounded-b-xl pt-1 pr-2" : "mt-1.5"
-            )}
-          >
-            {hasFolderBranchPicker ? (
-              <ConversationFolderBranchPicker tabId={attachmentTabId} />
-            ) : (
-              <div
-                className="flex h-6 min-w-0 items-center gap-1 px-1.5"
-                title={contextLocation?.title ?? contextLocationLabel}
-              >
-                <FolderSearch className="size-3 shrink-0" />
-                <span className="max-w-[220px] truncate">
-                  {contextLocationLabel}
-                </span>
-              </div>
-            )}
+        {hasContextLocation && (
+          <div className="mt-1.5 flex items-center gap-1 pl-2 text-xs text-muted-foreground">
+            <div
+              className="flex h-6 min-w-0 items-center gap-1 px-1.5"
+              title={contextLocation?.title ?? contextLocationLabel}
+            >
+              <FolderSearch className="size-3 shrink-0" />
+              <span className="max-w-[220px] truncate">
+                {contextLocationLabel}
+              </span>
+            </div>
           </div>
         )}
       </div>
