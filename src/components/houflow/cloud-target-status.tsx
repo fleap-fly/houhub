@@ -1,11 +1,13 @@
 "use client"
 
 import { Bot, ServerCog } from "lucide-react"
+import { AgentIcon } from "@/components/agent-icon"
 import type {
   HouflowAgentTarget,
   HouflowAgentTargetCapability,
   HouflowConnectorSummary,
 } from "@/houflow/types"
+import type { AgentType } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 export function CloudTargetIcon({
@@ -21,12 +23,18 @@ export function CloudTargetIcon({
     size === "sm"
       ? "h-3.5 w-3.5 shrink-0 text-muted-foreground"
       : "h-4 w-4 shrink-0 text-muted-foreground"
-  const icon =
-    target.kind === "hosted_connected" || target.kind === "external_local" ? (
-      <ServerCog className={iconClass} />
-    ) : (
-      <Bot className={iconClass} />
-    )
+  const agentType = resolveRuntimeAgentType(
+    target.metadata.runtime_engine,
+    target.metadata.agent_type,
+    target.provider
+  )
+  const icon = agentType ? (
+    <AgentIcon agentType={agentType} className={iconClass} />
+  ) : target.kind === "hosted_connected" || target.kind === "external_local" ? (
+    <ServerCog className={iconClass} />
+  ) : (
+    <Bot className={iconClass} />
+  )
 
   return (
     <span
@@ -43,6 +51,46 @@ export function CloudTargetIcon({
       />
     </span>
   )
+}
+
+export function resolveRuntimeAgentType(
+  ...values: Array<string | null | undefined>
+): AgentType | null {
+  for (const value of values) {
+    const normalized = value
+      ?.trim()
+      .toLowerCase()
+      .replace(/[\s_]+/g, "-")
+    if (!normalized) continue
+    const agentType = RUNTIME_AGENT_TYPES[normalized]
+    if (agentType) return agentType
+  }
+  return null
+}
+
+const RUNTIME_AGENT_TYPES: Record<string, AgentType> = {
+  claude: "claude_code",
+  "claude-code": "claude_code",
+  claudecode: "claude_code",
+  codex: "codex",
+  "open-code": "open_code",
+  opencode: "open_code",
+  gemini: "gemini",
+  "gemini-cli": "gemini",
+  "open-claw": "open_claw",
+  openclaw: "open_claw",
+  cline: "cline",
+  hermes: "hermes",
+  "hermes-agent": "hermes",
+  codebuddy: "code_buddy",
+  "code-buddy": "code_buddy",
+  "codebuddy-code": "code_buddy",
+  kimi: "kimi_code",
+  "kimi-code": "kimi_code",
+  pi: "pi",
+  grok: "grok",
+  "grok-build": "grok",
+  cursor: "cursor",
 }
 
 export function CloudTargetStatusDot({

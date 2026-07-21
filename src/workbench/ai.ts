@@ -13,6 +13,7 @@ export interface WorkbenchAssistant {
   id: string
   name: string
   description: string | null
+  runtimeEngine: string | null
 }
 
 export interface WorkbenchAiSession {
@@ -250,6 +251,11 @@ function normalizeAssistant(value: unknown): WorkbenchAssistant | null {
     id,
     name: stringValue(record.name) || id,
     description: stringValue(record.description) || null,
+    runtimeEngine:
+      stringValue(record.runtimeEngine) ||
+      stringValue(record.runtime_engine) ||
+      stringValue(asRecord(record.metadata)?.runtime_engine) ||
+      null,
   }
 }
 

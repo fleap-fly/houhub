@@ -22,7 +22,14 @@ describe("workbench ai client", () => {
 
   it("lists assistants with the active project scope", async () => {
     callMock.mockResolvedValueOnce({
-      items: [{ id: "agent-1", name: "Planner", description: "Plan work" }],
+      items: [
+        {
+          id: "agent-1",
+          name: "Planner",
+          description: "Plan work",
+          runtimeEngine: "codex",
+        },
+      ],
       defaultAssistantId: "agent-1",
     })
 
@@ -33,7 +40,12 @@ describe("workbench ai client", () => {
     })
     expect(result.defaultAssistantId).toBe("agent-1")
     expect(result.items).toEqual([
-      { id: "agent-1", name: "Planner", description: "Plan work" },
+      {
+        id: "agent-1",
+        name: "Planner",
+        description: "Plan work",
+        runtimeEngine: "codex",
+      },
     ])
   })
 

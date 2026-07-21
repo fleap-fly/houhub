@@ -3,7 +3,7 @@
 import { HouflowAccountButton } from "./houflow-account-button"
 import { WorkbenchAccountButton } from "./workbench-account-button"
 
-/** HouHub-owned identity controls mounted into the upstream window chrome. */
+/** Independent Houflow and project identities for HouHub-owned UI surfaces. */
 export function HouhubWorkspaceIdentityControls() {
   return (
     <>

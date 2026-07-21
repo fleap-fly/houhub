@@ -16,7 +16,6 @@ import {
   AppWorkspaceProvider,
   ConversationStatusEventBridge,
 } from "@/contexts/app-workspace-context"
-import { WorkbenchAutoMount } from "@/workbench/workbench-auto-mount"
 import { WorkbenchCloudProvider } from "@/workbench/workbench-cloud-context"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { TaskProvider } from "@/contexts/task-context"
@@ -1129,7 +1128,6 @@ function WorkbenchRouteConversationSync() {
 function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
   return (
     <AppWorkspaceProvider>
-      <WorkbenchAutoMount />
       <AlertProvider>
         <GitCredentialProvider>
           <TaskProvider>

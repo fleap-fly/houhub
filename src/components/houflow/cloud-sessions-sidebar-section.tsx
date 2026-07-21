@@ -5,14 +5,12 @@ import type { AgentHubConversationSessionSnapshot } from "@houshan/agent-hub-net
 import {
   Archive,
   Bot,
-  BriefcaseBusiness,
   ChevronDown,
   ChevronRight,
   Cloud,
   Loader2,
   MoreHorizontal,
   RefreshCw,
-  ServerCog,
   SquarePen,
   Trash2,
 } from "lucide-react"
@@ -37,7 +35,11 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
-import { CloudTargetIcon } from "@/components/houflow/cloud-target-status"
+import { AgentIcon } from "@/components/agent-icon"
+import {
+  CloudTargetIcon,
+  resolveRuntimeAgentType,
+} from "@/components/houflow/cloud-target-status"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useHouflowDesktopStore } from "@/houflow"
 import { useHouflowCloudWorkspaceStore } from "@/houflow/cloud-workspace-context"
@@ -56,6 +58,10 @@ import { cn } from "@/lib/utils"
 
 const INITIAL_TARGET_COUNT = 6
 const INITIAL_SESSION_COUNT = 4
+const CLOUD_TREE_ROW_CLASS =
+  "flex h-[1.9375rem] w-full items-center rounded-full transition-colors duration-[120ms]"
+const CLOUD_TREE_ROW_HOVER_CLASS =
+  "hover:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)]"
 
 export function CloudSessionsSidebarSection() {
   const t = useTranslations("HouflowCloud")
@@ -281,9 +287,10 @@ export function CloudSessionsSidebarSection() {
               <TargetGroup
                 connector={houflow.snapshot?.connector ?? null}
                 expanded={managedExpanded}
-                icon="managed"
                 label={t("targetManaged")}
                 selectedTargetKey={cloud.selectedTargetKey}
+                selectedSessionId={cloud.selectedSessionId}
+                selectedHostedSessionId={cloud.selectedHostedSessionId}
                 sessionsByAgent={sessionsByAgent}
                 hostedSessionsByAgent={new Map()}
                 hostedSessionPages={{}}
@@ -333,9 +340,10 @@ export function CloudSessionsSidebarSection() {
               <TargetGroup
                 connector={houflow.snapshot?.connector ?? null}
                 expanded={hostedExpanded}
-                icon="hosted"
                 label={t("targetHostedResident")}
                 selectedTargetKey={cloud.selectedTargetKey}
+                selectedSessionId={cloud.selectedSessionId}
+                selectedHostedSessionId={cloud.selectedHostedSessionId}
                 sessionsByAgent={sessionsByAgent}
                 hostedSessionsByAgent={hostedSessionsByAgent(
                   cloud.hostedSessions
@@ -565,9 +573,10 @@ export function CloudSessionsSidebarSection() {
 function TargetGroup({
   connector,
   expanded,
-  icon,
   label,
   selectedTargetKey,
+  selectedSessionId,
+  selectedHostedSessionId,
   sessionsByAgent,
   hostedSessionsByAgent,
   hostedSessionPages,
@@ -590,9 +599,10 @@ function TargetGroup({
 }: {
   connector: HouflowConnectorSummary | null
   expanded: boolean
-  icon: "managed" | "hosted"
   label: string
   selectedTargetKey: string | null
+  selectedSessionId: string | null
+  selectedHostedSessionId: string | null
   sessionsByAgent: Map<string, HouflowCloudSession[]>
   hostedSessionsByAgent: Map<string, AgentHubConversationSessionSnapshot[]>
   hostedSessionPages: Record<
@@ -630,20 +640,19 @@ function TargetGroup({
     <div>
       <button
         type="button"
-        className="flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-left text-[0.75rem] text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
+        className="group flex h-8 w-full items-center gap-1.5 rounded-md px-2 text-left text-sidebar-foreground/50 outline-none transition-colors hover:text-sidebar-foreground/80 focus-visible:ring-2 focus-visible:ring-ring"
         onClick={onToggle}
       >
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-        )}
-        {icon === "hosted" ? (
-          <ServerCog className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <Bot className="h-3.5 w-3.5 shrink-0" />
-        )}
-        <span className="min-w-0 flex-1 truncate">{label}</span>
+        <span className="min-w-0 truncate text-[0.875rem]">{label}</span>
+        <ChevronRight
+          className={cn(
+            "h-3 w-3 shrink-0 transition-[transform,opacity] duration-200",
+            expanded
+              ? "rotate-90 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
+              : "opacity-100"
+          )}
+        />
+        <span className="min-w-0 flex-1" />
         <span className="rounded-[0.3125rem] bg-primary/10 px-1 font-mono text-[0.625rem] text-primary">
           {targets.length}
         </span>
@@ -665,11 +674,19 @@ function TargetGroup({
               : sessions.slice(0, INITIAL_SESSION_COUNT)
             const selected = selectedTargetKey === target.key
             return (
-              <div key={target.key}>
-                <div className="group/target-row flex items-center">
+              <div key={target.key} className="bg-sidebar ws-transparent-bg">
+                <div
+                  className={cn(
+                    "group/target-row",
+                    CLOUD_TREE_ROW_CLASS,
+                    selected
+                      ? "bg-sidebar-primary/8"
+                      : CLOUD_TREE_ROW_HOVER_CLASS
+                  )}
+                >
                   <button
                     type="button"
-                    className="flex h-8 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex h-full w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() => onToggleTarget(target.key)}
                     aria-label={
                       targetExpanded
@@ -687,11 +704,7 @@ function TargetGroup({
                   </button>
                   <button
                     type="button"
-                    className={cn(
-                      "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left outline-none",
-                      "transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring",
-                      selected && "bg-sidebar-primary/8"
-                    )}
+                    className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-full pr-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() => onChangeTarget(target.key)}
                   >
                     <CloudTargetIcon
@@ -702,12 +715,15 @@ function TargetGroup({
                     <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-sidebar-foreground">
                       {target.name}
                     </span>
+                    <span className="inline-flex h-[0.9375rem] min-w-4 shrink-0 items-center justify-center rounded-[0.3125rem] bg-primary/10 px-1 text-[0.625rem] font-semibold leading-none text-primary">
+                      {childCount}
+                    </span>
                   </button>
                   <Button
                     type="button"
                     variant="ghost"
                     size="icon-xs"
-                    className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground group-hover/target-row:opacity-100 focus-visible:opacity-100"
+                    className="mr-1.5 h-6 w-6 shrink-0 justify-end rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground group-hover/target-row:opacity-100 focus-visible:opacity-100"
                     onClick={() => onNewSession(target.key)}
                     title={t("newSession")}
                     aria-label={t("newSession")}
@@ -752,6 +768,9 @@ function TargetGroup({
                       .map((snapshot) => (
                         <HostedSessionRow
                           key={snapshot.session.id}
+                          selected={
+                            selectedHostedSessionId === snapshot.session.id
+                          }
                           snapshot={snapshot}
                           onRequestDeleteHostedSession={
                             onRequestDeleteHostedSession
@@ -777,6 +796,7 @@ function TargetGroup({
                     {visibleSessions.map((session) => (
                       <SessionRow
                         key={session.id}
+                        selected={selectedSessionId === session.id}
                         session={session}
                         onArchiveSession={onArchiveSession}
                         onRequestDeleteSession={onRequestDeleteSession}
@@ -812,10 +832,12 @@ function TargetGroup({
 
 function HostedSessionRow({
   snapshot,
+  selected,
   onRequestDeleteHostedSession,
   onSelectHostedSession,
 }: {
   snapshot: AgentHubConversationSessionSnapshot
+  selected: boolean
   onRequestDeleteHostedSession: (
     snapshot: AgentHubConversationSessionSnapshot
   ) => void
@@ -827,27 +849,40 @@ function HostedSessionRow({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className="group/hosted-row flex items-center">
+        <div
+          className={cn(
+            "group/hosted-row bg-sidebar ws-transparent-bg",
+            CLOUD_TREE_ROW_CLASS,
+            selected ? "bg-sidebar-primary/8" : CLOUD_TREE_ROW_HOVER_CLASS
+          )}
+        >
           <button
             type="button"
-            className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
+            className="relative flex h-full min-w-0 flex-1 items-center gap-2 rounded-full py-0 pr-1 pl-7 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onClick={() => onSelectHostedSession(snapshot)}
           >
             <span
+              aria-hidden
+              className="absolute inset-y-0 left-[0.875rem] w-0.5 -translate-x-1/2 bg-sidebar-border"
+            />
+            <span
               className={cn(
-                "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50",
+                "absolute left-[0.875rem] h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-muted-foreground/50 ring-2 ring-sidebar",
                 activityDotClass(status)
               )}
             />
-            <span className="min-w-0 flex-1 truncate text-[0.75rem] text-muted-foreground">
-              {title} · {status}
+            <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-sidebar-foreground">
+              {title}
+            </span>
+            <span className="shrink-0 text-[0.625rem] text-muted-foreground">
+              {status}
             </span>
           </button>
           <Button
             type="button"
             variant="ghost"
             size="icon-xs"
-            className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground group-hover/hosted-row:opacity-100 focus-visible:opacity-100"
+            className="mr-1.5 h-6 w-6 shrink-0 justify-end rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground group-hover/hosted-row:opacity-100 focus-visible:opacity-100"
             onClick={(event) => {
               event.stopPropagation()
               onRequestDeleteHostedSession(snapshot)
@@ -874,11 +909,13 @@ function HostedSessionRow({
 
 function SessionRow({
   session,
+  selected,
   onArchiveSession,
   onRequestDeleteSession,
   onSelectSession,
 }: {
   session: HouflowCloudSession
+  selected: boolean
   onArchiveSession: (sessionId: string) => void
   onRequestDeleteSession: (session: HouflowCloudSession) => void
   onSelectSession: (sessionId: string) => void
@@ -888,20 +925,32 @@ function SessionRow({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className="group/session-row flex items-center">
+        <div
+          className={cn(
+            "group/session-row bg-sidebar ws-transparent-bg",
+            CLOUD_TREE_ROW_CLASS,
+            selected ? "bg-sidebar-primary/8" : CLOUD_TREE_ROW_HOVER_CLASS
+          )}
+        >
           <button
             type="button"
-            className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
+            className="relative flex h-full min-w-0 flex-1 items-center gap-2 rounded-full py-0 pr-1 pl-7 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onClick={() => onSelectSession(session.id)}
           >
             <span
+              aria-hidden
+              className="absolute inset-y-0 left-[0.875rem] w-0.5 -translate-x-1/2 bg-sidebar-border"
+            />
+            <span
               className={cn(
-                "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50",
+                "absolute left-[0.875rem] h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-muted-foreground/50 ring-2 ring-sidebar",
                 activityDotClass(session.status)
               )}
             />
-            <span className="min-w-0 flex-1 truncate text-[0.75rem] text-muted-foreground">
-              {formatConversationTitle(session.title) || t("untitled")} ·{" "}
+            <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-sidebar-foreground">
+              {formatConversationTitle(session.title) || t("untitled")}
+            </span>
+            <span className="shrink-0 text-[0.625rem] text-muted-foreground">
               {archived ? t("archived") : session.status}
             </span>
           </button>
@@ -909,7 +958,7 @@ function SessionRow({
             type="button"
             variant="ghost"
             size="icon-xs"
-            className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground group-hover/session-row:opacity-100 focus-visible:opacity-100"
+            className="mr-1.5 h-6 w-6 shrink-0 justify-end rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-sidebar-foreground group-hover/session-row:opacity-100 focus-visible:opacity-100"
             onClick={(event) => {
               event.stopPropagation()
               if (archived) onRequestDeleteSession(session)
@@ -985,16 +1034,19 @@ function WorkbenchTargetGroup({
     <div>
       <button
         type="button"
-        className="flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-left text-[0.75rem] text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
+        className="group flex h-8 w-full items-center gap-1.5 rounded-md px-2 text-left text-sidebar-foreground/50 outline-none transition-colors hover:text-sidebar-foreground/80 focus-visible:ring-2 focus-visible:ring-ring"
         onClick={onToggle}
       >
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-        )}
-        <BriefcaseBusiness className="h-3.5 w-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate">{label}</span>
+        <span className="min-w-0 truncate text-[0.875rem]">{label}</span>
+        <ChevronRight
+          className={cn(
+            "h-3 w-3 shrink-0 transition-[transform,opacity] duration-200",
+            expanded
+              ? "rotate-90 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
+              : "opacity-100"
+          )}
+        />
+        <span className="min-w-0 flex-1" />
         <span className="rounded-[0.3125rem] bg-primary/10 px-1 font-mono text-[0.625rem] text-primary">
           {assistants.length}
         </span>
@@ -1010,12 +1062,23 @@ function WorkbenchTargetGroup({
             const visibleSessions = agentExpanded
               ? assistantSessions
               : assistantSessions.slice(0, INITIAL_SESSION_COUNT)
+            const assistantAgentType = resolveRuntimeAgentType(
+              assistant.runtimeEngine
+            )
             return (
-              <div key={assistant.id}>
-                <div className="flex items-center">
+              <div key={assistant.id} className="bg-sidebar ws-transparent-bg">
+                <div
+                  className={cn(
+                    "group/project-agent-row",
+                    CLOUD_TREE_ROW_CLASS,
+                    selectedAssistantId === assistant.id && !selectedSessionId
+                      ? "bg-sidebar-primary/8"
+                      : CLOUD_TREE_ROW_HOVER_CLASS
+                  )}
+                >
                   <button
                     type="button"
-                    className="flex h-8 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex h-full w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() => onToggleAgent(assistant.id)}
                     aria-label={
                       agentExpanded
@@ -1033,18 +1096,22 @@ function WorkbenchTargetGroup({
                   </button>
                   <button
                     type="button"
-                    className={cn(
-                      "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left outline-none",
-                      "transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring",
-                      selectedAssistantId === assistant.id &&
-                        !selectedSessionId &&
-                        "bg-sidebar-primary/8"
-                    )}
+                    className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-full pr-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() => onSelectAssistant(assistant.id)}
                   >
-                    <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    {assistantAgentType ? (
+                      <AgentIcon
+                        agentType={assistantAgentType}
+                        className="h-3.5 w-3.5 shrink-0"
+                      />
+                    ) : (
+                      <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    )}
                     <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-sidebar-foreground">
                       {assistant.name}
+                    </span>
+                    <span className="inline-flex h-[0.9375rem] min-w-4 shrink-0 items-center justify-center rounded-[0.3125rem] bg-primary/10 px-1 text-[0.625rem] font-semibold leading-none text-primary">
+                      {assistantSessions.length}
                     </span>
                   </button>
                 </div>
@@ -1055,14 +1122,20 @@ function WorkbenchTargetGroup({
                         key={session.sessionId}
                         type="button"
                         className={cn(
-                          "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring",
+                          "relative flex h-[1.9375rem] w-full items-center gap-2 rounded-full py-0 pr-2 pl-7 text-left text-sidebar-foreground outline-none transition-colors duration-[120ms] focus-visible:ring-2 focus-visible:ring-ring",
                           selectedSessionId === session.sessionId &&
-                            "bg-sidebar-primary/8"
+                            "bg-sidebar-primary/8",
+                          selectedSessionId !== session.sessionId &&
+                            CLOUD_TREE_ROW_HOVER_CLASS
                         )}
                         onClick={() => onSelectSession(session.sessionId)}
                       >
-                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
-                        <span className="min-w-0 flex-1 truncate text-[0.75rem] text-muted-foreground">
+                        <span
+                          aria-hidden
+                          className="absolute inset-y-0 left-[0.875rem] w-0.5 -translate-x-1/2 bg-sidebar-border"
+                        />
+                        <span className="absolute left-[0.875rem] h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-muted-foreground/50 ring-2 ring-sidebar" />
+                        <span className="min-w-0 flex-1 truncate text-[0.8125rem]">
                           {formatConversationTitle(session.title) ||
                             t("untitled")}
                         </span>

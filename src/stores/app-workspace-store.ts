@@ -14,6 +14,7 @@ import {
   listAllFolderDetails,
   listOpenFolderDetails,
 } from "@/stores/local-workspace-read"
+import { isPsPath } from "@/workbench/space-fs"
 import type {
   AgentStats,
   AgentType,
@@ -173,7 +174,11 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
             branches.set(f.id, f.git_branch ?? null)
           }
         }
-        set({ folders: openList, allFolders: allList, branches })
+        set({
+          folders: openList.filter((folder) => !isPsPath(folder.path)),
+          allFolders: allList,
+          branches,
+        })
       } catch (err) {
         console.error("[AppWorkspace] fetchFolders failed:", err)
       } finally {
@@ -313,7 +318,9 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       // lookups). Seeding a chat folder into `folders` would render a "Chat"
       // header row in the sidebar until the next refetch.
       set({
-        ...(detail.kind !== "chat" ? { folders: upsert(folders) } : {}),
+        ...(detail.kind !== "chat" && !isPsPath(detail.path)
+          ? { folders: upsert(folders) }
+          : {}),
         allFolders: upsert(allFolders),
       })
     },

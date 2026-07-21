@@ -8,13 +8,15 @@ import {
 
 const h = vi.hoisted(() => ({
   listAllConversations: vi.fn(async () => [] as DbConversationSummary[]),
+  listAllFolderDetails: vi.fn(async () => []),
+  listOpenFolderDetails: vi.fn(async () => []),
 }))
 
 vi.mock("@/lib/api", () => ({
   getFolder: vi.fn(),
   listAllConversations: h.listAllConversations,
-  listAllFolderDetails: vi.fn(async () => []),
-  listOpenFolderDetails: vi.fn(async () => []),
+  listAllFolderDetails: h.listAllFolderDetails,
+  listOpenFolderDetails: h.listOpenFolderDetails,
   openFolder: vi.fn(),
   openFolderById: vi.fn(),
   openWorktreeFolder: vi.fn(),
@@ -47,6 +49,8 @@ function makeSummary(id: number): DbConversationSummary {
 describe("HouHub local workspace resilience", () => {
   beforeEach(() => {
     h.listAllConversations.mockReset().mockResolvedValue([])
+    h.listAllFolderDetails.mockReset().mockResolvedValue([])
+    h.listOpenFolderDetails.mockReset().mockResolvedValue([])
     resetAppWorkspaceStore()
   })
 
@@ -64,5 +68,32 @@ describe("HouHub local workspace resilience", () => {
 
     expect(useAppWorkspaceStore.getState().conversations).toEqual([cached])
     expect(useAppWorkspaceStore.getState().conversationsError).toBeNull()
+  })
+
+  it("keeps project-system mounts out of the local folder sidebar", async () => {
+    const local = {
+      id: 1,
+      path: "/work/local",
+      name: "local",
+      alias: null,
+      color: "default",
+      kind: "regular" as const,
+      parent_id: null,
+      default_agent_type: null,
+      git_branch: null,
+    }
+    const project = {
+      ...local,
+      id: 2,
+      path: "ps://fe213ec3-5d9d-44a9-bd7a-c611774a2067",
+      name: "fe213ec3-5d9d-44a9-bd7a-c611774a2067",
+    }
+    h.listOpenFolderDetails.mockResolvedValueOnce([local, project])
+    h.listAllFolderDetails.mockResolvedValueOnce([local, project])
+
+    await useAppWorkspaceStore.getState().fetchFolders()
+
+    expect(useAppWorkspaceStore.getState().folders).toEqual([local])
+    expect(useAppWorkspaceStore.getState().allFolders).toEqual([local, project])
   })
 })
