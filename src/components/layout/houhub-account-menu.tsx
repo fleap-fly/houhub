@@ -6,6 +6,7 @@ import {
   Check,
   ChevronUp,
   CircleUserRound,
+  Gauge,
   Loader2,
   LogIn,
   LogOut,
@@ -23,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useHouflowDesktopStore } from "@/houflow"
+import { gatewayDailyQuotaDisplay } from "@/houflow/quota-display"
 import { toErrorMessage } from "@/lib/app-error"
 import { openUrl } from "@/lib/platform"
 import { cn } from "@/lib/utils"
@@ -35,6 +37,7 @@ interface AccountMenuCopy {
   project: string
   signIn: string
   signedIn: string
+  usage: string
   signOutHouflow: string
   signOutProject: string
   loginFailed: string
@@ -49,6 +52,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     project: "项目账户",
     signIn: "登录",
     signedIn: "已登录",
+    usage: "用量",
     signOutHouflow: "退出 Houflow",
     signOutProject: "退出项目账户",
     loginFailed: "登录失败",
@@ -61,6 +65,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     project: "專案帳戶",
     signIn: "登入",
     signedIn: "已登入",
+    usage: "用量",
     signOutHouflow: "登出 Houflow",
     signOutProject: "登出專案帳戶",
     loginFailed: "登入失敗",
@@ -73,6 +78,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     project: "Project account",
     signIn: "Sign in",
     signedIn: "Signed in",
+    usage: "Usage",
     signOutHouflow: "Sign out of Houflow",
     signOutProject: "Sign out of project account",
     loginFailed: "Sign-in failed",
@@ -85,6 +91,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     project: "プロジェクトアカウント",
     signIn: "サインイン",
     signedIn: "サインイン済み",
+    usage: "使用量",
     signOutHouflow: "Houflow からサインアウト",
     signOutProject: "プロジェクトからサインアウト",
     loginFailed: "サインインに失敗しました",
@@ -97,6 +104,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     project: "프로젝트 계정",
     signIn: "로그인",
     signedIn: "로그인됨",
+    usage: "사용량",
     signOutHouflow: "Houflow 로그아웃",
     signOutProject: "프로젝트 계정 로그아웃",
     loginFailed: "로그인 실패",
@@ -109,6 +117,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     project: "Cuenta del proyecto",
     signIn: "Iniciar sesión",
     signedIn: "Sesión iniciada",
+    usage: "Uso",
     signOutHouflow: "Cerrar sesión en Houflow",
     signOutProject: "Cerrar sesión del proyecto",
     loginFailed: "Error al iniciar sesión",
@@ -121,6 +130,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     project: "Projektkonto",
     signIn: "Anmelden",
     signedIn: "Angemeldet",
+    usage: "Nutzung",
     signOutHouflow: "Von Houflow abmelden",
     signOutProject: "Vom Projektkonto abmelden",
     loginFailed: "Anmeldung fehlgeschlagen",
@@ -133,6 +143,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     project: "Compte projet",
     signIn: "Se connecter",
     signedIn: "Connecté",
+    usage: "Utilisation",
     signOutHouflow: "Se déconnecter de Houflow",
     signOutProject: "Se déconnecter du projet",
     loginFailed: "Échec de la connexion",
@@ -145,6 +156,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     project: "Conta do projeto",
     signIn: "Entrar",
     signedIn: "Conectado",
+    usage: "Uso",
     signOutHouflow: "Sair do Houflow",
     signOutProject: "Sair da conta do projeto",
     loginFailed: "Falha ao entrar",
@@ -157,6 +169,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     project: "حساب المشروع",
     signIn: "تسجيل الدخول",
     signedIn: "تم تسجيل الدخول",
+    usage: "الاستخدام",
     signOutHouflow: "تسجيل الخروج من Houflow",
     signOutProject: "تسجيل الخروج من حساب المشروع",
     loginFailed: "فشل تسجيل الدخول",
@@ -181,6 +194,7 @@ export function HouhubAccountMenu() {
     useShallow((state) => ({
       status: state.status,
       session: state.session,
+      quota: state.snapshot?.quota ?? null,
       error: state.error,
       signIn: state.signInWithHouflow,
       signOut: state.signOut,
@@ -210,6 +224,10 @@ export function HouhubAccountMenu() {
   )
   const displayLabel =
     houflow.session.userLabel || workbench.session.user?.label || copy.accounts
+  const usage = useMemo(
+    () => gatewayDailyQuotaDisplay(houflow.quota, locale),
+    [houflow.quota, locale]
+  )
 
   const signInHouflow = useCallback(async () => {
     setPending("houflow")
@@ -319,6 +337,37 @@ export function HouhubAccountMenu() {
             <LogIn className="h-3.5 w-3.5 text-muted-foreground" />
           )}
         </DropdownMenuItem>
+        {houflowConnected && usage ? (
+          <div className="px-2 py-1.5" data-testid="houflow-usage">
+            <div className="flex items-center gap-1.5 text-xs">
+              <Gauge className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="font-medium">{copy.usage}</span>
+              <span className="min-w-0 flex-1 truncate text-right text-muted-foreground">
+                {usage.remainingText ?? usage.usedText}
+              </span>
+            </div>
+            {usage.percent !== null ? (
+              <div
+                role="progressbar"
+                aria-label={copy.usage}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(usage.percent)}
+                className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted"
+              >
+                <div
+                  className="h-full rounded-full bg-primary transition-[width]"
+                  style={{ width: `${usage.percent}%` }}
+                />
+              </div>
+            ) : null}
+            {usage.remainingText ? (
+              <div className="mt-1 truncate pl-5 text-[0.6875rem] text-muted-foreground">
+                {usage.usedText}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <DropdownMenuItem
           className="min-h-11"
           disabled={busy}

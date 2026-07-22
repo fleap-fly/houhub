@@ -173,12 +173,12 @@ fn engine_lock_path(data_dir: &Path) -> PathBuf {
 }
 
 /// Take an exclusive, non-blocking advisory lock on the engine lock file, held
-/// for the process lifetime. Uses the std cross-platform file lock (`flock` on
+/// for the process lifetime. Uses `fs2`'s cross-platform file lock (`flock` on
 /// Unix, `LockFileEx` on Windows), so the single-engine invariant is enforced on
-/// every platform. The aggressive boot reconcile (every `running` row is treated
-/// as interrupted) is only sound when this process is the sole engine on the DB;
-/// the held lock is the proof of that. The OS releases it on exit/crash, so the
-/// next boot reconciles correctly.
+/// every supported Rust toolchain and platform. The aggressive boot reconcile
+/// (every `running` row is treated as interrupted) is only sound when this
+/// process is the sole engine on the DB; the held lock is the proof of that. The
+/// OS releases it on exit/crash, so the next boot reconciles correctly.
 fn acquire_engine_ownership(data_dir: &Path) -> Ownership {
     let path = engine_lock_path(data_dir);
     let file = match std::fs::OpenOptions::new()
@@ -198,10 +198,10 @@ fn acquire_engine_ownership(data_dir: &Path) -> Ownership {
             return Ownership::Unavailable;
         }
     };
-    match file.try_lock() {
+    match fs2::FileExt::try_lock_exclusive(&file) {
         Ok(()) => Ownership::Exclusive(file),
-        Err(std::fs::TryLockError::WouldBlock) => Ownership::Taken,
-        Err(std::fs::TryLockError::Error(e)) => {
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ownership::Taken,
+        Err(e) => {
             // A real IO error (never `WouldBlock`) — e.g. a filesystem without
             // lock support. Fail closed: we won't run an engine we can't prove is
             // the only one.

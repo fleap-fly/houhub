@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { DbConversationSummary } from "@/lib/types"
+import type { DbConversationSummary, FolderDetail } from "@/lib/types"
 import {
   resetAppWorkspaceStore,
   useAppWorkspaceStore,
@@ -8,8 +8,8 @@ import {
 
 const h = vi.hoisted(() => ({
   listAllConversations: vi.fn(async () => [] as DbConversationSummary[]),
-  listAllFolderDetails: vi.fn(async () => []),
-  listOpenFolderDetails: vi.fn(async () => []),
+  listAllFolderDetails: vi.fn(async () => [] as FolderDetail[]),
+  listOpenFolderDetails: vi.fn(async () => [] as FolderDetail[]),
 }))
 
 vi.mock("@/lib/api", () => ({
@@ -81,6 +81,8 @@ describe("HouHub local workspace resilience", () => {
       parent_id: null,
       default_agent_type: null,
       git_branch: null,
+      last_opened_at: "2026-01-01T00:00:00.000Z",
+      sort_order: 1,
     }
     const project = {
       ...local,

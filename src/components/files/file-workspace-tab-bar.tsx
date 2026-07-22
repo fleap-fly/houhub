@@ -154,16 +154,6 @@ export function FileWorkspaceTabBar() {
   )
 }
 
-function openReadonlyHtmlInBrowser(content: string) {
-  const url = URL.createObjectURL(new Blob([content], { type: "text/html" }))
-  const opened = window.open(url, "_blank", "noreferrer")
-  if (!opened) {
-    URL.revokeObjectURL(url)
-    return
-  }
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
-}
-
 interface FileWorkspaceTabItemProps {
   tab: FileWorkspaceTab
   active: boolean

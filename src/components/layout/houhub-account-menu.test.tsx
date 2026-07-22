@@ -12,6 +12,14 @@ const state = vi.hoisted(() => ({
       status: "signed_out",
       userLabel: null as string | null,
     },
+    snapshot: null as {
+      quota: {
+        active: boolean
+        gatewayDailyLimitUsd: number | null
+        gatewayDailyUsedUsd: number | null
+        gatewayDailyRemainingUsd: number | null
+      } | null
+    } | null,
     error: null as string | null,
     signInWithHouflow: vi.fn(),
     signOut: vi.fn(),
@@ -58,6 +66,7 @@ describe("HouhubAccountMenu", () => {
     state.houflow.status = "signed_out"
     state.houflow.session.status = "signed_out"
     state.houflow.session.userLabel = null
+    state.houflow.snapshot = null
     state.houflow.error = null
     state.houflow.signInWithHouflow.mockReset().mockResolvedValue(undefined)
     state.houflow.signOut.mockReset().mockResolvedValue(undefined)
@@ -112,5 +121,32 @@ describe("HouhubAccountMenu", () => {
     await user.click(screen.getByText("Sign out of Houflow"))
     await waitFor(() => expect(state.houflow.signOut).toHaveBeenCalledOnce())
     expect(state.workbench.signOut).not.toHaveBeenCalled()
+  })
+
+  it("shows Houflow usage inside the account menu instead of the sidebar header", async () => {
+    state.houflow.status = "ready"
+    state.houflow.session.status = "signed_in"
+    state.houflow.session.userLabel = "houflow@example.com"
+    state.houflow.snapshot = {
+      quota: {
+        active: true,
+        gatewayDailyLimitUsd: 10,
+        gatewayDailyUsedUsd: 2.5,
+        gatewayDailyRemainingUsd: 7.5,
+      },
+    }
+    const user = userEvent.setup()
+    renderMenu()
+
+    expect(screen.queryByTestId("houflow-usage")).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Accounts" }))
+
+    expect(screen.getByTestId("houflow-usage")).toBeInTheDocument()
+    expect(screen.getByText("$7.50 remaining")).toBeInTheDocument()
+    expect(screen.getByText("Today $2.50 / $10")).toBeInTheDocument()
+    expect(screen.getByRole("progressbar", { name: "Usage" })).toHaveAttribute(
+      "aria-valuenow",
+      "25"
+    )
   })
 })
