@@ -25,6 +25,7 @@ import {
   FolderGit2,
   FolderOpen,
   FolderOpenDot,
+  FolderRoot,
   ListChecks,
   Loader2,
   MoreHorizontal,
@@ -38,7 +39,6 @@ import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
-import { useConversationLocate } from "@/contexts/conversation-locate-context"
 import { useTerminalContext } from "@/contexts/terminal-context"
 import { useThemeColor, useZoomLevel } from "@/hooks/use-appearance"
 import { useSortedAvailableAgents } from "@/hooks/use-sorted-available-agents"
@@ -52,6 +52,7 @@ import {
   updateFolderAlias,
   updateFolderDefaultAgent,
   deleteConversation,
+  listChildConversations,
 } from "@/lib/api"
 import { isDesktop, openFileDialog, revealItemInDir } from "@/lib/platform"
 import { getActiveRemoteConnectionId } from "@/lib/transport"
@@ -66,8 +67,11 @@ import {
   saveFolderExpanded,
   loadSectionCollapsed,
   saveSectionCollapsed,
+  loadConversationExpanded,
+  saveConversationExpanded,
   type SidebarSectionCollapsed,
   type SidebarSortMode,
+  type SidebarSectionOrder,
 } from "@/lib/sidebar-view-mode-storage"
 import {
   FOLDER_THEME_COLOR_INHERIT,
@@ -77,7 +81,11 @@ import {
   type FolderThemeColor,
   type ThemeColor,
 } from "@/lib/theme-presets"
-import { SidebarConversationCard } from "./sidebar-conversation-card"
+import {
+  SidebarConversationCard,
+  SubsessionAncestorRails,
+  CONV_RAIL_DEPTH_STEP,
+} from "./sidebar-conversation-card"
 import {
   applyReorder,
   buildOwnerHeaderIndex,
@@ -88,14 +96,17 @@ import {
   formatRelative,
   groupByFolderWithReuse,
   headerIndexForFolder,
+  mergeChildrenById,
   nextHeaderAfter,
   pointerYToTargetIndex,
   reuseSelected,
   reuseSet,
   selectChatConversationsWithReuse,
   selectPinnedWithReuse,
+  worktreeChildrenByParent,
   type SidebarRow,
 } from "./sidebar-conversation-grouping"
+import { useSubsessionSync } from "@/hooks/use-subsession-sync"
 import { SidebarSectionHeader } from "./sidebar-section-header"
 import { ConversationManageDialog } from "./conversation-manage-dialog"
 import { CloneDialog } from "@/components/layout/clone-dialog"
@@ -140,6 +151,18 @@ import { toErrorMessage } from "@/lib/app-error"
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? useLayoutEffect : useEffect
 
+// Shared empty merge map used when "Show worktrees" is on: worktree children
+// then keep their own conversation bucket / count / theme instead of being
+// folded into the parent. A module constant so the reference is stable across
+// renders (the `byFolder` / `folderTotalCounts` memos depend on it).
+const EMPTY_CHILD_TO_PARENT: ReadonlyMap<number, number> = new Map()
+
+// Shared empty container map used when "Show worktrees" is off: no repo is a
+// worktree container, so every folder renders flat. Stable reference so the
+// `containerChildren` memo (and buildRows through it) doesn't churn.
+const EMPTY_CONTAINER_CHILDREN: ReadonlyMap<number, readonly number[]> =
+  new Map()
+
 const FolderHeader = memo(function FolderHeader({
   folderId,
   folderName,
@@ -165,6 +188,9 @@ const FolderHeader = memo(function FolderHeader({
   isDragging,
   onGripPointerDown,
   suppressed = false,
+  depth = 0,
+  variant = "repo",
+  worktreeBranch = null,
 }: {
   folderId: number
   folderName: string
@@ -210,6 +236,27 @@ const FolderHeader = memo(function FolderHeader({
    * virtua still keeps it mounted in the buffer.
    */
   suppressed?: boolean
+  /**
+   * Nesting depth of the header row. 0 for a top-level repo / plain folder / repo
+   * container; 1 for a worktree or "root" sub-group shown under its container
+   * when "Show worktrees" is on. Drives the left indent and the connector-spine
+   * ancestor rails (a pure function of this number), mirroring the conversation
+   * card's per-level rail step.
+   */
+  depth?: number
+  /**
+   * Which glyph + label this header renders:
+   * - `repo` (default): a top-level repo / plain folder / repo container — the
+   *   FolderOpen/FolderClosed glyph and the repo-name alias label.
+   * - `worktree`: a git worktree sub-group — the FolderGit2 glyph and the branch
+   *   label (`worktreeBranch`).
+   * - `root`: a repo container's own-sessions sub-group — the FolderRoot glyph
+   *   and a fixed, non-localized "root" label.
+   */
+  variant?: "repo" | "worktree" | "root"
+  /** The worktree's branch name (its own `git_branch`), shown as the label when
+   *  `variant === "worktree"`. Falls back to the folder name when absent. */
+  worktreeBranch?: string | null
 }) {
   // Own the translations here rather than receiving `t` as a prop: next-intl
   // returns a fresh `t` on every parent render, so passing it down would defeat
@@ -285,9 +332,15 @@ const FolderHeader = memo(function FolderHeader({
                   isDragging ? "cursor-grabbing" : "cursor-grab"
                 )}
                 style={{
-                  paddingLeft: "calc(var(--conv-rail-axis) + 0.875rem)",
+                  paddingLeft: `calc(var(--conv-rail-axis) + 0.875rem + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
                 }}
               >
+                {/* Connector spine (Show worktrees): a depth-1 sub-group header
+                    draws its container's vertical rail at the depth-0 axis, so
+                    stacked across the container's children (root + worktree
+                    headers and their session cards) it forms one continuous line
+                    down from the container. Renders nothing at depth 0. */}
+                <SubsessionAncestorRails depth={depth} />
                 <span
                   aria-hidden
                   className={cn(
@@ -295,13 +348,17 @@ const FolderHeader = memo(function FolderHeader({
                   )}
                   style={{
                     top: "50%",
-                    left: "var(--conv-rail-axis)",
+                    left: `calc(var(--conv-rail-axis) + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
                     width: "0.875rem",
                     height: "0.875rem",
                     transform: "translate(-50%, -50%)",
                   }}
                 >
-                  {expanded ? (
+                  {variant === "worktree" ? (
+                    <FolderGit2 className="h-[0.875rem] w-[0.875rem]" />
+                  ) : variant === "root" ? (
+                    <FolderRoot className="h-[0.875rem] w-[0.875rem]" />
+                  ) : expanded ? (
                     <FolderOpen className="h-[0.875rem] w-[0.875rem]" />
                   ) : (
                     <FolderClosed className="h-[0.875rem] w-[0.875rem]" />
@@ -313,11 +370,21 @@ const FolderHeader = memo(function FolderHeader({
                       "min-w-0 flex-shrink truncate text-left text-[0.875rem] font-normal text-sidebar-foreground/75"
                     )}
                   >
-                    <FolderAliasLabel
-                      name={folderName}
-                      alias={folderAlias}
-                      bracketClassName="text-sidebar-foreground"
-                    />
+                    {variant === "worktree" ? (
+                      (worktreeBranch ?? folderName)
+                    ) : variant === "root" ? (
+                      // The container repo's own-sessions sub-group is labeled
+                      // with a fixed, non-localized "root" (its glyph is
+                      // FolderRoot); it stands for the repo root regardless of UI
+                      // language.
+                      "root"
+                    ) : (
+                      <FolderAliasLabel
+                        name={folderName}
+                        alias={folderAlias}
+                        bracketClassName="text-sidebar-foreground"
+                      />
+                    )}
                   </span>
                   <span
                     className={cn(
@@ -611,12 +678,18 @@ export interface SidebarConversationListHandle {
 export interface SidebarConversationListProps {
   showCompleted?: boolean
   sortMode?: SidebarSortMode
+  sectionOrder?: SidebarSectionOrder
+  /** When on, each repo's worktree child folders render as indented sub-groups
+   *  instead of being merged flat into the parent group. Defaults to off. */
+  showWorktrees?: boolean
 }
 
 export function SidebarConversationList({
   ref,
   showCompleted = true,
   sortMode = "created",
+  sectionOrder = "folders-first",
+  showWorktrees = false,
 }: SidebarConversationListProps & {
   ref?: Ref<SidebarConversationListHandle>
 }) {
@@ -627,7 +700,6 @@ export function SidebarConversationList({
   const { resolvedTheme } = useTheme()
   const { themeColor: appThemeColor } = useThemeColor()
   const { createTerminalInDirectory } = useTerminalContext()
-  const { registerLocate } = useConversationLocate()
   useZoomLevel()
   const folders = useAppWorkspaceStore((s) => s.folders)
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
@@ -669,6 +741,7 @@ export function SidebarConversationList({
         path: string
         color: string
         defaultAgentType: AgentType | null
+        gitBranch: string | null
       }
     >()
     for (const f of allFolders)
@@ -678,6 +751,7 @@ export function SidebarConversationList({
         path: f.path,
         color: f.color,
         defaultAgentType: f.default_agent_type,
+        gitBranch: f.git_branch,
       })
     return map
   }, [allFolders])
@@ -717,6 +791,14 @@ export function SidebarConversationList({
   const [folderExpanded, setFolderExpanded] = useState<Record<number, boolean>>(
     {}
   )
+  // Repo ids whose "root" sub-group (a container repo's own sessions, shown only
+  // under "Show worktrees") is collapsed. Session-only, not persisted: the
+  // container's own collapse — which hides the whole subtree — IS persisted via
+  // `folderExpanded`, so this indented sub-toggle is kept deliberately
+  // lightweight. Default (absent) = expanded.
+  const [rootGroupCollapsed, setRootGroupCollapsed] = useState<Set<number>>(
+    () => new Set()
+  )
   // Collapsed state of the two top-level sections ("Pinned", "Folders"). Absent
   // key = expanded (default). Hydrated from localStorage after mount.
   const [sectionCollapsed, setSectionCollapsed] =
@@ -724,6 +806,38 @@ export function SidebarConversationList({
   const pinnedExpanded = !sectionCollapsed.pinned
   const foldersExpanded = !sectionCollapsed.folders
   const chatsExpanded = !sectionCollapsed.chats
+  // ── Per-conversation delegation sub-session expansion ───────────────────
+  // Default COLLAPSED (unlike folders): only ids the user opened are tracked
+  // and persisted. Hydrated from localStorage after mount. `childrenByParent`
+  // is the lazily-fetched child cache (key absent = not fetched → renders a
+  // loading row; empty array = no live children → renders nothing, self-heals
+  // on the next refresh). The ref mirror lets the lazy-fetch dedupe read the
+  // latest cache without re-creating its callback.
+  const [conversationExpanded, setConversationExpanded] = useState<Set<number>>(
+    () => new Set()
+  )
+  const [childrenByParent, setChildrenByParent] = useState<
+    Map<number, DbConversationSummary[]>
+  >(() => new Map())
+  const childrenByParentRef = useRef(childrenByParent)
+  childrenByParentRef.current = childrenByParent
+  const childrenInFlightRef = useRef<Set<number>>(new Set())
+  // In-flight parent fetches → drives the loading spinner. A placeholder empty
+  // array is written into `childrenByParent` before the fetch so concurrent child
+  // upserts buffer into it (closing the lost-update race); `childrenLoading` then
+  // distinguishes "still fetching" from a settled-empty (stale-count) subtree.
+  const [childrenLoading, setChildrenLoading] = useState<Set<number>>(
+    () => new Set()
+  )
+  // Tombstones for soft-deleted child ids (FIFO-bounded in the sync hook) so a
+  // stale fetch snapshot or out-of-order upsert can't resurrect a deleted child —
+  // the child-cache analog of the context's root deletion guard.
+  const deletedChildIdsRef = useRef<Set<number>>(new Set())
+
+  // Keep the lazily-loaded sub-session cache live in real time: route child
+  // upsert/status/deleted events into `childrenByParent` (roots stay with the
+  // AppWorkspace context). child_count converges via backend parent re-emits.
+  useSubsessionSync({ setChildrenByParent, deletedChildIdsRef })
   const [removeConfirm, setRemoveConfirm] = useState<{
     folderId: number
     folderName: string
@@ -767,7 +881,7 @@ export function SidebarConversationList({
   const dragCleanupRef = useRef<(() => void) | null>(null)
   const autoscrollRef = useRef<number | null>(null)
   // Snapshots read by the imperative drag listeners without re-subscribing them.
-  const orderedFolderIdsRef = useRef<number[]>([])
+  const reorderableFolderIdsRef = useRef<number[]>([])
   const reorderingRef = useRef(false)
 
   useEffect(() => {
@@ -775,6 +889,7 @@ export function SidebarConversationList({
 
     setFolderExpanded(loadFolderExpanded())
     setSectionCollapsed(loadSectionCollapsed())
+    setConversationExpanded(new Set(loadConversationExpanded()))
   }, [])
 
   const toggleSection = useCallback(
@@ -927,6 +1042,16 @@ export function SidebarConversationList({
     return map
   }, [folders])
 
+  // The merge map used for DISPLAY (grouping, counts, theming). When "Show
+  // worktrees" is on it is empty, so each worktree child keeps its own bucket /
+  // count / theme and renders under its own header. The raw `childToParent`
+  // above is still used to know which folders ARE worktree children (nesting
+  // order, indent, grip gating). Off → identical to the historical behavior.
+  const displayChildToParent = useMemo(
+    () => (showWorktrees ? EMPTY_CHILD_TO_PARENT : childToParent),
+    [showWorktrees, childToParent]
+  )
+
   // Hold the previous grouping so unchanged folders keep their bucket array
   // reference across renders (lets memoized FolderGroupItems bail out). Updating
   // the ref inside the memo factory is a deliberate cache, idempotent under
@@ -937,11 +1062,11 @@ export function SidebarConversationList({
       folderConversations,
       sortMode,
       byFolderRef.current,
-      childToParent
+      displayChildToParent
     )
     byFolderRef.current = grouped
     return grouped
-  }, [folderConversations, sortMode, childToParent])
+  }, [folderConversations, sortMode, displayChildToParent])
 
   // Counts the unfiltered-but-non-pinned conversations per display group, so the
   // empty-hint renderer distinguishes a truly empty folder from one whose rows
@@ -951,17 +1076,22 @@ export function SidebarConversationList({
     const map = new Map<number, number>()
     for (const conv of conversations) {
       if (conv.pinned_at != null) continue
-      const groupId = childToParent.get(conv.folder_id) ?? conv.folder_id
+      const groupId = displayChildToParent.get(conv.folder_id) ?? conv.folder_id
       map.set(groupId, (map.get(groupId) ?? 0) + 1)
     }
     return map
-  }, [conversations, childToParent])
+  }, [conversations, displayChildToParent])
 
-  const orderedFolderIds = useMemo(() => {
+  // The reorderable, top-level folder sequence: worktree child folders are
+  // excluded (they follow their parent, never reorder on their own), so this is
+  // the source of truth for the custom drag gesture and its `pointerYToTargetIndex`
+  // math. When "Show worktrees" is off this is ALSO the display order; when on,
+  // `orderedFolderIds` below splices each repo's worktree children back in.
+  const reorderableFolderIds = useMemo(() => {
     const folderIdSet = new Set(folders.map((f) => f.id))
-    // Worktree child folders are merged into their parent group, so they get no
-    // header row of their own. Hidden chat folders never reach this list — the
-    // backend already excludes them from the open-folder set
+    // Worktree child folders are excluded here (`childToParent.has` is always the
+    // raw map, independent of `showWorktrees`). Hidden chat folders never reach
+    // this list — the backend already excludes them from the open-folder set
     // (`folder_service::list_open_folder_details`).
     const isHidden = (id: number) => childToParent.has(id)
     // During drag we honour the optimistic order so sibling folders shift live
@@ -996,6 +1126,27 @@ export function SidebarConversationList({
     return ids
   }, [folders, dragOrder, childToParent])
 
+  // "Show worktrees" container map: repo id → its open worktree child folder ids
+  // (sorted). A repo present here renders as a CONTAINER — buildRows nests its
+  // own sessions (a "root" sub-group) plus each worktree beneath it, and the
+  // whole subtree is gated on the container's own `folderExpanded` entry. Empty
+  // when the toggle is off (every folder then renders flat). Depends only on
+  // `folders` (+ the toggle), never on `conversations`, so status events don't
+  // rebuild it — preserving the single-status-event re-render budget.
+  const containerChildren = useMemo(
+    () =>
+      showWorktrees
+        ? worktreeChildrenByParent(reorderableFolderIds, folders)
+        : EMPTY_CONTAINER_CHILDREN,
+    [showWorktrees, reorderableFolderIds, folders]
+  )
+  // The repo ids that are containers (have ≥1 open worktree child). Drives the
+  // header render's container/plain distinction (total count, subtree toggle).
+  const containerRepoIds = useMemo(
+    () => new Set(containerChildren.keys()),
+    [containerChildren]
+  )
+
   const darkMode = resolvedTheme === "dark"
 
   // Flat row model for windowing — the pinned section, the folders section, and
@@ -1008,24 +1159,38 @@ export function SidebarConversationList({
       buildRows({
         pinned,
         pinnedExpanded,
-        orderedFolderIds,
+        // Top-level (reorderable) folders drive the outer order; buildRows nests
+        // each container's root sub-group + worktrees via `containerChildren`.
+        orderedFolderIds: reorderableFolderIds,
         byFolder,
         folderExpanded,
         folderTotalCounts,
         foldersExpanded,
         chatConversations,
         chatsExpanded,
+        sectionOrder,
+        conversationExpanded,
+        childrenByParent,
+        childrenLoading,
+        containerChildren,
+        rootGroupCollapsed,
       }),
     [
       pinned,
       pinnedExpanded,
-      orderedFolderIds,
+      reorderableFolderIds,
       byFolder,
       folderExpanded,
       folderTotalCounts,
       foldersExpanded,
       chatConversations,
       chatsExpanded,
+      sectionOrder,
+      conversationExpanded,
+      childrenByParent,
+      childrenLoading,
+      containerChildren,
+      rootGroupCollapsed,
     ]
   )
 
@@ -1034,7 +1199,7 @@ export function SidebarConversationList({
   // without being torn down and re-subscribed.
   const rowsRef = useRef<SidebarRow[]>(rows)
   rowsRef.current = rows
-  orderedFolderIdsRef.current = orderedFolderIds
+  reorderableFolderIdsRef.current = reorderableFolderIds
   reorderingRef.current = reordering
 
   // Sticky-overlay lookup tables, rebuilt only when the flat rows change
@@ -1055,29 +1220,27 @@ export function SidebarConversationList({
     expandAll() {
       setFolderExpanded((prev) => {
         const next: Record<number, boolean> = { ...prev }
-        for (const id of orderedFolderIds) next[id] = true
+        for (const id of reorderableFolderIds) next[id] = true
+        // Worktree children (containers only) are separate folder ids.
+        for (const kids of containerChildren.values())
+          for (const id of kids) next[id] = true
         saveFolderExpanded(next)
         return next
       })
+      // Expand every container's root sub-group too (session-only state).
+      setRootGroupCollapsed((prev) => (prev.size === 0 ? prev : new Set()))
     },
     collapseAll() {
       setFolderExpanded((prev) => {
         const next: Record<number, boolean> = { ...prev }
-        for (const id of orderedFolderIds) next[id] = false
+        for (const id of reorderableFolderIds) next[id] = false
+        for (const kids of containerChildren.values())
+          for (const id of kids) next[id] = false
         saveFolderExpanded(next)
         return next
       })
     },
   }))
-
-  // Publish scrollToActive to the locate context so the conversation detail
-  // header's "locate" button (which lives in another column) can reach it. The
-  // registered wrapper is stable; it always reads the current scrollToActiveRef.
-  useEffect(() => {
-    const scrollToActive = () => scrollToActiveRef.current()
-    registerLocate(scrollToActive)
-    return () => registerLocate(null)
-  }, [registerLocate])
 
   useEffect(() => {
     scrollToActiveRef.current = () => {
@@ -1128,11 +1291,52 @@ export function SidebarConversationList({
           pendingScrollRef.current = true
           return
         }
-        // A worktree conversation is rendered under its parent group, so the
-        // row's visibility is gated by the parent's expansion — expand the
-        // display group, not the (never-rendered) child folder id.
+        // Under "Show worktrees" the conversation may sit inside a container's
+        // subtree, which is gated top-down: the container (repo root) must be
+        // expanded first, then — for the repo's OWN sessions — its root
+        // sub-group. Each step defers the scroll one render (pendingScrollRef).
+        if (showWorktrees) {
+          const containerRepoId = childToParent.get(conv.folder_id) ?? null
+          if (
+            containerRepoId != null &&
+            !(folderExpanded[containerRepoId] ?? true)
+          ) {
+            setFolderExpanded((prev) => {
+              const next = { ...prev, [containerRepoId]: true }
+              saveFolderExpanded(next)
+              return next
+            })
+            pendingScrollRef.current = true
+            return
+          }
+          // The repo's own conversation lives in the indented root sub-group.
+          if (containerRepoIds.has(conv.folder_id)) {
+            if (!(folderExpanded[conv.folder_id] ?? true)) {
+              setFolderExpanded((prev) => {
+                const next = { ...prev, [conv.folder_id]: true }
+                saveFolderExpanded(next)
+                return next
+              })
+              pendingScrollRef.current = true
+              return
+            }
+            if (rootGroupCollapsed.has(conv.folder_id)) {
+              setRootGroupCollapsed((prev) => {
+                const next = new Set(prev)
+                next.delete(conv.folder_id)
+                return next
+              })
+              pendingScrollRef.current = true
+              return
+            }
+          }
+        }
+        // A worktree conversation is rendered under its display group's header,
+        // so the row's visibility is gated by that group's expansion. With
+        // "Show worktrees" off the display group is the parent repo; on, the
+        // worktree folder renders its own header, so expand the folder itself.
         const displayFolderId =
-          childToParent.get(conv.folder_id) ?? conv.folder_id
+          displayChildToParent.get(conv.folder_id) ?? conv.folder_id
         if (!(folderExpanded[displayFolderId] ?? true)) {
           setFolderExpanded((prev) => {
             const next = { ...prev, [displayFolderId]: true }
@@ -1165,7 +1369,11 @@ export function SidebarConversationList({
     selectedConversation,
     conversations,
     folderExpanded,
+    displayChildToParent,
+    showWorktrees,
     childToParent,
+    containerRepoIds,
+    rootGroupCollapsed,
     pinnedExpanded,
     foldersExpanded,
     chatsExpanded,
@@ -1178,6 +1386,126 @@ export function SidebarConversationList({
       return next
     })
   }, [])
+
+  // Toggle a container repo's "root" sub-group (its own sessions). Session-only,
+  // so unlike `toggleFolder` there is no persistence write.
+  const toggleRootGroup = useCallback((repoId: number) => {
+    setRootGroupCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(repoId)) next.delete(repoId)
+      else next.add(repoId)
+      return next
+    })
+  }, [])
+
+  // Lazily fetch a conversation's direct delegation children into the cache.
+  // Deduped against both the cache and in-flight requests so a re-toggle or the
+  // restore-time guard below can call it freely (idempotent, StrictMode-safe).
+  const ensureChildrenLoaded = useCallback(async (id: number) => {
+    if (childrenByParentRef.current.has(id)) return
+    if (childrenInFlightRef.current.has(id)) return
+    childrenInFlightRef.current.add(id)
+    // Placeholder BEFORE the fetch: `childrenByParent` is the only routing
+    // surface for live child upserts, so a concurrent upsert buffers into this
+    // entry instead of being dropped, and the fetch merges them — closing the
+    // lost-update race. `childrenLoading` keeps the spinner up while empty.
+    setChildrenByParent((prev) => {
+      if (prev.has(id)) return prev
+      const next = new Map(prev)
+      next.set(id, [])
+      return next
+    })
+    setChildrenLoading((prev) => {
+      if (prev.has(id)) return prev
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+    try {
+      const fetched = await listChildConversations(id)
+      setChildrenByParent((prev) => {
+        // Drop any child tombstoned while the fetch was in flight — a stale
+        // snapshot can still contain a since-deleted child (list_children
+        // queried before the soft-delete committed) — then merge the snapshot
+        // with live events buffered mid-flight (events win by id) so a child
+        // created after the query isn't lost.
+        const tomb = deletedChildIdsRef.current
+        const liveFetched =
+          tomb.size > 0 ? fetched.filter((c) => !tomb.has(c.id)) : fetched
+        const buffered = prev.get(id)
+        const merged =
+          buffered && buffered.length > 0
+            ? mergeChildrenById(liveFetched, buffered)
+            : liveFetched
+        const next = new Map(prev)
+        next.set(id, merged)
+        return next
+      })
+    } catch {
+      // Roll back the placeholder so a later toggle retries — unless live events
+      // already populated it, in which case keep them.
+      setChildrenByParent((prev) => {
+        const cur = prev.get(id)
+        if (cur && cur.length > 0) return prev
+        const next = new Map(prev)
+        next.delete(id)
+        return next
+      })
+    } finally {
+      childrenInFlightRef.current.delete(id)
+      setChildrenLoading((prev) => {
+        if (!prev.has(id)) return prev
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
+  }, [])
+
+  // Toggle a conversation's sub-session subtree. Expanding kicks off a lazy
+  // fetch; the Set identity changes so `rows` rebuilds, but the per-card
+  // `expanded` boolean is computed per row at render (never the Set passed in),
+  // so only the toggled card's prop flips and every other card memo holds.
+  const toggleConversation = useCallback(
+    (id: number) => {
+      setConversationExpanded((prev) => {
+        const next = new Set(prev)
+        if (next.has(id)) {
+          next.delete(id)
+        } else {
+          next.add(id)
+          void ensureChildrenLoaded(id)
+        }
+        saveConversationExpanded([...next])
+        return next
+      })
+    },
+    [ensureChildrenLoaded]
+  )
+
+  // Restore-time lazy load, driven by the RENDERED rows (not the raw persisted
+  // set): fetch children for every expanded parent actually visible in `rows`
+  // but not yet cached. Iterating `rows` keeps this to the reachable next level —
+  // a deep restored expansion re-materializes one level per pass as each level's
+  // children arrive and `rows` rebuilds — instead of flooding startup with
+  // requests for every persisted (possibly stale/deleted/deep) id. An effect (not
+  // a render-time microtask) keeps the side effect out of render; the
+  // cache/in-flight dedupe makes the repeated passes cheap and StrictMode-safe.
+  useEffect(() => {
+    if (loading) return
+    for (const row of rows) {
+      if (row.kind !== "conversation") continue
+      const c = row.conversation
+      if (
+        c.child_count > 0 &&
+        conversationExpanded.has(c.id) &&
+        !childrenByParentRef.current.has(c.id) &&
+        !childrenInFlightRef.current.has(c.id)
+      ) {
+        void ensureChildrenLoaded(c.id)
+      }
+    }
+  }, [rows, conversationExpanded, loading, ensureChildrenLoaded])
 
   // ── Sticky folder header overlay ──────────────────────────────────────────
   // Resolve the folder currently scrolled through and the iOS handoff offset
@@ -1497,7 +1825,7 @@ export function SidebarConversationList({
       const state = dragPointerRef.current
       const surface = dragSurfaceRef.current
       if (!state || !surface) return
-      const order = orderedFolderIdsRef.current
+      const order = reorderableFolderIdsRef.current
       // The surface's live rect already reflects scroll, so no scrollTop term.
       const targetIndex = pointerYToTargetIndex(
         clientY,
@@ -1585,7 +1913,7 @@ export function SidebarConversationList({
         if (moved < DRAG_THRESHOLD_PX) return
         state.started = true
         setDragging(state.folderId)
-        setDragOrder(orderedFolderIdsRef.current.slice())
+        setDragOrder(reorderableFolderIdsRef.current.slice())
       }
       updateDragTarget(event.clientY)
       maybeAutoscroll(event.clientY)
@@ -1720,6 +2048,16 @@ export function SidebarConversationList({
     )
   }
 
+  // Total sessions across a container repo and all its worktrees — the count
+  // shown on the container header (its own sessions live in the root sub-group,
+  // so the bare `byFolder` count would understate the repo family).
+  const containerTotalCount = (repoId: number): number => {
+    let total = byFolder.get(repoId)?.length ?? 0
+    const kids = containerChildren.get(repoId)
+    if (kids) for (const kid of kids) total += byFolder.get(kid)?.length ?? 0
+    return total
+  }
+
   const folderHeaderElement = (
     folderId: number,
     opts: {
@@ -1728,23 +2066,50 @@ export function SidebarConversationList({
       grip: boolean
       onToggle?: (folderId: number) => void
       suppressed?: boolean
+      /** Render as the container repo's own-sessions "root" sub-group (FolderRoot
+       *  glyph, indented, session-only collapse) rather than the repo header. */
+      rootGroup?: boolean
     }
   ) => {
     const folderEntry = folderIndex.get(folderId)
+    const isRootGroup = opts.rootGroup ?? false
+    // A worktree child header (only under "Show worktrees"): indented, FolderGit2
+    // glyph, branch label. Keyed off `childToParent` so it matches exactly which
+    // folders buildRows nests — an orphan worktree (parent closed) is neither a
+    // worktree child nor a container here, so it renders as a plain top-level
+    // folder, consistent with its slot.
+    const isWorktree =
+      !isRootGroup && showWorktrees && childToParent.has(folderId)
+    // A container repo (has ≥1 open worktree): plain repo glyph but a total count
+    // spanning the whole family. Its own sessions render in the root sub-group.
+    const isContainer =
+      !isRootGroup && showWorktrees && containerRepoIds.has(folderId)
+    const variant = isRootGroup ? "root" : isWorktree ? "worktree" : "repo"
+    const depth = isRootGroup || isWorktree ? 1 : 0
+    const count = isContainer
+      ? containerTotalCount(folderId)
+      : (byFolder.get(folderId)?.length ?? 0)
+    const expanded = isRootGroup
+      ? !rootGroupCollapsed.has(folderId)
+      : opts.collapsed
+        ? false
+        : (folderExpanded[folderId] ?? true)
     return (
       <FolderHeader
         folderId={folderId}
         folderName={folderEntry?.name ?? String(folderId)}
         folderAlias={folderEntry?.alias ?? null}
         folderPath={folderEntry?.path ?? ""}
-        count={byFolder.get(folderId)?.length ?? 0}
-        expanded={opts.collapsed ? false : (folderExpanded[folderId] ?? true)}
+        count={count}
+        expanded={expanded}
         themeColor={folderThemeColor(folderId)}
         appThemeColor={appThemeColor}
         currentDefaultAgent={folderEntry?.defaultAgentType ?? null}
         availableAgents={availableAgents}
         availableAgentsFresh={availableAgentsFresh}
-        onToggle={opts.onToggle ?? toggleFolder}
+        onToggle={
+          opts.onToggle ?? (isRootGroup ? toggleRootGroup : toggleFolder)
+        }
         onRemoveFromWorkspace={handleRemoveFolder}
         onNewConversation={handleNewConversationForFolder}
         onImport={handleImportForFolder}
@@ -1757,6 +2122,9 @@ export function SidebarConversationList({
         isDragging={opts.dragging}
         onGripPointerDown={opts.grip ? beginFolderDrag : undefined}
         suppressed={opts.suppressed ?? false}
+        depth={depth}
+        variant={variant}
+        worktreeBranch={folderEntry?.gitBranch ?? null}
       />
     )
   }
@@ -1802,7 +2170,10 @@ export function SidebarConversationList({
         row.folderId,
         folderHeaderElement(row.folderId, {
           dragging: dragging === row.folderId,
-          grip: true,
+          // Worktree child headers follow their parent and never reorder on
+          // their own, so they are not drag initiators (no grip). Only
+          // reorderable top-level repos keep the grip.
+          grip: !(showWorktrees && childToParent.has(row.folderId)),
           // While this folder's sticky overlay is showing, the overlay is the
           // accessible control; make the (occluded) in-list copy inert so it is
           // not a duplicate tab stop / announcement.
@@ -1810,16 +2181,46 @@ export function SidebarConversationList({
         })
       )
     }
-    if (row.kind === "empty") {
+    if (row.kind === "root-group") {
+      // A container repo's own-sessions sub-group. Shares the repo id (for its
+      // bucket / count / theme) but is its own row kind with its own toggle, and
+      // is never draggable (it follows the container).
       return themeWrap(
         row.folderId,
+        folderHeaderElement(row.folderId, {
+          dragging: false,
+          grip: false,
+          rootGroup: true,
+        })
+      )
+    }
+    if (row.kind === "empty") {
+      // A worktree / root sub-group's empty hint is indented one level so its
+      // text lines up under the (depth-1) sub-group's sessions, matching the
+      // header. A plain folder's hint stays at depth 0.
+      const nested =
+        showWorktrees &&
+        (childToParent.has(row.folderId) || containerRepoIds.has(row.folderId))
+      const depth = nested ? 1 : 0
+      return themeWrap(
+        row.folderId,
+        // Full row height (h-[2rem], the fixed virtua item size) so the container
+        // connector spine stays continuous THROUGH an empty sub-group ("no
+        // conversations") instead of breaking at a shorter box. The ancestor rail
+        // spans this row; it renders nothing at depth 0 (a plain folder has no
+        // spine).
         <div
-          className="py-[0.375rem] text-[0.75rem] text-muted-foreground/70"
-          style={{ paddingLeft: "calc(var(--conv-rail-axis) + 0.875rem)" }}
+          className="relative flex h-[2rem] items-center text-[0.75rem] text-muted-foreground/70"
+          style={{
+            paddingLeft: `calc(var(--conv-rail-axis) + 0.875rem + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
+          }}
         >
-          {row.totalConversationCount === 0
-            ? t("emptyFolderHint")
-            : t("noUnfinishedConversations")}
+          <SubsessionAncestorRails depth={depth} />
+          <span className="relative truncate">
+            {row.totalConversationCount === 0
+              ? t("emptyFolderHint")
+              : t("noUnfinishedConversations")}
+          </span>
         </div>
       )
     }
@@ -1832,10 +2233,43 @@ export function SidebarConversationList({
         </div>
       )
     }
+    if (row.kind === "folders-empty") {
+      // Empty "Folders" section hint — mirrors chats-empty (folderless, no rail,
+      // aligned with the section header's text inset). The header's own hover
+      // actions (Open Folder / Clone / Import) are how you add the first folder.
+      return (
+        <div className="px-[0.5rem] py-[0.375rem] text-[0.75rem] text-muted-foreground/70">
+          {t("noFolders")}
+        </div>
+      )
+    }
+    if (row.kind === "subsession-loading") {
+      // Transient spinner at the child indent while children are fetched. The
+      // left inset matches a depth-`row.depth` card's text start: rail axis
+      // (0.875rem + depth·CONV_RAIL_DEPTH_STEP) plus the button's extra 0.875rem.
+      // Ancestor guide rails keep each parent's vertical line continuous through
+      // this placeholder; the content is lifted (relative) above the z-0 rails.
+      return (
+        <div
+          className="relative py-[0.375rem] text-[0.75rem] text-muted-foreground/70"
+          style={{
+            paddingLeft: `calc(0.875rem + ${row.depth} * ${CONV_RAIL_DEPTH_STEP} + 0.875rem)`,
+          }}
+        >
+          <SubsessionAncestorRails depth={row.depth} />
+          <span className="relative flex items-center gap-1.5">
+            <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden />
+            {t("loadingSubsessions")}
+          </span>
+        </div>
+      )
+    }
     const conv = row.conversation
-    // Worktree child folders render under their parent group, so theme the row
-    // by the display group (parent) for a unified look.
-    const groupId = childToParent.get(conv.folder_id) ?? conv.folder_id
+    // Theme the row by its display group. With "Show worktrees" off a worktree
+    // conversation renders under its parent group (themed as the parent); on, it
+    // renders under its own worktree header (themed as itself). `displayChildToParent`
+    // captures both — empty when the toggle is on.
+    const groupId = displayChildToParent.get(conv.folder_id) ?? conv.folder_id
     return themeWrap(
       groupId,
       <SidebarConversationCard
@@ -1856,6 +2290,10 @@ export function SidebarConversationList({
         onStatusChange={handleStatusChange}
         onNewConversation={handleNewConversationForFolder}
         onTogglePin={handleTogglePin}
+        depth={row.depth}
+        hasChildren={conv.child_count > 0}
+        expanded={conversationExpanded.has(conv.id)}
+        onToggleExpand={toggleConversation}
       />
     )
   }
@@ -1863,8 +2301,11 @@ export function SidebarConversationList({
   const rowKey = (row: SidebarRow): string => {
     if (row.kind === "section") return `section-${row.section}`
     if (row.kind === "folder") return `folder-${row.folderId}`
+    if (row.kind === "root-group") return `rootgroup-${row.folderId}`
     if (row.kind === "empty") return `empty-${row.folderId}`
     if (row.kind === "chats-empty") return "chats-empty"
+    if (row.kind === "folders-empty") return "folders-empty"
+    if (row.kind === "subsession-loading") return `subloading-${row.parentId}`
     return `conv-${row.conversation.agent_type}-${row.conversation.id}`
   }
 
@@ -1933,11 +2374,14 @@ export function SidebarConversationList({
                 )}
               >
                 {dragging !== null ? (
-                  // Drag surface: every folder collapsed to its header so any
-                  // folder (even one that was virtualized off-screen) is a valid
-                  // drop target. Non-virtualized — folder counts are small.
+                  // Drag surface: every reorderable (top-level) folder collapsed
+                  // to its header so any folder (even one virtualized off-screen)
+                  // is a valid drop target. Worktree children are excluded — they
+                  // aren't independently reorderable, and their presence would
+                  // break the `pointerYToTargetIndex` fixed-height row math.
+                  // Non-virtualized — folder counts are small.
                   <div ref={dragSurfaceRef} className="flex flex-col">
-                    {orderedFolderIds.map((folderId) => (
+                    {reorderableFolderIds.map((folderId) => (
                       <div key={folderId}>
                         {themeWrap(
                           folderId,

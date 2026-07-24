@@ -43,6 +43,7 @@ function makeSummary(id: number): DbConversationSummary {
     parent_id: null,
     parent_tool_use_id: null,
     delegation_call_id: null,
+    child_count: 0,
   }
 }
 

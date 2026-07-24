@@ -21,6 +21,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useHouflowDesktopStore } from "@/houflow"
@@ -38,6 +41,7 @@ interface AccountMenuCopy {
   signIn: string
   signedIn: string
   usage: string
+  signOut: string
   signOutHouflow: string
   signOutProject: string
   loginFailed: string
@@ -53,6 +57,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signIn: "登录",
     signedIn: "已登录",
     usage: "用量",
+    signOut: "退出登录",
     signOutHouflow: "退出 Houflow",
     signOutProject: "退出项目账户",
     loginFailed: "登录失败",
@@ -66,6 +71,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signIn: "登入",
     signedIn: "已登入",
     usage: "用量",
+    signOut: "登出",
     signOutHouflow: "登出 Houflow",
     signOutProject: "登出專案帳戶",
     loginFailed: "登入失敗",
@@ -79,6 +85,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signIn: "Sign in",
     signedIn: "Signed in",
     usage: "Usage",
+    signOut: "Sign out",
     signOutHouflow: "Sign out of Houflow",
     signOutProject: "Sign out of project account",
     loginFailed: "Sign-in failed",
@@ -92,6 +99,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signIn: "サインイン",
     signedIn: "サインイン済み",
     usage: "使用量",
+    signOut: "サインアウト",
     signOutHouflow: "Houflow からサインアウト",
     signOutProject: "プロジェクトからサインアウト",
     loginFailed: "サインインに失敗しました",
@@ -105,6 +113,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signIn: "로그인",
     signedIn: "로그인됨",
     usage: "사용량",
+    signOut: "로그아웃",
     signOutHouflow: "Houflow 로그아웃",
     signOutProject: "프로젝트 계정 로그아웃",
     loginFailed: "로그인 실패",
@@ -118,6 +127,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signIn: "Iniciar sesión",
     signedIn: "Sesión iniciada",
     usage: "Uso",
+    signOut: "Cerrar sesión",
     signOutHouflow: "Cerrar sesión en Houflow",
     signOutProject: "Cerrar sesión del proyecto",
     loginFailed: "Error al iniciar sesión",
@@ -131,6 +141,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signIn: "Anmelden",
     signedIn: "Angemeldet",
     usage: "Nutzung",
+    signOut: "Abmelden",
     signOutHouflow: "Von Houflow abmelden",
     signOutProject: "Vom Projektkonto abmelden",
     loginFailed: "Anmeldung fehlgeschlagen",
@@ -144,6 +155,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signIn: "Se connecter",
     signedIn: "Connecté",
     usage: "Utilisation",
+    signOut: "Se déconnecter",
     signOutHouflow: "Se déconnecter de Houflow",
     signOutProject: "Se déconnecter du projet",
     loginFailed: "Échec de la connexion",
@@ -157,6 +169,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signIn: "Entrar",
     signedIn: "Conectado",
     usage: "Uso",
+    signOut: "Sair",
     signOutHouflow: "Sair do Houflow",
     signOutProject: "Sair da conta do projeto",
     loginFailed: "Falha ao entrar",
@@ -170,6 +183,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signIn: "تسجيل الدخول",
     signedIn: "تم تسجيل الدخول",
     usage: "الاستخدام",
+    signOut: "تسجيل الخروج",
     signOutHouflow: "تسجيل الخروج من Houflow",
     signOutProject: "تسجيل الخروج من حساب المشروع",
     loginFailed: "فشل تسجيل الدخول",
@@ -394,11 +408,52 @@ export function HouhubAccountMenu() {
             <LogIn className="h-3.5 w-3.5 text-muted-foreground" />
           )}
         </DropdownMenuItem>
-        {houflowConnected || projectConnected ? (
+        {houflowConnected && projectConnected ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="text-destructive focus:bg-destructive/10 focus:text-destructive data-open:bg-destructive/10 data-open:text-destructive">
+                <LogOut className="h-4 w-4" />
+                {copy.signOut}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-56">
+                <DropdownMenuItem
+                  variant="destructive"
+                  disabled={busy}
+                  onSelect={() => void signOut("houflow")}
+                >
+                  <CircleUserRound className="h-4 w-4" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{copy.houflow}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {houflow.session.userLabel || copy.signedIn}
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  variant="destructive"
+                  disabled={busy}
+                  onSelect={() => void signOut("project")}
+                >
+                  <Building2 className="h-4 w-4" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{copy.project}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {activeProject?.name ||
+                        workbench.session.user?.label ||
+                        copy.signedIn}
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          </>
+        ) : houflowConnected || projectConnected ? (
           <>
             <DropdownMenuSeparator />
             {houflowConnected ? (
               <DropdownMenuItem
+                variant="destructive"
                 disabled={busy}
                 onSelect={() => void signOut("houflow")}
               >
@@ -408,6 +463,7 @@ export function HouhubAccountMenu() {
             ) : null}
             {projectConnected ? (
               <DropdownMenuItem
+                variant="destructive"
                 disabled={busy}
                 onSelect={() => void signOut("project")}
               >

@@ -28,6 +28,7 @@ import {
   PackagePlus,
   RefreshCw,
   Save,
+  Stethoscope,
   Trash2,
   Wrench,
 } from "lucide-react"
@@ -115,6 +116,7 @@ import {
   parseCodexModelConfig,
   serializeCodexModelConfig,
 } from "@/lib/types"
+import { AgentDiagnosticsDialog } from "@/components/settings/agent-diagnostics-dialog"
 import { toErrorMessage } from "@/lib/app-error"
 import { getInstallErrorHintKey } from "@/lib/agent-install-error"
 import { modelReasoningEfforts } from "@/lib/reasoning-effort-capabilities"
@@ -4198,6 +4200,7 @@ export function AcpAgentSettings() {
     },
     [t]
   )
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [dragging, setDragging] = useState<AgentType | null>(null)
   const [reordering, setReordering] = useState(false)
   const pendingOrderRef = useRef<AgentType[] | null>(null)
@@ -7534,7 +7537,7 @@ export function AcpAgentSettings() {
                       {selectedAgent.distribution_type}
                     </Badge>
                   </div>
-                  <div className="flex items-center shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
                       role="switch"
@@ -7606,6 +7609,12 @@ export function AcpAgentSettings() {
                 </p>
               </div>
 
+              <AgentDiagnosticsDialog
+                open={diagnosticsOpen}
+                onOpenChange={setDiagnosticsOpen}
+                agentType={selectedAgent.agent_type}
+              />
+
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 <div className="space-y-2">
                   {selectedCurrent?.error && (
@@ -7625,9 +7634,20 @@ export function AcpAgentSettings() {
                       </span>
                     </div>
                   )}
-                  <div className="text-[11px] text-muted-foreground flex items-center gap-1">
-                    <CheckCircle2 className="h-3 w-3" />
-                    {t("preflight.count", { count: selectedChecks.length })}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-[11px] text-muted-foreground flex items-center gap-1">
+                      <CheckCircle2 className="h-3 w-3" />
+                      {t("preflight.count", { count: selectedChecks.length })}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      onClick={() => setDiagnosticsOpen(true)}
+                    >
+                      <Stethoscope className="h-3.5 w-3.5" />
+                      {t("actions.diagnose")}
+                    </Button>
                   </div>
                   {selectedChecks.length > 0 ? (
                     selectedChecks.map((check) =>

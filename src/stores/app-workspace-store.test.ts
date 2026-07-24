@@ -33,6 +33,7 @@ function makeSummary(
     parent_tool_use_id: null,
     delegation_call_id: null,
     ...overrides,
+    child_count: overrides.child_count ?? 0,
   }
 }
 

@@ -21,7 +21,6 @@ import { LiveTurnStats } from "./live-turn-stats"
 import { ReplyArtifacts } from "./reply-artifacts"
 import { UserResourceLinks } from "./user-resource-links"
 import { UserImageAttachments } from "./user-image-attachments"
-import { useSessionStats } from "@/contexts/session-stats-context"
 import { AgentPlanOverlay } from "@/components/chat/agent-plan-overlay"
 import { SubAgentOverlay } from "@/components/chat/sub-agent-overlay"
 import { normalizeToolName } from "@/lib/tool-call-normalization"
@@ -53,12 +52,7 @@ import {
   buildPlanKey,
   extractLatestPlanEntriesFromMessages,
 } from "@/lib/agent-plan"
-import type {
-  AgentType,
-  ConnectionStatus,
-  MessageTurn,
-  SessionStats,
-} from "@/lib/types"
+import type { AgentType, ConnectionStatus, MessageTurn } from "@/lib/types"
 import { copyTextToClipboard } from "@/lib/utils"
 import { VirtualizedMessageThread } from "@/components/message/virtualized-message-thread"
 import {
@@ -76,7 +70,6 @@ interface MessageListViewProps {
   connStatus?: ConnectionStatus | null
   isActive?: boolean
   sendSignal?: number
-  sessionStats?: SessionStats | null
   detailLoading?: boolean
   detailError?: string | null
   /**
@@ -589,7 +582,6 @@ export function MessageListView({
   connStatus,
   isActive = true,
   sendSignal = 0,
-  sessionStats = null,
   detailLoading = false,
   detailError = null,
   acpLoadError = null,
@@ -604,14 +596,6 @@ export function MessageListView({
   const session = getSession(conversationId)
   const liveMessage = session?.liveMessage ?? null
   const timelineTurns = getTimelineTurns(conversationId)
-
-  const { setSessionStats } = useSessionStats()
-
-  useEffect(() => {
-    if (isActive) {
-      setSessionStats(sessionStats)
-    }
-  }, [isActive, sessionStats, setSessionStats])
 
   const shouldUseSmoothResize = !(
     isActive &&

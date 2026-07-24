@@ -1,6 +1,6 @@
 [package]
 name = "houhub"
-version = "0.21.6"
+version = "0.21.7"
 description = "Agent Code Generation App"
 authors = ["fleap.fly"]
 edition = "2021"

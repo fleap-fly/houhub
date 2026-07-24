@@ -1,4 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -100,7 +106,7 @@ describe("HouhubAccountMenu", () => {
     })
   })
 
-  it("shows both signed-in identities and keeps sign-out independent", async () => {
+  it("groups both signed-in identities behind one sign-out row", async () => {
     state.houflow.status = "ready"
     state.houflow.session.status = "signed_in"
     state.houflow.session.userLabel = "houflow@example.com"
@@ -117,6 +123,41 @@ describe("HouhubAccountMenu", () => {
     await user.click(screen.getByRole("button", { name: "Accounts" }))
     expect(screen.getAllByText("houflow@example.com")).toHaveLength(2)
     expect(screen.getByText("Design Project")).toBeInTheDocument()
+    expect(screen.getByText("Sign out")).toBeInTheDocument()
+    expect(screen.queryByText("Sign out of Houflow")).not.toBeInTheDocument()
+    expect(
+      screen.queryByText("Sign out of project account")
+    ).not.toBeInTheDocument()
+
+    await user.hover(screen.getByText("Sign out"))
+    await waitFor(() => {
+      expect(screen.getAllByText("Project account")).toHaveLength(2)
+    })
+    const signOutSubmenu = document.querySelector(
+      "[data-slot=dropdown-menu-sub-content]"
+    )
+    expect(signOutSubmenu).not.toBeNull()
+    const projectSignOutItem = within(signOutSubmenu as HTMLElement)
+      .getByText("Project account")
+      .closest("[role=menuitem]")!
+    expect(projectSignOutItem).toHaveAttribute(
+      "data-slot",
+      "dropdown-menu-item"
+    )
+    fireEvent.click(projectSignOutItem)
+    await waitFor(() => expect(state.workbench.signOut).toHaveBeenCalledOnce())
+    expect(state.houflow.signOut).not.toHaveBeenCalled()
+  })
+
+  it("keeps a single connected identity as a direct sign-out action", async () => {
+    state.houflow.status = "ready"
+    state.houflow.session.status = "signed_in"
+    state.houflow.session.userLabel = "houflow@example.com"
+    const user = userEvent.setup()
+    renderMenu()
+
+    await user.click(screen.getByRole("button", { name: "Accounts" }))
+    expect(screen.queryByText("Sign out")).not.toBeInTheDocument()
 
     await user.click(screen.getByText("Sign out of Houflow"))
     await waitFor(() => expect(state.houflow.signOut).toHaveBeenCalledOnce())

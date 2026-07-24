@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   BarChart3,
   Box,
@@ -29,7 +29,7 @@ import {
   SkillAgentMatrix,
   type MatrixSkill,
 } from "@/components/settings/skill-agent-matrix"
-import { cn } from "@/lib/utils"
+import { cn, randomUUID } from "@/lib/utils"
 import {
   loadOfficeAutoPreview,
   saveOfficeAutoPreview,
@@ -46,6 +46,7 @@ import {
   officecliUninstall,
 } from "@/lib/api"
 import { invalidateAgentSkillsCache } from "@/hooks/use-agent-skills"
+import { useOfficecliInstallStream } from "@/hooks/use-officecli-install-stream"
 import { pickLocalized } from "@/lib/expert-presentation"
 import { piUsesCustomAgentDir } from "@/lib/pi-config"
 import type {
@@ -229,6 +230,8 @@ export function OfficeToolsBody({
   const [detecting, setDetecting] = useState(true)
   const [installing, setInstalling] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const installStream = useOfficecliInstallStream()
+  const installLogEndRef = useRef<HTMLDivElement | null>(null)
 
   const [skills, setSkills] = useState<OfficecliSkill[]>([])
   const [agents, setAgents] = useState<AcpAgentInfo[]>([])
@@ -315,6 +318,18 @@ export function OfficeToolsBody({
       })
     })
   }, [onRegisterRefresh, detect, refreshSkills])
+
+  useEffect(() => {
+    return () => installStream.reset()
+    // The reset callback is stable; stream state changes must not tear down an
+    // active subscription.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    const container = installLogEndRef.current?.parentElement
+    if (container) container.scrollTop = container.scrollHeight
+  }, [installStream.logs])
   const matrixSkills = useMemo<MatrixSkill[]>(
     () =>
       skills.map((s) => ({
@@ -345,8 +360,10 @@ export function OfficeToolsBody({
 
   const handleInstall = useCallback(async () => {
     setInstalling(true)
+    const taskId = randomUUID()
+    await installStream.start(taskId)
     try {
-      const result = await officecliInstall()
+      const result = await officecliInstall(taskId)
       setInfo(result)
       toast.success(t("toasts.installSuccess"))
       const report = await officecliSyncSkills()
@@ -368,7 +385,7 @@ export function OfficeToolsBody({
     } finally {
       setInstalling(false)
     }
-  }, [t, detect, refreshSkills])
+  }, [t, detect, refreshSkills, installStream])
 
   const handleUninstall = useCallback(async () => {
     try {
@@ -423,6 +440,20 @@ export function OfficeToolsBody({
           syncing={syncing}
         />
       </div>
+
+      {installStream.status !== "idle" && (
+        <div className="mt-3 max-h-[200px] shrink-0 overflow-y-auto rounded-md border bg-muted/50 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
+          {installStream.logs.map((line, index) => (
+            <div
+              key={`${index}-${line}`}
+              className={line.startsWith("ERROR:") ? "text-destructive" : ""}
+            >
+              {line}
+            </div>
+          ))}
+          <div ref={installLogEndRef} />
+        </div>
+      )}
 
       <div className="mt-4 shrink-0 flex items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3">
         <div className="min-w-0 space-y-1">

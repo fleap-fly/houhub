@@ -69,6 +69,7 @@ function detail(
       created_at: "2026-07-07T03:40:00.000Z",
       updated_at: "2026-07-07T03:40:00.000Z",
       pinned_at: null,
+      child_count: 0,
     },
     turns: [],
     session_stats: null,

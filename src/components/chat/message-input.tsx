@@ -112,7 +112,13 @@ import {
   type AttachFileToSessionDetail,
   type AppendTextToSessionDetail,
 } from "@/lib/session-attachment-events"
-import { ConversationContextBar } from "@/components/chat/conversation-context-bar"
+import {
+  ConversationContextBar,
+  ConversationFolderBranchPicker,
+  useConversationFolderBranchPickerVisible,
+} from "@/components/chat/conversation-context-bar"
+import { ComposerContextUsage } from "@/components/chat/composer-context-usage"
+import { ComposerConnectionStatus } from "@/components/chat/composer-connection-status"
 import { InlineModeSelector } from "@/components/chat/mode-selector"
 import { InlineSessionConfigSelector } from "@/components/chat/session-config-selector"
 import { ModelOptionPicker } from "@/components/chat/model-option-picker"
@@ -142,6 +148,7 @@ import {
   loadMessageInputDraftV2,
   saveMessageInputDraftV2,
 } from "@/lib/message-input-draft"
+import { rankByTextMatch } from "@/lib/fuzzy-text-match"
 import {
   RichComposer,
   type RichComposerHandle,
@@ -216,9 +223,9 @@ interface MessageInputProps {
    * server file browser, and direct local file:// path attachment. Cloud
    * conversations keep this off so they do not leak the active local folder. */
   enableWorkspaceReferences?: boolean
-  /** Read-only conversation location rendered in the existing folder row.
-   * Remote conversations use this to identify their workspace without exposing
-   * or enabling the active local folder picker. */
+  /** Read-only conversation location rendered below the composer. Remote
+   * conversations use this to identify their workspace without enabling the
+   * active local folder picker. */
   contextLocation?: { label: string; title?: string } | null
   attachmentTabId?: string | null
   draftStorageKey?: string | null
@@ -437,7 +444,7 @@ function editorHasFileReference(editor: Editor, uri: string): boolean {
 /** Drop embedded-attachment reference badges from a draft document before it is
  *  persisted: their bytes live only in the in-memory `embeddedPayloadsRef` map
  *  (never serialized into the draft), so a restored badge would send nothing.
- *  Identified purely by the unambiguous `houhub://embedded/…` display uri (no map
+ *  Identified purely by the unambiguous `houhub://embedded/...` display uri (no map
  *  needed) — a real `file://` attachment is never matched. Stripping at save
  *  keeps the live badge visible this session but matches the pre-existing
  *  behavior where out-of-band pasted bytes don't survive a draft round-trip. */
@@ -986,6 +993,11 @@ export function MessageInput({
   const hasAnySelector =
     showConfigLoading || hasConfigOptions || showModeLoading || showModeSelector
   const hasInlineSelectors = hasConfigOptions || showModeSelector
+  const localFolderBranchPickerVisible =
+    useConversationFolderBranchPickerVisible(attachmentTabId)
+  const hasFolderBranchPicker =
+    enableWorkspaceReferences && localFolderBranchPickerVisible
+  const folderBranchPickerAttached = hasFolderBranchPicker
   const contextLocationLabel = contextLocation?.label.trim() ?? ""
   const hasContextLocation = contextLocationLabel.length > 0
   const imageAttachments = useMemo(
@@ -1029,20 +1041,16 @@ export function MessageInput({
   const [slashDropdownOpen, setSlashDropdownOpen] = useState(false)
   const [slashDropdownSearch, setSlashDropdownSearch] = useState("")
   const slashDropdownInputRef = useRef<HTMLInputElement>(null)
-  const filteredSlashDropdownCommands = useMemo(() => {
-    const q = slashDropdownSearch.toLowerCase().trim()
-    if (!q) return slashCommands
-    const nameMatches: typeof slashCommands = []
-    const descOnlyMatches: typeof slashCommands = []
-    for (const cmd of slashCommands) {
-      if (cmd.name.toLowerCase().includes(q)) {
-        nameMatches.push(cmd)
-      } else if (cmd.description?.toLowerCase().includes(q)) {
-        descOnlyMatches.push(cmd)
-      }
-    }
-    return [...nameMatches, ...descOnlyMatches]
-  }, [slashCommands, slashDropdownSearch])
+  const filteredSlashDropdownCommands = useMemo(
+    () =>
+      rankByTextMatch(
+        slashDropdownSearch,
+        slashCommands,
+        (cmd) => cmd.name,
+        (cmd) => cmd.description
+      ),
+    [slashCommands, slashDropdownSearch]
+  )
   const handleSlashDropdownOpenChange = useCallback((open: boolean) => {
     setSlashDropdownOpen(open)
     if (!open) setSlashDropdownSearch("")
@@ -1061,28 +1069,19 @@ export function MessageInput({
   const filteredSlashCommands = useMemo(() => {
     if (!slashMenuOpen || slashCommands.length === 0) return []
     if (slashTriggerChar !== "/") return []
-    const filter = slashFilter.toLowerCase()
-    return slashCommands.filter((cmd) =>
-      cmd.name.toLowerCase().includes(filter)
-    )
+    return rankByTextMatch(slashFilter, slashCommands, (cmd) => cmd.name)
   }, [slashMenuOpen, slashCommands, slashTriggerChar, slashFilter])
   const filteredSlashSkills = useMemo(() => {
     // Skills autocomplete is Codex-only and triggered by `$`.
     if (agentType !== "codex") return []
     if (!slashMenuOpen || availableSkills.length === 0) return []
     if (slashTriggerChar !== "$") return []
-    const filter = slashFilter.toLowerCase()
-    if (!filter) return availableSkills
-    const nameMatches: typeof availableSkills = []
-    const idOnlyMatches: typeof availableSkills = []
-    for (const skill of availableSkills) {
-      if (skill.name.toLowerCase().includes(filter)) {
-        nameMatches.push(skill)
-      } else if (skill.id.toLowerCase().includes(filter)) {
-        idOnlyMatches.push(skill)
-      }
-    }
-    return [...nameMatches, ...idOnlyMatches]
+    return rankByTextMatch(
+      slashFilter,
+      availableSkills,
+      (skill) => skill.name,
+      (skill) => skill.id
+    )
   }, [slashMenuOpen, availableSkills, agentType, slashTriggerChar, slashFilter])
   const slashAutocompleteCount =
     filteredSlashCommands.length + filteredSlashSkills.length
@@ -1163,7 +1162,7 @@ export function MessageInput({
   // Insert one inline file reference badge per item, matching `@`-file mentions.
   // A genuine `file://` item uses its uri directly (deduped against the document);
   // an item carrying a `realBlock` (embedded bytes / `data:` link) gets an inert
-  // `houhub://embedded/…` display uri and its block is stashed in
+  // `houhub://embedded/...` display uri and its block is stashed in
   // `embeddedPayloadsRef` for send-time reconciliation. Badges append at the doc
   // end by default; pass `atCaret` to drop them at the composer's current caret
   // (`focus()` keeps the retained selection even while the input is blurred —
@@ -1759,7 +1758,7 @@ export function MessageInput({
         return true
       }
 
-      // Linux/Tauri (WebKitGTK) fallback: screenshot tools can write
+      // Linux/Tauri (WebKitGTK) fallback: screenshot tools (e.g. WeChat) write
       // the image to the clipboard in a form the synchronous DataTransfer API
       // can't read, so retry through the async Clipboard API. Only for a pure-
       // image clipboard — when text is present we let the default paste run
@@ -2448,7 +2447,7 @@ export function MessageInput({
       ? serializeDocToDisplayText(editor.state.doc).trim()
       : ""
     // Append the real bytes-bearing block for every embedded-attachment badge
-    // still present in the document, looked up by its `houhub://embedded/…` uri.
+    // still present in the document, looked up by its `houhub://embedded/...` uri.
     // Walking the live doc (rather than a swap pass over a stored draft) means a
     // deleted badge's stale map entry is simply never emitted, and an undo that
     // resurrects a badge re-emits it — no pruning, and no orphan uri can leak.
@@ -3011,10 +3010,20 @@ export function MessageInput({
           </div>
         </div>
       )}
-      {/* Layout-neutral group (`display:contents`): it once clipped the attached
-          mobile folder/branch row, which is retired, so it just wraps the
-          composer's context menu without affecting layout. */}
-      <div className="contents">
+      {/* When the folder/branch row is attached below the composer, this group
+          clips both into one rounded box (`overflow-hidden rounded-xl`); the
+          drag-active ring rides the wrapper so it isn't clipped. Standalone
+          (no row) it's layout-neutral (`display:contents`). */}
+      <div
+        className={cn(
+          folderBranchPickerAttached
+            ? "overflow-hidden rounded-xl transition-colors"
+            : "contents",
+          folderBranchPickerAttached &&
+            showDragActive &&
+            "ring-1 ring-primary/40"
+        )}
+      >
         <ContextMenu onOpenChange={handleContextMenuOpenChange}>
           {/* Disabled in non-secure web (no async clipboard read) so the native
               context menu — whose Paste still works over the editor text — is
@@ -3031,13 +3040,21 @@ export function MessageInput({
                 // the default `border-input`, which is near-invisible at rest and
                 // vanishes over a workspace background image); it adapts per theme
                 // (dark ink in light mode, light ink in dark) and stays legible.
-                // Focus still swaps to `border-ring` below. `bg-background
+                // Focus still swaps to `border-ring` below.
+                "houhub-composer-chrome @container relative flex flex-col rounded-xl border border-foreground/20 bg-transparent transition-colors",
+                // Standard focus ring — always shown when the composer is
+                // focused (the plain default input style). `bg-background
                 // ws-transparent-bg`: opaque surface normally, but with a
                 // workspace-bg image the composer goes transparent to reveal the
                 // real image like the rest of the canvas (no frosted treatment) —
-                // the border stays. The surface lives on the composer itself.
-                "houhub-composer-chrome @container relative flex flex-col rounded-xl border border-foreground/20 bg-background ws-transparent-bg transition-colors",
-                "focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
+                // the border stays. Off (no image) it's the plain background,
+                // unchanged. When the folder/branch row is attached below, the
+                // solid surface + an INSET focus ring live here so the shared
+                // rounded box (clipped by the wrapper) reads as one control and
+                // the ring isn't clipped away.
+                folderBranchPickerAttached
+                  ? "bg-background ws-transparent-bg focus-within:border-ring focus-within:ring-[3px] focus-within:ring-inset focus-within:ring-ring/50"
+                  : "focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
                 // Active session, tiled across multiple sessions: a gradient
                 // flows around the border to mark which tile is active — but ONLY
                 // while the composer itself is not focused. Focusing it hides the
@@ -3045,7 +3062,9 @@ export function MessageInput({
                 // A lone/non-tiled session (showActiveFlow=false) and inactive
                 // tiles show the plain default border.
                 showActiveFlow && "houhub-composer-flow",
-                showDragActive && "ring-1 ring-primary/40",
+                !folderBranchPickerAttached &&
+                  showDragActive &&
+                  "ring-1 ring-primary/40",
                 className
               )}
             >
@@ -3590,6 +3609,30 @@ export function MessageInput({
             </ContextMenuSub>
           </ContextMenuContent>
         </ContextMenu>
+        {hasFolderBranchPicker && (
+          // `px-2` mirrors the action bar so this row lines up with the composer
+          // above; the folder icon then aligns with the centered "+" icon (both
+          // add the same 1px transparent border, paired with the picker buttons'
+          // `px-1.5`). The row only renders while attached below the composer, so
+          // it always takes the rounded-bottom box treatment. Pickers sit at the
+          // left edge; the context-usage circle + agent connection status
+          // right-align at the trailing edge.
+          <div className="flex items-center justify-between gap-2 rounded-b-xl px-2 pt-1 text-xs text-muted-foreground">
+            <div className="flex min-w-0 items-center gap-1">
+              <ConversationFolderBranchPicker tabId={attachmentTabId} />
+            </div>
+            {/* `pr-px` offsets the composer chrome's 1px border: the send button
+                sits INSIDE that border while this status row sits outside it, so
+                without the 1px nudge the trailing icon hangs 1px past the button.
+                With it, the connection icon's RIGHT edge is flush (0px) with the
+                send button's right edge in the action bar above — no centring
+                slot, which would inset the narrow icon and break the alignment. */}
+            <div className="flex shrink-0 items-center gap-3 pr-px">
+              <ComposerContextUsage tabId={attachmentTabId ?? null} />
+              <ComposerConnectionStatus tabId={attachmentTabId ?? null} />
+            </div>
+          </div>
+        )}
         {hasContextLocation && (
           <div className="mt-1.5 flex items-center gap-1 pl-2 text-xs text-muted-foreground">
             <div

@@ -42,6 +42,7 @@ import type {
   QuestionAnswer,
   AcpAgentInfo,
   AcpAgentStatus,
+  AgentDiagnosticsReport,
   GrokStructuredConfig,
   CursorStructuredConfig,
   CursorAuthStatus,
@@ -100,6 +101,7 @@ import type {
   FileSaveResult,
   WorkspaceSnapshotResponse,
   GitLogResult,
+  GitLogFileChange,
   AvailableTerminalShells,
   SystemLanguageSettings,
   SystemProxySettings,
@@ -333,6 +335,13 @@ export async function acpGetAgentStatus(
   agentType: AgentType
 ): Promise<AcpAgentStatus> {
   return getTransport().call("acp_get_agent_status", { agentType })
+}
+
+// Run environment diagnostics for an agent (or a base env report when omitted).
+export async function acpEnvDiagnostics(
+  agentType?: AgentType
+): Promise<AgentDiagnosticsReport> {
+  return getTransport().call("acp_env_diagnostics", { agentType })
 }
 
 export async function acpClearBinaryCache(agentType: AgentType): Promise<void> {
@@ -975,8 +984,15 @@ export async function officecliDetect(): Promise<OfficecliInfo> {
   return getTransport().call("officecli_detect")
 }
 
-export async function officecliInstall(): Promise<OfficecliInfo> {
-  return getTransport().call("officecli_install")
+export async function officecliInstall(taskId: string): Promise<OfficecliInfo> {
+  // Keep the transport deadline above the backend's 600-second installer
+  // deadline so users receive the structured backend error while progress
+  // continues to stream on slow networks.
+  return getTransport().call(
+    "officecli_install",
+    { taskId },
+    { timeoutMs: 630_000 }
+  )
 }
 
 export async function officecliUninstall(): Promise<OfficecliInfo> {
@@ -3096,7 +3112,10 @@ export async function gitLog(
   limit?: number,
   branch?: string,
   remote?: string,
-  skip?: number
+  skip?: number,
+  author?: string,
+  allBranches?: boolean,
+  withFiles?: boolean
 ): Promise<GitLogResult> {
   return getTransport().call("git_log", {
     path,
@@ -3104,6 +3123,35 @@ export async function gitLog(
     branch: branch ?? null,
     remote: remote ?? null,
     skip: skip ?? null,
+    author: author ?? null,
+    allBranches: allBranches ?? null,
+    withFiles: withFiles ?? null,
+  })
+}
+
+export async function gitCurrentUser(path: string): Promise<string | null> {
+  return getTransport().call("git_current_user", { path })
+}
+
+export async function gitCommitFiles(
+  path: string,
+  commit: string
+): Promise<GitLogFileChange[]> {
+  return getTransport().call("git_commit_files", { path, commit })
+}
+
+// On-demand author search for the log filter — real repo authors matching
+// `query` (case-insensitive, most-active first). Debounced client-side; no
+// upfront full-repo scan.
+export async function gitSearchAuthors(
+  path: string,
+  query: string,
+  limit?: number
+): Promise<string[]> {
+  return getTransport().call("git_search_authors", {
+    path,
+    query,
+    limit: limit ?? null,
   })
 }
 

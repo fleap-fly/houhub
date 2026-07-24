@@ -647,7 +647,8 @@
       "saveCodeBuddyConfig": "CodeBuddy 設定を保存",
       "saveKimiCodeConfig": "Kimi Code の設定を保存",
       "customInstall": "カスタムインストール",
-      "saveKimiCodeRawConfig": "Save config.toml"
+      "saveKimiCodeRawConfig": "Save config.toml",
+      "diagnose": "診断"
     },
     "status": {
       "enabled": "有効",
@@ -1307,11 +1308,16 @@
       "reorderHandle": "ドラッグして並べ替え",
       "openFolder": "フォルダを開く",
       "searchPlaceholder": "会話を検索...",
+      "viewOptions": "表示オプション",
       "showCompleted": "完了した会話を表示",
+      "showWorktrees": "ワークツリーフォルダを表示",
       "moreOptions": "その他のオプション",
       "sortBy": "並び替え",
       "sortByCreatedAt": "作成時刻順",
       "sortByUpdatedAt": "更新時刻順",
+      "sectionOrder": "セクションの順序",
+      "sectionOrderFoldersFirst": "フォルダを上に",
+      "sectionOrderChatsFirst": "チャットを上に",
       "statusRunningBadge": "実行中",
       "statusCancelledBadge": "キャンセル済み",
       "conversationCountUnit": "{count} 件",
@@ -1360,8 +1366,10 @@
       "sectionFolders": "フォルダ",
       "sectionChats": "チャット",
       "noChats": "チャットがありません",
+      "noFolders": "開いているフォルダがありません",
       "newChatAction": "新しいチャット",
-      "automations": "オートメーション"
+      "automations": "オートメーション",
+      "loadingSubsessions": "サブ会話を読み込み中…"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",
@@ -1452,7 +1460,9 @@
       "pin": "ピン留め",
       "unpin": "ピン留めを解除",
       "markCompleted": "完了にする",
-      "reopen": "再開する"
+      "reopen": "再開する",
+      "expandSubsessions": "サブ会話を展開",
+      "collapseSubsessions": "サブ会話を折りたたむ"
     },
     "search": {
       "dialogTitle": "検索",
@@ -1725,7 +1735,11 @@
         "confirmApply": "スタッシュ {ref} を作業ディレクトリに適用しますか？",
         "cancel": "キャンセル"
       },
-      "deleteBranch": "ブランチを削除"
+      "deleteBranch": "ブランチを削除",
+      "searchPlaceholder": "ブランチと操作を検索",
+      "searchAriaLabel": "ブランチと操作を検索",
+      "branchListLabel": "ブランチと操作",
+      "noMatches": "一致する項目がありません"
     },
     "commitDialog": {
       "toasts": {
@@ -1811,6 +1825,7 @@
       "copyMessage": "メッセージをコピー",
       "author": "作成者",
       "noFileChangeDetails": "ファイル変更の詳細はありません。",
+      "loadingFiles": "ファイルを読み込み中…",
       "branchesTitle": "ブランチ",
       "loadingBranches": "ブランチを読み込み中...",
       "noContainingBranches": "含まれるブランチが見つかりません。",
@@ -1839,14 +1854,28 @@
         "resetSuccessDescription": "{branch} を {mode} で {shortHash} にリセットしました",
         "resetFailed": "リセットに失敗しました"
       },
+      "authorFilter": {
+        "label": "作成者",
+        "searchPlaceholder": "作成者を検索",
+        "noAuthors": "作成者が見つかりません",
+        "you": "あなた",
+        "filterByAuthorAria": "作成者でコミットを絞り込む",
+        "filterByQuery": "「{query}」で絞り込む",
+        "clearAuthorFilterAria": "作成者フィルターをクリア",
+        "recent": "最近",
+        "matchingAuthors": "一致する作成者",
+        "removeFromRecent": "{name} を最近から削除"
+      },
       "branchSelector": {
+        "label": "ブランチ",
         "searchBranch": "ブランチを検索...",
         "noBranches": "ブランチがありません",
         "selectBranchPlaceholder": "ブランチを選択...",
         "localBranches": "ローカルブランチ",
         "current": "現在",
         "remoteBranches": "リモートブランチ",
-        "refreshCommitHistory": "コミット履歴を更新"
+        "refreshCommitHistory": "コミット履歴を更新",
+        "clearBranchFilterAria": "ブランチフィルターをクリア"
       },
       "dialogs": {
         "newBranchTitle": "新規ブランチ",
@@ -4047,5 +4076,27 @@
     "groupInstructions": "説明とシステムプロンプト",
     "fieldDescription": "説明",
     "baseInstructions": "システムプロンプト（base_instructions）"
+  },
+  "DiagnosticsSettings": {
+    "title": "環境診断",
+    "description": "このアプリが自身のプロセス内でエージェントの CLI をどう解決するかを確認します（ターミナルとは異なる場合があります）。",
+    "loading": "診断を実行中…",
+    "error": "診断に失敗しました",
+    "rerun": "再実行",
+    "copyAll": "すべてコピー",
+    "copied": "診断情報をクリップボードにコピーしました",
+    "button": "診断",
+    "verdict": {
+      "ok": "環境は正常です。それでも未インストールと表示される場合は、アプリを完全に再起動してプレフィックスキャッシュを更新してください。",
+      "node_missing": "アプリの PATH に Node.js が見つかりませんでした。",
+      "npm_missing": "アプリの PATH に npm が見つかりませんでした。",
+      "not_installed": "このエージェントはインストールされていないようです。",
+      "installed_but_unresolved": "インストール済みと記録されていますが、アプリが実行ファイルを見つけられません。",
+      "user_prefix_not_on_path": "フォールバックのプレフィックス（~/.houhub/npm-global）にインストールされていますが、アプリの PATH に含まれていません。アプリを完全に再起動して再試行してください。",
+      "homebrew_bin_not_on_path": "Homebrew の bin にインストールされていますが、アプリの PATH に含まれていません（Apple Silicon の keg 分割）。",
+      "terminal_only_path": "このコマンドはターミナルでは解決されますが、アプリでは解決されません。GUI の PATH のずれです。ターミナルからアプリを起動するか、エージェント設定から再インストールしてください。",
+      "npm_prefix_timeout": "npm prefix -g が遅すぎました（1.5 秒超）。フォールバック検出をスキップしました。アプリを再起動して再試行してください。",
+      "node_too_old": "使用中の Node.js がこのエージェントの要件より古いです。Node.js をアップグレードしてください。"
+    }
   }
 }

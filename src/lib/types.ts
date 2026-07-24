@@ -142,6 +142,14 @@ export type ContentBlock =
       tool_name: string
       input_preview: string | null
       /**
+       * ACP tool-call status when known. Live and promoted turns forward it
+       * from `ToolCallInfo.status` in `buildStreamingTurnsFromLiveMessage`;
+       * DB-persisted rows omit it (`undefined`). Lets the render layer tell a
+       * still-unsettled orphan (interrupted/retried arg-less call promoted into
+       * `localTurns`) from a completed no-op. See `dropEmptyInFlightToolCalls`.
+       */
+      status?: string | null
+      /**
        * ACP extensibility metadata for this tool call. Opaque pass-through
        * — both the live snapshot (`ToolCallState.meta`) and the persisted
        * message-row variant carry the same shape. Delegation writes
@@ -329,6 +337,10 @@ export interface DbConversationSummary {
   git_branch: string | null
   external_id: string | null
   message_count: number
+  /** Number of direct, non-deleted delegation children (computed by the backend
+   *  `fill_child_counts` aggregate). `child_count > 0` means this conversation is
+   *  expandable into its sub-session subtree and drives the sidebar chevron. */
+  child_count: number
   created_at: string
   updated_at: string
   /** When the user pinned this conversation (ISO string), or null if not pinned.
@@ -1767,6 +1779,39 @@ export interface AcpAgentStatus {
   installed_version: string | null
 }
 
+// Environment diagnostics (returned by acp_env_diagnostics). Mirrors the Rust
+// AgentDiagnosticsReport in src-tauri/src/acp/types.rs (snake_case response DTO).
+export type DiagLevel = "ok" | "warn" | "fail" | "info"
+
+export interface DiagCheck {
+  label: string
+  value: string
+  status: DiagLevel
+  hint: string | null
+}
+
+export interface DiagSection {
+  title: string
+  checks: DiagCheck[]
+}
+
+export interface DiagnosticsVerdict {
+  level: DiagLevel
+  // Stable id localized via DiagnosticsSettings.verdict.<code>.
+  code: string
+  // Pre-formatted English sentence; used only in plain_text (copy blob).
+  summary: string
+}
+
+export interface AgentDiagnosticsReport {
+  generated_at: string
+  agent_type: AgentType | null
+  verdict: DiagnosticsVerdict
+  sections: DiagSection[]
+  // Backend-rendered text for the "copy all" button.
+  plain_text: string
+}
+
 export type AgentSkillScope = "global" | "project"
 export type AgentSkillLayout = "markdown_file" | "skill_directory"
 
@@ -2507,6 +2552,18 @@ export type AgentInstallEventKind = "started" | "log" | "completed" | "failed"
 export interface AgentInstallEvent {
   task_id: string
   kind: AgentInstallEventKind
+  payload: string
+}
+
+export type OfficecliInstallEventKind =
+  | "started"
+  | "log"
+  | "completed"
+  | "failed"
+
+export interface OfficecliInstallEvent {
+  task_id: string
+  kind: OfficecliInstallEventKind
   payload: string
 }
 

@@ -27,9 +27,7 @@ import {
 import { DelegationProvider } from "@/contexts/delegation-context"
 import { ConversationRuntimeProvider } from "@/contexts/conversation-runtime-context"
 import { TabProvider, useTabStore, useTabActions } from "@/contexts/tab-context"
-import { SessionStatsProvider } from "@/contexts/session-stats-context"
 import { SidebarProvider, useSidebarContext } from "@/contexts/sidebar-context"
-import { ConversationLocateProvider } from "@/contexts/conversation-locate-context"
 import { SearchDialogProvider } from "@/contexts/search-dialog-context"
 import { AutomationsViewProvider } from "@/contexts/automations-view-context"
 import {
@@ -1148,29 +1146,25 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                       <DeepLinkBootstrap />
                       <PetFocusBridge />
                       <ExternalConflictDialog />
-                      <SessionStatsProvider>
-                        <SidebarProvider>
-                          <TerminalProvider>
-                            <SearchDialogProvider>
-                              <AutomationsViewProvider>
-                                <WorkbenchRouteProvider>
-                                  <WorkbenchCloudProvider>
-                                    <HouflowCloudWorkspaceProvider>
-                                      <WorkbenchRouteConversationSync />
-                                      <WorkspaceOpenFolderListener />
-                                      <ConversationLocateProvider>
-                                        <FolderLayoutShell>
-                                          {children}
-                                        </FolderLayoutShell>
-                                      </ConversationLocateProvider>
-                                    </HouflowCloudWorkspaceProvider>
-                                  </WorkbenchCloudProvider>
-                                </WorkbenchRouteProvider>
-                              </AutomationsViewProvider>
-                            </SearchDialogProvider>
-                          </TerminalProvider>
-                        </SidebarProvider>
-                      </SessionStatsProvider>
+                      <SidebarProvider>
+                        <TerminalProvider>
+                          <SearchDialogProvider>
+                            <AutomationsViewProvider>
+                              <WorkbenchRouteProvider>
+                                <WorkbenchCloudProvider>
+                                  <HouflowCloudWorkspaceProvider>
+                                    <WorkbenchRouteConversationSync />
+                                    <WorkspaceOpenFolderListener />
+                                    <FolderLayoutShell>
+                                      {children}
+                                    </FolderLayoutShell>
+                                  </HouflowCloudWorkspaceProvider>
+                                </WorkbenchCloudProvider>
+                              </WorkbenchRouteProvider>
+                            </AutomationsViewProvider>
+                          </SearchDialogProvider>
+                        </TerminalProvider>
+                      </SidebarProvider>
                     </TabProvider>
                   </WorkspaceProvider>
                 </ConversationRuntimeProvider>

@@ -71,6 +71,7 @@ function summary(
     updated_at: "2026-06-12T12:00:00.000Z",
     pinned_at: null,
     ...over,
+    child_count: over.child_count ?? 0,
   }
 }
 

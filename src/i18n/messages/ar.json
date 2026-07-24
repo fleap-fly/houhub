@@ -647,7 +647,8 @@
       "saveCodeBuddyConfig": "حفظ إعدادات CodeBuddy",
       "saveKimiCodeConfig": "حفظ إعدادات Kimi Code",
       "customInstall": "تثبيت مخصص",
-      "saveKimiCodeRawConfig": "Save config.toml"
+      "saveKimiCodeRawConfig": "Save config.toml",
+      "diagnose": "تشخيص"
     },
     "status": {
       "enabled": "مفعّل",
@@ -1307,11 +1308,16 @@
       "reorderHandle": "اسحب لإعادة الترتيب",
       "openFolder": "فتح مجلد",
       "searchPlaceholder": "بحث عن محادثات...",
+      "viewOptions": "خيارات العرض",
       "showCompleted": "عرض المحادثات المكتملة",
+      "showWorktrees": "عرض مجلدات worktree",
       "moreOptions": "المزيد من الخيارات",
       "sortBy": "الترتيب حسب",
       "sortByCreatedAt": "وقت الإنشاء",
       "sortByUpdatedAt": "وقت التحديث",
+      "sectionOrder": "ترتيب الأقسام",
+      "sectionOrderFoldersFirst": "المجلدات في الأعلى",
+      "sectionOrderChatsFirst": "المحادثة في الأعلى",
       "statusRunningBadge": "قيد التشغيل",
       "statusCancelledBadge": "ملغى",
       "conversationCountUnit": "{count} محادثة",
@@ -1360,8 +1366,10 @@
       "sectionFolders": "المجلدات",
       "sectionChats": "محادثة",
       "noChats": "لا توجد محادثات",
+      "noFolders": "لا توجد مجلدات مفتوحة",
       "newChatAction": "محادثة جديدة",
-      "automations": "الأتمتة"
+      "automations": "الأتمتة",
+      "loadingSubsessions": "جارٍ تحميل المحادثات الفرعية…"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
@@ -1452,7 +1460,9 @@
       "pin": "تثبيت",
       "unpin": "إلغاء التثبيت",
       "markCompleted": "وضع علامة كمكتمل",
-      "reopen": "إعادة فتح"
+      "reopen": "إعادة فتح",
+      "expandSubsessions": "توسيع المحادثات الفرعية",
+      "collapseSubsessions": "طي المحادثات الفرعية"
     },
     "search": {
       "dialogTitle": "بحث",
@@ -1725,7 +1735,11 @@
         "confirmApply": "تطبيق التخبئة {ref} على دليل العمل؟",
         "cancel": "إلغاء"
       },
-      "deleteBranch": "حذف الفرع"
+      "deleteBranch": "حذف الفرع",
+      "searchPlaceholder": "البحث في الفروع والإجراءات",
+      "searchAriaLabel": "البحث في الفروع والإجراءات",
+      "branchListLabel": "الفروع والإجراءات",
+      "noMatches": "لا توجد نتائج"
     },
     "commitDialog": {
       "toasts": {
@@ -1811,6 +1825,7 @@
       "copyMessage": "نسخ الرسالة",
       "author": "المؤلف",
       "noFileChangeDetails": "لا توجد تفاصيل تغييرات ملفات متاحة.",
+      "loadingFiles": "جارٍ تحميل الملفات...",
       "branchesTitle": "الفروع",
       "loadingBranches": "جارٍ تحميل الفروع...",
       "noContainingBranches": "لم يتم العثور على فروع تحتوي هذا الالتزام.",
@@ -1839,14 +1854,28 @@
         "resetSuccessDescription": "تمت إعادة ضبط {branch} إلى {shortHash} باستخدام {mode}",
         "resetFailed": "فشلت إعادة الضبط"
       },
+      "authorFilter": {
+        "label": "المؤلف",
+        "searchPlaceholder": "بحث عن مؤلف",
+        "noAuthors": "لم يتم العثور على مؤلفين",
+        "you": "أنت",
+        "filterByAuthorAria": "تصفية الإيداعات حسب المؤلف",
+        "filterByQuery": "تصفية حسب \"{query}\"",
+        "clearAuthorFilterAria": "مسح تصفية المؤلف",
+        "recent": "الأخيرة",
+        "matchingAuthors": "المؤلفون المطابقون",
+        "removeFromRecent": "إزالة {name} من الأخيرة"
+      },
       "branchSelector": {
+        "label": "الفرع",
         "searchBranch": "بحث عن فرع...",
         "noBranches": "لا توجد فروع",
         "selectBranchPlaceholder": "اختر فرعًا...",
         "localBranches": "الفروع المحلية",
         "current": "الحالي",
         "remoteBranches": "الفروع البعيدة",
-        "refreshCommitHistory": "تحديث سجل الالتزامات"
+        "refreshCommitHistory": "تحديث سجل الالتزامات",
+        "clearBranchFilterAria": "مسح تصفية الفرع"
       },
       "dialogs": {
         "newBranchTitle": "فرع جديد",
@@ -4047,5 +4076,27 @@
     "groupInstructions": "الوصف وموجّه النظام",
     "fieldDescription": "الوصف",
     "baseInstructions": "موجّه النظام (base_instructions)"
+  },
+  "DiagnosticsSettings": {
+    "title": "تشخيص البيئة",
+    "description": "يتحقق من كيفية تحليل هذا التطبيق لواجهة سطر أوامر الوكيل داخل عمليته الخاصة، وقد يختلف ذلك عن الطرفية لديك.",
+    "loading": "جارٍ تشغيل التشخيص…",
+    "error": "فشل التشخيص",
+    "rerun": "إعادة التشغيل",
+    "copyAll": "نسخ الكل",
+    "copied": "تم نسخ التشخيص إلى الحافظة",
+    "button": "تشخيص",
+    "verdict": {
+      "ok": "تبدو البيئة سليمة. إذا استمر ظهوره كغير مُثبَّت، فأعد تشغيل التطبيق بالكامل لتحديث ذاكرة التخزين المؤقتة للبادئة.",
+      "node_missing": "لم يتم العثور على Node.js في مسار PATH الخاص بالتطبيق.",
+      "npm_missing": "لم يتم العثور على npm في مسار PATH الخاص بالتطبيق.",
+      "not_installed": "يبدو أن هذا الوكيل غير مُثبَّت.",
+      "installed_but_unresolved": "مُسجَّل كمُثبَّت، لكن لا يستطيع التطبيق تحديد موقع الملف التنفيذي.",
+      "user_prefix_not_on_path": "تم التثبيت في بادئة الاحتياط (~/.houhub/npm-global)، وهي ليست في مسار PATH الخاص بالتطبيق. أعد تشغيل التطبيق بالكامل وحاول مرة أخرى.",
+      "homebrew_bin_not_on_path": "تم التثبيت ضمن مجلد bin الخاص بـ Homebrew، وهو ليس في مسار PATH الخاص بالتطبيق (فصل keg على Apple Silicon).",
+      "terminal_only_path": "يُحلَّل الأمر في الطرفية لديك لكن ليس في التطبيق — وهي فجوة في مسار PATH لواجهة المستخدم الرسومية. شغّل التطبيق من الطرفية أو أعد التثبيت من إعدادات الوكلاء.",
+      "npm_prefix_timeout": "كان npm prefix -g بطيئًا جدًا (أكثر من 1.5 ثانية)، لذا تم تخطّي الكشف الاحتياطي. أعد تشغيل التطبيق وحاول مرة أخرى.",
+      "node_too_old": "إصدار Node.js النشط أقدم مما يتطلبه هذا الوكيل. يرجى ترقية Node.js."
+    }
   }
 }
