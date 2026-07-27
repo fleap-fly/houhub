@@ -1,0 +1,293 @@
+#[cfg(feature = "tauri-runtime")]
+const SERVICE_NAME: &str = "houhub";
+#[cfg(feature = "tauri-runtime")]
+const HOUFLOW_SERVICE_NAME: &str = "com.houflow.houhub";
+
+fn token_key(account_id: &str) -> String {
+    format!("github-token:{}", account_id)
+}
+
+fn channel_token_key(channel_id: i32) -> String {
+    format!("chat-channel:{}", channel_id)
+}
+
+fn houflow_auth_secret_key() -> &'static str {
+    "houflow-auth-secret:v2"
+}
+
+fn workbench_session_key() -> &'static str {
+    "workbench-session:v1"
+}
+
+// ── Tauri mode: OS keyring ──
+
+#[cfg(feature = "tauri-runtime")]
+pub fn set_token(account_id: &str, token: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(SERVICE_NAME, &token_key(account_id))
+        .map_err(|e| format!("keyring init error: {e}"))?;
+    entry
+        .set_password(token)
+        .map_err(|e| format!("keyring set error: {e}"))
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub fn get_token(account_id: &str) -> Option<String> {
+    let entry = keyring::Entry::new(SERVICE_NAME, &token_key(account_id)).ok()?;
+    entry.get_password().ok()
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub fn delete_token(account_id: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(SERVICE_NAME, &token_key(account_id))
+        .map_err(|e| format!("keyring init error: {e}"))?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("keyring delete error: {e}")),
+    }
+}
+
+// ── Server mode: file-based token store ──
+
+#[cfg(not(feature = "tauri-runtime"))]
+fn tokens_file_path() -> std::path::PathBuf {
+    tokens_file_path_for(std::env::var("HOUHUB_DATA_DIR").ok().as_deref())
+}
+
+/// Resolve the on-disk `tokens.json` path given an explicit
+/// `HOUHUB_DATA_DIR` value (or `None` to fall back to the platform
+/// default). Always returns an absolute path so subprocess credential
+/// helpers — which inherit our env but run in git's CWD, not ours —
+/// don't end up looking for `tokens.json` in the user's repo. Factored
+/// out so tests can exercise path resolution without poking at process
+/// env state.
+#[cfg(not(feature = "tauri-runtime"))]
+fn tokens_file_path_for(env_value: Option<&str>) -> std::path::PathBuf {
+    let dir = env_value.map(std::path::PathBuf::from).unwrap_or_else(|| {
+        dirs::data_dir()
+            .map(|d| d.join("houhub"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".houhub-data"))
+    });
+    crate::git_credential::absolutize(&dir).join("tokens.json")
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+fn read_tokens() -> std::collections::HashMap<String, String> {
+    let path = tokens_file_path();
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+fn write_tokens(tokens: &std::collections::HashMap<String, String>) -> Result<(), String> {
+    let path = tokens_file_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create token store directory: {e}"))?;
+    }
+    let json = serde_json::to_string_pretty(tokens)
+        .map_err(|e| format!("failed to serialize tokens: {e}"))?;
+    std::fs::write(&path, json).map_err(|e| format!("failed to write token store: {e}"))
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+pub fn set_token(account_id: &str, token: &str) -> Result<(), String> {
+    let mut tokens = read_tokens();
+    tokens.insert(token_key(account_id), token.to_string());
+    write_tokens(&tokens)
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+pub fn get_token(account_id: &str) -> Option<String> {
+    read_tokens().get(&token_key(account_id)).cloned()
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+pub fn delete_token(account_id: &str) -> Result<(), String> {
+    let mut tokens = read_tokens();
+    tokens.remove(&token_key(account_id));
+    write_tokens(&tokens)
+}
+
+// ── Chat channel token helpers ──
+// Reuse the same storage mechanism (keyring or file) with a different key prefix.
+
+#[cfg(feature = "tauri-runtime")]
+pub fn set_channel_token(channel_id: i32, token: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(SERVICE_NAME, &channel_token_key(channel_id))
+        .map_err(|e| format!("keyring init error: {e}"))?;
+    entry
+        .set_password(token)
+        .map_err(|e| format!("keyring set error: {e}"))
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub fn get_channel_token(channel_id: i32) -> Option<String> {
+    let entry = keyring::Entry::new(SERVICE_NAME, &channel_token_key(channel_id)).ok()?;
+    entry.get_password().ok()
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub fn delete_channel_token(channel_id: i32) -> Result<(), String> {
+    let entry = keyring::Entry::new(SERVICE_NAME, &channel_token_key(channel_id))
+        .map_err(|e| format!("keyring init error: {e}"))?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("keyring delete error: {e}")),
+    }
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub fn set_houflow_auth_secret(secret_json: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(HOUFLOW_SERVICE_NAME, houflow_auth_secret_key())
+        .map_err(|e| format!("keyring init error: {e}"))?;
+    entry
+        .set_password(secret_json)
+        .map_err(|e| format!("keyring set error: {e}"))
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub fn get_houflow_auth_secret() -> Option<String> {
+    let entry = keyring::Entry::new(HOUFLOW_SERVICE_NAME, houflow_auth_secret_key()).ok()?;
+    entry.get_password().ok()
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub fn delete_houflow_auth_secret() -> Result<(), String> {
+    let entry = keyring::Entry::new(HOUFLOW_SERVICE_NAME, houflow_auth_secret_key())
+        .map_err(|e| format!("keyring init error: {e}"))?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("keyring delete error: {e}")),
+    }
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub fn set_workbench_session(secret_json: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(HOUFLOW_SERVICE_NAME, workbench_session_key())
+        .map_err(|e| format!("keyring init error: {e}"))?;
+    entry
+        .set_password(secret_json)
+        .map_err(|e| format!("keyring set error: {e}"))
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub fn get_workbench_session() -> Option<String> {
+    let entry = keyring::Entry::new(HOUFLOW_SERVICE_NAME, workbench_session_key()).ok()?;
+    entry.get_password().ok()
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub fn delete_workbench_session() -> Result<(), String> {
+    let entry = keyring::Entry::new(HOUFLOW_SERVICE_NAME, workbench_session_key())
+        .map_err(|e| format!("keyring init error: {e}"))?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("keyring delete error: {e}")),
+    }
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+pub fn set_workbench_session(secret_json: &str) -> Result<(), String> {
+    let mut tokens = read_tokens();
+    tokens.insert(workbench_session_key().to_string(), secret_json.to_string());
+    write_tokens(&tokens)
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+pub fn get_workbench_session() -> Option<String> {
+    read_tokens().get(workbench_session_key()).cloned()
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+pub fn delete_workbench_session() -> Result<(), String> {
+    let mut tokens = read_tokens();
+    tokens.remove(workbench_session_key());
+    write_tokens(&tokens)
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+pub fn set_channel_token(channel_id: i32, token: &str) -> Result<(), String> {
+    let mut tokens = read_tokens();
+    tokens.insert(channel_token_key(channel_id), token.to_string());
+    write_tokens(&tokens)
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+pub fn get_channel_token(channel_id: i32) -> Option<String> {
+    read_tokens().get(&channel_token_key(channel_id)).cloned()
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+pub fn delete_channel_token(channel_id: i32) -> Result<(), String> {
+    let mut tokens = read_tokens();
+    tokens.remove(&channel_token_key(channel_id));
+    write_tokens(&tokens)
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+pub fn set_houflow_auth_secret(secret_json: &str) -> Result<(), String> {
+    let mut tokens = read_tokens();
+    tokens.insert(
+        houflow_auth_secret_key().to_string(),
+        secret_json.to_string(),
+    );
+    write_tokens(&tokens)
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+pub fn get_houflow_auth_secret() -> Option<String> {
+    read_tokens().get(houflow_auth_secret_key()).cloned()
+}
+
+#[cfg(not(feature = "tauri-runtime"))]
+pub fn delete_houflow_auth_secret() -> Result<(), String> {
+    let mut tokens = read_tokens();
+    tokens.remove(houflow_auth_secret_key());
+    write_tokens(&tokens)
+}
+
+#[cfg(all(test, not(feature = "tauri-runtime")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tokens_file_path_absolutizes_relative_env() {
+        // Regression: a relative `HOUHUB_DATA_DIR=data` previously made
+        // `tokens.json` resolve against the helper subprocess's CWD (i.e.
+        // git's repo dir), even after we'd absolutized the path used for
+        // the database. The token store must always land on an absolute
+        // path so DB lookup and token lookup point at the same root.
+        let cwd = std::env::current_dir().expect("cwd");
+        let resolved = tokens_file_path_for(Some("data"));
+        assert!(
+            resolved.is_absolute(),
+            "tokens path must be absolute, got: {}",
+            resolved.display()
+        );
+        assert_eq!(resolved, cwd.join("data").join("tokens.json"));
+    }
+
+    #[test]
+    fn test_tokens_file_path_absolute_env_unchanged() {
+        let data_dir = std::env::current_dir().expect("cwd").join("houhub-data");
+        let data_dir_str = data_dir.to_string_lossy().to_string();
+        let resolved = tokens_file_path_for(Some(&data_dir_str));
+        assert_eq!(resolved, data_dir.join("tokens.json"));
+    }
+
+    #[test]
+    fn test_tokens_file_path_default_when_unset() {
+        // No env var → derived from `dirs::data_dir()` (always absolute on
+        // every platform we ship to). Just verify we end at `tokens.json`
+        // and that the result is absolute, not the literal default.
+        let resolved = tokens_file_path_for(None);
+        assert!(resolved.is_absolute());
+        assert!(resolved.ends_with("tokens.json"));
+    }
+}

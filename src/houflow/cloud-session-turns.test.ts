@@ -1,0 +1,509 @@
+import { describe, expect, it } from "vitest"
+import { houflowCloudEventsToTurns } from "./cloud-session-turns"
+import type { HouflowCloudSessionEvent } from "./cloud-sessions"
+
+describe("houflowCloudEventsToTurns", () => {
+  it("renders the latest Agent Hub plan snapshot with the local plan card shape", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_plan_1",
+        type: "agent.plan",
+        plan: {
+          version: "agent_hub.plan.v1",
+          plan_id: "primary",
+          state: "active",
+          explanation: null,
+          entries: [
+            { content: "实现", status: "in_progress", priority: "high" },
+            { content: "测试", status: "pending", priority: "medium" },
+          ],
+        },
+      }),
+      event({
+        id: "evt_plan_2",
+        type: "agent.plan",
+        plan: {
+          version: "agent_hub.plan.v1",
+          plan_id: "primary",
+          state: "completed",
+          explanation: "已完成",
+          entries: [
+            { content: "实现", status: "completed", priority: "high" },
+            { content: "测试", status: "completed", priority: "medium" },
+          ],
+        },
+      }),
+    ])
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]?.blocks).toEqual([
+      {
+        type: "plan",
+        entries: [
+          { content: "实现", status: "completed", priority: "high" },
+          { content: "测试", status: "completed", priority: "medium" },
+        ],
+      },
+    ])
+  })
+
+  it("removes the local plan card without leaving an empty assistant turn", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_plan_active",
+        type: "agent.plan",
+        plan: {
+          version: "agent_hub.plan.v1",
+          plan_id: "primary",
+          state: "active",
+          explanation: null,
+          entries: [
+            { content: "实现", status: "in_progress", priority: "high" },
+          ],
+        },
+      }),
+      event({
+        id: "evt_plan_removed",
+        type: "agent.plan",
+        plan: {
+          version: "agent_hub.plan.v1",
+          plan_id: "primary",
+          state: "removed",
+          explanation: null,
+          entries: [],
+        },
+      }),
+    ])
+
+    expect(turns).toEqual([])
+  })
+
+  it("maps Agent Hub text, reasoning and tool events into reusable message turns", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_user",
+        type: "user.message",
+        content: [{ type: "text", text: "开始" }],
+      }),
+      event({
+        id: "evt_reasoning",
+        type: "agent.message",
+        content: [{ type: "thinking", text: "分析中" }],
+      }),
+      event({
+        id: "evt_tool",
+        type: "agent.message",
+        content: [
+          {
+            type: "tool_use",
+            id: "call_1",
+            name: "Read",
+            input: { file_path: "README.md" },
+          },
+          {
+            type: "tool_result",
+            tool_use_id: "call_1",
+            content: [{ type: "text", text: "ok" }],
+          },
+        ],
+      }),
+    ])
+
+    expect(turns).toEqual([
+      {
+        id: "evt_user",
+        role: "user",
+        blocks: [{ type: "text", text: "开始" }],
+        timestamp: "2026-06-28T00:00:00.000Z",
+        completed_at: "2026-06-28T00:00:00.000Z",
+      },
+      {
+        id: "evt_reasoning",
+        role: "assistant",
+        blocks: [
+          { type: "thinking", text: "分析中" },
+          {
+            type: "tool_use",
+            tool_use_id: "call_1",
+            tool_name: "Read",
+            input_preview: '{"file_path":"README.md"}',
+            meta: null,
+          },
+          {
+            type: "tool_result",
+            tool_use_id: "call_1",
+            output_preview: "ok",
+            is_error: false,
+          },
+        ],
+        timestamp: "2026-06-28T00:00:00.000Z",
+        completed_at: "2026-06-28T00:00:00.000Z",
+      },
+    ])
+  })
+
+  it("filters lifecycle and machine artifact status events but keeps user-facing messages", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_idle",
+        type: "session.status_idle",
+        message: "Session is idle.",
+      }),
+      event({
+        id: "evt_hosted_idle",
+        type: "hosted.event",
+        message: "Session is idle.",
+      }),
+      event({
+        id: "evt_hosted_queued",
+        type: "hosted.event",
+        message: "Session run queued.",
+      }),
+      event({
+        id: "evt_dispatch",
+        type: "runtime.status",
+        message: "Hosted A2A dispatch started",
+      }),
+      event({
+        id: "evt_hosted_dispatch",
+        type: "hosted.event",
+        message: "Runtime Plane native message dispatch started.",
+      }),
+      event({
+        id: "evt_manifest",
+        type: "agent.message",
+        content: [
+          {
+            type: "text",
+            text: "normalized_spec=tmp/normalized_exam_spec.json exam_html=written art_prompts=written polish_prompts=written proof_front=written published_outputs=exam.html,exam_paper_front.png internal_files=11 internal_manifest=tmp/render_outputs/render_manifest.json",
+          },
+        ],
+      }),
+      event({
+        id: "evt_check_json",
+        type: "agent.message",
+        content: [
+          {
+            type: "text",
+            text: '{"checked":[{"image":"outputs/exam_paper_front.png","job_id":"65308652316057600","quality_flags":[],"raw_text_chars":1514,"structural_image_ma":true}]}',
+          },
+        ],
+      }),
+      event({
+        id: "evt_real",
+        type: "agent.message",
+        content: [{ type: "text", text: "试卷已经生成，可以在右侧查看文件。" }],
+      }),
+    ])
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]).toMatchObject({
+      id: "evt_real",
+      role: "assistant",
+      blocks: [{ type: "text", text: "试卷已经生成，可以在右侧查看文件。" }],
+    })
+  })
+
+  it("maps object-form Agent Hub content blocks", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_object_content",
+        type: "agent.message",
+        content: {
+          type: "tool_use",
+          id: "call_1",
+          name: "Read",
+          input: { file_path: "outputs/report.md" },
+        },
+      }),
+    ])
+
+    expect(turns).toEqual([
+      {
+        id: "evt_object_content",
+        role: "assistant",
+        blocks: [
+          {
+            type: "tool_use",
+            tool_use_id: "call_1",
+            tool_name: "Read",
+            input_preview: '{"file_path":"outputs/report.md"}',
+            meta: null,
+          },
+        ],
+        timestamp: "2026-06-28T00:00:00.000Z",
+        completed_at: "2026-06-28T00:00:00.000Z",
+      },
+    ])
+  })
+
+  it("maps Agent Hub tool events into the local tool/delegation renderer shape", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_delegate",
+        type: "agent.tool_use",
+        name: "mcp__houhub-mcp__delegate_to_agent",
+        tool_use_id: "call_delegate",
+        input: { agent: "codex", task: "检查诗歌题" },
+        metadata: {
+          "houhub.delegation": {
+            status: "running",
+            child_conversation_id: "42",
+          },
+        },
+      }),
+      event({
+        id: "evt_status",
+        type: "agent.tool_result",
+        tool_use_id: "call_delegate",
+        content: [
+          {
+            type: "text",
+            text: "task_id=abc. Call get_delegation_status later.",
+          },
+        ],
+      }),
+      event({
+        id: "evt_poll",
+        type: "agent.tool_use",
+        name: "get_delegation_status",
+        tool_use_id: "call_poll",
+        input: { task_ids: ["abc"] },
+      }),
+      event({
+        id: "evt_poll_result",
+        type: "agent.tool_result",
+        tool_use_id: "call_poll",
+        content: [
+          {
+            type: "text",
+            text: '{"tasks":[{"task_id":"abc","status":"running","text":"Running."}]}',
+          },
+        ],
+      }),
+    ])
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]?.blocks[0]).toMatchObject({
+      type: "tool_use",
+      tool_use_id: "call_delegate",
+      tool_name: "mcp__houhub-mcp__delegate_to_agent",
+      input_preview: '{"agent":"codex","task":"检查诗歌题"}',
+      meta: {
+        "houhub.delegation": {
+          status: "running",
+          child_conversation_id: "42",
+        },
+      },
+    })
+    expect(turns[0]?.blocks[2]).toMatchObject({
+      type: "tool_use",
+      tool_use_id: "call_poll",
+      tool_name: "get_delegation_status",
+    })
+    expect(turns[0]?.blocks[3]).toMatchObject({
+      type: "tool_result",
+      tool_use_id: "call_poll",
+      output_preview:
+        '{"tasks":[{"task_id":"abc","status":"running","text":"Running."}]}',
+    })
+    expect(turns[0]?.blocks[1]).toMatchObject({
+      type: "tool_result",
+      tool_use_id: "call_delegate",
+      output_preview: "task_id=abc. Call get_delegation_status later.",
+    })
+  })
+
+  it("coalesces consecutive ACP text deltas into one assistant turn", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_delta_1",
+        type: "agent.message.delta",
+        delta: "你好",
+        created_at: "2026-06-28T00:00:01.000Z",
+      }),
+      event({
+        id: "evt_delta_2",
+        type: "agent.message.delta",
+        delta: "，世界",
+        created_at: "2026-06-28T00:00:02.000Z",
+      }),
+    ])
+
+    expect(turns).toEqual([
+      {
+        id: "evt_delta_1",
+        role: "assistant",
+        blocks: [{ type: "text", text: "你好，世界" }],
+        timestamp: "2026-06-28T00:00:01.000Z",
+        completed_at: "2026-06-28T00:00:02.000Z",
+      },
+    ])
+  })
+
+  it("preserves explicit server-side model usage and duration for reply actions", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_usage",
+        type: "agent.message",
+        model: "gpt-5.5",
+        duration_ms: 320,
+        model_usage: {
+          input_tokens: 120,
+          output_tokens: 32,
+          cache_read_input_tokens: 8,
+          cache_creation_input_tokens: 0,
+        },
+        content: [{ type: "text", text: "已完成。" }],
+      }),
+    ])
+
+    expect(turns).toMatchObject([
+      {
+        id: "evt_usage",
+        model: "gpt-5.5",
+        duration_ms: 320,
+        usage: {
+          input_tokens: 120,
+          output_tokens: 32,
+          cache_read_input_tokens: 8,
+          cache_creation_input_tokens: 0,
+        },
+      },
+    ])
+  })
+
+  it("folds a model completion span emitted before the reply into that reply", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_user",
+        type: "user.message",
+        content: [{ type: "text", text: "开始" }],
+      }),
+      event({
+        id: "evt_span_start",
+        type: "span.model_request_start",
+        model: "gpt-old",
+      }),
+      event({
+        id: "evt_span_end",
+        type: "span.model_request_end",
+        model: "gpt-5.5",
+        duration_ms: 640,
+        model_usage: {
+          input_tokens: 240,
+          output_tokens: 64,
+          cache_read_input_tokens: 16,
+        },
+      }),
+      event({
+        id: "evt_reply",
+        type: "agent.message",
+        content: [{ type: "text", text: "完成" }],
+      }),
+    ])
+
+    expect(turns[1]).toMatchObject({
+      id: "evt_reply",
+      model: "gpt-5.5",
+      duration_ms: 640,
+      usage: {
+        input_tokens: 240,
+        output_tokens: 64,
+        cache_read_input_tokens: 16,
+        cache_creation_input_tokens: 0,
+      },
+    })
+  })
+
+  it("folds a model completion span emitted after streaming deltas into the streamed reply", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_user",
+        type: "user.message",
+        content: [{ type: "text", text: "开始" }],
+      }),
+      event({
+        id: "evt_delta_1",
+        type: "agent.message.delta",
+        delta: "云端",
+      }),
+      event({
+        id: "evt_delta_2",
+        type: "agent.message.delta",
+        delta: "回复",
+      }),
+      event({
+        id: "evt_span_end",
+        type: "span.model_request_end",
+        model: "gpt-5.5",
+        duration_ms: 320,
+        model_usage: { input_tokens: 10, output_tokens: 4 },
+      }),
+    ])
+
+    expect(turns[1]).toMatchObject({
+      id: "evt_delta_1",
+      blocks: [{ type: "text", text: "云端回复" }],
+      model: "gpt-5.5",
+      duration_ms: 320,
+      usage: { input_tokens: 10, output_tokens: 4 },
+    })
+  })
+
+  it("aggregates usage and duration across one consecutive assistant reply", () => {
+    const turns = houflowCloudEventsToTurns([
+      event({
+        id: "evt_user",
+        type: "user.message",
+        content: [{ type: "text", text: "开始" }],
+      }),
+      event({
+        id: "evt_reasoning",
+        type: "agent.message",
+        model: "gpt-5.6",
+        duration_ms: 120,
+        model_usage: { input_tokens: 6, output_tokens: 2 },
+        content: [{ type: "thinking", text: "分析" }],
+      }),
+      event({
+        id: "evt_reply",
+        type: "agent.message",
+        model: "gpt-5.6",
+        duration_ms: 280,
+        model_usage: { input_tokens: 4, output_tokens: 8 },
+        content: [{ type: "text", text: "完成" }],
+      }),
+    ])
+
+    expect(turns[1]).toMatchObject({
+      id: "evt_reasoning",
+      model: "gpt-5.6",
+      duration_ms: 400,
+      usage: {
+        input_tokens: 10,
+        output_tokens: 10,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+      blocks: [
+        { type: "thinking", text: "分析" },
+        { type: "text", text: "完成" },
+      ],
+    })
+  })
+})
+
+function event(raw: Record<string, unknown>): HouflowCloudSessionEvent {
+  return {
+    id: String(raw.id),
+    type: String(raw.type),
+    role: null,
+    text: null,
+    createdAt:
+      typeof raw.created_at === "string"
+        ? raw.created_at
+        : "2026-06-28T00:00:00.000Z",
+    raw,
+  }
+}
