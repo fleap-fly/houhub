@@ -523,12 +523,7 @@ pub(crate) async fn verify_agent_installed(agent_type: AgentType) -> Result<(), 
             }
             Ok(())
         }
-        registry::AgentDistribution::Binary {
-            cmd,
-            platforms,
-            dir_entry,
-            ..
-        } => {
+        registry::AgentDistribution::Binary { cmd, platforms, .. } => {
             let platform = registry::current_platform();
             if !platforms.iter().any(|p| p.platform == platform) {
                 return Err(AcpError::PlatformNotSupported(format!(
@@ -538,12 +533,11 @@ pub(crate) async fn verify_agent_installed(agent_type: AgentType) -> Result<(), 
             }
             // Accept any cached version — the Settings page will still
             // surface "upgrade available" for stale caches via its own
-            // version-badge flow. Dir-tree agents (Cursor) additionally
-            // accept a user-installed CLI (official install script), the
-            // same fallback `build_agent` launches with.
+            // version-badge flow. A user-installed CLI also counts, the same
+            // fallback `build_agent` launches with.
             let launchable = binary_cache::find_best_cached_binary_for_agent(agent_type, cmd)?
                 .is_some()
-                || (dir_entry.is_some() && resolve_system_agent_binary(cmd).is_some());
+                || resolve_system_agent_binary(cmd).is_some();
             if !launchable {
                 // INVARIANT: see note above — "is not installed" is a
                 // stable substring the frontend matches against.
@@ -972,21 +966,16 @@ async fn collect_agent_diag(
             .ok()
             .flatten();
         }
-        registry::AgentDistribution::Binary {
-            cmd,
-            platforms,
-            dir_entry,
-            ..
-        } => {
+        registry::AgentDistribution::Binary { cmd, platforms, .. } => {
             diag.cmd = cmd.to_string();
             diag.distribution = "binary";
             // Mirror verify_agent_installed exactly: it first rejects unsupported
             // platforms, then evaluates
-            // `find_best_cached_binary_for_agent(..)?.is_some() || (dir_entry &&
-            // system)`. So an unsupported platform — and a cache-read *error* —
-            // both FAIL the gate (the latter propagated via `?`) rather than
-            // falling through to the system binary. Reflect both here so
-            // diagnostics never reports "ok" for a case where connect errors out.
+            // `find_best_cached_binary_for_agent(..)?.is_some() || system`. So
+            // an unsupported platform — and a cache-read *error* — both FAIL
+            // the gate (the latter propagated via `?`) rather than falling
+            // through to the system binary. Reflect both here so diagnostics
+            // never reports "ok" for a case where connect errors out.
             let supported = platforms
                 .iter()
                 .any(|p| p.platform == registry::current_platform());
@@ -995,8 +984,8 @@ async fn collect_agent_diag(
             } else {
                 match binary_cache::find_best_cached_binary_for_agent(agent_type, cmd) {
                     Ok(Some((path, _version))) => Some(path),
-                    Ok(None) if dir_entry.is_some() => resolve_system_agent_binary(cmd),
-                    Ok(None) | Err(_) => None,
+                    Ok(None) => resolve_system_agent_binary(cmd),
+                    Err(_) => None,
                 }
                 .map(|p| p.to_string_lossy().to_string())
             };
