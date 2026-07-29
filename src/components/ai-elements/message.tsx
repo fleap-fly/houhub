@@ -30,6 +30,7 @@ import {
 } from "streamdown"
 import { markdownLinkComponents } from "./markdown-link"
 import { rehypePluginsAllowingHouhub } from "./rehype-allow-houhub"
+import { remarkTrimCjkAutolinkTail } from "./remark-cjk-autolink-tail"
 import { remarkRewriteFileUriLinks } from "./remark-file-uri-links"
 import { useStreamdownPlugins } from "./streamdown-plugins"
 
@@ -364,6 +365,7 @@ export function normalizeMathDelimiters(text: string): string {
 const remarkPlugins = [
   ...Object.values(defaultRemarkPlugins),
   remarkRewriteFileUriLinks,
+  remarkTrimCjkAutolinkTail,
 ]
 
 // Streamdown's default rehype pipeline strips `houhub://` reference hrefs in

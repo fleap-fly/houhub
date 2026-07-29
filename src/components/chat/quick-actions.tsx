@@ -42,7 +42,8 @@ import {
   type QuickActionsTab,
 } from "@/lib/quick-actions-tab-storage"
 import type { ComposerInjectContent } from "@/components/chat/message-input"
-import { AGENT_LABELS, type AgentType, type ExpertListItem } from "@/lib/types"
+import { type AgentType, type ExpertListItem } from "@/lib/types"
+import { getAgentLabel } from "@/lib/custom-agents"
 
 interface OfficeAction {
   /** Stable id; also the i18n label key (`<id>`) and description (`<id>Desc`). */
@@ -397,7 +398,7 @@ export function QuickActions({ onSelect, agentType }: QuickActionsProps) {
   // badge the agent can't act on.
   const notifyNotEnabled = useCallback(
     (skillLabel: string, section: SettingsSection) => {
-      const agentLabel = agentType ? AGENT_LABELS[agentType] : ""
+      const agentLabel = agentType ? getAgentLabel(agentType) : ""
       toast.warning(
         t("notEnabled.title", { skill: skillLabel, agent: agentLabel }),
         {

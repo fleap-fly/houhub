@@ -180,6 +180,12 @@ describe("HouflowDesktopProvider workspace selection", () => {
         enabled: true,
         available: true,
       },
+      {
+        agent_type: "custom:goose",
+        name: "Goose",
+        enabled: true,
+        available: true,
+      },
     ])
 
     render(
@@ -218,6 +224,13 @@ describe("HouflowDesktopProvider workspace selection", () => {
         runtimeProvider: "cursor",
         runtimeRunner: true,
       }),
+      expect.objectContaining({
+        localAgentRef: "custom:goose",
+        provider: "custom",
+        runtimeProvider: null,
+        runtimeRunner: false,
+        capabilities: [],
+      }),
     ])
     expect(mocks.syncHouflowConnectorLocalAgents).not.toHaveBeenCalled()
     expect(mocks.publishHouflowExternalAgent).not.toHaveBeenCalled()
@@ -225,7 +238,12 @@ describe("HouflowDesktopProvider workspace selection", () => {
     act(() => {
       useHouflowDesktopStore
         .getState()
-        .setLocalAgentReportSelection(["claude:cli", "pi:cli", "cline:vscode"])
+        .setLocalAgentReportSelection([
+          "claude:cli",
+          "pi:cli",
+          "cline:vscode",
+          "custom:goose",
+        ])
     })
     await act(async () => {
       await useHouflowDesktopStore.getState().reportSelectedLocalAgents()
@@ -247,6 +265,13 @@ describe("HouflowDesktopProvider workspace selection", () => {
         expect.objectContaining({
           localAgentRef: "cline:vscode",
           provider: "cline",
+          runtimeProvider: null,
+          runtimeRunner: false,
+          capabilities: [],
+        }),
+        expect.objectContaining({
+          localAgentRef: "custom:goose",
+          provider: "custom",
           runtimeProvider: null,
           runtimeRunner: false,
           capabilities: [],
@@ -285,10 +310,24 @@ describe("HouflowDesktopProvider workspace selection", () => {
         },
       })
     )
-    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledTimes(3)
+    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "workspace_1" }),
+      expect.anything(),
+      expect.objectContaining({
+        connectorId: "cac_desktop",
+        localAgentRef: "custom:goose",
+        provider: "custom",
+        capabilities: {
+          dispatch: false,
+          workspace_message: false,
+          lifecycle: false,
+        },
+      })
+    )
+    expect(mocks.publishHouflowExternalAgent).toHaveBeenCalledTimes(4)
     expect(mocks.saveHouflowLocalAgentReportSelection).toHaveBeenCalledWith(
       "workspace_1",
-      ["claude:cli", "pi:cli", "cline:vscode"]
+      ["claude:cli", "pi:cli", "cline:vscode", "custom:goose"]
     )
   })
 

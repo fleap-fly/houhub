@@ -53,6 +53,12 @@ struct Args {
     /// feature gating; see `CompanionFeatures::parse` (defaults to
     /// delegation-only).
     features: Option<String>,
+    /// Comma-joined `custom:<id>` slugs registered in the parent at injection
+    /// time. They are appended to the `delegate_to_agent` target enum.
+    custom_agents: Option<String>,
+    /// Comma-joined built-in agent slugs disabled in settings. They are
+    /// removed from the `delegate_to_agent` target enum.
+    disabled_agents: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -61,6 +67,8 @@ fn parse_args() -> Result<Args, String> {
     let mut token = None;
     let mut parent_pid = None;
     let mut features = None;
+    let mut custom_agents = None;
+    let mut disabled_agents = None;
 
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
@@ -98,9 +106,21 @@ fn parse_args() -> Result<Args, String> {
                         .ok_or_else(|| "--features requires a value".to_string())?,
                 );
             }
+            "--custom-agents" => {
+                custom_agents = Some(
+                    iter.next()
+                        .ok_or_else(|| "--custom-agents requires a value".to_string())?,
+                );
+            }
+            "--disabled-agents" => {
+                disabled_agents = Some(
+                    iter.next()
+                        .ok_or_else(|| "--disabled-agents requires a value".to_string())?,
+                );
+            }
             "--help" | "-h" => {
                 println!(
-                    "houhub-mcp --parent-connection-id <uuid> --socket-path <path> --token <secret> [--parent-pid <pid>] [--features delegation,feedback,ask,sessions]"
+                    "houhub-mcp --parent-connection-id <uuid> --socket-path <path> --token <secret> [--parent-pid <pid>] [--features delegation,feedback,ask,sessions] [--custom-agents custom:<id>,...] [--disabled-agents <agent>,...]"
                 );
                 std::process::exit(0);
             }
@@ -114,7 +134,20 @@ fn parse_args() -> Result<Args, String> {
         token: token.ok_or_else(|| "missing --token".to_string())?,
         parent_pid,
         features,
+        custom_agents,
+        disabled_agents,
     })
+}
+
+fn parse_csv(raw: Option<&str>) -> Vec<String> {
+    raw.map(|csv| {
+        csv.split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// Serialize a `JsonRpcResponse` and append a newline; small enough to keep
@@ -151,6 +184,8 @@ async fn main() -> ExitCode {
         socket_path: args.socket_path,
         token: args.token,
         features: CompanionFeatures::parse(args.features.as_deref()),
+        custom_agents: parse_csv(args.custom_agents.as_deref()),
+        disabled_agents: parse_csv(args.disabled_agents.as_deref()),
     };
 
     let stdin = tokio::io::stdin();

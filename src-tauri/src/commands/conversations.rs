@@ -8,6 +8,7 @@ use crate::db::service::{conversation_service, folder_service, import_service, t
 use crate::db::AppDatabase;
 use crate::models::*;
 use crate::parsers::claude::ClaudeParser;
+use crate::parsers::acp_native::AcpNativeParser;
 use crate::parsers::cline::ClineParser;
 use crate::parsers::codebuddy::CodeBuddyParser;
 use crate::parsers::codex::CodexParser;
@@ -289,6 +290,7 @@ pub async fn get_conversation(
             AgentType::Pi => Box::new(PiParser::new()),
             AgentType::Grok => Box::new(GrokParser::new()),
             AgentType::Cursor => Box::new(CursorParser::new()),
+            AgentType::Custom(_) => Box::new(AcpNativeParser::new(agent_type)),
         };
 
         parser
@@ -949,6 +951,7 @@ pub async fn get_folder_conversation_core(
                     AgentType::Pi => Box::new(PiParser::new()),
                     AgentType::Grok => Box::new(GrokParser::new()),
                     AgentType::Cursor => Box::new(CursorParser::new()),
+                    AgentType::Custom(_) => Box::new(AcpNativeParser::new(at)),
                 };
                 match parser.get_conversation(&eid) {
                     Ok(d) => Ok((

@@ -54,7 +54,11 @@ export function ExpertsBody({
         acpListAgents(),
       ])
       setExperts(expertList)
-      setAgents(agentList.filter((agent) => !piUsesCustomAgentDir(agent)))
+      setAgents(
+        agentList.filter(
+          (agent) => agent.skills_capable && !piUsesCustomAgentDir(agent)
+        )
+      )
       setReloadKey((k) => k + 1)
     } catch (err) {
       setLoadError(toErrorMessage(err))

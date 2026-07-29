@@ -57,6 +57,9 @@ pub enum AgentDistribution {
 pub struct PlatformBinary {
     pub platform: &'static str,
     pub url: &'static str,
+    /// Expected archive digest for remotely registered custom agents. Built-in
+    /// URLs are reviewed constants, so they intentionally leave this unset.
+    pub sha256: Option<&'static str>,
 }
 
 /// Launch entry inside an extracted directory-tree archive (see
@@ -130,7 +133,9 @@ pub fn current_platform() -> &'static str {
     }
 }
 
-pub fn all_acp_agents() -> Vec<AgentType> {
+/// The built-in engine set. Custom ACP agents are loaded dynamically from the
+/// desktop registry and are deliberately excluded here.
+pub fn builtin_acp_agents() -> Vec<AgentType> {
     vec![
         AgentType::ClaudeCode,
         AgentType::Codex,
@@ -147,6 +152,13 @@ pub fn all_acp_agents() -> Vec<AgentType> {
     ]
 }
 
+/// Every launchable ACP engine: built-ins followed by registered custom agents.
+pub fn all_acp_agents() -> Vec<AgentType> {
+    let mut agents = builtin_acp_agents();
+    agents.extend(crate::acp::custom_registry::all());
+    agents
+}
+
 pub fn registry_id_for(agent_type: AgentType) -> &'static str {
     match agent_type {
         AgentType::ClaudeCode => "claude-acp",
@@ -161,6 +173,7 @@ pub fn registry_id_for(agent_type: AgentType) -> &'static str {
         AgentType::Pi => "pi-acp",
         AgentType::Grok => "grok-build",
         AgentType::Cursor => "cursor",
+        AgentType::Custom(id) => id,
     }
 }
 
@@ -178,11 +191,18 @@ pub fn from_registry_id(id: &str) -> Option<AgentType> {
         "pi-acp" => Some(AgentType::Pi),
         "grok-build" => Some(AgentType::Grok),
         "cursor" => Some(AgentType::Cursor),
-        _ => None,
+        other => crate::acp::custom_registry::is_registered(other)
+            .then(|| AgentType::custom(other))
+            .flatten(),
     }
 }
 
 pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
+    if let AgentType::Custom(id) = agent_type {
+        return crate::acp::custom_registry::get(id)
+            .cloned()
+            .unwrap_or_else(|| crate::acp::custom_registry::unregistered_meta(id));
+    }
     debug_assert_eq!(
         from_registry_id(registry_id_for(agent_type)),
         Some(agent_type)
@@ -307,26 +327,32 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                     PlatformBinary {
                         platform: "darwin-aarch64",
                         url: "https://github.com/anomalyco/opencode/releases/download/v1.18.5/opencode-darwin-arm64.zip",
+                        sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
                         url: "https://github.com/anomalyco/opencode/releases/download/v1.18.5/opencode-darwin-x64.zip",
+                        sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
                         url: "https://github.com/anomalyco/opencode/releases/download/v1.18.5/opencode-linux-arm64.tar.gz",
+                        sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
                         url: "https://github.com/anomalyco/opencode/releases/download/v1.18.5/opencode-linux-x64.tar.gz",
+                        sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
                         url: "https://github.com/anomalyco/opencode/releases/download/v1.18.5/opencode-windows-arm64.zip",
+                        sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
                         url: "https://github.com/anomalyco/opencode/releases/download/v1.18.5/opencode-windows-x64.zip",
+                        sha256: None,
                     },
                 ],
                 dir_entry: None,
@@ -460,26 +486,32 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                     PlatformBinary {
                         platform: "darwin-aarch64",
                         url: "https://downloads.cursor.com/lab/2026.07.23-e383d2b/darwin/arm64/agent-cli-package.tar.gz",
+                        sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
                         url: "https://downloads.cursor.com/lab/2026.07.23-e383d2b/darwin/x64/agent-cli-package.tar.gz",
+                        sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
                         url: "https://downloads.cursor.com/lab/2026.07.23-e383d2b/linux/arm64/agent-cli-package.tar.gz",
+                        sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
                         url: "https://downloads.cursor.com/lab/2026.07.23-e383d2b/linux/x64/agent-cli-package.tar.gz",
+                        sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
                         url: "https://downloads.cursor.com/lab/2026.07.23-e383d2b/windows/arm64/agent-cli-package.zip",
+                        sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
                         url: "https://downloads.cursor.com/lab/2026.07.23-e383d2b/windows/x64/agent-cli-package.zip",
+                        sha256: None,
                     },
                 ],
                 dir_entry: Some(BinaryDirEntry {
@@ -488,6 +520,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 }),
             },
         },
+        AgentType::Custom(_) => unreachable!("custom metadata is handled above"),
     }
 }
 

@@ -117,7 +117,7 @@ describe("parseHouhubReferenceUri", () => {
     })
   })
 
-  it("parses a skill uri, stripping the leading `/`·`$` from the label", () => {
+  it("parses a skill uri, preserving its literal invocation prefix", () => {
     expect(
       parseHouhubReferenceUri("houhub://skill/review", "/review")
     ).toMatchObject({
@@ -125,18 +125,22 @@ describe("parseHouhubReferenceUri", () => {
       id: "review",
       label: "review",
       uri: "houhub://skill/review",
-      meta: null,
+      meta: { invocationPrefix: "/" },
     })
-    // The `$` prefix ($skill / Codex expert) is stripped the same way.
+    // `$` must stay `$` when a restored badge is serialized again.
     expect(
-      parseHouhubReferenceUri("houhub://skill/deploy", "$deploy")?.label
-    ).toBe("deploy")
+      parseHouhubReferenceUri("houhub://skill/deploy", "$deploy")
+    ).toMatchObject({
+      label: "deploy",
+      meta: { invocationPrefix: "$" },
+    })
   })
 
   it("falls back to the bare id for an empty skill label", () => {
-    expect(parseHouhubReferenceUri("houhub://skill/deploy", "")?.label).toBe(
-      "deploy"
-    )
+    expect(parseHouhubReferenceUri("houhub://skill/deploy", "")).toMatchObject({
+      label: "deploy",
+      meta: null,
+    })
   })
 
   it("parses an embedded-attachment uri as an inert file badge", () => {

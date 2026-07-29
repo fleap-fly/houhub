@@ -28,13 +28,13 @@ import { createModelProvider, fetchOpenAiCompatibleModels } from "@/lib/api"
 import { CodexModelListEditor } from "@/components/settings/codex-model-list-editor"
 import {
   MODEL_PROVIDER_AGENT_TYPES,
-  AGENT_LABELS,
   serializeClaudeProviderModel,
   serializeCodexModelConfig,
   type AgentType,
   type ClaudeProviderModel,
   type CodexModelConfig,
 } from "@/lib/types"
+import { getAgentLabel } from "@/lib/custom-agents"
 
 function normalizeModelList(raw: string): string[] {
   const seen = new Set<string>()
@@ -342,7 +342,7 @@ export function AddModelProviderDialog({
                     checked={agentTypes.includes(at)}
                     onCheckedChange={() => handleAgentTypeToggle(at)}
                   />
-                  {AGENT_LABELS[at]}
+                  {getAgentLabel(at)}
                 </label>
               ))}
             </div>

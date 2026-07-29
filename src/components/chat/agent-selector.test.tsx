@@ -20,12 +20,14 @@ function agent(
 ): AcpAgentInfo {
   return {
     agent_type: agentType,
+    skills_capable: true,
     registry_id: `${agentType}-registry`,
     registry_version: null,
     name: agentType,
     description: "",
     available: true,
     distribution_type: "system",
+    custom_source: null,
     enabled: true,
     sort_order: 0,
     installed_version: null,
@@ -36,6 +38,7 @@ function agent(
     codex_auth_json: null,
     codex_config_toml: null,
     codex_model_catalog: null,
+    codex_sandbox_settings: null,
     grok_config_toml: null,
     grok_settings: null,
     cline_secrets_json: null,
@@ -43,6 +46,7 @@ function agent(
     cursor_cli_config_json: null,
     cursor_settings: null,
     model_provider_id: null,
+    icon_url: null,
     ...overrides,
   }
 }

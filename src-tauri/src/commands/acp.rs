@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 
 use crate::acp::binary_cache;
+use crate::acp::custom_registry;
 use crate::acp::error::AcpError;
 use crate::acp::manager::ConnectionManager;
 use crate::acp::opencode_plugins::{self, PluginCheckSummary};
@@ -15,8 +16,10 @@ use crate::acp::preflight::{self, PreflightResult};
 use crate::acp::registry;
 use crate::acp::types::{
     AcpAgentInfo, AgentDiagnosticsReport, AgentSkillContent, AgentSkillItem, AgentSkillLayout,
-    AgentSkillLocation, AgentSkillScope, AgentSkillsListResult, ConfigStaleKind, ConnectionStatus,
-    DiagCheck, DiagLevel, DiagSection, DiagnosticsVerdict, GrokSettings, GrokStructuredConfig,
+    AgentSkillLocation, AgentSkillScope, AgentSkillsListResult, CodexGranularApproval,
+    CodexSandboxSettings, CodexSandboxStructuredConfig, CodexWorkspaceWrite, ConfigStaleKind,
+    ConnectionStatus, DiagCheck, DiagLevel, DiagSection, DiagnosticsVerdict, GrokSettings,
+    GrokStructuredConfig,
 };
 #[cfg(feature = "tauri-runtime")]
 use crate::acp::types::{ConnectionInfo, ForkResultInfo, PromptInputBlock};
@@ -39,7 +42,7 @@ struct AcpAgentsUpdatedEventPayload {
     agent_type: Option<AgentType>,
 }
 
-fn emit_acp_agents_updated(
+pub(crate) fn emit_acp_agents_updated(
     emitter: &EventEmitter,
     reason: &'static str,
     agent_type: Option<AgentType>,
@@ -380,15 +383,6 @@ impl NpxCommandResolver {
         self.per_cmd_cache.insert(cmd.to_string(), resolved.clone());
         resolved
     }
-
-    async fn resolve_agent_for_list(&mut self, agent_type: AgentType) -> bool {
-        let registry::AgentDistribution::Npx { cmd, .. } =
-            registry::get_agent_meta(agent_type).distribution
-        else {
-            return false;
-        };
-        self.resolve_for_list(cmd).await.is_some()
-    }
 }
 
 async fn resolve_npx_command_from_current_npm_prefix(cmd: &str) -> Option<PathBuf> {
@@ -639,12 +633,16 @@ async fn detect_local_version(agent_type: AgentType) -> Option<String> {
     let meta = registry::get_agent_meta(agent_type);
     match meta.distribution {
         registry::AgentDistribution::Npx { cmd, package, .. } => {
-            if !is_cmd_available(cmd).await {
-                return None;
-            }
+            let resolved = resolve_npx_command(cmd).await?;
             // Try `npm list -g <package_name> --json` to get the real installed version.
             let pkg_name = package_name_from_spec(package);
-            detect_npm_global_version(&pkg_name).await
+            let mut version = detect_npm_global_version(&pkg_name).await;
+            // Keep install detection consistent with the status/list paths for
+            // package managers npm cannot see (bun, pnpm, brew, ...).
+            if version.is_none() {
+                version = system_probed_version(agent_type, &resolved, Some(package)).await;
+            }
+            version
         }
         registry::AgentDistribution::Binary { cmd, dir_entry, .. } => {
             let cached = binary_cache::detect_installed_version(agent_type, cmd)
@@ -659,9 +657,26 @@ async fn detect_local_version(agent_type: AgentType) -> Option<String> {
             if dir_entry.is_some() {
                 return system_dir_agent_version(cmd).await;
             }
-            None
+            let bin = resolve_system_agent_binary(cmd)?;
+            system_probed_version(agent_type, &bin, None).await
         }
-        registry::AgentDistribution::Uvx { .. } => binary_cache::uvx_prepared_version(agent_type),
+        registry::AgentDistribution::Uvx {
+            cmd, system_cmd, ..
+        } => {
+            let mut version = binary_cache::uvx_prepared_version(agent_type);
+            // A user-installed package CLI is a real install even without a
+            // HouHub prewarm marker. Prefer its console script, then the
+            // launch fallback (Hermes: `hermes-acp` then `hermes`).
+            if version.is_none() {
+                let bin = resolve_command_on_path(cmd).or_else(|| {
+                    system_cmd.and_then(|(command, _)| resolve_command_on_path(command))
+                });
+                if let Some(bin) = bin {
+                    version = system_probed_version(agent_type, &bin, None).await;
+                }
+            }
+            version
+        }
     }
 }
 
@@ -1703,6 +1718,137 @@ pub(crate) async fn system_dir_agent_version(cmd: &str) -> Option<String> {
         *cache = Some((bin, mtime, version.clone()));
     }
     Some(version)
+}
+
+/// Process-local cache for system-CLI version probes. Entries are keyed by the
+/// resolved binary, declared probe, and package name, then invalidated on a
+/// binary mtime change. Failed probes are cached too so status refreshes do not
+/// keep spawning a CLI that does not support `--version`.
+type ProbeCacheEntry = (std::time::SystemTime, Option<String>);
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ProbeCacheKey {
+    bin: PathBuf,
+    probe: Option<String>,
+    package: Option<String>,
+}
+
+fn probe_cache_key(
+    resolved_bin: &std::path::Path,
+    declared_probe: Option<&str>,
+    npm_package: Option<&str>,
+) -> ProbeCacheKey {
+    ProbeCacheKey {
+        bin: resolved_bin.to_path_buf(),
+        probe: declared_probe.map(str::to_string),
+        package: npm_package.map(str::to_string),
+    }
+}
+
+static SYSTEM_PROBE_CACHE: std::sync::Mutex<Option<HashMap<ProbeCacheKey, ProbeCacheEntry>>> =
+    std::sync::Mutex::new(None);
+
+/// Return the first dotted version token from a CLI banner. CLI output varies
+/// between `name 1.2.3`, `name/1.2.3`, and `package@1.2.3`, so split all three
+/// forms and ignore URL paths that could otherwise look version-like.
+fn extract_version_token(text: &str) -> Option<String> {
+    fn version_candidate(piece: &str) -> Option<String> {
+        let piece = piece.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | ';' | ':'));
+        let candidate = piece
+            .strip_prefix('v')
+            .or_else(|| piece.strip_prefix('V'))
+            .unwrap_or(piece);
+        let starts_digit = candidate.chars().next().is_some_and(|c| c.is_ascii_digit());
+        (starts_digit
+            && candidate.contains('.')
+            && candidate
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+')))
+        .then(|| candidate.to_string())
+    }
+
+    for line in text.lines() {
+        for token in line.split_whitespace() {
+            if token.contains("://") {
+                continue;
+            }
+            if let Some(version) = token.split(['/', '@']).find_map(version_candidate) {
+                return Some(version);
+            }
+        }
+    }
+    None
+}
+
+async fn probe_cli_version_token(bin: &std::path::Path, args: &[String]) -> Option<String> {
+    let mut cmd = crate::process::tokio_command(bin);
+    cmd.args(args).kill_on_drop(true);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    extract_version_token(&String::from_utf8_lossy(&output.stdout))
+        .or_else(|| extract_version_token(&String::from_utf8_lossy(&output.stderr)))
+}
+
+/// Probe a user's system install (npm, bun, brew, pipx, installer script, ...)
+/// when HouHub has no managed install record. Custom agents use a declared
+/// `version_probe` first; all other agents fall back to their standard CLI
+/// version command. Results are cached per effective probe input.
+pub(crate) async fn system_probed_version(
+    agent_type: AgentType,
+    resolved_bin: &std::path::Path,
+    npm_package: Option<&str>,
+) -> Option<String> {
+    let declared_probe = agent_type
+        .custom_id()
+        .and_then(crate::acp::custom_registry::version_probe_of);
+    system_probed_version_with(declared_probe, resolved_bin, npm_package).await
+}
+
+async fn system_probed_version_with(
+    declared_probe: Option<&str>,
+    resolved_bin: &std::path::Path,
+    npm_package: Option<&str>,
+) -> Option<String> {
+    let mtime = std::fs::metadata(resolved_bin).ok()?.modified().ok()?;
+    let key = probe_cache_key(resolved_bin, declared_probe, npm_package);
+    if let Ok(cache) = SYSTEM_PROBE_CACHE.lock() {
+        if let Some((cached_mtime, version)) = cache.as_ref().and_then(|map| map.get(&key)) {
+            if *cached_mtime == mtime {
+                return version.clone();
+            }
+        }
+    }
+
+    let mut version = None;
+    if let Some(probe) = declared_probe {
+        let mut parts = probe.split_whitespace();
+        if let Some(program) = parts.next() {
+            let args: Vec<String> = parts.map(str::to_string).collect();
+            if let Some(path) = resolve_npx_command(program).await {
+                version = probe_cli_version_token(&path, &args).await;
+            }
+        }
+    }
+    if version.is_none() {
+        if let Some(package) = npm_package {
+            version = detect_npm_global_version(&package_name_from_spec(package)).await;
+        }
+    }
+    if version.is_none() {
+        version = probe_cli_version_token(resolved_bin, &["--version".to_string()]).await;
+    }
+
+    if let Ok(mut cache) = SYSTEM_PROBE_CACHE.lock() {
+        cache
+            .get_or_insert_with(HashMap::new)
+            .insert(key, (mtime, version.clone()));
+    }
+    version
 }
 
 /// Run `<binary> --version` and return the first non-empty stdout line.
@@ -3352,6 +3498,262 @@ fn persist_codex_native_config_files(
     }
 
     Ok(())
+}
+
+/// Read the current Codex configuration for a structured patch. A missing file
+/// is an empty base, but any other read error must abort the save so an
+/// unavailable file is never replaced by a partial configuration.
+fn read_codex_config_or_empty() -> Result<String, AcpError> {
+    let path = codex_config_toml_path();
+    match fs::read_to_string(&path) {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(AcpError::protocol(format!(
+            "read codex config.toml failed: {error}"
+        ))),
+    }
+}
+
+const CODEX_APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
+const CODEX_SANDBOX_MODES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
+
+/// Project the sandbox and approval keys into a stable UI shape. Invalid TOML
+/// deliberately yields defaults: the raw editor remains the recovery surface.
+fn parse_codex_sandbox_settings(raw_toml: &str) -> CodexSandboxSettings {
+    let Ok(table) = raw_toml.parse::<toml::Table>() else {
+        return CodexSandboxSettings::default();
+    };
+
+    let approval_item = table.get("approval_policy");
+    let approval_policy = approval_item
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .map(|value| match value {
+            "on-failure" => "on-request",
+            other => other,
+        })
+        .filter(|value| CODEX_APPROVAL_POLICIES.contains(value))
+        .map(str::to_string);
+    let granular = approval_item
+        .and_then(toml::Value::as_table)
+        .and_then(|policy| policy.get("granular"))
+        .and_then(toml::Value::as_table)
+        .map(|granular| {
+            let flag = |key: &str| {
+                granular
+                    .get(key)
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(false)
+            };
+            CodexGranularApproval {
+                sandbox_approval: flag("sandbox_approval"),
+                rules: flag("rules"),
+                skill_approval: flag("skill_approval"),
+                request_permissions: flag("request_permissions"),
+                mcp_elicitations: flag("mcp_elicitations"),
+            }
+        });
+    let sandbox_mode = table
+        .get("sandbox_mode")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| CODEX_SANDBOX_MODES.contains(value))
+        .map(str::to_string);
+    let workspace_write = table
+        .get("sandbox_workspace_write")
+        .and_then(toml::Value::as_table);
+    let workspace_flag = |key: &str| {
+        workspace_write
+            .and_then(|entry| entry.get(key))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false)
+    };
+    let writable_roots = workspace_write
+        .and_then(|entry| entry.get("writable_roots"))
+        .and_then(toml::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    CodexSandboxSettings {
+        approval_policy,
+        granular,
+        sandbox_mode,
+        workspace_write: CodexWorkspaceWrite {
+            writable_roots,
+            network_access: workspace_flag("network_access"),
+            exclude_tmpdir_env_var: workspace_flag("exclude_tmpdir_env_var"),
+            exclude_slash_tmp: workspace_flag("exclude_slash_tmp"),
+        },
+        shadowed_by_default_permissions: table.contains_key("default_permissions"),
+        has_permissions_table: table
+            .get("permissions")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|profiles| !profiles.is_empty()),
+    }
+}
+
+fn is_absolute_codex_config_path(value: &str) -> bool {
+    let value = value.trim();
+    if value.starts_with('/') || value.starts_with("\\\\") {
+        return true;
+    }
+    let mut chars = value.chars();
+    matches!(
+        (chars.next(), chars.next(), chars.next()),
+        (Some(drive), Some(':'), Some('\\' | '/')) if drive.is_ascii_alphabetic()
+    )
+}
+
+/// Apply only the fields provided by the structured panel and retain comments
+/// plus unrelated configuration through `toml_edit`.
+fn apply_codex_sandbox_config(
+    base_toml: &str,
+    settings: &CodexSandboxStructuredConfig,
+) -> Result<String, AcpError> {
+    let mut doc = base_toml
+        .parse::<toml_edit::Document>()
+        .map_err(|error| AcpError::protocol(format!("invalid codex config.toml: {error}")))?;
+
+    let approval = settings
+        .approval_policy
+        .as_ref()
+        .map(|policy| policy.as_deref());
+    let granular = settings.granular;
+    if approval.is_some() || granular.is_some() {
+        let preset = approval.flatten();
+        let granular = granular.flatten();
+        if preset.is_some() && granular.is_some() {
+            return Err(AcpError::protocol(
+                "approval_policy cannot be both a preset and a granular table",
+            ));
+        }
+        match (preset, granular) {
+            (Some(policy), _) => {
+                let policy = policy.trim();
+                if !CODEX_APPROVAL_POLICIES.contains(&policy) {
+                    return Err(AcpError::protocol(format!(
+                        "unsupported codex approval_policy: {policy}"
+                    )));
+                }
+                doc["approval_policy"] = toml_edit::value(policy);
+            }
+            (None, Some(granular)) => {
+                let mut values = toml_edit::Table::new();
+                values.insert(
+                    "sandbox_approval",
+                    toml_edit::value(granular.sandbox_approval),
+                );
+                values.insert("rules", toml_edit::value(granular.rules));
+                values.insert("skill_approval", toml_edit::value(granular.skill_approval));
+                values.insert(
+                    "request_permissions",
+                    toml_edit::value(granular.request_permissions),
+                );
+                values.insert(
+                    "mcp_elicitations",
+                    toml_edit::value(granular.mcp_elicitations),
+                );
+                let mut parent = toml_edit::Table::new();
+                parent.insert("granular", toml_edit::Item::Table(values));
+                doc["approval_policy"] = toml_edit::Item::Table(parent);
+            }
+            (None, None) => {
+                doc.remove("approval_policy");
+            }
+        }
+    }
+
+    if let Some(mode) = settings.sandbox_mode.as_ref() {
+        match mode.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            Some(mode) => {
+                if !CODEX_SANDBOX_MODES.contains(&mode) {
+                    return Err(AcpError::protocol(format!(
+                        "unsupported codex sandbox_mode: {mode}"
+                    )));
+                }
+                doc["sandbox_mode"] = toml_edit::value(mode);
+            }
+            None => {
+                doc.remove("sandbox_mode");
+            }
+        }
+    }
+
+    let roots = match settings.writable_roots.as_ref() {
+        Some(roots) => {
+            let roots = roots
+                .iter()
+                .map(|root| root.trim().to_string())
+                .filter(|root| !root.is_empty())
+                .collect::<Vec<_>>();
+            if let Some(path) = roots
+                .iter()
+                .find(|path| !is_absolute_codex_config_path(path))
+            {
+                return Err(AcpError::protocol(format!(
+                    "writable_roots entries must be absolute paths: {path}"
+                )));
+            }
+            Some(roots)
+        }
+        None => None,
+    };
+    let flags = [
+        ("network_access", settings.network_access),
+        ("exclude_tmpdir_env_var", settings.exclude_tmpdir_env_var),
+        ("exclude_slash_tmp", settings.exclude_slash_tmp),
+    ];
+    if roots.is_some() || flags.iter().any(|(_, value)| value.is_some()) {
+        let entry = &mut doc["sandbox_workspace_write"];
+        if entry.is_none() {
+            *entry = toml_edit::Item::Table(toml_edit::Table::new());
+        } else if entry.as_table_like_mut().is_none() {
+            return Err(AcpError::protocol(
+                "cannot set [sandbox_workspace_write]: it exists but is not a table",
+            ));
+        }
+        if let Some(table) = entry.as_table_like_mut() {
+            if let Some(roots) = roots {
+                if roots.is_empty() {
+                    table.remove("writable_roots");
+                } else {
+                    let mut array = toml_edit::Array::new();
+                    for root in &roots {
+                        array.push(root.as_str());
+                    }
+                    table.insert("writable_roots", toml_edit::value(array));
+                }
+            }
+            for (key, value) in flags {
+                match value {
+                    Some(true) => {
+                        table.insert(key, toml_edit::value(true));
+                    }
+                    Some(false) => {
+                        table.remove(key);
+                    }
+                    None => {}
+                }
+            }
+        }
+        if doc
+            .get("sandbox_workspace_write")
+            .and_then(|entry| entry.as_table_like())
+            .is_some_and(|table| table.is_empty())
+        {
+            doc.remove("sandbox_workspace_write");
+        }
+    }
+
+    Ok(doc.to_string())
 }
 
 /// Read the raw `~/.grok/config.toml` for the Grok settings panel's config-file
@@ -6050,6 +6452,29 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
             ],
             project_rel_dirs: vec![".cursor/skills", ".agents/skills"],
         }),
+        AgentType::Custom(id) => {
+            let decl = crate::acp::custom_registry::skills_decl(id);
+            let mut global_dirs = Vec::new();
+            if let Some(dir) = decl
+                .dir
+                .map(std::path::Path::new)
+                .filter(|path| path.is_absolute())
+            {
+                global_dirs.push(dir.to_path_buf());
+            }
+            if decl.shared_store {
+                global_dirs.push(home_dir_or_default().join(".agents").join("skills"));
+            }
+            (!global_dirs.is_empty()).then_some(SkillStorageSpec {
+                kind: SkillStorageKind::SkillDirectoryOnly,
+                global_dirs,
+                project_rel_dirs: if decl.shared_store {
+                    vec![".agents/skills"]
+                } else {
+                    vec![]
+                },
+            })
+        }
     }
 }
 
@@ -7384,6 +7809,10 @@ fn cascade_update_agent_config(
             // Grok credentials are managed through its runtime environment and
             // native config panel, not through the generic provider cascade.
         }
+        AgentType::Custom(_) => {
+            // Custom agents are configuration-free. Their credentials remain in
+            // the generic launch environment rather than a HouHub-owned file.
+        }
     }
     Ok(())
 }
@@ -8143,13 +8572,18 @@ pub(crate) async fn acp_get_agent_status_core(
         .map_err(|e| AcpError::protocol(e.to_string()))?;
 
     let (available, installed_version) = match &meta.distribution {
-        registry::AgentDistribution::Npx { .. } => (
-            true,
-            npx_agent_launchable(agent_type)
-                .await
-                .then(|| setting.as_ref().and_then(|m| m.installed_version.clone()))
-                .flatten(),
-        ),
+        registry::AgentDistribution::Npx { cmd, package, .. } => {
+            let resolved = resolve_npx_command(cmd).await;
+            let mut version = resolved
+                .as_ref()
+                .and_then(|_| setting.as_ref().and_then(|m| m.installed_version.clone()));
+            if version.is_none() {
+                if let Some(bin) = &resolved {
+                    version = system_probed_version(agent_type, bin, Some(package)).await;
+                }
+            }
+            (true, version)
+        }
         registry::AgentDistribution::Binary {
             platforms,
             cmd,
@@ -8159,19 +8593,33 @@ pub(crate) async fn acp_get_agent_status_core(
             let mut detected = binary_cache::detect_installed_version(agent_type, cmd)
                 .ok()
                 .flatten();
-            // Dir-tree agents (Cursor): a system install is launchable via the
-            // connect path's PATH fallback, and the frontend gates connect on a
-            // non-null installed_version — report the probed system version so
-            // an official-script install isn't blocked as "not installed".
-            if detected.is_none() && dir_entry.is_some() {
-                detected = system_dir_agent_version(cmd).await;
+            // A system install is launchable via the connect path's PATH
+            // fallback, while the frontend gates connection on a non-null
+            // version. Keep both paths in agreement for managed and user
+            // installs alike.
+            if detected.is_none() {
+                if dir_entry.is_some() {
+                    detected = system_dir_agent_version(cmd).await;
+                } else if let Some(bin) = resolve_system_agent_binary(cmd) {
+                    detected = system_probed_version(agent_type, &bin, None).await;
+                }
             }
             (platforms.iter().any(|p| p.platform == platform), detected)
         }
-        registry::AgentDistribution::Uvx { system_cmd, .. } => (
-            uvx_agent_launchable(*system_cmd),
-            binary_cache::uvx_prepared_version(agent_type),
-        ),
+        registry::AgentDistribution::Uvx {
+            cmd, system_cmd, ..
+        } => {
+            let mut version = binary_cache::uvx_prepared_version(agent_type);
+            if version.is_none() {
+                let bin = resolve_command_on_path(cmd).or_else(|| {
+                    (*system_cmd).and_then(|(command, _)| resolve_command_on_path(command))
+                });
+                if let Some(bin) = bin {
+                    version = system_probed_version(agent_type, &bin, None).await;
+                }
+            }
+            (uvx_agent_launchable(*system_cmd), version)
+        }
     };
 
     Ok(crate::acp::types::AcpAgentStatus {
@@ -8222,15 +8670,20 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
         let setting = settings_map.get(&agent_type);
         let meta = registry::get_agent_meta(agent_type);
         let (available, dist_type, local_installed_version) = match &meta.distribution {
-            registry::AgentDistribution::Npx { .. } => {
+            registry::AgentDistribution::Npx { cmd, package, .. } => {
                 // Keep the list path bounded: each list request probes npm
                 // global prefix at most once, then reuses the result across
                 // all NPX agents in the loop.
-                let launchable = npx_resolver.resolve_agent_for_list(agent_type).await;
-                let cached = launchable
-                    .then(|| setting.and_then(|m| m.installed_version.clone()))
-                    .flatten();
-                (true, "npx", cached)
+                let resolved = npx_resolver.resolve_for_list(cmd).await;
+                let mut version = resolved
+                    .as_ref()
+                    .and_then(|_| setting.and_then(|m| m.installed_version.clone()));
+                if version.is_none() {
+                    if let Some(bin) = &resolved {
+                        version = system_probed_version(agent_type, bin, Some(package)).await;
+                    }
+                }
+                (true, "npx", version)
             }
             registry::AgentDistribution::Binary {
                 platforms,
@@ -8241,12 +8694,14 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
                 let mut detected = binary_cache::detect_installed_version(agent_type, cmd)
                     .ok()
                     .flatten();
-                // Mirror the status path: a dir-tree agent's system install
-                // counts as installed (cached probe — no per-list subprocess
-                // after the first call). Without this, the list would also
-                // persist `installed_version = None` over the detected value.
-                if detected.is_none() && dir_entry.is_some() {
-                    detected = system_dir_agent_version(cmd).await;
+                // Mirror the status path; the generic system probe caches the
+                // result, so repeated list refreshes do not respawn a CLI.
+                if detected.is_none() {
+                    if dir_entry.is_some() {
+                        detected = system_dir_agent_version(cmd).await;
+                    } else if let Some(bin) = resolve_system_agent_binary(cmd) {
+                        detected = system_probed_version(agent_type, &bin, None).await;
+                    }
                 }
                 (
                     platforms.iter().any(|p| p.platform == platform),
@@ -8254,11 +8709,20 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
                     detected,
                 )
             }
-            registry::AgentDistribution::Uvx { system_cmd, .. } => (
-                uvx_agent_launchable(*system_cmd),
-                "uvx",
-                binary_cache::uvx_prepared_version(agent_type),
-            ),
+            registry::AgentDistribution::Uvx {
+                cmd, system_cmd, ..
+            } => {
+                let mut version = binary_cache::uvx_prepared_version(agent_type);
+                if version.is_none() {
+                    let bin = resolve_command_on_path(cmd).or_else(|| {
+                        (*system_cmd).and_then(|(command, _)| resolve_command_on_path(command))
+                    });
+                    if let Some(bin) = bin {
+                        version = system_probed_version(agent_type, &bin, None).await;
+                    }
+                }
+                (uvx_agent_launchable(*system_cmd), "uvx", version)
+            }
         };
 
         let mut env = setting
@@ -8319,6 +8783,13 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
         } else {
             None
         };
+        let codex_sandbox_settings = if agent_type == AgentType::Codex {
+            Some(parse_codex_sandbox_settings(
+                codex_config_toml.as_deref().unwrap_or(""),
+            ))
+        } else {
+            None
+        };
         let cline_secrets_json = if agent_type == AgentType::Cline {
             load_cline_secrets_json_raw()
         } else {
@@ -8370,6 +8841,10 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
             description: meta.description.to_string(),
             available,
             distribution_type: dist_type.to_string(),
+            custom_source: agent_type
+                .custom_id()
+                .and_then(custom_registry::source_of)
+                .map(|source| source.as_str().to_string()),
             enabled: setting
                 .map(|m| m.enabled)
                 .unwrap_or_else(|| agent_setting_service::default_enabled(agent_type)),
@@ -8383,6 +8858,7 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
             codex_auth_json,
             codex_config_toml,
             codex_model_catalog,
+            codex_sandbox_settings,
             cline_secrets_json,
             hermes_config_yaml,
             grok_config_toml,
@@ -8390,6 +8866,11 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
             cursor_cli_config_json,
             cursor_settings,
             model_provider_id: setting.and_then(|m| m.model_provider_id),
+            icon_url: agent_type
+                .custom_id()
+                .and_then(custom_registry::icon_for)
+                .map(ToString::to_string),
+            skills_capable: skill_storage_spec(agent_type).is_some(),
         });
     }
 
@@ -8852,6 +9333,7 @@ pub(crate) async fn acp_update_agent_config_core(
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_model_catalog: Option<String>,
+    codex_sandbox: Option<CodexSandboxStructuredConfig>,
     grok_config_toml: Option<String>,
     grok_structured: Option<GrokStructuredConfig>,
     cursor_cli_config_json: Option<String>,
@@ -8885,11 +9367,18 @@ pub(crate) async fn acp_update_agent_config_core(
     }
 
     if agent_type == AgentType::Codex {
-        if codex_auth_json.is_some() || codex_config_toml.is_some() {
-            persist_codex_native_config_files(
-                codex_auth_json.as_deref(),
-                codex_config_toml.as_deref(),
-            )?;
+        if codex_auth_json.is_some() || codex_config_toml.is_some() || codex_sandbox.is_some() {
+            let merged_toml = match &codex_sandbox {
+                Some(sandbox) => {
+                    let base = match codex_config_toml {
+                        Some(text) => text,
+                        None => read_codex_config_or_empty()?,
+                    };
+                    Some(apply_codex_sandbox_config(&base, sandbox)?)
+                }
+                None => codex_config_toml,
+            };
+            persist_codex_native_config_files(codex_auth_json.as_deref(), merged_toml.as_deref())?;
         }
         // The frontend has already patched config.toml's `model_catalog_json` +
         // root `model` into `codex_config_toml` (comment-preserving text patch);
@@ -8995,6 +9484,7 @@ pub(crate) async fn acp_update_agent_config_and_refresh(
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_model_catalog: Option<String>,
+    codex_sandbox: Option<CodexSandboxStructuredConfig>,
     grok_config_toml: Option<String>,
     grok_structured: Option<GrokStructuredConfig>,
     cursor_cli_config_json: Option<String>,
@@ -9011,6 +9501,7 @@ pub(crate) async fn acp_update_agent_config_and_refresh(
         codex_auth_json,
         codex_config_toml,
         codex_model_catalog,
+        codex_sandbox,
         grok_config_toml,
         grok_structured,
         cursor_cli_config_json,
@@ -9038,6 +9529,7 @@ pub async fn acp_update_agent_config(
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_model_catalog: Option<String>,
+    codex_sandbox: Option<CodexSandboxStructuredConfig>,
     grok_config_toml: Option<String>,
     grok_structured: Option<GrokStructuredConfig>,
     cursor_cli_config_json: Option<String>,
@@ -9059,6 +9551,7 @@ pub async fn acp_update_agent_config(
         codex_auth_json,
         codex_config_toml,
         codex_model_catalog,
+        codex_sandbox,
         grok_config_toml,
         grok_structured,
         cursor_cli_config_json,
@@ -9375,6 +9868,7 @@ pub(crate) async fn acp_download_agent_binary_core(
                 effective_version,
                 &archive_url,
                 cmd,
+                custom.is_none().then_some(fallback.sha256).flatten(),
                 move |msg| {
                     emit_agent_install_event(
                         &emitter_clone,
@@ -10402,6 +10896,73 @@ pub(crate) async fn codex_poll_device_code_core(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_version_token_finds_common_cli_banners() {
+        assert_eq!(extract_version_token("0.21.0").as_deref(), Some("0.21.0"));
+        assert_eq!(
+            extract_version_token("hermes version 0.21.0\n").as_deref(),
+            Some("0.21.0")
+        );
+        assert_eq!(
+            extract_version_token("hermes-acp/1.44.0").as_deref(),
+            Some("1.44.0")
+        );
+        assert_eq!(
+            extract_version_token("@scope/agent@v2.3.4-beta.1").as_deref(),
+            Some("2.3.4-beta.1")
+        );
+        assert!(extract_version_token("docs: https://example.com/2.0/setup").is_none());
+    }
+
+    #[test]
+    fn probe_cache_key_changes_with_effective_probe_input() {
+        let bin = std::path::Path::new("/usr/local/bin/agent");
+        assert_ne!(
+            probe_cache_key(bin, None, None),
+            probe_cache_key(bin, Some("agent --version"), None)
+        );
+        assert_ne!(
+            probe_cache_key(bin, None, Some("@scope/a")),
+            probe_cache_key(bin, None, Some("@scope/b"))
+        );
+    }
+
+    #[cfg(unix)]
+    fn fake_version_script(dir: &std::path::Path, name: &str, banner: &str) -> PathBuf {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let bin = dir.join(name);
+        let mut file = std::fs::File::create(&bin).expect("create script");
+        file.write_all(format!("#!/bin/sh\necho \"{banner}\"\n").as_bytes())
+            .expect("write script");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        bin
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn system_probed_version_reads_a_system_cli() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = fake_version_script(dir.path(), "fake-agent", "fake-agent version 1.2.3");
+        let version = system_probed_version(AgentType::Custom("probe-e2e-test"), &bin, None).await;
+        assert_eq!(version.as_deref(), Some("1.2.3"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failing_declared_probe_falls_back_to_cli_version() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = fake_version_script(dir.path(), "fallback-agent", "fallback-agent/3.2.1");
+        let version = system_probed_version_with(
+            Some("houhub-missing-probe-e2e --version"),
+            &bin,
+            None,
+        )
+        .await;
+        assert_eq!(version.as_deref(), Some("3.2.1"));
+    }
 
     #[test]
     fn parse_grok_settings_reads_custom_model_and_session() {

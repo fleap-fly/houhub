@@ -294,7 +294,11 @@ export function OfficeToolsBody({
         acpListAgents(),
       ])
       setSkills(skillList)
-      setAgents(agentList.filter((agent) => !piUsesCustomAgentDir(agent)))
+      setAgents(
+        agentList.filter(
+          (agent) => agent.skills_capable && !piUsesCustomAgentDir(agent)
+        )
+      )
       // Remount the matrix so it re-fetches the authoritative status snapshot
       // (newly synced skills become enableable).
       setReloadKey((k) => k + 1)

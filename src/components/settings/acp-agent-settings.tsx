@@ -26,6 +26,8 @@ import {
   Loader2,
   Minus,
   PackagePlus,
+  Pencil,
+  Plus,
   RefreshCw,
   Save,
   Stethoscope,
@@ -36,7 +38,14 @@ import { isDesktop, openUrl } from "@/lib/platform"
 import { getActiveRemoteConnectionId } from "@/lib/transport"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
+import {
+  customAgentId,
+  isCustomAgentType,
+  setCustomAgentDisplay,
+} from "@/lib/custom-agents"
 import { AgentIcon } from "@/components/agent-icon"
+import { AddCustomAgentDialog } from "@/components/settings/add-custom-agent-dialog"
+import { CustomAgentSkillsToggle } from "@/components/settings/custom-agent-skills-toggle"
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -86,6 +95,7 @@ import {
   acpPreflight,
   acpPrepareNpxAgent,
   acpReorderAgents,
+  acpDeleteCustomAgent,
   acpUninstallAgent,
   acpUpdateAgentConfig,
   acpUpdateAgentEnv,
@@ -103,6 +113,8 @@ import type {
   AcpAgentInfo,
   AgentType,
   CheckStatus,
+  CodexGranularApproval,
+  CodexSandboxStructuredConfig,
   FixAction,
   GrokStructuredConfig,
   HermesLocalConfig,
@@ -162,6 +174,26 @@ interface AgentDraft {
   codexSupportsWebsockets: boolean
   codexSkills: boolean
   codexServiceTierFast: boolean
+  /** Sandbox / approval group — the thread defaults codex applies to turns it
+   * starts itself (`/goal`, `/review`, `/compact`). Held as plain draft state
+   * (not derived from `codexConfigTomlText`) and merged into config.toml
+   * server-side on save. */
+  codexApprovalPolicy: CodexApprovalPolicyChoice
+  codexGranular: CodexGranularApproval
+  codexSandboxMode: CodexSandboxModeChoice
+  /** `writable_roots`, one absolute path per line. */
+  codexWritableRootsText: string
+  codexNetworkAccess: boolean
+  codexExcludeTmpdirEnvVar: boolean
+  codexExcludeSlashTmp: boolean
+  /** The sandbox group as it was read off disk. A save sends only the fields
+   * that differ from this, so neither the raw config.toml editor nor an
+   * untouched control can revert the other. */
+  codexSandboxBaseline: CodexSandboxBaseline
+  /** Read-only diagnostics from the backend projection: `default_permissions`
+   * makes codex ignore `sandbox_mode` entirely. */
+  codexSandboxShadowed: boolean
+  codexSandboxHasPermissionsTable: boolean
   claudeMainModel: string
   claudeReasoningModel: string
   claudeDefaultHaikuModel: string
@@ -255,6 +287,25 @@ interface UiCheckItem {
   fixes: UiFixAction[]
 }
 
+/**
+ * Fix kinds that run a package operation. Only one of these may run at a time
+ * across ALL agents, so while any of them is busy anywhere, every button whose
+ * kind is listed here is disabled — and dimmed, so the lockout is visible on
+ * agents other than the busy one.
+ */
+const PACKAGE_ACTION_FIX_KINDS: ReadonlyArray<UiFixAction["kind"]> = [
+  "download_binary",
+  "upgrade_binary",
+  "install_npx",
+  "upgrade_npx",
+  "uninstall_binary",
+  "uninstall_npx",
+  "redownload_binary",
+  "install_opencode_plugins",
+  "custom_install",
+  "install_uv",
+]
+
 type AcpTranslator = (
   key: string,
   values?: Record<string, string | number>
@@ -269,6 +320,23 @@ function acpText(
 ): string {
   if (!acpTranslator) return fallback
   return acpTranslator(key, values)
+}
+
+/**
+ * Publish a freshly fetched agent list into the custom-agent display map
+ * (names + icons behind `getAgentLabel` / `getAgentIconUrl`). The map is
+ * normally hydrated by `useAcpAgents`, but that hook lives in the workspace
+ * surfaces — the settings window fetches its own list, so without this every
+ * custom agent here falls back to the initial-letter glyph.
+ */
+function publishAgentDisplay(list: AcpAgentInfo[]): void {
+  setCustomAgentDisplay(
+    list.map((agent) => ({
+      agentType: agent.agent_type,
+      name: agent.name,
+      iconUrl: agent.icon_url,
+    }))
+  )
 }
 
 function statusTone(status: CheckStatus): string {
@@ -1555,6 +1623,203 @@ const CODEX_REASONING_EFFORT_OPTIONS: ReadonlyArray<{
 ]
 
 const CODEX_DEFAULT_REASONING_EFFORT: CodexReasoningEffort = "high"
+
+/** The draft value meaning "leave the key out of config.toml", i.e. let codex
+ * apply its own default. */
+const CODEX_SANDBOX_UNSET = ""
+
+/** Radix Select rejects "" as an item value, so the unset choice travels
+ * through the widget under this sentinel and is mapped back on change. */
+const CODEX_SANDBOX_UNSET_OPTION = "__codex_unset__"
+
+/** `approval_policy` choices. The three presets are `AskForApproval`'s plain
+ * string variants; `granular` is its table variant and reveals five switches.
+ * (`on-failure` is only a legacy serde alias of `on-request` upstream, so it is
+ * normalized away by the backend rather than offered here.) */
+const CODEX_APPROVAL_POLICY_VALUES = [
+  "on-request",
+  "untrusted",
+  "never",
+  "granular",
+] as const
+type CodexApprovalPolicyChoice =
+  | typeof CODEX_SANDBOX_UNSET
+  | (typeof CODEX_APPROVAL_POLICY_VALUES)[number]
+
+/** `SandboxMode`'s complete upstream vocabulary. */
+const CODEX_SANDBOX_MODE_VALUES = [
+  "read-only",
+  "workspace-write",
+  "danger-full-access",
+] as const
+type CodexSandboxModeChoice =
+  | typeof CODEX_SANDBOX_UNSET
+  | (typeof CODEX_SANDBOX_MODE_VALUES)[number]
+
+/** The five `granular` flags, in the order they are shown. */
+const CODEX_GRANULAR_KEYS = [
+  "sandbox_approval",
+  "rules",
+  "skill_approval",
+  "request_permissions",
+  "mcp_elicitations",
+] as const
+
+const CODEX_GRANULAR_DEFAULT: CodexGranularApproval = {
+  sandbox_approval: true,
+  rules: true,
+  skill_approval: false,
+  request_permissions: false,
+  mcp_elicitations: true,
+}
+
+/** codex resolves a RELATIVE `writable_roots` entry against `CODEX_HOME`
+ * instead of rejecting it, so `docs` would silently grant write access to
+ * `~/.codex/docs`. Absolute-only is enforced here (and again server-side).
+ * Both POSIX and Windows shapes are accepted regardless of host, since
+ * config.toml is portable. */
+function isAbsoluteWritableRoot(value: string): boolean {
+  const trimmed = value.trim()
+  if (trimmed.startsWith("/") || trimmed.startsWith("\\\\")) return true
+  return /^[A-Za-z]:[\\/]/.test(trimmed)
+}
+
+/** One path per line → trimmed, de-blanked list. */
+function parseWritableRootsText(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+}
+
+/** The first relative entry, or null when every entry is absolute. */
+function firstRelativeWritableRoot(text: string): string | null {
+  return (
+    parseWritableRootsText(text).find(
+      (root) => !isAbsoluteWritableRoot(root)
+    ) ?? null
+  )
+}
+
+/** Whether the workspace-write sub-group applies. `sandbox_mode` unset falls
+ * back to `workspace-write` for any directory carrying a `[projects]` trust
+ * decision (which HouHub writes for every folder it opens), so "unset" keeps the
+ * group live rather than greying out the very knobs the fallback uses. */
+function codexWorkspaceWriteApplies(mode: CodexSandboxModeChoice): boolean {
+  return mode === "workspace-write" || mode === CODEX_SANDBOX_UNSET
+}
+
+/** The draft slice the sandbox payload is derived from. */
+export type CodexSandboxDraftFields = {
+  codexApprovalPolicy: CodexApprovalPolicyChoice
+  codexGranular: CodexGranularApproval
+  codexSandboxMode: CodexSandboxModeChoice
+  codexWritableRootsText: string
+  codexNetworkAccess: boolean
+  codexExcludeTmpdirEnvVar: boolean
+  codexExcludeSlashTmp: boolean
+}
+
+/** The sandbox controls as they were read off disk, kept on the draft so a save
+ * can send ONLY what the user actually moved. */
+export type CodexSandboxBaseline = CodexSandboxDraftFields
+
+/** Baseline snapshot to seed a fresh draft with. */
+export function codexSandboxBaselineOf(
+  fields: CodexSandboxDraftFields
+): CodexSandboxBaseline {
+  return { ...fields }
+}
+
+/** Build the save PATCH for the Codex sandbox / approval controls: only the
+ * fields whose control actually moved relative to `codexSandboxBaseline`.
+ * Exported for tests.
+ *
+ * A whole-group payload would be wrong here. The panel sends the raw
+ * config.toml text alongside this patch and the backend applies the patch LAST,
+ * so any of these keys the user hand-edited in the raw editor — a surface the
+ * panel never parses back into its controls — would be reverted by the panel's
+ * stale value for that key. A per-field patch touches nothing the user did not
+ * touch, in either surface.
+ *
+ * Throws on a relative `writable_roots` entry (only when that field moved) so
+ * the save surfaces it instead of writing a path that would silently resolve
+ * inside `~/.codex`. */
+export function buildCodexSandboxConfig(
+  draft: CodexSandboxDraftFields & {
+    codexSandboxBaseline: CodexSandboxBaseline
+  }
+): CodexSandboxStructuredConfig {
+  const base = draft.codexSandboxBaseline
+  const patch: CodexSandboxStructuredConfig = {}
+
+  // Approval is one externally tagged key upstream, so its two representations
+  // move together: send both (one nulled) whenever either side changed.
+  const granular = draft.codexApprovalPolicy === "granular"
+  const approvalChanged =
+    draft.codexApprovalPolicy !== base.codexApprovalPolicy ||
+    (granular &&
+      JSON.stringify(draft.codexGranular) !==
+        JSON.stringify(base.codexGranular))
+  if (approvalChanged) {
+    patch.approvalPolicy =
+      granular || draft.codexApprovalPolicy === CODEX_SANDBOX_UNSET
+        ? null
+        : draft.codexApprovalPolicy
+    patch.granular = granular ? draft.codexGranular : null
+  }
+
+  if (draft.codexSandboxMode !== base.codexSandboxMode) {
+    patch.sandboxMode =
+      draft.codexSandboxMode === CODEX_SANDBOX_UNSET
+        ? null
+        : draft.codexSandboxMode
+  }
+
+  // The workspace-write group is sent as-is even in the modes that ignore it:
+  // codex only reads it under `workspace-write`, so a dormant value costs
+  // nothing, while clearing it would destroy the user's roots/flags on a round
+  // trip through read-only or full-access.
+  const roots = parseWritableRootsText(draft.codexWritableRootsText)
+  const baseRoots = parseWritableRootsText(base.codexWritableRootsText)
+  if (JSON.stringify(roots) !== JSON.stringify(baseRoots)) {
+    const relative = roots.find((root) => !isAbsoluteWritableRoot(root))
+    if (relative) {
+      // `.replace` also covers the no-translator path, where acpText returns
+      // the fallback uninterpolated.
+      throw new Error(
+        acpText(
+          "codex.sandboxRootsRelativeError",
+          "Writable folders must be absolute paths: {path}",
+          { path: relative }
+        ).replace("{path}", relative)
+      )
+    }
+    patch.writableRoots = roots
+  }
+  if (draft.codexNetworkAccess !== base.codexNetworkAccess) {
+    patch.networkAccess = draft.codexNetworkAccess
+  }
+  if (draft.codexExcludeTmpdirEnvVar !== base.codexExcludeTmpdirEnvVar) {
+    patch.excludeTmpdirEnvVar = draft.codexExcludeTmpdirEnvVar
+  }
+  if (draft.codexExcludeSlashTmp !== base.codexExcludeSlashTmp) {
+    patch.excludeSlashTmp = draft.codexExcludeSlashTmp
+  }
+
+  return patch
+}
+
+/** The `codexSandbox` value a Codex save should carry, or `undefined` when no
+ * control moved (so the field is omitted from the request entirely). */
+export function codexSandboxSaveConfig(
+  draft: CodexSandboxDraftFields & {
+    codexSandboxBaseline: CodexSandboxBaseline
+  }
+): CodexSandboxStructuredConfig | undefined {
+  const patch = buildCodexSandboxConfig(draft)
+  return Object.keys(patch).length > 0 ? patch : undefined
+}
 
 function normalizeCodexReasoningEffort(
   value: string
@@ -2867,6 +3132,28 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
           true
         )
       : (agent.codex_config_toml ?? "")
+  const codexSandbox = agent.codex_sandbox_settings ?? null
+  // Seeded once, then fingerprinted, so a save can tell a real control change
+  // from "untouched, still whatever config.toml says".
+  const codexSandboxFields: CodexSandboxDraftFields = {
+    // The granular table and the string presets are mutually exclusive upstream,
+    // so a present table always wins the selector.
+    codexApprovalPolicy: codexSandbox?.granular
+      ? "granular"
+      : ((codexSandbox?.approval_policy ??
+          CODEX_SANDBOX_UNSET) as CodexApprovalPolicyChoice),
+    codexGranular: codexSandbox?.granular ?? CODEX_GRANULAR_DEFAULT,
+    codexSandboxMode: (codexSandbox?.sandbox_mode ??
+      CODEX_SANDBOX_UNSET) as CodexSandboxModeChoice,
+    codexWritableRootsText: (
+      codexSandbox?.workspace_write.writable_roots ?? []
+    ).join("\n"),
+    codexNetworkAccess: codexSandbox?.workspace_write.network_access ?? false,
+    codexExcludeTmpdirEnvVar:
+      codexSandbox?.workspace_write.exclude_tmpdir_env_var ?? false,
+    codexExcludeSlashTmp:
+      codexSandbox?.workspace_write.exclude_slash_tmp ?? false,
+  }
   const grokConfigTomlText = agent.grok_config_toml ?? ""
   const grokPermissionMode = agent.grok_settings?.permission_mode ?? ""
   const grokReasoningEffort =
@@ -2976,6 +3263,12 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
     codexSupportsWebsockets: codexImportant.supportsWebsockets,
     codexSkills: codexImportant.skills,
     codexServiceTierFast: codexImportant.serviceTierFast,
+    ...codexSandboxFields,
+    codexSandboxBaseline: codexSandboxBaselineOf(codexSandboxFields),
+    codexSandboxShadowed:
+      codexSandbox?.shadowed_by_default_permissions ?? false,
+    codexSandboxHasPermissionsTable:
+      codexSandbox?.has_permissions_table ?? false,
     claudeMainModel: important.claudeMainModel,
     claudeReasoningModel: important.claudeReasoningModel,
     claudeDefaultHaikuModel: important.claudeDefaultHaikuModel,
@@ -3140,11 +3433,17 @@ export function buildVersionCheck(
   const remoteVersion = agent.registry_version ?? "unknown"
   const localVersion =
     agent.installed_version ?? acpText("version.notInstalled", "Not installed")
-  const versionText = acpText(
-    "version.remoteLocal",
-    "Remote: {remoteVersion} · Local: {localVersion}",
-    { remoteVersion, localVersion }
-  )
+  // A manually written definition has no registry behind it — its stored
+  // version is whatever the user typed — so "Remote:" would be comparing
+  // against noise. Every message shows the local side alone.
+  const manualSource = agent.custom_source === "manual"
+  const versionText = manualSource
+    ? acpText("version.localOnly", "Local: {localVersion}", { localVersion })
+    : acpText(
+        "version.remoteLocal",
+        "Remote: {remoteVersion} · Local: {localVersion}",
+        { remoteVersion, localVersion }
+      )
   const installAction: RunningActionKind =
     agent.distribution_type === "binary" ? "download_binary" : "install_npx"
   const upgradeAction: RunningActionKind =
@@ -3236,6 +3535,27 @@ export function buildVersionCheck(
         {
           label: acpText("actions.install", "Install"),
           kind: installAction,
+          payload: agent.agent_type,
+        },
+      ]),
+    }
+  }
+
+  // Manual definitions stop here: installed is the whole story, and the
+  // registry-comparison branches below would only manufacture "upgrade
+  // available" noise against a user-typed version.
+  if (manualSource) {
+    return {
+      check_id: "version_status",
+      label: acpText("version.statusLabel", "Version Status"),
+      status: "pass",
+      message: acpText("version.localInstalled", "{versionText}. Installed.", {
+        versionText,
+      }),
+      fixes: withCustomInstall([
+        {
+          label: acpText("actions.uninstall", "Uninstall"),
+          kind: uninstallAction,
           payload: agent.agent_type,
         },
       ]),
@@ -4270,6 +4590,14 @@ export function AcpAgentSettings() {
   )
   const [agents, setAgents] = useState<AcpAgentInfo[]>([])
   const [loadingAgents, setLoadingAgents] = useState(true)
+  const [addCustomOpen, setAddCustomOpen] = useState(false)
+  // Registry id of the custom agent being edited; non-null renders the edit
+  // instance of the add dialog (its own instance so the two flows never share
+  // form state).
+  const [editCustomAgentId, setEditCustomAgentId] = useState<string | null>(
+    null
+  )
+  const [removingCustomAgent, setRemovingCustomAgent] = useState(false)
   const [loadingError, setLoadingError] = useState<string | null>(null)
   const [checkState, setCheckState] = useState<
     Partial<Record<AgentType, AgentCheckState>>
@@ -4291,6 +4619,8 @@ export function AcpAgentSettings() {
   >({})
   const [modelProviders, setModelProviders] = useState<ModelProviderInfo[]>([])
   const [uninstallConfirmAgent, setUninstallConfirmAgent] =
+    useState<AcpAgentInfo | null>(null)
+  const [removeConfirmAgent, setRemoveConfirmAgent] =
     useState<AcpAgentInfo | null>(null)
   const [customInstallAgent, setCustomInstallAgent] =
     useState<AcpAgentInfo | null>(null)
@@ -4390,9 +4720,10 @@ export function AcpAgentSettings() {
       try {
         const [next, providers] = await Promise.all([
           acpListAgents(),
-          listModelProviders(),
+          listModelProviders().catch(() => [] as ModelProviderInfo[]),
         ])
         setAgents(next)
+        publishAgentDisplay(next)
         setModelProviders(providers)
         setDrafts((prev) => {
           const updated: Partial<Record<AgentType, AgentDraft>> =
@@ -4697,6 +5028,7 @@ export function AcpAgentSettings() {
         codexAuthJsonText?: string
         codexConfigTomlText?: string
         codexModelCatalog?: string
+        codexSandbox?: CodexSandboxStructuredConfig
         grokConfigTomlText?: string
         grokStructured?: GrokStructuredConfig
       }
@@ -4750,6 +5082,7 @@ export function AcpAgentSettings() {
             typeof options?.codexModelCatalog === "string"
               ? options.codexModelCatalog
               : null,
+          codex_sandbox: options?.codexSandbox ?? null,
           grok_config_toml:
             typeof options?.grokConfigTomlText === "string"
               ? options.grokConfigTomlText
@@ -4818,6 +5151,7 @@ export function AcpAgentSettings() {
     try {
       const fresh = await acpListAgents()
       setAgents(fresh)
+      publishAgentDisplay(fresh)
       const grok = fresh.find((a) => a.agent_type === "grok")
       if (grok) {
         setDrafts((prev) => ({ ...prev, grok: buildAgentDraft(grok) }))
@@ -5043,6 +5377,34 @@ export function AcpAgentSettings() {
     [installErrorDescription, runPreflight, t, installStream.start]
   )
 
+  /**
+   * Remove a custom agent's definition. Recorded transcripts are kept — the
+   * conversations that reference this agent are still readable afterwards,
+   * they just cannot be resumed. Deleting them is a separate, explicit action.
+   *
+   * Confirmation happens in the `removeConfirmAgent` AlertDialog, never via
+   * `window.confirm`: the Tauri webview does not reliably block on the native
+   * prompt, so the deletion used to run before the user answered.
+   */
+  const handleRemoveCustomAgent = useCallback(
+    async (agent: AcpAgentInfo) => {
+      const id = customAgentId(agent.agent_type)
+      if (!id) return
+      setRemovingCustomAgent(true)
+      try {
+        await acpDeleteCustomAgent(id, false)
+        toast.success(t("customAgentRemoved", { name: agent.name }))
+        setSelectedAgentType(null)
+        await refreshAgents()
+      } catch (err) {
+        toast.error(toErrorMessage(err))
+      } finally {
+        setRemovingCustomAgent(false)
+      }
+    },
+    [refreshAgents, t]
+  )
+
   const runUninstallAction = useCallback(
     async (agent: AcpAgentInfo) => {
       if (busyActionRef.current.has(agent.agent_type)) return
@@ -5185,6 +5547,18 @@ export function AcpAgentSettings() {
     await runPreflight(agent.agent_type)
   }
 
+  const confirmRemoveCustomAgent = useCallback(() => {
+    if (!removeConfirmAgent) return
+    const target = removeConfirmAgent
+    handleRemoveCustomAgent(target)
+      .catch((err) => {
+        console.error("[Settings] remove custom agent failed:", err)
+      })
+      .finally(() => {
+        setRemoveConfirmAgent(null)
+      })
+  }, [handleRemoveCustomAgent, removeConfirmAgent])
+
   const confirmUninstall = useCallback(() => {
     if (!uninstallConfirmAgent) return
     const target = uninstallConfirmAgent
@@ -5243,6 +5617,13 @@ export function AcpAgentSettings() {
     pendingOrderRef.current = reordered.map((agent) => agent.agent_type)
   }, [])
 
+  // One package operation at a time across ALL agents: while any
+  // install/upgrade/uninstall runs, every agent's package-action buttons are
+  // disabled — the busy flag is keyed per agent, so without this, selecting
+  // another agent in the list offers a second, concurrent install. The
+  // spinner stays precise via the per-agent `runningActionKind`.
+  const anyBinaryActionBusy = Object.values(busyBinaryAction).some(Boolean)
+
   const renderCheck = (agent: AcpAgentInfo, check: UiCheckItem) => {
     const checkKey = `${agent.agent_type}:${check.check_id}`
     const expanded = expandedChecks[checkKey] ?? check.status !== "pass"
@@ -5284,55 +5665,62 @@ export function AcpAgentSettings() {
             </div>
             {check.fixes.length > 0 && (
               <div className="flex flex-wrap gap-1.5 justify-end max-w-[220px] shrink-0">
-                {check.fixes.map((fix, index) => (
-                  <Button
-                    key={`${fix.label}-${index}`}
-                    size="xs"
-                    variant="outline"
-                    className="h-6 bg-muted/30 hover:bg-muted/50 disabled:bg-muted/30 disabled:opacity-100"
-                    disabled={
-                      ("disabled" in fix && fix.disabled === true) ||
-                      (Boolean(busyBinaryAction[agent.agent_type]) &&
-                        [
-                          "download_binary",
-                          "upgrade_binary",
-                          "install_npx",
-                          "upgrade_npx",
-                          "uninstall_binary",
-                          "uninstall_npx",
-                          "redownload_binary",
-                          "install_opencode_plugins",
-                          "custom_install",
-                          "install_uv",
-                        ].includes(fix.kind))
-                    }
-                    onClick={() => {
-                      handleFixAction(agent, fix).catch((err) => {
-                        console.error("[Settings] fix action failed:", err)
-                      })
-                    }}
-                  >
-                    {runningActionKind[agent.agent_type] === fix.kind ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : fix.kind === "download_binary" ||
-                      fix.kind === "install_npx" ||
-                      fix.kind === "install_uv" ? (
-                      <Download className="h-3 w-3" />
-                    ) : fix.kind === "upgrade_binary" ||
-                      fix.kind === "upgrade_npx" ||
-                      fix.kind === "redownload_binary" ? (
-                      <Wrench className="h-3 w-3" />
-                    ) : fix.kind === "uninstall_binary" ||
-                      fix.kind === "uninstall_npx" ? (
-                      <Trash2 className="h-3 w-3" />
-                    ) : fix.kind === "install_opencode_plugins" ? (
-                      <Download className="h-3 w-3" />
-                    ) : fix.kind === "custom_install" ? (
-                      <PackagePlus className="h-3 w-3" />
-                    ) : null}
-                    {fix.label}
-                  </Button>
-                ))}
+                {check.fixes.map((fix, index) => {
+                  const busyGated =
+                    anyBinaryActionBusy &&
+                    PACKAGE_ACTION_FIX_KINDS.includes(fix.kind)
+                  const running =
+                    runningActionKind[agent.agent_type] === fix.kind
+                  return (
+                    <Button
+                      key={`${fix.label}-${index}`}
+                      size="xs"
+                      variant="outline"
+                      className={cn(
+                        "h-6 bg-muted/30 hover:bg-muted/50",
+                        // Two disabled looks: while the global one-package-op-
+                        // at-a-time gate is busy, every parked package action
+                        // dims (backend-disabled or not) so the lockout shows
+                        // on agents other than the busy one; only the button
+                        // showing the spinner, and — when the gate is idle — a
+                        // backend-declared inapplicable fix, keep the full-
+                        // opacity chip look.
+                        busyGated && !running
+                          ? "disabled:opacity-50"
+                          : "disabled:bg-muted/30 disabled:opacity-100"
+                      )}
+                      disabled={
+                        ("disabled" in fix && fix.disabled === true) ||
+                        busyGated
+                      }
+                      onClick={() => {
+                        handleFixAction(agent, fix).catch((err) => {
+                          console.error("[Settings] fix action failed:", err)
+                        })
+                      }}
+                    >
+                      {runningActionKind[agent.agent_type] === fix.kind ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : fix.kind === "download_binary" ||
+                        fix.kind === "install_npx" ||
+                        fix.kind === "install_uv" ? (
+                        <Download className="h-3 w-3" />
+                      ) : fix.kind === "upgrade_binary" ||
+                        fix.kind === "upgrade_npx" ||
+                        fix.kind === "redownload_binary" ? (
+                        <Wrench className="h-3 w-3" />
+                      ) : fix.kind === "uninstall_binary" ||
+                        fix.kind === "uninstall_npx" ? (
+                        <Trash2 className="h-3 w-3" />
+                      ) : fix.kind === "install_opencode_plugins" ? (
+                        <Download className="h-3 w-3" />
+                      ) : fix.kind === "custom_install" ? (
+                        <PackagePlus className="h-3 w-3" />
+                      ) : null}
+                      {fix.label}
+                    </Button>
+                  )
+                })}
               </div>
             )}
           </div>
@@ -5486,6 +5874,12 @@ export function AcpAgentSettings() {
       ? (CODEX_REASONING_EFFORT_OPTIONS.find(
           (option) => option.value === selectedDraft.codexReasoningEffort
         ) ?? null)
+      : null
+  // Inline validation for `writable_roots`: codex would accept a relative entry
+  // and resolve it against CODEX_HOME, so it is surfaced before the save throws.
+  const codexRelativeWritableRoot =
+    selectedAgent?.agent_type === "codex" && selectedDraft
+      ? firstRelativeWritableRoot(selectedDraft.codexWritableRootsText)
       : null
   const selectedHermesProviderOption =
     selectedAgent?.agent_type === "hermes" && selectedDraft
@@ -7481,6 +7875,7 @@ export function AcpAgentSettings() {
                 codexConfigTomlText: draft.codexConfigTomlText,
                 codexModelCatalog:
                   serializeCodexModelConfig(draft.codexModelList) ?? "",
+                codexSandbox: codexSandboxSaveConfig(draft),
               })
             } catch (err) {
               const msg = toErrorMessage(err)
@@ -7543,7 +7938,35 @@ export function AcpAgentSettings() {
             {t("description")}
           </p>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs shrink-0"
+          onClick={() => setAddCustomOpen(true)}
+        >
+          <Plus className="h-3.5 w-3.5 mr-1" />
+          {t("addCustomAgent")}
+        </Button>
       </div>
+
+      <AddCustomAgentDialog
+        open={addCustomOpen}
+        onOpenChange={setAddCustomOpen}
+        onAdded={() => void refreshAgents()}
+      />
+
+      {/* Keyed by the id so switching agents never leaks a previous form. */}
+      {editCustomAgentId !== null && (
+        <AddCustomAgentDialog
+          key={editCustomAgentId}
+          open
+          editRegistryId={editCustomAgentId}
+          onOpenChange={(next) => {
+            if (!next) setEditCustomAgentId(null)
+          }}
+          onAdded={() => void refreshAgents()}
+        />
+      )}
 
       {loadingError && (
         <div className="mb-3 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
@@ -7713,7 +8136,16 @@ export function AcpAgentSettings() {
                     <Badge variant="outline" className="shrink-0">
                       {selectedAgent.distribution_type}
                     </Badge>
+                    {isCustomAgentType(selectedAgent.agent_type) && (
+                      <Badge variant="secondary" className="shrink-0">
+                        {t("customAgentBadge")}
+                      </Badge>
+                    )}
                   </div>
+                  {/* Removing a custom agent lives in the danger row at the
+                      bottom of the panel, not here: this line already carries
+                      the name, the distribution badge, the Custom badge and
+                      the enable switch. */}
                   <div className="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
@@ -8283,6 +8715,219 @@ export function AcpAgentSettings() {
                       </div>
                     </div>
 
+                    {/* ---- Sandbox & approvals (config.toml thread defaults) ----
+                        These govern the turns codex starts by itself: /goal,
+                        /review, /compact. Ordinary prompts carry the composer
+                        preset's own policy per turn and ignore these keys. */}
+                    <div className="space-y-2 rounded-md border px-3 py-2.5">
+                      <div className="space-y-1">
+                        <p className="text-[11px] font-medium">
+                          {t("codex.sandboxGroupTitle")}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {t("codex.sandboxGroupHint")}
+                        </p>
+                      </div>
+
+                      {selectedDraft.codexSandboxShadowed ? (
+                        <p className="text-[10px] text-yellow-500">
+                          {t("codex.sandboxShadowedWarning")}
+                        </p>
+                      ) : null}
+                      {selectedDraft.codexSandboxHasPermissionsTable &&
+                      !selectedDraft.codexSandboxShadowed ? (
+                        <p className="text-[10px] text-yellow-500">
+                          {t("codex.sandboxPermissionsTableWarning")}
+                        </p>
+                      ) : null}
+
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] text-muted-foreground">
+                          {t("codex.approvalPolicyLabel")}
+                        </label>
+                        <Select
+                          value={
+                            selectedDraft.codexApprovalPolicy ||
+                            CODEX_SANDBOX_UNSET_OPTION
+                          }
+                          onValueChange={(value) => {
+                            updateSelectedDraft((current) => ({
+                              ...current,
+                              codexApprovalPolicy:
+                                value === CODEX_SANDBOX_UNSET_OPTION
+                                  ? CODEX_SANDBOX_UNSET
+                                  : (value as CodexApprovalPolicyChoice),
+                            }))
+                          }}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent align="start">
+                            <SelectItem value={CODEX_SANDBOX_UNSET_OPTION}>
+                              {t("codex.approvalPolicyUnset")}
+                            </SelectItem>
+                            {CODEX_APPROVAL_POLICY_VALUES.map((value) => (
+                              <SelectItem key={value} value={value}>
+                                {t(`codex.approvalPolicy_${value}`)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {selectedDraft.codexApprovalPolicy === "granular" ? (
+                        <div className="space-y-1 rounded-md border border-dashed px-2.5 py-2">
+                          <p className="text-[10px] text-muted-foreground">
+                            {t("codex.granularHint")}
+                          </p>
+                          {CODEX_GRANULAR_KEYS.map((key) => (
+                            <div
+                              className="flex items-center justify-between gap-2 py-0.5"
+                              key={key}
+                            >
+                              <label className="text-[11px] text-muted-foreground">
+                                {t(`codex.granular_${key}`)}
+                              </label>
+                              <Switch
+                                checked={selectedDraft.codexGranular[key]}
+                                onCheckedChange={(checked) => {
+                                  updateSelectedDraft((current) => ({
+                                    ...current,
+                                    codexGranular: {
+                                      ...current.codexGranular,
+                                      [key]: checked,
+                                    },
+                                  }))
+                                }}
+                                aria-label={t(`codex.granular_${key}`)}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] text-muted-foreground">
+                          {t("codex.sandboxModeLabel")}
+                        </label>
+                        <Select
+                          disabled={selectedDraft.codexSandboxShadowed}
+                          value={
+                            selectedDraft.codexSandboxMode ||
+                            CODEX_SANDBOX_UNSET_OPTION
+                          }
+                          onValueChange={(value) => {
+                            updateSelectedDraft((current) => ({
+                              ...current,
+                              codexSandboxMode:
+                                value === CODEX_SANDBOX_UNSET_OPTION
+                                  ? CODEX_SANDBOX_UNSET
+                                  : (value as CodexSandboxModeChoice),
+                            }))
+                          }}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent align="start">
+                            <SelectItem value={CODEX_SANDBOX_UNSET_OPTION}>
+                              {t("codex.sandboxModeUnset")}
+                            </SelectItem>
+                            {CODEX_SANDBOX_MODE_VALUES.map((value) => (
+                              <SelectItem key={value} value={value}>
+                                {t(`codex.sandboxMode_${value}`)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-[10px] text-muted-foreground">
+                          {t("codex.sandboxModeHint")}
+                        </p>
+                      </div>
+
+                      {codexWorkspaceWriteApplies(
+                        selectedDraft.codexSandboxMode
+                      ) && !selectedDraft.codexSandboxShadowed ? (
+                        <div className="space-y-2 rounded-md border border-dashed px-2.5 py-2">
+                          <div className="space-y-1">
+                            <label className="text-[11px] text-muted-foreground">
+                              {t("codex.writableRootsLabel")}
+                            </label>
+                            <Textarea
+                              className="min-h-16 font-mono text-[11px]"
+                              spellCheck={false}
+                              value={selectedDraft.codexWritableRootsText}
+                              onChange={(event) => {
+                                const next = event.target.value
+                                updateSelectedDraft((current) => ({
+                                  ...current,
+                                  codexWritableRootsText: next,
+                                }))
+                              }}
+                              placeholder={"/Users/me/shared\n/srv/cache"}
+                            />
+                            {codexRelativeWritableRoot ? (
+                              <p className="text-[10px] text-red-500">
+                                {t("codex.sandboxRootsRelativeError", {
+                                  path: codexRelativeWritableRoot,
+                                })}
+                              </p>
+                            ) : (
+                              <p className="text-[10px] text-muted-foreground">
+                                {t("codex.writableRootsHint")}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="text-[11px] text-muted-foreground">
+                              {t("codex.networkAccessLabel")}
+                            </label>
+                            <Switch
+                              checked={selectedDraft.codexNetworkAccess}
+                              onCheckedChange={(checked) => {
+                                updateSelectedDraft((current) => ({
+                                  ...current,
+                                  codexNetworkAccess: checked,
+                                }))
+                              }}
+                              aria-label={t("codex.networkAccessLabel")}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="text-[11px] text-muted-foreground">
+                              {t("codex.excludeTmpdirLabel")}
+                            </label>
+                            <Switch
+                              checked={selectedDraft.codexExcludeTmpdirEnvVar}
+                              onCheckedChange={(checked) => {
+                                updateSelectedDraft((current) => ({
+                                  ...current,
+                                  codexExcludeTmpdirEnvVar: checked,
+                                }))
+                              }}
+                              aria-label={t("codex.excludeTmpdirLabel")}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="text-[11px] text-muted-foreground">
+                              {t("codex.excludeSlashTmpLabel")}
+                            </label>
+                            <Switch
+                              checked={selectedDraft.codexExcludeSlashTmp}
+                              onCheckedChange={(checked) => {
+                                updateSelectedDraft((current) => ({
+                                  ...current,
+                                  codexExcludeSlashTmp: checked,
+                                }))
+                              }}
+                              aria-label={t("codex.excludeSlashTmpLabel")}
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+
                     <div className="space-y-1.5">
                       <label className="text-[11px] text-muted-foreground">
                         {t("codex.configTomlNative")}
@@ -8355,6 +9000,8 @@ supports_websockets = false`}
                                     serializeCodexModelConfig(
                                       selectedDraft.codexModelList
                                     ) ?? "",
+                                  codexSandbox:
+                                    codexSandboxSaveConfig(selectedDraft),
                                 }
                               )
                             )
@@ -10741,6 +11388,66 @@ supports_websockets = false`}
                       </Button>
                     </div>
                   </div>
+                ) : isCustomAgentType(selectedAgent.agent_type) ? (
+                  // A custom agent is driven purely by the ACP protocol: HouHub
+                  // knows nothing about its config file layout or auth model,
+                  // so the generic "config management" editor below would be
+                  // offering to write a file that may not exist in a format it
+                  // cannot know. Environment variables (above) are the one
+                  // channel that works for every agent, so they are the whole
+                  // surface — plus the skills declaration and removing the
+                  // agent.
+                  <>
+                    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+                      <div>
+                        <label className="text-xs font-medium">
+                          {t("customAgentEdit")}
+                        </label>
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          {t("customAgentEditHint")}
+                        </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          setEditCustomAgentId(
+                            customAgentId(selectedAgent.agent_type)
+                          )
+                        }
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        {t("customAgentEdit")}
+                      </Button>
+                    </div>
+                    <CustomAgentSkillsToggle
+                      registryId={customAgentId(selectedAgent.agent_type) ?? ""}
+                    />
+                    <div className="space-y-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                      <div>
+                        <label className="text-xs font-medium text-destructive">
+                          {t("customAgentRemove")}
+                        </label>
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          {t("customAgentRemoveHint")}
+                        </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-destructive hover:text-destructive"
+                        disabled={removingCustomAgent}
+                        onClick={() => setRemoveConfirmAgent(selectedAgent)}
+                      >
+                        {removingCustomAgent ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
+                        {t("customAgentRemove")}
+                      </Button>
+                    </div>
+                  </>
                 ) : (
                   <div className="space-y-3 rounded-md border bg-muted/10 p-3">
                     <div>
@@ -11572,6 +12279,41 @@ supports_websockets = false`}
                   {t("actions.confirmUninstall")}
                 </>
               )}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(removeConfirmAgent)}
+        onOpenChange={(open) => {
+          if (!open) setRemoveConfirmAgent(null)
+        }}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("customAgentRemove")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("customAgentRemoveConfirm", {
+                name: removeConfirmAgent?.name ?? "Agent",
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removingCustomAgent}>
+              {t("actions.cancel")}
+            </AlertDialogCancel>
+            <Button
+              variant="destructive"
+              onClick={confirmRemoveCustomAgent}
+              disabled={removingCustomAgent}
+            >
+              {removingCustomAgent ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
+              {t("customAgentRemove")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

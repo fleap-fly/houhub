@@ -432,6 +432,13 @@ export function inferLiveToolName(params: {
   // config") as an Agent card before raw_input is even consulted.
   if ((params.title ?? "").trim().toLowerCase() === "agent") return "agent"
 
+  // Grok plan-mode tools carry their authoritative identity in
+  // `_meta["x.ai/tool"].kind` (`enter_plan`/`exit_plan`), while their human
+  // title mutates across the lifecycle. Resolve them ahead of title fallbacks
+  // so streaming and historical rendering use the same PlanModeCard.
+  const grokPlanMode = extractGrokPlanModeToolName(params.meta)
+  if (grokPlanMode) return grokPlanMode
+
   // codex collab / sub-agent activity (codex-acp 1.0.1 #223). The live ACP
   // tool_call's title is the bare, free-form collab op (`spawn_agent`/
   // `wait_agent`/`close_agent`/…), but its rawInput carries inter-agent fields
@@ -486,6 +493,16 @@ export function inferLiveToolName(params: {
   const titleCompanion = normalizeToolName(params.title ?? "")
   if (DELEGATION_COMPANION_TOOLS.has(titleCompanion)) return titleCompanion
 
+  // claude-agent-acp ≥0.63 marks Agent/Task launches with the authoritative
+  // `_meta.claudeCode.subagent: true` (its stated purpose: clients should not
+  // infer subagents from `toolName` or the generic `think` kind). Resolve it
+  // ahead of `inferFromInput` so the Agent card classifies on frame 1 even
+  // when `rawInput` (and its `subagent_type` shape) hasn't streamed yet and
+  // the meta toolName is the legacy `Task`. The Task regression guard below
+  // (meta toolName must NOT override input shape) is untouched: that path
+  // carries no `subagent` flag.
+  if (claudeCodeMarksSubagent(params.meta)) return "agent"
+
   // Input-shape detection runs FIRST so cross-agent heuristics (Claude Code
   // `Task` tool routed via `subagent_type`, OpenCode sub-agent calls, etc.)
   // keep priority. The meta-tool-name override below only kicks in when the
@@ -529,4 +546,59 @@ function extractClaudeCodeToolName(
   if (typeof tn !== "string") return null
   const trimmed = tn.trim()
   return trimmed.length > 0 ? trimmed : null
+}
+
+/**
+ * claude-agent-acp ≥0.63 marks Agent/Task tool calls with
+ * `_meta.claudeCode.subagent: true` — the namespaced subagent-launch marker
+ * (ACP 1.2 has no standard subagent ToolKind). Strict `=== true`: any other
+ * shape reads as unmarked.
+ */
+export function claudeCodeMarksSubagent(
+  meta: Record<string, unknown> | null | undefined
+): boolean {
+  if (!meta || typeof meta !== "object") return false
+  const cc = (meta as Record<string, unknown>).claudeCode
+  if (!cc || typeof cc !== "object") return false
+  return (cc as Record<string, unknown>).subagent === true
+}
+
+/**
+ * claude-agent-acp ≥0.63 exposes the tool's human-readable description as
+ * `_meta.claudeCode.title` (for Bash: the model-authored `description` input;
+ * falls back to the command upstream). The ACP `title` stays the raw command,
+ * so this is the display-friendly label — available from frame 1, including
+ * on eager permission tool calls, before `rawInput` streams in.
+ */
+export function extractClaudeCodeMetaTitle(
+  meta: Record<string, unknown> | null | undefined
+): string | null {
+  if (!meta || typeof meta !== "object") return null
+  const cc = (meta as Record<string, unknown>).claudeCode
+  if (!cc || typeof cc !== "object") return null
+  const title = (cc as Record<string, unknown>).title
+  if (typeof title !== "string") return null
+  const trimmed = title.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+/**
+ * Grok stamps the authoritative tool identity in `_meta["x.ai/tool"]`
+ * (`{ name, kind, namespace, label }`). For its plan-mode tools this returns the
+ * canonical `enter_plan_mode` / `exit_plan_mode` name (which `normalizeToolName`
+ * then aliases to `enterplanmode`/`exitplanmode`); `null` for every other Grok
+ * tool and every non-Grok host, so their existing title/alias resolution is
+ * preserved. Keyed on the stable `kind` discriminator, which — unlike `title` —
+ * does not mutate across the tool_call lifecycle.
+ */
+function extractGrokPlanModeToolName(
+  meta: Record<string, unknown> | null | undefined
+): string | null {
+  if (!meta || typeof meta !== "object") return null
+  const tool = (meta as Record<string, unknown>)["x.ai/tool"]
+  if (!tool || typeof tool !== "object") return null
+  const kind = (tool as Record<string, unknown>).kind
+  if (kind === "enter_plan") return "enter_plan_mode"
+  if (kind === "exit_plan") return "exit_plan_mode"
+  return null
 }

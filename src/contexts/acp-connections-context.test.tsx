@@ -589,7 +589,192 @@ describe("AcpConnectionsProvider background activity", () => {
     return latestAttachHandlers()
   }
 
-  it("settles launch cards in memory without refetching conversation detail", async () => {
+  it("drops streaming deltas while the connection is not prompting (Bug-A guard)", async () => {
+    const handlers = await mountOwnerConnection()
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "connected",
+    })
+    // Out-of-turn delta (the backend idle loop forwards these between turns):
+    // must NOT graft onto a liveMessage. The next status_changed flushes the
+    // streaming queue BEFORE the status dispatch, so the drop is exercised
+    // deterministically with the pre-flip status still "connected".
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "out-of-turn garbage",
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "prompting",
+    })
+    // Prompting resets liveMessage to an empty shell; the dropped delta must
+    // not appear in it.
+    const afterPrompting = h.store!.getConnection(TAB)
+    expect(afterPrompting?.liveMessage?.content ?? []).toEqual([])
+
+    // In-turn delta flows normally (flushed by the next non-streaming event).
+    emitAcpEvent(handlers, {
+      seq: 4,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "real reply",
+    })
+    emitAcpEvent(handlers, {
+      seq: 5,
+      connection_id: "spawned-conn",
+      type: "usage_update",
+      used: 1,
+      size: 100,
+    })
+    const conn = h.store!.getConnection(TAB)
+    expect(conn?.liveMessage?.content).toEqual([
+      { type: "text", text: "real reply" },
+    ])
+  })
+
+  it("routes parented deltas into separate blocks and drops orphans (claude-agent-acp ≥0.63)", async () => {
+    const handlers = await mountOwnerConnection()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "prompting",
+    })
+    // The launching Agent tool call precedes its subagent's chunks on the
+    // seq-ordered wire — required by the reducer's parent-presence gate.
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "tool_call",
+      tool_call_id: "toolu_parent",
+      title: "Agent",
+      kind: "other",
+      status: "in_progress",
+      content: null,
+      raw_input: null,
+      raw_output: null,
+    })
+    // main → sub → main within ONE flush window: the queue pre-coalescing
+    // must not concatenate across attributions, and the reducer must produce
+    // three separate text blocks.
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "main ",
+    })
+    emitAcpEvent(handlers, {
+      seq: 4,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "sub report",
+      parent_tool_use_id: "toolu_parent",
+    })
+    emitAcpEvent(handlers, {
+      seq: 5,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "main tail",
+    })
+    // Orphan: no such tool call in liveMessage → dropped entirely.
+    emitAcpEvent(handlers, {
+      seq: 6,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "orphan noise",
+      parent_tool_use_id: "toolu_unknown",
+    })
+    // Parented thinking lands as its own attributed block.
+    emitAcpEvent(handlers, {
+      seq: 7,
+      connection_id: "spawned-conn",
+      type: "thinking",
+      text: "sub reasoning",
+      parent_tool_use_id: "toolu_parent",
+    })
+    // Non-streaming event flushes the queue deterministically.
+    emitAcpEvent(handlers, {
+      seq: 8,
+      connection_id: "spawned-conn",
+      type: "usage_update",
+      used: 1,
+      size: 100,
+    })
+
+    const conn = h.store!.getConnection(TAB)
+    const content = conn?.liveMessage?.content ?? []
+    const rendered = content.map((b) =>
+      b.type === "text" || b.type === "thinking"
+        ? { type: b.type, text: b.text, parent: b.parentToolUseId ?? null }
+        : { type: b.type }
+    )
+    expect(rendered).toEqual([
+      { type: "tool_call" },
+      { type: "text", text: "main ", parent: null },
+      { type: "text", text: "sub report", parent: "toolu_parent" },
+      { type: "text", text: "main tail", parent: null },
+      { type: "thinking", text: "sub reasoning", parent: "toolu_parent" },
+    ])
+  })
+
+  it("merges consecutive same-parent deltas into one growing block", async () => {
+    const handlers = await mountOwnerConnection()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "prompting",
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "tool_call",
+      tool_call_id: "toolu_parent",
+      title: "Agent",
+      kind: "other",
+      status: "in_progress",
+      content: null,
+      raw_input: null,
+      raw_output: null,
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "part one, ",
+      parent_tool_use_id: "toolu_parent",
+    })
+    emitAcpEvent(handlers, {
+      seq: 4,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "part two",
+      parent_tool_use_id: "toolu_parent",
+    })
+    emitAcpEvent(handlers, {
+      seq: 5,
+      connection_id: "spawned-conn",
+      type: "usage_update",
+      used: 1,
+      size: 100,
+    })
+    const content = h.store!.getConnection(TAB)?.liveMessage?.content ?? []
+    const texts = content.filter((b) => b.type === "text")
+    expect(texts).toHaveLength(1)
+    expect(texts[0]).toMatchObject({
+      text: "part one, part two",
+      parentToolUseId: "toolu_parent",
+    })
+  })
+
+  it("background_activity mirrors outstanding, applies overlay turns, and notifies settled tasks", async () => {
     const { useConversationRuntimeStore, resetConversationRuntimeStore } =
       await import("@/stores/conversation-runtime-store")
     const { sendSystemNotification } = await import("@/lib/notification")

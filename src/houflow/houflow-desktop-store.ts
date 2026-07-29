@@ -37,7 +37,7 @@ import {
 import { toErrorMessage } from "@/lib/app-error"
 import { openUrl } from "@/lib/platform"
 import { isDesktop } from "@/lib/transport"
-import type { AcpAgentInfo, AgentType } from "@/lib/types"
+import { customAgentId, type AcpAgentInfo, type AgentType } from "@/lib/types"
 
 export type HouflowDesktopStatus =
   | "loading"
@@ -438,6 +438,14 @@ function connectorRuntimeForAgent(agentType: AgentType): {
     runtimeRunner: false,
     capabilities: [],
   })
+  // A custom ACP definition tells HouHub how to launch an interactive local
+  // session, but it does not declare the non-interactive command contract that
+  // houshan-cli needs to execute connector ledger work. Report it accurately
+  // (so an enabled local agent remains visible to the workspace) without
+  // advertising dispatch/workspace_message it cannot honor.
+  if (customAgentId(agentType)) {
+    return visibleOnly(agentType, "custom")
+  }
   switch (agentType) {
     case "claude_code":
       return runner("claude:cli", "claude", "claude")
@@ -463,6 +471,8 @@ function connectorRuntimeForAgent(agentType: AgentType): {
       return visibleOnly("cline:vscode", "cline")
     case "code_buddy":
       return visibleOnly("code_buddy:local", "code_buddy")
+    default:
+      return null
   }
 }
 
