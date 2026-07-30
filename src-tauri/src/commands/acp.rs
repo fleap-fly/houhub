@@ -9990,24 +9990,21 @@ pub(crate) async fn acp_detect_agent_local_version_core(
                 .await;
         // Heal the composer's install status. The input box reads
         // `installed_version` straight from this row and shows "not installed"
-        // while it's null (`acp_list_agents_core` never probes npm for it). When
-        // a live probe discovers a version the DB never recorded — an agent
-        // installed outside HouHub, or by a build predating version tracking —
-        // wake `useAcpAgents()` so the composer stops claiming it's missing.
+        // while it's null. `acp_list_agents_core` reports live discovery but
+        // intentionally does not persist every probe, so persist this result
+        // and wake `useAcpAgents()` when an agent installed outside HouHub (or
+        // by an older build) is newly recognized.
         if previous.as_deref() != Some(version.as_str()) {
             emit_acp_agents_updated(emitter, "local_version_detected", Some(agent_type));
         }
         return Ok(Some(version));
     }
 
-    // Binary agents detect their version purely from the on-disk cache, so a
-    // `None` here means the binary is genuinely absent (cleared cache, or a
-    // failed custom/upgrade install). Return `None` authoritatively rather than
-    // falling back to the DB, which would resurrect a removed version as a
-    // phantom that can no longer be launched. The returned value does NOT depend
-    // on the mirror write below, so a swallowed write cannot reintroduce the
-    // phantom. (NPX detection runs `npm list`, which can fail transiently, so
-    // for npx we keep the DB value as a best-effort fallback.)
+    // A Binary result is authoritative: it comes from the managed cache or a
+    // launchable system CLI. A `None` means neither yielded a usable version,
+    // so do not fall back to the DB and resurrect a removed install as a
+    // phantom. (NPX detection can fail transiently while querying package
+    // managers, so its stored value remains a best-effort fallback.)
     if matches!(
         registry::get_agent_meta(agent_type).distribution,
         registry::AgentDistribution::Binary { .. }
