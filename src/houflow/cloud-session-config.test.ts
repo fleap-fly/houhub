@@ -78,7 +78,7 @@ describe("Houflow cloud session config", () => {
     expect(settings).toEqual({
       modelProviderId: "default",
       model: "openai/gpt-5.6-sol",
-      reasoningEffort: "high",
+      reasoningEffort: "ultra",
     })
 
     const options = houflowCloudSessionConfigOptions(
@@ -116,11 +116,7 @@ describe("Houflow cloud session config", () => {
     ])
   })
 
-  it("keeps Ultra Codex-only when Claude is selected", () => {
-    const settings = resolveHouflowCloudModelSettings({
-      target: target(),
-      gateway,
-    })
+  it("uses the control-plane capability profile for Terra and legacy models", () => {
     const labels = {
       model: "Model",
       reasoningEffort: "Reasoning effort",
@@ -131,20 +127,42 @@ describe("Houflow cloud session config", () => {
       effortMax: "Max",
       effortUltra: "Ultra",
     }
-    const claudeTarget = target({
-      kind: "hosted_connected",
-      key: "hosted_connected:cag_claude",
-      metadata: { runtime_engine: "claude-code" },
+    const terra = resolveHouflowCloudModelSettings({
+      target: target({ provider: "openai/gpt-5.6-terra" }),
+      gateway,
+    })
+    const legacy = resolveHouflowCloudModelSettings({
+      target: target({ provider: "openai/gpt-5.5" }),
+      gateway,
     })
 
+    expect(terra).toEqual({
+      modelProviderId: "default",
+      model: "openai/gpt-5.6-terra",
+      reasoningEffort: "max",
+    })
     expect(
       houflowCloudSessionConfigOptions(
-        settings,
+        terra,
         gateway,
         labels,
-        claudeTarget
+        target({ provider: "openai/gpt-5.6-terra" })
       )[1]?.kind.options.map((option) => option.value)
     ).toEqual(["low", "medium", "high", "xhigh", "max"])
+
+    expect(legacy).toEqual({
+      modelProviderId: "default",
+      model: "openai/gpt-5.5",
+      reasoningEffort: null,
+    })
+    expect(
+      houflowCloudSessionConfigOptions(
+        legacy,
+        gateway,
+        labels,
+        target({ provider: "openai/gpt-5.5" })
+      ).map((option) => option.id)
+    ).toEqual(["model"])
   })
 
   it("restores session and hosted thread settings from canonical request fields", () => {
@@ -192,7 +210,7 @@ describe("Houflow cloud session config", () => {
     })
   })
 
-  it("shows request-level controls only for native managed and headless residents", () => {
+  it("shows request-level controls only for managed Agent Hub sessions", () => {
     expect(houflowCloudTargetSupportsModelSettings(target())).toBe(true)
     expect(
       houflowCloudTargetSupportsModelSettings(
@@ -207,7 +225,7 @@ describe("Houflow cloud session config", () => {
           metadata: { runtime_engine: "pi" },
         })
       )
-    ).toBe(true)
+    ).toBe(false)
     expect(
       houflowCloudTargetSupportsModelSettings(
         target({

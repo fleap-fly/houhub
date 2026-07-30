@@ -12,6 +12,22 @@ export type ModelReasoningEffort = (typeof MODEL_REASONING_EFFORTS)[number]
 const THROUGH_XHIGH = MODEL_REASONING_EFFORTS.slice(0, 4)
 const THROUGH_MAX = MODEL_REASONING_EFFORTS.slice(0, 5)
 
+export function cloudModelReasoningEfforts(
+  model: string | null | undefined
+): readonly ModelReasoningEffort[] {
+  const slug = modelSlug(model)
+  if (slug === "gpt-5.6-sol") return MODEL_REASONING_EFFORTS
+  if (slug === "gpt-5.6-terra") return THROUGH_MAX
+  return []
+}
+
+export function defaultCloudModelReasoningEffort(
+  model: string | null | undefined
+): ModelReasoningEffort | null {
+  const supported = cloudModelReasoningEfforts(model)
+  return supported.length > 0 ? supported[supported.length - 1] ?? null : null
+}
+
 export function modelReasoningEfforts(input: {
   engine?: string | null
   model?: string | null

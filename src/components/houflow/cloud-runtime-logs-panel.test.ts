@@ -28,6 +28,7 @@ describe("cloud runtime log projection", () => {
           target_kind: "hosted_connected_agent",
           status: "failed",
           title: "Conversation",
+          archived_at: null,
           created_at: "2026-07-20T00:00:00.000Z",
           updated_at: "2026-07-20T00:00:01.000Z",
           transport: {

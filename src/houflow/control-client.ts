@@ -590,7 +590,7 @@ function connectedTargetFromDto(
       connector_id: binding?.connector_id ?? "",
       runtime_engine: runtimeBinding?.runtime_engine ?? "",
       environment_id: runtimeBinding?.environment_id ?? "",
-      model: runtimeBinding?.model ?? "",
+      model: runtimeBinding?.model_execution.canonical_model_id ?? "",
     }),
   }
 }
@@ -633,7 +633,8 @@ function hostedConnectedCapabilities(
   if (value.native_capabilities?.stream === true) {
     capabilities.push("stream")
   }
-  if (value.runtime_binding?.native_console) {
+  const nativeConsole = value.native_capabilities?.native_console
+  if (nativeConsole && nativeConsole !== "none") {
     capabilities.push("native_console")
   }
   return capabilities

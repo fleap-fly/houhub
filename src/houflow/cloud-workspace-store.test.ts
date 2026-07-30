@@ -122,6 +122,7 @@ function conversationSnapshot(
       target_kind: "hosted_connected_agent",
       status: latest?.status ?? "idle",
       title: "Conversation",
+      archived_at: null,
       created_at: "2026-07-20T00:00:00.000Z",
       updated_at: latest?.updated_at ?? "2026-07-20T00:00:00.000Z",
       transport: {

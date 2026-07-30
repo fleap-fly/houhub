@@ -2,7 +2,8 @@ import type { SessionConfigOptionInfo } from "@/lib/types"
 import type { AgentHubConversationSessionSnapshot } from "@houshan/agent-hub-network-sdk"
 import {
   MODEL_REASONING_EFFORTS,
-  modelReasoningEfforts,
+  cloudModelReasoningEfforts,
+  defaultCloudModelReasoningEffort,
 } from "@/lib/reasoning-effort-capabilities"
 import type { HouflowAgentTarget, HouflowGatewayCatalog } from "./types"
 import type { HouflowCloudSessionEvent } from "./cloud-sessions"
@@ -15,7 +16,7 @@ export type HouflowCloudReasoningEffort =
 export interface HouflowCloudModelSettings {
   modelProviderId: string
   model: string
-  reasoningEffort: HouflowCloudReasoningEffort
+  reasoningEffort: HouflowCloudReasoningEffort | null
 }
 
 export interface HouflowCloudConfigLabels {
@@ -52,17 +53,22 @@ export function resolveHouflowCloudModelSettings(input: {
     gateway?.provider.defaultModel,
     gateway?.models[0]?.id
   )
-  const reasoningEffort = normalizeReasoningEffort(
+  const requestedReasoningEffort = normalizeReasoningEffort(
     firstText(
       draft?.reasoningEffort,
       persisted?.reasoningEffort,
       target.metadata.reasoningEffort,
       target.metadata.reasoning_effort,
-      "high"
     )
   )
+  const supportedReasoningEfforts = cloudModelReasoningEfforts(model)
+  const reasoningEffort =
+    requestedReasoningEffort &&
+    supportedReasoningEfforts.includes(requestedReasoningEffort)
+      ? requestedReasoningEffort
+      : defaultCloudModelReasoningEffort(model)
 
-  if (!modelProviderId || !model || !reasoningEffort) return null
+  if (!modelProviderId || !model) return null
   return { modelProviderId, model, reasoningEffort }
 }
 
@@ -70,7 +76,7 @@ export function houflowCloudSessionConfigOptions(
   settings: HouflowCloudModelSettings | null,
   gateway: HouflowGatewayCatalog | null | undefined,
   labels: HouflowCloudConfigLabels,
-  target: HouflowAgentTarget | null | undefined
+  _target: HouflowAgentTarget | null | undefined
 ): SessionConfigOptionInfo[] {
   if (!settings) return []
 
@@ -87,15 +93,11 @@ export function houflowCloudSessionConfigOptions(
     max: labels.effortMax,
     ultra: labels.effortUltra,
   }
-  const reasoningOptions = modelReasoningEfforts({
-    engine:
-      target?.kind === "hosted_connected"
-        ? target.metadata.runtime_engine
-        : null,
-    model: settings.model,
-  }).map((value) => ({ value, name: effortLabels[value] }))
+  const reasoningOptions = cloudModelReasoningEfforts(settings.model).map(
+    (value) => ({ value, name: effortLabels[value] })
+  )
 
-  return [
+  const options: SessionConfigOptionInfo[] = [
     {
       id: "model",
       name: labels.model,
@@ -107,7 +109,9 @@ export function houflowCloudSessionConfigOptions(
         groups: [],
       },
     },
-    {
+  ]
+  if (reasoningOptions.length > 0 && settings.reasoningEffort) {
+    options.push({
       id: "reasoning_effort",
       name: labels.reasoningEffort,
       category: "mode",
@@ -117,8 +121,9 @@ export function houflowCloudSessionConfigOptions(
         options: reasoningOptions,
         groups: [],
       },
-    },
-  ]
+    })
+  }
+  return options
 }
 
 export function updateHouflowCloudModelSettings(
@@ -160,17 +165,15 @@ export function houflowCloudModelSettingsFromConversationSession(
 export function houflowCloudTargetSupportsModelSettings(
   target: HouflowAgentTarget
 ): boolean {
-  if (target.kind === "managed") {
-    return !firstText(
+  return (
+    target.kind === "managed" &&
+    !firstText(
       target.metadata.hostAgentSourceRef,
       target.metadata.houflowAgentSourceRef,
       target.metadata.host_agent_source_ref,
       target.metadata.houflow_agent_source_ref
     )
-  }
-  if (target.kind !== "hosted_connected") return false
-  const engine = normalizeRuntimeEngine(target.metadata.runtime_engine)
-  return engine === "codex" || engine === "claude-code" || engine === "pi"
+  )
 }
 
 function modelSettingsFromRecord(
@@ -211,10 +214,6 @@ function normalizeReasoningEffort(
     HOUFLOW_CLOUD_REASONING_EFFORTS.find((effort) => effort === normalized) ??
     null
   )
-}
-
-function normalizeRuntimeEngine(value: string | undefined): string {
-  return value?.trim().toLowerCase().replace(/_/g, "-") ?? ""
 }
 
 function firstText(...values: Array<string | null | undefined>): string {

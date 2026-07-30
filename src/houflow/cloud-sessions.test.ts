@@ -272,6 +272,98 @@ describe("Houflow cloud session adapters", () => {
     )
   })
 
+  it("keeps another connected target sendable after one target is unavailable", async () => {
+    const unavailable = conversationSnapshot()
+    const available = {
+      ...conversationSnapshot(),
+      session: {
+        ...conversationSnapshot().session,
+        id: "conversation_2",
+        target_id: "connected:agent_2",
+        transport: {
+          kind: "connected" as const,
+          connected_agent_id: "agent_2",
+          channel_ref: "channel_2",
+          latest_turn_id: null,
+          stream_url: null,
+        },
+      },
+    }
+    mocks.sendConversation
+      .mockRejectedValueOnce(new Error("target unavailable"))
+      .mockResolvedValueOnce(available)
+
+    await expect(
+      sendHouflowConversationSessionMessage(
+        session(),
+        secret(),
+        unavailable,
+        "first target"
+      )
+    ).rejects.toThrow("target unavailable")
+
+    await expect(
+      sendHouflowConversationSessionMessage(
+        session(),
+        secret(),
+        available,
+        "second target"
+      )
+    ).resolves.toBe(available)
+    expect(mocks.sendConversation).toHaveBeenNthCalledWith(
+      1,
+      unavailable,
+      expect.objectContaining({ message: "first target" })
+    )
+    expect(mocks.sendConversation).toHaveBeenNthCalledWith(
+      2,
+      available,
+      expect.objectContaining({ message: "second target" })
+    )
+  })
+
+  it("puts managed conversation model settings in the canonical event input", async () => {
+    const snapshot = conversationSnapshot()
+    snapshot.session = {
+      ...snapshot.session,
+      target_id: "agent:agent_1",
+      target_kind: "managed_agent",
+      transport: {
+        kind: "managed",
+        session_id: "ses_1",
+        stream_url: "/v1/sessions/ses_1/stream",
+      },
+    }
+    mocks.sendConversation.mockResolvedValue(snapshot)
+
+    await sendHouflowConversationSessionMessage(
+      session(),
+      secret(),
+      snapshot,
+      {
+        message: "next",
+        modelSettings: {
+          modelProviderId: "default",
+          model: "openai/gpt-5.6-terra",
+          reasoningEffort: "max",
+        },
+      }
+    )
+
+    expect(mocks.sendConversation).toHaveBeenCalledWith(
+      snapshot,
+      expect.objectContaining({
+        input: {
+          model_settings: {
+            model_provider_id: "default",
+            model: "openai/gpt-5.6-terra",
+            reasoning_effort: "max",
+          },
+        },
+      })
+    )
+  })
+
   it("keeps the latest available output session across failed follow-ups", () => {
     const snapshot = conversationSnapshot()
     snapshot.turns.unshift({
@@ -301,6 +393,39 @@ describe("Houflow cloud session adapters", () => {
       expect.anything(),
       expect.objectContaining({ kind: "managed" }),
       expect.objectContaining({ sessionId: "ses_1", message: "next" })
+    )
+  })
+
+  it("does not send an undeclared reasoning effort for a legacy cloud model", async () => {
+    mocks.responses.push(sessionDto())
+    const created = await createHouflowManagedCloudSession(
+      session(),
+      secret(),
+      managedTarget(),
+      "hello"
+    )
+    mocks.dispatchManagedAgent.mockResolvedValue({ kind: "managed", raw: {} })
+
+    await sendHouflowCloudSessionMessage(session(), secret(), created, {
+      message: "next",
+      modelSettings: {
+        modelProviderId: "default",
+        model: "openai/gpt-5.5",
+        reasoningEffort: null,
+      },
+    })
+
+    expect(mocks.dispatchManagedAgent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ kind: "managed" }),
+      expect.objectContaining({
+        messageInput: {
+          model_settings: {
+            model_provider_id: "default",
+            model: "openai/gpt-5.5",
+          },
+        },
+      })
     )
   })
 })
@@ -367,6 +492,7 @@ function conversationSnapshot(): AgentHubConversationSessionSnapshot {
       target_kind: "hosted_connected_agent",
       status: "failed",
       title: "Conversation",
+      archived_at: null,
       created_at: "2026-07-20T00:00:00.000Z",
       updated_at: "2026-07-20T00:00:01.000Z",
       transport: {

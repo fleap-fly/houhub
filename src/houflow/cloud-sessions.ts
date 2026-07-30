@@ -7,7 +7,7 @@ import {
   type AgentHubConversationTurn,
   type PageCursor,
 } from "@houshan/agent-hub-network-sdk"
-import type { ContentBlock } from "@houshan/agent-hub-sdk"
+import type { ContentBlock, JsonObject } from "@houshan/agent-hub-sdk"
 import {
   type AgentHubDispatchResult,
   dispatchManagedAgent,
@@ -500,9 +500,9 @@ export async function sendHouflowConversationSessionMessage(
   return client.sdk.conversationSessions.send(snapshot, {
     message: draft.message,
     content: draft.content,
-    model_provider_id: draft.modelSettings?.modelProviderId,
-    model: draft.modelSettings?.model,
-    reasoning_effort: draft.modelSettings?.reasoningEffort,
+    ...(draft.modelSettings
+      ? { input: cloudModelSettingsInput(draft.modelSettings) }
+      : {}),
     metadata: { source: "houhub" },
   })
 }
@@ -635,13 +635,15 @@ function normalizeCloudDispatchInput(
 
 function cloudModelSettingsInput(
   settings: HouflowCloudModelSettings | undefined
-): Record<string, unknown> | undefined {
+): JsonObject | undefined {
   return settings
     ? {
         model_settings: {
           model_provider_id: settings.modelProviderId,
           model: settings.model,
-          reasoning_effort: settings.reasoningEffort,
+          ...(settings.reasoningEffort
+            ? { reasoning_effort: settings.reasoningEffort }
+            : {}),
         },
       }
     : undefined

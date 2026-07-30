@@ -33,11 +33,11 @@ importers:
         specifier: file:vendor/houflow-agent-connector-0.1.5.tgz
         version: file:vendor/houflow-agent-connector-0.1.5.tgz
       '@houshan/agent-hub-network-sdk':
-        specifier: file:vendor/houshan-agent-hub-network-sdk-0.1.16.tgz
-        version: file:vendor/houshan-agent-hub-network-sdk-0.1.16.tgz(@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.14.tgz)
+        specifier: file:vendor/houshan-agent-hub-network-sdk-0.1.17.tgz
+        version: file:vendor/houshan-agent-hub-network-sdk-0.1.17.tgz(@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.18.tgz)
       '@houshan/agent-hub-sdk':
-        specifier: file:vendor/houshan-agent-hub-sdk-0.1.14.tgz
-        version: file:vendor/houshan-agent-hub-sdk-0.1.14.tgz
+        specifier: file:vendor/houshan-agent-hub-sdk-0.1.18.tgz
+        version: file:vendor/houshan-agent-hub-sdk-0.1.18.tgz
       '@monaco-editor/react':
         specifier: ^4.7.0
         version: 4.7.0(monaco-editor@0.55.1)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -802,19 +802,19 @@ packages:
     bundledDependencies:
       - '@houshan/agent-hub-network-sdk'
 
-  '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.16.tgz':
-    resolution: {integrity: sha512-mU/Uwp3efNfPDnmmmbA2kWIwYvoBKLO+eCq/Ce+ThFAo0X28laFmaYRmsQXpAtNPZHVvifkx/OphOW8/x1CKYA==, tarball: file:vendor/houshan-agent-hub-network-sdk-0.1.16.tgz}
-    version: 0.1.16
+  '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.17.tgz':
+    resolution: {integrity: sha512-PRGPspowlPf/vA/fObGKkGlbF0ZLe8jziUqWGuGHm0V6Dix0GkbGlsTIMbFhSSy1U45yQSb2I3KlP2jfa35ong==, tarball: file:vendor/houshan-agent-hub-network-sdk-0.1.17.tgz}
+    version: 0.1.17
     engines: {node: '>=20'}
     peerDependencies:
-      '@houshan/agent-hub-sdk': ^0.1.8
+      '@houshan/agent-hub-sdk': ^0.1.17
     peerDependenciesMeta:
       '@houshan/agent-hub-sdk':
         optional: true
 
-  '@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.14.tgz':
-    resolution: {integrity: sha512-SEQ/XGroiVuHzWR00UrGLNPMd98Tulcm6xew7GXsBrHfFmyd4jnlFcvsj4+PqFyyvI7xyAgk2/zpRS7uO8Eihg==, tarball: file:vendor/houshan-agent-hub-sdk-0.1.14.tgz}
-    version: 0.1.14
+  '@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.18.tgz':
+    resolution: {integrity: sha512-PNaOWER7bVyYX2QYYj4pZdGvueNnI9vvpPOxTyVxE1sZTmqT5AMpQzALUKzKmsDGmhQz2WyS6V7hfYXnx6NrcQ==, tarball: file:vendor/houshan-agent-hub-sdk-0.1.18.tgz}
+    version: 0.1.18
 
   '@humanfs/core@0.19.1':
     resolution: {integrity: sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA==}
@@ -7392,11 +7392,11 @@ snapshots:
 
   '@houflow/agent-connector@file:vendor/houflow-agent-connector-0.1.5.tgz': {}
 
-  '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.16.tgz(@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.14.tgz)':
+  '@houshan/agent-hub-network-sdk@file:vendor/houshan-agent-hub-network-sdk-0.1.17.tgz(@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.18.tgz)':
     optionalDependencies:
-      '@houshan/agent-hub-sdk': file:vendor/houshan-agent-hub-sdk-0.1.14.tgz
+      '@houshan/agent-hub-sdk': file:vendor/houshan-agent-hub-sdk-0.1.18.tgz
 
-  '@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.14.tgz': {}
+  '@houshan/agent-hub-sdk@file:vendor/houshan-agent-hub-sdk-0.1.18.tgz': {}
 
   '@humanfs/core@0.19.1': {}
 

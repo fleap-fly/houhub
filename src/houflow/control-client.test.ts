@@ -286,13 +286,20 @@ describe("loadHouflowControlSnapshot", () => {
         status: "active",
         native_capabilities: {
           stream: true,
+          native_console: "embedded",
         },
         metadata: { nativeConsoleSupported: "true" },
         runtime_binding: {
+          engine_id: "eng_codex",
           runtime_engine: "codex",
           environment_id: "env_resident",
-          model: "gpt-5",
-          native_console: true,
+          model_execution: {
+            model_provider_id: "openai",
+            canonical_model_id: "gpt-5",
+            wire_model: "gpt-5",
+            reasoning_effort: null,
+          },
+          bound_at: "2026-07-10T00:00:00.000Z",
         },
       },
     ]
