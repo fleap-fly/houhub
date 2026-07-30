@@ -21,7 +21,7 @@ import {
   isReparentUnmount,
   resetTabStore,
   selectIsSplit,
-  useTabStore,
+  useTabStore as useGlobalTabStore,
 } from "@/stores/tab-store"
 import { leafIds } from "@/lib/tab-group-layout"
 import {
@@ -1728,7 +1728,7 @@ describe("TabProvider tab groups", () => {
     return result
   }
 
-  const store = () => useTabStore.getState()
+  const store = () => useGlobalTabStore.getState()
   const leaves = () => leafIds(store().groupLayout)
   const groupOfId = (tabId: string) =>
     groupOfTab(store().groupOf, store().groupLayout, tabId)

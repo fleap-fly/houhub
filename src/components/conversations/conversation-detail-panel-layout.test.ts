@@ -24,10 +24,6 @@ const conversationShellSource = readFileSync(
   resolve(process.cwd(), "src/components/chat/conversation-shell.tsx"),
   "utf8"
 )
-const globalsCssSource = readFileSync(
-  resolve(process.cwd(), "src/app/globals.css"),
-  "utf8"
-)
 const workspaceLayoutSource = readFileSync(
   resolve(process.cwd(), "src/app/workspace/layout.tsx"),
   "utf8"
