@@ -37,12 +37,12 @@ The harness checks package/Cargo/Tauri versions, updater endpoint, release workf
 
 1. Inspect dirty worktrees in `/home/dev/houhub` and `/home/dev/next-ai-saas`; avoid unrelated changes.
 2. Run `pnpm release:check`.
-3. Confirm GitHub secrets exist: `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+3. Confirm GitHub secrets exist: `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `HOUHUB_PRODUCTION_DEPLOY_HOST`, `HOUHUB_PRODUCTION_DEPLOY_USER`, `HOUHUB_PRODUCTION_DEPLOY_KEY`, and `HOUHUB_PRODUCTION_KNOWN_HOSTS`.
 4. Create or move the `vX.Y.Z` tag using `fleap.fly <199331649+fleap-fly@users.noreply.github.com>`.
 5. Push the tag and monitor the `Desktop Release` workflow.
 6. Verify release assets include macOS DMG, macOS updater tar/signatures, Windows installer/signature, SHA256SUMS, and `latest.json`.
-7. Sync only the release `latest.json` to production at `/home/dev/next-ai-saas/apps/agent-hub/public/downloads/houhub/latest.json`; do not mirror installer/updater packages. The manifest points to GitHub versioned release assets. Ensure the production file is world-readable (`0644`) after sync so nginx can serve it.
-8. Verify `https://agent.houflow.com/downloads/houhub/latest.json` is no-cache/no-store, exactly matches the GitHub release `latest.json`, and points to versioned GitHub artifact URLs.
+7. The required `sync-production-manifest` job atomically syncs only the release `latest.json` to production at `/home/dev/next-ai-saas/apps/agent-hub/public/downloads/houhub/latest.json`; do not mirror updater packages. It must receive `HOUHUB_PRODUCTION_DEPLOY_HOST`, `HOUHUB_PRODUCTION_DEPLOY_USER`, `HOUHUB_PRODUCTION_DEPLOY_KEY`, and `HOUHUB_PRODUCTION_KNOWN_HOSTS` repository secrets. Stable installer routes redirect to fixed alias assets on the latest GitHub Release.
+8. Verify `https://agent.houflow.com/downloads/houhub/latest.json` is no-cache/no-store, exactly matches the GitHub release `latest.json`, and stable installer routes resolve through the fixed latest-release aliases.
 9. Verify docs download routes redirect to current installer artifacts.
 10. Run `pnpm release:check:remote`.
 

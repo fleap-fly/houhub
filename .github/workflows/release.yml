@@ -495,6 +495,15 @@ jobs:
           )
           NODE
 
+      - name: Create stable installer aliases
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          cp "dist/houhub_${version}_aarch64.dmg" "dist/houhub_macos-arm64.dmg"
+          cp "dist/houhub_${version}_x64.dmg" "dist/houhub_macos-x64.dmg"
+          cp "dist/houhub_${version}_x64-setup.exe" "dist/houhub_windows-x64-setup.exe"
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -508,3 +517,95 @@ jobs:
               --title "houhub $TAG_NAME" \
               --notes "Automated desktop build for macOS Apple Silicon, macOS Intel, Windows, and signed updater metadata."
           fi
+
+  sync-production-manifest:
+    name: Sync production update manifest
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: houhub-production-update-feed
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Download published manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "$TAG_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern latest.json \
+            --dir dist
+
+      - name: Validate published manifest
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs")
+
+          const tag = process.env.TAG_NAME || ""
+          const version = tag.replace(/^v/, "")
+          const manifest = JSON.parse(fs.readFileSync("dist/latest.json", "utf8"))
+          const baseUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/`
+
+          if (manifest.version !== version) {
+            throw new Error(`Published manifest version ${manifest.version} does not match ${version}`)
+          }
+          for (const [platform, entry] of Object.entries(manifest.platforms || {})) {
+            if (!entry || typeof entry.url !== "string" || !entry.url.startsWith(baseUrl)) {
+              throw new Error(`Published manifest has invalid ${platform} URL`)
+            }
+            if (typeof entry.signature !== "string" || !entry.signature.trim()) {
+              throw new Error(`Published manifest has empty ${platform} signature`)
+            }
+          }
+          NODE
+
+      - name: Configure production SSH
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.HOUHUB_PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.HOUHUB_PRODUCTION_DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.HOUHUB_PRODUCTION_DEPLOY_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.HOUHUB_PRODUCTION_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_houhub_production
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_houhub_production
+          printf 'DEPLOY_HOST=%s\nDEPLOY_USER=%s\n' "$DEPLOY_HOST" "$DEPLOY_USER" >> "$GITHUB_ENV"
+
+      - name: Atomically install production manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_tmp="/tmp/houhub-latest-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          remote_target="/home/dev/next-ai-saas/apps/agent-hub/public/downloads/houhub/latest.json"
+          ssh_options=(
+            -i ~/.ssh/id_houhub_production
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=yes
+          )
+          scp "${ssh_options[@]}" dist/latest.json "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_tmp}"
+          ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "set -euo pipefail; install -m 0644 '${remote_tmp}' '${remote_target}.next'; cmp -s '${remote_tmp}' '${remote_target}.next'; mv -f '${remote_target}.next' '${remote_target}'; rm -f '${remote_tmp}'"
+
+      - name: Verify production update feed
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 6 --retry-all-errors \
+            --output production-latest.json \
+            https://agent.houflow.com/downloads/houhub/latest.json
+          cmp -s dist/latest.json production-latest.json

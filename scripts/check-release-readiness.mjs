@@ -13,6 +13,14 @@ const docsRoot = valueArg("--docs-root") || "/home/dev/next-ai-saas"
 const productionManifestUrl =
   "https://agent.houflow.com/downloads/houhub/latest.json"
 const githubReleaseBase = `https://github.com/fleap-fly/houhub/releases/download/v${expectedVersion}/`
+const requiredGitHubSecrets = [
+  "TAURI_SIGNING_PRIVATE_KEY",
+  "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+  "HOUHUB_PRODUCTION_DEPLOY_HOST",
+  "HOUHUB_PRODUCTION_DEPLOY_USER",
+  "HOUHUB_PRODUCTION_DEPLOY_KEY",
+  "HOUHUB_PRODUCTION_KNOWN_HOSTS",
+]
 
 const failures = []
 const warnings = []
@@ -242,9 +250,33 @@ function checkWorkflow() {
     "houhub_${version}_aarch64.app.tar.gz",
     "houhub_${version}_x64.app.tar.gz",
     "houhub_${version}_x64-setup.exe",
+    "houhub_macos-arm64.dmg",
+    "houhub_macos-x64.dmg",
+    "houhub_windows-x64-setup.exe",
+    "sync-production-manifest",
+    "HOUHUB_PRODUCTION_DEPLOY_HOST",
+    "HOUHUB_PRODUCTION_DEPLOY_USER",
+    "HOUHUB_PRODUCTION_DEPLOY_KEY",
+    "HOUHUB_PRODUCTION_KNOWN_HOSTS",
   ]
   for (const token of required) {
     if (!workflow.includes(token)) fail(`release workflow missing ${token}`)
+  }
+}
+
+function checkGitHubReleaseSecrets() {
+  const secretList = tryRun("gh", [
+    "secret",
+    "list",
+    "--repo",
+    "fleap-fly/houhub",
+  ])
+  if (!secretList) {
+    warn("could not read GitHub release secrets with gh")
+    return
+  }
+  for (const secret of requiredGitHubSecrets) {
+    if (!secretList.includes(secret)) fail(`GitHub secret missing: ${secret}`)
   }
 }
 
@@ -287,7 +319,9 @@ function checkHistoryProvenance() {
   try {
     run(process.execPath, ["scripts/check-history-provenance.mjs"])
   } catch (error) {
-    const detail = String(error.stderr || error.message || "unknown error").trim()
+    const detail = String(
+      error.stderr || error.message || "unknown error"
+    ).trim()
     fail(`history provenance check failed: ${detail}`)
   }
 }
@@ -325,23 +359,6 @@ function checkDocsLinks() {
 }
 
 async function checkRemoteState() {
-  const secretList = tryRun("gh", [
-    "secret",
-    "list",
-    "--repo",
-    "fleap-fly/houhub",
-  ])
-  if (!secretList) {
-    warn("could not read GitHub secrets with gh")
-  } else {
-    for (const secret of [
-      "TAURI_SIGNING_PRIVATE_KEY",
-      "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
-    ]) {
-      if (!secretList.includes(secret)) fail(`GitHub secret missing: ${secret}`)
-    }
-  }
-
   const releaseJson = tryRun("gh", [
     "release",
     "view",
@@ -367,6 +384,9 @@ async function checkRemoteState() {
       `houhub_${expectedVersion}_x64.app.tar.gz.sig`,
       `houhub_${expectedVersion}_x64-setup.exe`,
       `houhub_${expectedVersion}_x64-setup.exe.sig`,
+      "houhub_macos-arm64.dmg",
+      "houhub_macos-x64.dmg",
+      "houhub_windows-x64-setup.exe",
       "latest.json",
     ]) {
       if (!assetNames.has(asset)) fail(`release asset missing: ${asset}`)
@@ -450,25 +470,31 @@ async function checkRemoteState() {
   const installerRouteSpecs = [
     {
       path: "/downloads/houhub/macos-arm64",
-      suffix: `houhub_${expectedVersion}_aarch64.dmg`,
+      stableAsset: "houhub_macos-arm64.dmg",
+      versionedAsset: `houhub_${expectedVersion}_aarch64.dmg`,
     },
     {
       path: "/downloads/houhub/macos-x64",
-      suffix: `houhub_${expectedVersion}_x64.dmg`,
+      stableAsset: "houhub_macos-x64.dmg",
+      versionedAsset: `houhub_${expectedVersion}_x64.dmg`,
     },
     {
       path: "/downloads/houhub/windows-x64",
-      suffix: `houhub_${expectedVersion}_x64-setup.exe`,
+      stableAsset: "houhub_windows-x64-setup.exe",
+      versionedAsset: `houhub_${expectedVersion}_x64-setup.exe`,
     },
   ]
-  const installerRoutes = [
-    "https://houflow.com",
-    "https://agent.houflow.com",
-  ].flatMap((origin) =>
-    installerRouteSpecs.map(({ path, suffix }) => ({
-      route: `${origin}${path}`,
-      suffix,
-    }))
+  const installerRoutes = installerRouteSpecs.flatMap(
+    ({ path, stableAsset, versionedAsset }) => [
+      {
+        route: `https://agent.houflow.com${path}`,
+        target: `https://github.com/fleap-fly/houhub/releases/latest/download/${stableAsset}`,
+      },
+      {
+        route: `https://houflow.com${path}`,
+        target: `${githubReleaseBase}${versionedAsset}?v=${encodeURIComponent(expectedVersion)}`,
+      },
+    ]
   )
   for (const item of installerRoutes) {
     const routeCheck = await fetchText(item.route, { redirect: "manual" })
@@ -481,10 +507,7 @@ async function checkRemoteState() {
     if (route.status !== 302) {
       fail(`${item.route} expected HTTP 302, got ${route.status}`)
     }
-    if (
-      !location.startsWith(githubReleaseBase) ||
-      !location.includes(item.suffix)
-    ) {
+    if (location !== item.target) {
       fail(
         `${item.route} redirects to unexpected location: ${location || "(missing)"}`
       )
@@ -496,6 +519,7 @@ checkBrandHygiene()
 checkVersions()
 checkUpdater()
 checkWorkflow()
+checkGitHubReleaseSecrets()
 checkWechatCapability()
 checkGitIdentity()
 checkHistoryProvenance()
