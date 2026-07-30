@@ -835,6 +835,8 @@ mod tests {
                     parent_tool_use_id: None,
                 },
             }),
+            // Parented (subagent-attributed) chunks: the optional id is a
+            // sized string field, including an escape-heavy id.
             Arc::new(EventEnvelope {
                 seq: 31,
                 connection_id: "conn-xyz".into(),
