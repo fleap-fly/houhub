@@ -43,7 +43,7 @@ export function isEmbeddedReferenceUri(uri: string): boolean {
  * `label` is the human-readable text (a sent resource's name, or a markdown
  * link's text); it falls back to the uri basename or `#id` when empty.
  */
-export function parseHouhubReferenceUri(
+export function parseHouHubReferenceUri(
   uri: string,
   label: string
 ): ReferenceAttrs | null {

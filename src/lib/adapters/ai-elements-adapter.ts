@@ -15,6 +15,7 @@ import {
 } from "@/lib/adapters/tool-kind-classifier"
 import { normalizeToolName } from "@/lib/tool-call-normalization"
 import { isBackgroundTaskToolCall } from "@/lib/background-task"
+import { isContextCompactionMeta } from "@/lib/context-compaction"
 import { isUnsettledToolCall } from "@/lib/tool-call-lifecycle"
 import { feedbackCheckHasContent } from "@/lib/feedback-check"
 import {
@@ -25,6 +26,7 @@ import {
 import {
   tokenizeReferenceLinks,
   unescapeReferenceLabel,
+  unwrapReferenceDestination,
 } from "@/lib/reference-link"
 
 /**
@@ -856,14 +858,11 @@ function handleMarkdownLink(
   resources: UserResourceDisplay[]
 ): string {
   const normalizedLabel = label.trim()
-  // Unwrap a CommonMark angle-bracket destination (`<uri>`) to the bare uri so
-  // scheme tests and the stored value are clean. `match` (returned for
-  // inline-kept refs) keeps the original bracketed form untouched.
-  const rawUri = uri.trim()
-  const normalizedUri =
-    rawUri.startsWith("<") && rawUri.endsWith(">")
-      ? rawUri.slice(1, -1).trim()
-      : rawUri
+  // Unwrap a CommonMark angle-bracket destination (`<uri>`) — and decode the
+  // `\`/`<`/`>` escapes it carries — so scheme tests and the stored chip uri see
+  // the real path, not `file:///C:\\dir`. `match` (returned for inline-kept
+  // refs) keeps the original bracketed form untouched.
+  const normalizedUri = unwrapReferenceDestination(uri)
   // A `houhub://` reference (session / commit / agent) renders as an inline badge
   // in the transcript (markdown-link → ReferenceBadge); never lift it to the
   // bottom resource-chip row. The guard mirrors markdown-link's interception
@@ -1034,6 +1033,10 @@ function adaptContentBlock(
       }
 
     case "tool_result": {
+      // An unpaired (orphan) image result still shows its picture rather than
+      // an empty result row. Paired image results are intercepted earlier in
+      // `adaptMessageTurn`; this only fires for the rare standalone case, where
+      // a single image is the realistic shape.
       const imageParts = adaptImageToolResultParts(block)
       if (imageParts) return imageParts[0]
       return {
@@ -1097,6 +1100,22 @@ function deriveImageNameFromImageData(img: {
   return `image.${ext}`
 }
 
+/**
+ * Convert a tool_result carrying image bytes (e.g. Claude Code's `Read` of an
+ * image, or a multi-page PDF read returning one image per page) into one
+ * `generated-image` part per image.
+ *
+ * Mirrors the live ACP path: there, an image-bearing ToolCall is detected by
+ * `isImageGenerationToolCall` (`images.length > 0`) and rendered as
+ * `image_generation` block(s) in place of a generic tool card. Doing the same
+ * here means the historical (JSONL replay) view of that Read shows the picture
+ * in-position instead of degrading to a bare "Read foo.png" row — closing the
+ * live/historical asymmetry.
+ *
+ * Returns `null` when the result carries no usable images, so callers fall
+ * through to the normal tool-card path. Images missing `data`/`mime_type` are
+ * skipped; if that empties the list, `null` is returned too.
+ */
 function adaptImageToolResultParts(result: {
   images?: ImageData[] | null
 }): AdaptedGeneratedImagePart[] | null {
@@ -1107,6 +1126,7 @@ function adaptImageToolResultParts(result: {
     if (!img.data || !img.mime_type) continue
     parts.push({
       type: "generated-image",
+      // A Read has no model-revised prompt — only codex image generation does.
       revisedPrompt: null,
       image: {
         name: deriveImageNameFromImageData(img),
@@ -1114,6 +1134,8 @@ function adaptImageToolResultParts(result: {
         mime_type: img.mime_type,
         uri: img.uri ?? null,
       },
+      // Historical replay always carries a present image, so status is
+      // irrelevant to the renderer; `null` is treated as success.
       status: null,
     })
   }
@@ -1183,7 +1205,12 @@ export function groupConsecutiveToolCalls(
       // Claude Code background-task polls (TaskOutput/TaskStop) render through a
       // dedicated <BackgroundTaskCard> that merges a task's repeated polls, so
       // they break the run instead of folding into a "执行 N 个任务" tool-group.
-      !isBackgroundTaskToolCall(part)
+      !isBackgroundTaskToolCall(part) &&
+      // Context-compaction items (codex `_meta.contextCompaction`, and Grok's
+      // synthesized auto_compact card) render through the dedicated subtle
+      // <ContextCompactionCard>, so they break the run and render standalone
+      // instead of being wrapped in a single-item "调用 1 个工具" tool-group.
+      !isContextCompactionMeta(part.meta)
     ) {
       buffer.push(part)
       continue
@@ -1784,6 +1811,10 @@ export function adaptMessageTurn(
 
       if (matchedResult) {
         matchedResultIds.add(block.tool_use_id!)
+        // A Read whose result carries image bytes renders in-position as
+        // image card(s) (matching the live ACP path) instead of a generic
+        // "Read foo.png" tool card. Only when the tool is no longer running —
+        // mid-stream we keep the spinner via the normal tool-call path.
         const imageParts = isToolStillRunning
           ? null
           : adaptImageToolResultParts(matchedResult)
@@ -1821,6 +1852,8 @@ export function adaptMessageTurn(
 
         if (positionalResult) {
           positionMatchedIndices.add(index + 1)
+          // Same image-result handling as the id-matched branch above: a Read
+          // returning image bytes renders as image card(s) in-position.
           const imageParts = adaptImageToolResultParts(positionalResult)
           if (imageParts) {
             adaptedContent.push(...imageParts)

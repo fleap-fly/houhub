@@ -6,7 +6,7 @@ import { FileText, Globe, Mail, Phone, type LucideIcon } from "lucide-react"
 import type { Components, LinkSafetyModalProps } from "streamdown"
 
 import { ReferenceBadge } from "@/components/chat/composer/badges/reference-badge"
-import { parseHouhubReferenceUri } from "@/components/chat/composer/reference-uri"
+import { parseHouHubReferenceUri } from "@/components/chat/composer/reference-uri"
 import { FileReferenceActions } from "@/components/message/file-reference-actions"
 import type { ReferenceAttrs } from "@/components/chat/composer/types"
 import { classifyResourceKind, type ResourceKind } from "@/lib/resource-kind"
@@ -101,7 +101,7 @@ export function MarkdownLink({
   // editor uses on draft restore recovers refType/id/meta from the uri; the link
   // text is the label.
   if (!isIncomplete && href.toLowerCase().startsWith("houhub:")) {
-    const reference = parseHouhubReferenceUri(href, nodeText(children))
+    const reference = parseHouHubReferenceUri(href, nodeText(children))
     if (reference) return <ReferenceBadge data={reference} />
   }
 
