@@ -400,6 +400,7 @@ export interface DbConversationSummary {
   parent_id?: number | null
   parent_tool_use_id?: string | null
   delegation_call_id?: string | null
+  origin_cwd?: string | null
 }
 
 /** Payload for the global `conversation://changed` side-channel that keeps
@@ -1013,6 +1014,7 @@ export interface PermissionOptionInfo {
   option_id: string
   name: string
   kind: string
+  meta?: Record<string, unknown> | null
 }
 
 // --- ask_user_question (mirror of Rust `crate::acp::question`) ---
@@ -1156,10 +1158,13 @@ export interface AutomationLabelSnapshot {
   branch_label?: string
 }
 
+export type AutomationAction = "launch_session" | "enqueue_task"
+
 /** The captured composer snapshot stored in `automation.config`. `mode_id` +
  *  `config_values` are exactly AgentDelegationDefaults; the model rides inside
  *  `config_values["model"]`, never as its own field. */
 export interface AutomationConfig {
+  action?: AutomationAction
   prompt_blocks: PromptInputBlock[]
   display_text: string
   mode_id?: string | null
@@ -1220,6 +1225,114 @@ export interface AutomationDraft {
   branch: string | null
   is_remote_branch: boolean
   config: AutomationConfig
+}
+
+// ─── Work tasks ────────────────────────────────────────────────────────────
+// Mirrors src-tauri/src/models/work_task.rs. Wire form is snake_case like
+// Automations. (Named WorkTask* because `Task` is taken by task-context.tsx.)
+
+export type WorkTaskStatus =
+  | "todo"
+  | "queued"
+  | "running"
+  | "awaiting_input"
+  | "review"
+  | "merging"
+  | "done"
+  | "failed"
+  | "canceled"
+
+export interface WorkTaskConfig {
+  prompt_blocks: PromptInputBlock[]
+  display_text: string
+  agent_type?: AgentType | null
+  mode_id?: string | null
+  config_values: Record<string, string>
+  label_snapshot?: AutomationLabelSnapshot | null
+}
+
+export interface WorkTask {
+  id: number
+  folder_id: number
+  title: string
+  config: WorkTaskConfig | null
+  status: WorkTaskStatus
+  failure_reason: string | null
+  last_error: string | null
+  run_seq: number
+  sort_order: number
+  worktree_folder_id: number | null
+  conversation_id: number | null
+  connection_id: string | null
+  base_branch: string | null
+  base_sha: string | null
+  work_branch: string | null
+  cleanup_state: string | null
+  verdict: string | null
+  result_summary: string | null
+  files_changed: number | null
+  additions: number | null
+  deletions: number | null
+  merge_commit: string | null
+  preflight: WorkTaskPreflight | null
+  archived_at: string | null
+  latest_progress?: string | null
+  created_at: string
+  updated_at: string
+  started_at: string | null
+  settled_at: string | null
+  finished_at: string | null
+}
+
+export interface WorkTaskPreflight {
+  status: "running" | "passed" | "failed"
+  command: string
+  exit_code?: number | null
+  output_tail?: string | null
+}
+
+export interface WorkTaskEvent {
+  id: number
+  task_id: number
+  kind: string
+  actor: string
+  payload: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface WorkTaskDraft {
+  folder_id: number
+  title: string
+  config: WorkTaskConfig
+}
+
+export interface WorkTaskTemplate {
+  id: number
+  name: string
+  title: string
+  config: WorkTaskConfig | null
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkTaskFolderSettings {
+  default_agent_type?: AgentType | null
+  mode_id?: string | null
+  config_values: Record<string, string>
+  label_snapshot?: AutomationLabelSnapshot | null
+  auto_process: boolean
+  max_concurrent: number
+  merge_strategy: "squash" | "merge"
+  delete_worktree_default: boolean
+  preflight_command_id?: number | null
+  preflight_command?: string | null
+  init_command?: string | null
+}
+
+export interface WorkTaskChangedFile {
+  file: string
+  additions: number
+  deletions: number
 }
 
 export interface PlanEntryInfo {
@@ -1384,6 +1497,7 @@ export type AcpEvent =
       agent_type: string
       /** Stable backend error identifier for localization (e.g. "initialize_timeout"). */
       code: string | null
+      details?: string | null
     }
   | {
       // codex-acp #289: a retryable turn error that keeps the turn alive (codex
@@ -1697,6 +1811,7 @@ export interface FeedbackItem {
 export interface SessionLastError {
   message: string
   code?: string | null
+  details?: string | null
 }
 
 export interface LiveSessionSnapshot {
@@ -1732,6 +1847,7 @@ export interface LiveSessionSnapshot {
    *  The frontend gates the feedback bar on this — the agent's real capability —
    *  not the (possibly later-toggled) global setting. Absent → `false`. */
   feedback_tool_available?: boolean
+  native_steering_available?: boolean
   modes: SessionModeStateInfo | null
   current_mode: string | null
   config_options: SessionConfigOptionInfo[] | null
@@ -1782,6 +1898,7 @@ export interface AcpAgentInfo {
   description: string
   available: boolean
   distribution_type: string
+  is_acp_adapter: boolean
   /**
    * For custom agents, where the definition came from ("registry" | "manual");
    * null for built-ins. A manual definition's registry_version is user-typed,
@@ -1997,6 +2114,7 @@ export interface AcpAgentStatus {
   available: boolean
   enabled: boolean
   installed_version: string | null
+  is_acp_adapter: boolean
 }
 
 // Environment diagnostics (returned by acp_env_diagnostics). Mirrors the Rust
@@ -2734,14 +2852,50 @@ export interface CheckItem {
   fixes: FixAction[]
 }
 
+export interface AdapterInfo {
+  adapter_package: string
+  adapter_cmd: string
+  adapter_installed: boolean
+  native_cmd: string
+  native_label: string
+  native_path: string | null
+  shared_config_dir: string
+  docs_url: string
+}
+
 export interface PreflightResult {
   agent_type: AgentType
   agent_name: string
   passed: boolean
   checks: CheckItem[]
+  adapter: AdapterInfo | null
 }
 
 // ─── OpenCode Plugins ───
+
+// ─── OpenCode Provider Catalog (models.dev) ───
+
+/** A model entry under a catalog provider, normalized from models.dev. */
+export interface OpenCodeCatalogModel {
+  id: string
+  name: string
+  reasoning: boolean
+  tool_call: boolean
+  context: number | null
+  cost_in: number | null
+  cost_out: number | null
+}
+
+/** One provider from the models.dev catalog (the same registry OpenCode reads). */
+export interface OpenCodeCatalogProvider {
+  id: string
+  name: string
+  npm: string | null
+  env: string[]
+  doc: string | null
+  auth_kind: "api" | "oauth"
+  models: OpenCodeCatalogModel[]
+}
 
 export type PluginStatus = "installed" | "missing"
 

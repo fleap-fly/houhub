@@ -317,6 +317,22 @@ pub enum AutomationChange {
     },
 }
 
+/// Global side-channel for cross-client task-board sync. Task execution is
+/// headless, so clients refresh the board when the engine changes a row.
+pub const WORK_TASK_CHANGED_EVENT: &str = "task://changed";
+
+/// Id-only task change payload. Keeping the wire payload small avoids sending
+/// task transcripts through every connected client; the UI refetches the row
+/// or list it needs.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkTaskChange {
+    Upsert { id: i32 },
+    Deleted { id: i32 },
+    Settings { folder_id: i32 },
+    Refresh,
+}
+
 /// Unified event emission: serializes the payload exactly once and dispatches
 /// the shared `Arc<Value>` to both the Tauri webview and the web broadcaster.
 pub fn emit_event(emitter: &EventEmitter, event: &str, payload: impl Serialize) {

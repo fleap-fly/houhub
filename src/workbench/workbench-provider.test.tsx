@@ -77,4 +77,18 @@ describe("WorkbenchProvider", () => {
     })
     expect(screen.getByTestId("status")).toHaveTextContent("signed_out")
   })
+
+  it("clears a stale project session when Houflow owns the account gate", async () => {
+    localStorage.setItem("houhub:active-account-identity:v1", "houflow")
+    mocks.isDesktop = true
+    mocks.signOutWorkbench.mockResolvedValue(undefined)
+
+    renderProvider()
+
+    await waitFor(() => {
+      expect(screen.getByTestId("status")).toHaveTextContent("signed_out")
+    })
+    expect(mocks.signOutWorkbench).toHaveBeenCalledOnce()
+    expect(mocks.getWorkbenchSession).not.toHaveBeenCalled()
+  })
 })

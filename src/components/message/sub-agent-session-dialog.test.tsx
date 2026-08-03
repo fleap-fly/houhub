@@ -50,6 +50,20 @@ vi.mock("@/contexts/conversation-runtime-context", async () => {
   }
 })
 
+// LiveTranscriptView now owns the runtime bridge directly through the Zustand
+// action selector. Keep the dialog tests focused on the same bridge contract
+// without mounting the production store.
+vi.mock("@/stores/conversation-runtime-store", () => ({
+  useConversationRuntimeActions: () => ({
+    setLiveMessage: mockSetLiveMessage,
+    completeTurn: mockCompleteTurn,
+    removeConversation: mockRemoveConversation,
+    refetchDetail: mockRefetchDetail,
+    setLiveOwnsActiveTurn: mockSetLiveOwnsActiveTurn,
+    syncTurnMetadata: mockSyncTurnMetadata,
+  }),
+}))
+
 // Connection store — drives the child connection state subscription used
 // by the bridge. Mutating `mockChildConnection` + calling `notifyStore()`
 // simulates a STATE update from the connections reducer.

@@ -35,6 +35,10 @@ import {
   useHouflowDesktopStore,
   useWorkbenchClientCapabilityStore,
 } from "@/houflow"
+import {
+  classifyHouflowWorkspace,
+  personalCloudWorkspaces,
+} from "@/houflow/context"
 import { toErrorMessage } from "@/lib/app-error"
 import { openUrl } from "@/lib/platform"
 import { isDesktop, isRemoteDesktopMode } from "@/lib/transport"
@@ -45,6 +49,7 @@ import {
   useWorkbenchStore,
   type WorkbenchClientSuite,
 } from "@/workbench"
+import { usePersonalCloudStore } from "@/personal-workbench"
 import {
   cloudAgentWorkspaceResources,
   localAgentWorkspaceResources,
@@ -115,15 +120,29 @@ export function WorkspaceResourcesPanel() {
   )
   const [openingSuiteCode, setOpeningSuiteCode] = useState<string | null>(null)
   const localDiscoveryRefreshed = useRef(false)
+  const selectPersonalCloudWorkspace = usePersonalCloudStore(
+    (state) => state.selectWorkspace
+  )
 
   const houflowConnected = houflow.session.status === "signed_in"
   const workbenchConnected = workbench.session.status === "signed_in"
-  const projectSelectionLocked = houflowConnected && workbenchConnected
-  // Houflow and PS are intentionally independent identities. Houflow owns
-  // cloud/local Agent Hub resources; PS owns project assistants and suites.
+  // Houflow and PS remain separate credential systems, but HouHub activates
+  // only one at a time. This prevents the same Agent Hub project assistant
+  // from appearing once through Houflow and again through PS.
   const connected = houflowConnected || workbenchConnected
   const activeProjectId = workbenchConnected
     ? workbench.session.activeProjectId
+    : null
+  const personalWorkspaces = useMemo(
+    () => personalCloudWorkspaces(houflow.snapshot?.workspaces ?? []),
+    [houflow.snapshot?.workspaces]
+  )
+  const activeHouflowWorkspace =
+    houflow.snapshot?.workspaces.find(
+      (workspace) => workspace.id === houflow.session.workspaceId
+    ) ?? null
+  const activeHouflowContext = activeHouflowWorkspace
+    ? classifyHouflowWorkspace(activeHouflowWorkspace)
     : null
   const connector = houflow.snapshot?.connector ?? null
   const localResources = useMemo(
@@ -140,8 +159,11 @@ export function WorkspaceResourcesPanel() {
     ]
   )
   const cloudResources = useMemo(
-    () => cloudAgentWorkspaceResources(houflow.snapshot?.targets ?? []),
-    [houflow.snapshot?.targets]
+    () =>
+      activeHouflowContext?.context === "personal"
+        ? cloudAgentWorkspaceResources(houflow.snapshot?.targets ?? [])
+        : [],
+    [activeHouflowContext?.context, houflow.snapshot?.targets]
   )
   const suiteResources = useMemo(
     () => suiteWorkspaceResources(suites.items),
@@ -199,6 +221,20 @@ export function WorkspaceResourcesPanel() {
       }
     },
     [suites, t, workbench]
+  )
+
+  const handlePersonalWorkspaceChange = useCallback(
+    async (workspaceId: string) => {
+      try {
+        await houflow.selectWorkspace(workspaceId)
+        selectPersonalCloudWorkspace({ workspaceId })
+      } catch (error) {
+        toast.error(t("connectFailed"), {
+          description: toErrorMessage(error),
+        })
+      }
+    },
+    [houflow, selectPersonalCloudWorkspace, t]
   )
 
   const handleRefresh = useCallback(async () => {
@@ -299,20 +335,23 @@ export function WorkspaceResourcesPanel() {
                   label: project.name,
                 }))}
                 onValueChange={(value) => void handleProjectChange(value)}
-                disabled={projectSelectionLocked}
               />
             ) : null}
-            {houflowConnected ? (
+            {houflowConnected && personalWorkspaces.length > 0 ? (
               <LabeledSelect
                 label={t("workspace")}
-                value={houflow.session.workspaceId ?? ""}
-                items={(houflow.snapshot?.workspaces ?? []).map(
-                  (workspace) => ({
-                    value: workspace.id,
-                    label: workspace.name,
-                  })
-                )}
-                onValueChange={(value) => void houflow.selectWorkspace(value)}
+                value={
+                  activeHouflowContext?.context === "personal"
+                    ? (houflow.session.workspaceId ?? "")
+                    : ""
+                }
+                items={personalWorkspaces.map((workspace) => ({
+                  value: workspace.id,
+                  label: workspace.name,
+                }))}
+                onValueChange={(value) =>
+                  void handlePersonalWorkspaceChange(value)
+                }
               />
             ) : null}
           </div>

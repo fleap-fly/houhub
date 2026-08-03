@@ -8,12 +8,18 @@ export interface WorkspaceConnectionActions {
   openResources: () => void
 }
 
+export type WorkspaceConnectionIdentity = "houflow" | "project"
+
 export async function connectWorkspace(
-  actions: WorkspaceConnectionActions
+  actions: WorkspaceConnectionActions,
+  identity: WorkspaceConnectionIdentity = "houflow"
 ): Promise<void> {
-  if (!actions.isHouflowConnected()) await actions.signInHouflow()
-  if (!actions.isWorkbenchConnected()) await actions.signInWorkbench()
-  const projectId = actions.activeProjectId()
-  if (projectId) await actions.refreshSuites(projectId)
+  if (identity === "houflow") {
+    if (!actions.isHouflowConnected()) await actions.signInHouflow()
+  } else {
+    if (!actions.isWorkbenchConnected()) await actions.signInWorkbench()
+    const projectId = actions.activeProjectId()
+    if (projectId) await actions.refreshSuites(projectId)
+  }
   actions.openResources()
 }

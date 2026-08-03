@@ -35,6 +35,11 @@ import {
   syncHouflowManagedGateway,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import {
+  claimAccountIdentity,
+  loadActiveAccountIdentity,
+  releaseAccountIdentity,
+} from "@/lib/account-identity"
 import { openUrl } from "@/lib/platform"
 import { isDesktop } from "@/lib/transport"
 import { customAgentId, type AcpAgentInfo, type AgentType } from "@/lib/types"
@@ -187,6 +192,7 @@ export const useHouflowDesktopStore = create<HouflowDesktopStoreState>()((
     initialize: async () => {
       const storedSession = loadHouflowSessionMetadata()
       if (storedSession.status !== "signed_in") {
+        releaseAccountIdentity("houflow")
         set({
           ...initialState,
           session: storedSession,
@@ -195,23 +201,52 @@ export const useHouflowDesktopStore = create<HouflowDesktopStoreState>()((
         return
       }
 
+      // A previous HouHub build could leave both credentials persisted. The
+      // first identity that claims the marker remains active; the other one is
+      // cleared before it can load any Agent Hub targets.
+      if (loadActiveAccountIdentity() === "project") {
+        try {
+          await clearHouflowAuthSecret()
+          clearHouflowSessionMetadata()
+          set({ ...initialState, status: "signed_out" })
+        } catch (err) {
+          set({ error: toErrorMessage(err), status: "error" })
+        }
+        return
+      }
+
       try {
+        claimAccountIdentity("houflow")
         const storedSecret = await loadHouflowAuthSecret()
         if (!hasUsableSecret(storedSecret)) {
           await clearHouflowAuthSecret()
           clearHouflowSessionMetadata()
+          releaseAccountIdentity("houflow")
           set({ ...initialState, status: "signed_out" })
           return
         }
         set({ session: storedSession, secret: storedSecret })
         await refreshWith(storedSession, storedSecret, "refreshing")
       } catch (err) {
+        if (loadActiveAccountIdentity() === "project") {
+          try {
+            await clearHouflowAuthSecret()
+            clearHouflowSessionMetadata()
+            set({ ...initialState, status: "signed_out" })
+            return
+          } catch (cleanupError) {
+            set({ error: toErrorMessage(cleanupError), status: "error" })
+            return
+          }
+        }
         set({ error: toErrorMessage(err), status: "error" })
       }
     },
 
     signInWithHouflow: async (options: HouflowSignInOptions = {}) => {
+      claimAccountIdentity("houflow")
       set({ status: "signing_in", error: null })
+      let persisted = false
       try {
         const result = await signInWithHouflowDesktopOAuth({
           ...options,
@@ -219,8 +254,10 @@ export const useHouflowDesktopStore = create<HouflowDesktopStoreState>()((
         })
         await saveHouflowAuthSecret(result.secret)
         saveHouflowSessionMetadata(result.session)
+        persisted = true
         await refreshWith(result.session, result.secret, "refreshing", true)
       } catch (err) {
+        if (!persisted) releaseAccountIdentity("houflow")
         const message = toErrorMessage(err)
         set({ error: message, status: "error" })
         throw err instanceof Error ? err : new Error(message)
@@ -340,6 +377,7 @@ export const useHouflowDesktopStore = create<HouflowDesktopStoreState>()((
     signOut: async () => {
       await clearHouflowAuthSecret()
       clearHouflowSessionMetadata()
+      releaseAccountIdentity("houflow")
       set({ ...initialState, status: "signed_out" })
     },
   }

@@ -1977,6 +1977,7 @@ mod tests {
             model: None,
             git_branch: None,
             external_id: None,
+            origin_cwd: None,
             message_count: 0,
             child_count: 0,
             created_at: now,

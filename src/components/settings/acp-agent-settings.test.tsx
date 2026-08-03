@@ -52,6 +52,7 @@ function makeAgent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
     hermes_config_yaml: null,
     cursor_cli_config_json: null,
     cursor_settings: null,
+    is_acp_adapter: false,
     model_provider_id: null,
     icon_url: null,
     ...overrides,
@@ -711,6 +712,7 @@ describe("getAgentChecks uv gating", () => {
       agent_type: "hermes" as AgentType,
       agent_name: "Hermes Agent",
       passed: false,
+      adapter: null,
       checks: [
         {
           check_id: "uv_available",
@@ -779,6 +781,7 @@ describe("getAgentChecks Pi runtime gating", () => {
           agent_type: "pi" as AgentType,
           agent_name: "Pi",
           passed: false,
+          adapter: null,
           checks: [
             {
               check_id: "sdk",
@@ -811,6 +814,7 @@ describe("getAgentChecks Pi runtime gating", () => {
           agent_type: "pi" as AgentType,
           agent_name: "Pi",
           passed: true,
+          adapter: null,
           checks: [
             {
               check_id: "sdk",

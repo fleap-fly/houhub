@@ -42,10 +42,12 @@ import {
   ChevronRight,
   CopyIcon,
   Info,
+  ListTodo,
   Loader2,
   Plus,
   RefreshCw,
 } from "lucide-react"
+import { useCreateTaskFromMessage } from "./use-create-task-from-message"
 import { Button } from "@/components/ui/button"
 import { useTranslations } from "next-intl"
 import {
@@ -62,6 +64,10 @@ import {
 import type { MessageScrollContextValue } from "@/components/message/message-scroll-context"
 import { extractSessionFilesGrouped } from "@/lib/session-files"
 import { unescapeComposerText } from "@/lib/composer-copy-text"
+import {
+  ContextCompactionCard,
+  isContextCompactionMeta,
+} from "./context-compaction-card"
 import { useStickToBottomContext } from "use-stick-to-bottom"
 
 interface MessageListViewProps {
@@ -88,6 +94,8 @@ interface MessageListViewProps {
    * conversation view; disabled in compact embeds (e.g. the sub-agent dialog).
    */
   showMessageNav?: boolean
+  /** Optional per-user-turn phase label used by task transcripts. */
+  userTurnHeader?: ((group: ResolvedMessageGroup) => string | null) | null
 }
 
 export interface ResolvedMessageGroup {
@@ -120,6 +128,11 @@ export type ThreadRenderItem =
       /** Raw assistant sub-turn(s) that compose this reply — fed to the
        *  per-reply artifacts card so it can list files changed this reply. */
       sourceTurns: MessageTurn[]
+    }
+  | {
+      key: string
+      kind: "compaction"
+      meta: Record<string, unknown> | null
     }
   | {
       key: string
@@ -263,6 +276,27 @@ function isEmptyTurnItem(item: ThreadRenderItem): boolean {
   if (g.resources.length > 0) return false
   if (g.images.length > 0) return false
   return true
+}
+
+/**
+ * Hoist a compaction-only assistant turn into its own timeline item. Keeping it
+ * outside the assistant merge run makes the context boundary visible between
+ * replies instead of nesting it inside the preceding tool group.
+ */
+function compactionOnlyMeta(
+  group: ResolvedMessageGroup
+): Record<string, unknown> | null {
+  if (group.role !== "assistant") return null
+  if (group.resources.length > 0 || group.images.length > 0) return null
+  const meaningful = group.parts.filter(
+    (part) => !(part.type === "text" && part.text.trim().length === 0)
+  )
+  if (meaningful.length !== 1) return null
+  const only = meaningful[0]
+  if (only.type !== "tool-call" || !isContextCompactionMeta(only.meta)) {
+    return null
+  }
+  return only.meta ?? null
 }
 
 /**
@@ -475,6 +509,29 @@ const UserMessageCopyButton = memo(function UserMessageCopyButton({
   )
 })
 
+const UserMessageTaskButton = memo(function UserMessageTaskButton({
+  parts,
+}: {
+  parts: AdaptedContentPart[]
+}) {
+  const t = useTranslations("Tasks")
+  const getText = useCallback(
+    () => unescapeComposerText(extractTextFromParts(parts)),
+    [parts]
+  )
+  const createTask = useCreateTaskFromMessage(getText)
+  return (
+    <MessageAction
+      tooltip={t("createFromMessage")}
+      className="opacity-0 group-hover/user-msg:opacity-100 transition-opacity self-end"
+      onClick={createTask}
+      size="icon-xs"
+    >
+      <ListTodo size={12} />
+    </MessageAction>
+  )
+})
+
 const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   group,
   dimmed = false,
@@ -502,6 +559,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
         ) : null}
         {group.role === "user" ? (
           <div className="group/user-msg flex w-fit ml-auto max-w-full items-start gap-1">
+            <UserMessageTaskButton parts={group.parts} />
             <UserMessageCopyButton parts={group.parts} />
             <MessageContent>
               <CollapsibleUserMessage parts={group.parts} />
@@ -589,6 +647,7 @@ export function MessageListView({
   onReload,
   onNewSession,
   showMessageNav = true,
+  userTurnHeader = null,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -678,6 +737,11 @@ export function MessageListView({
         }
         groupCache.set(msg, group)
       }
+      const key = `${phase}-${msg.id}-${i}`
+      const compactionMeta = compactionOnlyMeta(group)
+      if (compactionMeta !== null) {
+        return { key, kind: "compaction" as const, meta: compactionMeta }
+      }
       return {
         // Include phase so a turn that briefly coexists across phases (e.g.
         // a streaming turn that has just been promoted to localTurns while the
@@ -762,29 +826,51 @@ export function MessageListView({
     [historicalPlanEntries]
   )
 
-  const renderThreadItem = useCallback((item: ThreadRenderItem) => {
-    switch (item.kind) {
-      case "turn": {
-        const pt = item.isRoleTransition ? 16 : 0
-        return (
-          <div style={pt > 0 ? { paddingTop: pt } : undefined}>
-            <HistoricalMessageGroup
-              group={item.group}
-              dimmed={item.phase === "optimistic"}
-              showStats={item.showStats}
-              previousUserIndex={item.previousUserIndex}
-              isResponseComplete={item.phase === "persisted"}
-              sourceTurns={item.sourceTurns}
-            />
-          </div>
-        )
+  const renderThreadItem = useCallback(
+    (item: ThreadRenderItem) => {
+      switch (item.kind) {
+        case "turn": {
+          const pt = item.isRoleTransition ? 16 : 0
+          const phaseLabel =
+            item.group.role === "user" && userTurnHeader
+              ? userTurnHeader(item.group)
+              : null
+          return (
+            <div style={pt > 0 ? { paddingTop: pt } : undefined}>
+              {phaseLabel ? (
+                <div className="flex items-center gap-2 px-1 pb-3 pt-1">
+                  <span aria-hidden="true" className="h-px flex-1 bg-border" />
+                  <span className="shrink-0 rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[0.625rem] font-medium leading-none text-muted-foreground">
+                    {phaseLabel}
+                  </span>
+                  <span aria-hidden="true" className="h-px flex-1 bg-border" />
+                </div>
+              ) : null}
+              <HistoricalMessageGroup
+                group={item.group}
+                dimmed={item.phase === "optimistic"}
+                showStats={item.showStats}
+                previousUserIndex={item.previousUserIndex}
+                isResponseComplete={item.phase === "persisted"}
+                sourceTurns={item.sourceTurns}
+              />
+            </div>
+          )
+        }
+        case "typing":
+          return <PendingTypingIndicator />
+        case "compaction":
+          return (
+            <div className="px-1 py-2">
+              <ContextCompactionCard meta={item.meta} />
+            </div>
+          )
+        default:
+          return null
       }
-      case "typing":
-        return <PendingTypingIndicator />
-      default:
-        return null
-    }
-  }, [])
+    },
+    [userTurnHeader]
+  )
 
   const emptyState = useMemo(
     () =>

@@ -14,7 +14,6 @@ import { useLocale, useTranslations } from "next-intl"
 import { useSearchParams } from "next/navigation"
 import {
   AlertCircle,
-  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -27,6 +26,7 @@ import {
   Minus,
   PackagePlus,
   Pencil,
+  Plug,
   Plus,
   RefreshCw,
   Save,
@@ -37,7 +37,6 @@ import {
 import { isDesktop, openUrl } from "@/lib/platform"
 import { getActiveRemoteConnectionId } from "@/lib/transport"
 import { toast } from "sonner"
-import { useShallow } from "zustand/react/shallow"
 import {
   customAgentId,
   isCustomAgentType,
@@ -105,10 +104,11 @@ import {
   codexPollDeviceCode,
   codexRequestDeviceCode,
   listModelProviders,
-  updateModelProvider,
+  opencodeProviderCatalog,
 } from "@/lib/api"
 import type {
   AcpAgentInfo,
+  AdapterInfo,
   AgentType,
   CheckStatus,
   CodexGranularApproval,
@@ -117,27 +117,40 @@ import type {
   GrokStructuredConfig,
   HermesLocalConfig,
   ModelProviderInfo,
+  OpenCodeCatalogProvider,
   PreflightResult,
-  CodexModelConfig,
 } from "@/lib/types"
 import {
   HERMES_PROVIDERS,
   parseClaudeProviderModel,
   parseCodexModelConfig,
   serializeCodexModelConfig,
+  type CodexModelConfig,
 } from "@/lib/types"
+import { CodexModelListEditor } from "@/components/settings/codex-model-list-editor"
+import {
+  OpenCodeConnectDialog,
+  OpenCodeCustomProviderDialog,
+} from "@/components/settings/opencode-connect-dialog"
 import { AgentDiagnosticsDialog } from "@/components/settings/agent-diagnostics-dialog"
+import {
+  buildConnectedModelOptions,
+  buildConnectedProviders,
+  disconnectProvider,
+  formatContextWindow,
+  modelReferencesProvider,
+  setProviderApiKey,
+  setProviderEnabled,
+  type OpenCodeModelOptionGroup,
+} from "@/lib/opencode-connect"
 import { toErrorMessage } from "@/lib/app-error"
 import { getInstallErrorHintKey } from "@/lib/agent-install-error"
-import { modelReasoningEfforts } from "@/lib/reasoning-effort-capabilities"
 import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
 import { OpencodePluginsModal } from "./opencode-plugins-modal"
-import { useHouflowDesktopStore, type HouflowAgentTarget } from "@/houflow"
 import { CodeBuddyConfigPanel } from "./codebuddy-config-panel"
 import { CursorConfigPanel } from "./cursor-config-panel"
 import { KimiCodeConfigPanel } from "./kimi-code-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
-import { CodexModelListEditor } from "./codex-model-list-editor"
 
 interface AgentCheckState {
   result?: PreflightResult
@@ -388,12 +401,6 @@ function patchEnvText(
   return envMapToText(envMap)
 }
 
-function removeSlotPrefixedModel(value: string): string {
-  const trimmed = value.trim()
-  const match = /^(main|reasoning|haiku|sonnet|opus):(.+)$/.exec(trimmed)
-  return match ? match[2].trim() : trimmed
-}
-
 interface ImportantEnvKeys {
   apiBaseUrl: string[]
   apiKey: string[]
@@ -430,11 +437,11 @@ const CLAUDE_DISABLE_NONESSENTIAL_TRAFFIC_DEFAULT = true
 
 const CLAUDE_EFFORT_LEVEL_CONFIG_KEY = "effortLevel"
 
-type ClaudeEffortLevel = "" | "low" | "medium" | "high" | "xhigh" | "max"
+type ClaudeEffortLevel = "" | "low" | "medium" | "high" | "xhigh"
 
 const CLAUDE_EFFORT_LEVEL_VALUES: ReadonlyArray<
   Exclude<ClaudeEffortLevel, "">
-> = ["low", "medium", "high", "xhigh", "max"]
+> = ["low", "medium", "high", "xhigh"]
 
 function normalizeClaudeEffortLevel(value: unknown): ClaudeEffortLevel {
   if (typeof value !== "string") return ""
@@ -447,8 +454,7 @@ function normalizeClaudeEffortLevel(value: unknown): ClaudeEffortLevel {
     normalized === "low" ||
     normalized === "medium" ||
     normalized === "high" ||
-    normalized === "xhigh" ||
-    normalized === "max"
+    normalized === "xhigh"
   ) {
     return normalized
   }
@@ -1333,12 +1339,6 @@ const OPENCODE_PROVIDER_NPM_OPTIONS = [
   },
 ] as const
 
-interface OpenCodeModelOptionGroup {
-  providerId: string
-  label: string
-  models: { value: string; label: string }[]
-}
-
 function buildOpenCodeModelOptions(
   config: OpenCodeConfigView | null
 ): OpenCodeModelOptionGroup[] {
@@ -1401,11 +1401,40 @@ function OpenCodeModelCombobox({
           {groups.map((group) => (
             <ComboboxGroup key={group.providerId}>
               <ComboboxLabel>{group.label}</ComboboxLabel>
-              {group.models.map((model) => (
-                <ComboboxItem key={model.value} value={model.value}>
-                  {model.value}
-                </ComboboxItem>
-              ))}
+              {group.models.map((model) => {
+                const contextLabel =
+                  typeof model.context === "number"
+                    ? formatContextWindow(model.context)
+                    : ""
+                return (
+                  <ComboboxItem key={model.value} value={model.value}>
+                    <span className="truncate">{model.value}</span>
+                    {(model.reasoning || contextLabel) && (
+                      <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
+                        {model.reasoning && (
+                          <Badge
+                            variant="outline"
+                            className="px-1 text-[9px] font-normal"
+                          >
+                            {acpText("openCode.reasoningBadge", "reasoning")}
+                          </Badge>
+                        )}
+                        {contextLabel && (
+                          <span
+                            className="text-[10px] text-muted-foreground"
+                            title={acpText(
+                              "openCode.contextWindow",
+                              "Context window"
+                            )}
+                          >
+                            {contextLabel}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </ComboboxItem>
+                )
+              })}
             </ComboboxGroup>
           ))}
           <ComboboxEmpty>
@@ -1567,7 +1596,6 @@ interface CodexImportantValues {
 }
 
 const CODEX_DEFAULT_MODEL_PROVIDER = "houhub"
-const MODEL_PROVIDER_MANUAL_VALUE = "__manual__"
 
 const CODEX_AUTH_MODES = [
   "api_key",
@@ -1576,13 +1604,7 @@ const CODEX_AUTH_MODES = [
 ] as const
 type CodexAuthMode = (typeof CODEX_AUTH_MODES)[number]
 
-type CodexReasoningEffort =
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max"
-  | "ultra"
+type CodexReasoningEffort = "low" | "medium" | "high" | "xhigh"
 
 const CODEX_REASONING_EFFORT_OPTIONS: ReadonlyArray<{
   value: CodexReasoningEffort
@@ -1608,16 +1630,6 @@ const CODEX_REASONING_EFFORT_OPTIONS: ReadonlyArray<{
     value: "xhigh",
     label: "Extra High",
     description: "Extra high reasoning depth for complex problems",
-  },
-  {
-    value: "max",
-    label: "Max",
-    description: "Maximum reasoning depth for the hardest problems",
-  },
-  {
-    value: "ultra",
-    label: "Ultra",
-    description: "Maximum reasoning with automatic task delegation",
   },
 ]
 
@@ -1828,9 +1840,7 @@ function normalizeCodexReasoningEffort(
     normalized === "low" ||
     normalized === "medium" ||
     normalized === "high" ||
-    normalized === "xhigh" ||
-    normalized === "max" ||
-    normalized === "ultra"
+    normalized === "xhigh"
   ) {
     return normalized
   }
@@ -2168,10 +2178,10 @@ function extractCodexImportantValues(
       toml.providerBaseUrls.openai ??
       "")
   const providerSupportsWebsockets =
-    activeProvider === CODEX_DEFAULT_MODEL_PROVIDER
-      ? false
-      : (toml.providerSupportsWebsockets[activeProvider] ??
-        toml.featureResponsesWebsocketsV2)
+    toml.providerSupportsWebsockets[activeProvider] ??
+    (activeProvider === CODEX_DEFAULT_MODEL_PROVIDER
+      ? toml.featureResponsesWebsocketsV2
+      : false)
   return {
     apiBaseUrl: providerBaseUrl,
     apiKey:
@@ -2525,13 +2535,13 @@ function ensureCodexProviderDefaults(
   }
   let next = configTomlText
   const current = extractCodexTomlImportantValues(next)
-  const agentHubBaseUrl =
+  const houhubBaseUrl =
     current.providerBaseUrls[CODEX_DEFAULT_MODEL_PROVIDER] ?? ""
   next = patchCodexProviderField(
     next,
     CODEX_DEFAULT_MODEL_PROVIDER,
     "base_url",
-    `base_url = ${JSON.stringify(agentHubBaseUrl)}`
+    `base_url = ${JSON.stringify(houhubBaseUrl)}`
   )
   next = patchCodexProviderField(
     next,
@@ -2550,12 +2560,6 @@ function ensureCodexProviderDefaults(
     CODEX_DEFAULT_MODEL_PROVIDER,
     "requires_openai_auth",
     "requires_openai_auth = true"
-  )
-  next = patchCodexProviderField(
-    next,
-    CODEX_DEFAULT_MODEL_PROVIDER,
-    "supports_websockets",
-    "supports_websockets = false"
   )
   return next
 }
@@ -2661,10 +2665,6 @@ function patchCodexConfigTomlText(
       patch.modelProvider?.trim() ||
       tomlValues.modelProvider.trim() ||
       CODEX_DEFAULT_MODEL_PROVIDER
-    const supportsWebsockets =
-      modelProvider === CODEX_DEFAULT_MODEL_PROVIDER
-        ? false
-        : patch.supportsWebsockets
     if (!tomlValues.modelProvider.trim()) {
       nextTomlText = updateTomlRootStringKey(
         nextTomlText,
@@ -2676,7 +2676,7 @@ function patchCodexConfigTomlText(
       nextTomlText,
       modelProvider,
       "supports_websockets",
-      `supports_websockets = ${supportsWebsockets ? "true" : "false"}`
+      `supports_websockets = ${patch.supportsWebsockets ? "true" : "false"}`
     )
     nextTomlText = ensureCodexProviderDefaults(nextTomlText, modelProvider)
   }
@@ -2695,14 +2695,14 @@ function patchCodexConfigTomlText(
   )
   const activeProvider =
     normalizedTomlValues.modelProvider.trim() || CODEX_DEFAULT_MODEL_PROVIDER
-  const shouldEnableFeature =
-    activeProvider !== CODEX_DEFAULT_MODEL_PROVIDER &&
-    Boolean(normalizedTomlValues.providerSupportsWebsockets[activeProvider])
+  const shouldEnableFeature = Boolean(
+    normalizedTomlValues.providerSupportsWebsockets[activeProvider]
+  )
   nextTomlText = upsertTomlSectionBooleanKey(
     nextTomlText,
     "features",
     "responses_websockets_v2",
-    shouldEnableFeature
+    shouldEnableFeature ? true : null
   )
   if (typeof patch.skills === "boolean") {
     nextTomlText = upsertTomlSectionBooleanKey(
@@ -3184,12 +3184,10 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
         : "api_key"
   const grokAuthMode: GrokAuthMethod =
     agent.agent_type === "grok"
-      ? agent.model_provider_id != null
-        ? "api_key"
-        : inferGrokMode(
-            agent.env,
-            Boolean(agent.grok_settings?.custom_model_id?.trim())
-          )
+      ? inferGrokMode(
+          agent.env,
+          Boolean(agent.grok_settings?.custom_model_id?.trim())
+        )
       : "api_key"
   const rawEnvText = envMapToText(agent.env)
   // When codex is in official subscription mode, clean up API keys/URLs from env.
@@ -3317,57 +3315,6 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
   }
 }
 
-function getModelProviderAgentTypes(
-  provider: Pick<ModelProviderInfo, "agent_types" | "agent_type">
-): string[] {
-  const agentTypes = Array.isArray(provider.agent_types)
-    ? provider.agent_types
-    : []
-  return agentTypes.length > 0 ? agentTypes : [provider.agent_type]
-}
-
-function modelProviderSupportsAgentType(
-  provider: Pick<ModelProviderInfo, "agent_types" | "agent_type">,
-  agentType: AgentType
-): boolean {
-  return getModelProviderAgentTypes(provider).includes(agentType)
-}
-
-function isStructuredCodexModelConfig(raw: string | null | undefined): boolean {
-  const value = raw?.trim()
-  if (!value?.startsWith("{")) return false
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>
-    return ["customs", "models", "excludedOfficials", "default"].some((key) =>
-      Object.prototype.hasOwnProperty.call(parsed, key)
-    )
-  } catch {
-    return false
-  }
-}
-
-function modelProviderUsesCodexCatalog(
-  provider: Pick<ModelProviderInfo, "agent_types" | "agent_type" | "model">
-): boolean {
-  return (
-    getModelProviderAgentTypes(provider).length === 1 ||
-    isStructuredCodexModelConfig(provider.model)
-  )
-}
-
-function resolveCompatibleModelProviderId(
-  agentType: AgentType,
-  providerId: number | null | undefined,
-  providers: ModelProviderInfo[]
-): number | null {
-  if (providerId == null) return null
-  const provider = providers.find((item) => item.id === providerId)
-  if (!provider) return null
-  return modelProviderSupportsAgentType(provider, agentType)
-    ? provider.id
-    : null
-}
-
 export function hasEffectiveGrokCredential(input: {
   providerApiKey?: string | null
   envApiKey?: string | null
@@ -3376,8 +3323,8 @@ export function hasEffectiveGrokCredential(input: {
 }): boolean {
   return Boolean(
     input.providerApiKey?.trim() ||
-    input.envApiKey?.trim() ||
-    (input.customModelId?.trim() && input.customApiKey?.trim())
+      input.envApiKey?.trim() ||
+      (input.customModelId?.trim() && input.customApiKey?.trim())
   )
 }
 
@@ -3411,6 +3358,82 @@ function hasComparableVersion(
 function isValidCustomVersion(value: string): boolean {
   const normalized = value.trim().replace(/^[vV]/, "")
   return /^[0-9][0-9A-Za-z.\-+]*$/.test(normalized) && normalized.includes(".")
+}
+
+/**
+ * The explainer card for agents whose HouHub entry is a third-party ACP
+ * *adapter* rather than the vendor's own CLI — Claude Code and Codex.
+ *
+ * Ten of the twelve built-ins install the vendor CLI itself, so a user's
+ * existing global install is simply detected. These two are the exception:
+ * neither `claude` nor `codex` speaks ACP, so HouHub installs `claude-agent-acp`
+ * / `codex-acp` instead, and the launch gate looks for THAT command. Without
+ * this card the user only sees "Not installed" next to an agent they demonstrably
+ * have — by far the most-reported confusion.
+ *
+ * Returns `null` for every non-adapter agent (backend decides, via
+ * `PreflightResult.adapter`), and while preflight hasn't resolved yet.
+ *
+ * Deliberately carries NO install action: the Version Status card directly below
+ * already has one, and two install buttons on adjacent cards only breeds doubt
+ * about which is the right one.
+ */
+export function buildAcpAdapterCheck(
+  adapter: AdapterInfo | null | undefined
+): UiCheckItem | null {
+  if (!adapter) return null
+
+  const values = {
+    nativeLabel: adapter.native_label,
+    nativeCmd: adapter.native_cmd,
+    nativePath: adapter.native_path ?? "",
+    adapterPackage: adapter.adapter_package,
+    adapterCmd: adapter.adapter_cmd,
+    configDir: adapter.shared_config_dir,
+  }
+
+  // Installed → `pass`, so renderCheck collapses it: the relationship stays
+  // documented for anyone who wonders later, without nagging a working setup.
+  const installed = adapter.adapter_installed
+  const sawNative = Boolean(adapter.native_path)
+  // The English fallbacks mirror the four i18n messages one-for-one (they are
+  // what renders if no translator is mounted), so each state keeps the detail
+  // that state is about — above all, the path we found the vendor CLI at.
+  const split = `HouHub drives agents over ACP and the ${adapter.native_label} does not speak ACP, so HouHub needs a separate adapter package, ${adapter.adapter_package}.`
+  const coexist = `It ships its own runtime, never modifies or replaces your ${adapter.native_cmd} command, and reads the same ${adapter.shared_config_dir} — your existing sign-in and settings carry over.`
+  const [key, fallback] = installed
+    ? sawNative
+      ? [
+          "adapter.readyWithNative",
+          `Adapter ${adapter.adapter_cmd} is installed — that is what HouHub launches, not your own ${adapter.native_cmd} at ${adapter.native_path}. They are separate packages that coexist, and both read ${adapter.shared_config_dir}.`,
+        ]
+      : [
+          "adapter.ready",
+          `Adapter ${adapter.adapter_cmd} is installed — that is what HouHub launches. It ships its own runtime, so the ${adapter.native_label} is not required.`,
+        ]
+    : sawNative
+      ? [
+          "adapter.missingWithNative",
+          `Found your own ${adapter.native_label} at ${adapter.native_path}. ${split} ${coexist} Install it below.`,
+        ]
+      : [
+          "adapter.missing",
+          `${split} It ships its own runtime, so the ${adapter.native_cmd} CLI is not required first; if you do have it, the two coexist and share the same ${adapter.shared_config_dir} sign-in and settings. Install it below.`,
+        ]
+
+  return {
+    check_id: "acp_adapter",
+    label: acpText("adapter.label", "ACP adapter"),
+    status: installed ? "pass" : "warn",
+    message: acpText(key, fallback, values),
+    fixes: [
+      {
+        label: acpText("adapter.learnMore", "Learn more"),
+        kind: "open_url",
+        payload: adapter.docs_url,
+      },
+    ],
+  }
 }
 
 // `uvReady` reports whether the uv runtime (uvx) is installed — only meaningful
@@ -3672,8 +3695,19 @@ export function getAgentChecks(
   const uvReady =
     agent.distribution_type !== "uvx" || !uvCheck || uvCheck.status === "pass"
   const versionCheck = buildVersionCheck(agent, uvReady)
-  const remoteChecks: UiCheckItem[] = current?.result?.checks ?? []
-  return versionCheck ? [versionCheck, ...remoteChecks] : remoteChecks
+  const remoteChecks: UiCheckItem[] = (current?.result?.checks ?? []).map(
+    (check) => ({
+      ...check,
+      fixes: [...check.fixes],
+    })
+  )
+  // The adapter explainer goes FIRST: it answers "why does this say not
+  // installed when I have the CLI?" before the Version Status card below it
+  // offers the Install that fixes it.
+  const adapterCheck = buildAcpAdapterCheck(current?.result?.adapter)
+  return [adapterCheck, versionCheck, ...remoteChecks].filter(
+    (check): check is UiCheckItem => check != null
+  )
 }
 
 interface AgentReorderItemProps {
@@ -3745,168 +3779,12 @@ function AgentReorderItem({
   )
 }
 
-const AGENT_HUB_TARGET_GROUPS: Array<{
-  kind: HouflowAgentTarget["kind"]
-}> = [
-  { kind: "managed" },
-  { kind: "hosted_connected" },
-  { kind: "external_local" },
-]
-const EMPTY_AGENT_HUB_TARGETS: HouflowAgentTarget[] = []
-
-const AGENT_HUB_TARGET_COPY = {
-  zh: {
-    title: "云端同步",
-    description:
-      "当前 Houflow 工作区内的托管智能体、云端接入和本机接入会自动同步；下方仍是本机智能体配置。",
-    total: (count: number) => `${count} 个`,
-    signedOut: "未登录",
-    error: "需处理",
-    loading: "同步中",
-    ready: "已同步",
-    empty: "暂无云端目标",
-    connector: "本机连接",
-    workspace: "工作区",
-    groups: {
-      managed: "托管智能体",
-      hosted_connected: "云端接入",
-      external_local: "本机接入",
-    },
-  },
-  en: {
-    title: "Cloud sync",
-    description:
-      "Houflow workspaces, managed agents, and local external agents sync automatically. Local agent configuration stays below.",
-    total: (count: number) => `${count} targets`,
-    signedOut: "Signed out",
-    error: "Needs attention",
-    loading: "Syncing",
-    ready: "Synced",
-    empty: "No cloud targets",
-    connector: "Local connector",
-    workspace: "Workspace",
-    groups: {
-      managed: "Managed agents",
-      hosted_connected: "Hosted connections",
-      external_local: "Local external",
-    },
-  },
-} as const
-
-function AgentHubTargetsSummary() {
-  const locale = useLocale()
-  const copy = useMemo(
-    () =>
-      locale.toLowerCase().startsWith("zh")
-        ? AGENT_HUB_TARGET_COPY.zh
-        : AGENT_HUB_TARGET_COPY.en,
-    [locale]
-  )
-  const houflow = useHouflowDesktopStore(
-    useShallow((state) => ({
-      status: state.status,
-      session: state.session,
-      snapshot: state.snapshot,
-      error: state.error,
-    }))
-  )
-  const targets = houflow.snapshot?.targets ?? EMPTY_AGENT_HUB_TARGETS
-  const counts = useMemo(
-    () =>
-      Object.fromEntries(
-        AGENT_HUB_TARGET_GROUPS.map((group) => [
-          group.kind,
-          targets.filter((target) => target.kind === group.kind).length,
-        ])
-      ) as Record<HouflowAgentTarget["kind"], number>,
-    [targets]
-  )
-  const isBusy =
-    houflow.status === "loading" ||
-    houflow.status === "refreshing" ||
-    houflow.status === "signing_in"
-  const activeWorkspace =
-    houflow.snapshot?.workspaces.find((workspace) => workspace.isActive) ??
-    houflow.snapshot?.workspaces.find(
-      (workspace) => workspace.id === houflow.session.workspaceId
-    ) ??
-    null
-  const statusLabel =
-    houflow.session.status !== "signed_in"
-      ? copy.signedOut
-      : houflow.status === "error"
-        ? copy.error
-        : isBusy
-          ? copy.loading
-          : targets.length === 0
-            ? copy.empty
-            : copy.ready
-
-  return (
-    <section className="mb-3 rounded-md border px-3 py-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            {houflow.status === "error" ? (
-              <AlertCircle className="h-3.5 w-3.5 text-red-500" />
-            ) : isBusy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />
-            ) : (
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-            )}
-            <h2 className="text-sm font-semibold">{copy.title}</h2>
-            <Badge variant="secondary" className="text-[10px]">
-              {statusLabel}
-            </Badge>
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {copy.description}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary" className="text-[10px]">
-            {copy.total(targets.length)}
-          </Badge>
-          {AGENT_HUB_TARGET_GROUPS.map((group) => (
-            <Badge key={group.kind} variant="outline" className="text-[10px]">
-              {copy.groups[group.kind]} {counts[group.kind]}
-            </Badge>
-          ))}
-        </div>
-      </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        {activeWorkspace ? (
-          <span>
-            {copy.workspace}: {activeWorkspace.name}
-          </span>
-        ) : null}
-        {houflow.snapshot?.connector ? (
-          <span>
-            {copy.connector}: {houflow.snapshot.connector.commandAgentCount}/
-            {houflow.snapshot.connector.reportedAgentCount}
-          </span>
-        ) : null}
-        {houflow.status === "error" && houflow.error ? (
-          <span className="text-red-500">{houflow.error}</span>
-        ) : null}
-      </div>
-    </section>
-  )
-}
-
 export function AcpAgentSettings() {
   const locale = useLocale()
   const t = useTranslations("AcpAgentSettings")
   const rawTranslator = t as unknown as AcpTranslator
   acpTranslator = (key, values) => rawTranslator(key, values)
   const searchParams = useSearchParams()
-  const houflow = useHouflowDesktopStore(
-    useShallow((state) => ({
-      status: state.status,
-      session: state.session,
-      snapshot: state.snapshot,
-    }))
-  )
   const [agents, setAgents] = useState<AcpAgentInfo[]>([])
   const [loadingAgents, setLoadingAgents] = useState(true)
   const [addCustomOpen, setAddCustomOpen] = useState(false)
@@ -3963,11 +3841,16 @@ export function AcpAgentSettings() {
   const [showApiKeys, setShowApiKeys] = useState<
     Partial<Record<AgentType, boolean>>
   >({})
+  // Whether the Grok panel's "advanced (raw config.toml)" escape hatch is open.
   const [grokAdvancedOpen, setGrokAdvancedOpen] = useState(false)
+  // Show/hide toggle for the Grok custom-model API key (kept separate from the
+  // per-agent `showApiKeys` map, which is keyed by AgentType only).
   const [showGrokCustomKey, setShowGrokCustomKey] = useState(false)
+  // True for the WHOLE duration of a Grok save (write + post-save reseed), so
+  // both Grok save buttons stay disabled and can't interleave while the draft
+  // is being rebuilt from disk.
   const [grokSaving, setGrokSaving] = useState(false)
   const [openCodeProviderId, setOpenCodeProviderId] = useState("")
-  const [openCodeNewProviderId, setOpenCodeNewProviderId] = useState("")
   const [openCodeNewModelIds, setOpenCodeNewModelIds] = useState<
     Record<string, string>
   >({})
@@ -3979,14 +3862,26 @@ export function AcpAgentSettings() {
   const [openCodeDeleteProviderId, setOpenCodeDeleteProviderId] = useState<
     string | null
   >(null)
-  const installErrorDescription = useCallback(
-    (message: string, name: string) => {
-      const hintKey = getInstallErrorHintKey(message)
-      return hintKey ? t(hintKey, { name }) : message
-    },
-    [t]
-  )
+  const [openCodeCatalog, setOpenCodeCatalog] = useState<
+    OpenCodeCatalogProvider[]
+  >([])
+  const [openCodeCatalogLoading, setOpenCodeCatalogLoading] = useState(false)
+  // True once the catalog fetch has settled at least once (success OR failure).
+  // Gates "Add custom provider" so the catalog-id collision check runs against a
+  // known set — an empty catalog while still loading must not let a catalog id
+  // (e.g. "openai") slip in as a custom provider.
+  const [openCodeCatalogReady, setOpenCodeCatalogReady] = useState(false)
+  // Dedupe the one-shot catalog fetch without putting volatile state in the
+  // effect deps (which would re-run the effect and self-cancel the request).
+  const openCodeCatalogRequestedRef = useRef(false)
+  const [openCodeConnectOpen, setOpenCodeConnectOpen] = useState(false)
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
+  // Add-a-custom-provider dialog (separate from the catalog connect dialog).
+  const [openCodeCustomOpen, setOpenCodeCustomOpen] = useState(false)
+  // When set, the connect dialog opens in edit mode for this connected provider.
+  const [openCodeEditProviderId, setOpenCodeEditProviderId] = useState<
+    string | null
+  >(null)
   const [dragging, setDragging] = useState<AgentType | null>(null)
   const [reordering, setReordering] = useState(false)
   const pendingOrderRef = useRef<AgentType[] | null>(null)
@@ -4007,7 +3902,6 @@ export function AcpAgentSettings() {
   >("idle")
   const [codexLoginError, setCodexLoginError] = useState<string | null>(null)
   const codexPollCancelledRef = useRef(false)
-  const lastHouflowProviderSyncRef = useRef<string | null>(null)
 
   const sortedAgents = useMemo(
     () =>
@@ -4032,61 +3926,43 @@ export function AcpAgentSettings() {
     [searchParams]
   )
 
-  const refreshAgents = useCallback(
-    async (options: { replaceDrafts?: boolean } = {}) => {
-      setLoadingAgents(true)
-      setLoadingError(null)
-      try {
-        const [next, providers] = await Promise.all([
-          acpListAgents(),
-          listModelProviders().catch(() => [] as ModelProviderInfo[]),
-        ])
-        setAgents(next)
-        publishAgentDisplay(next)
-        setModelProviders(providers)
-        setDrafts((prev) => {
-          const updated: Partial<Record<AgentType, AgentDraft>> =
-            options.replaceDrafts ? {} : { ...prev }
-          for (const agent of next) {
-            if (options.replaceDrafts || !updated[agent.agent_type]) {
-              updated[agent.agent_type] = buildAgentDraft(agent)
-            }
+  const refreshAgents = useCallback(async () => {
+    setLoadingAgents(true)
+    setLoadingError(null)
+    try {
+      const [next, providers] = await Promise.all([
+        acpListAgents(),
+        listModelProviders().catch(() => [] as ModelProviderInfo[]),
+      ])
+      setAgents(next)
+      publishAgentDisplay(next)
+      setModelProviders(providers)
+      setDrafts((prev) => {
+        const updated = { ...prev }
+        for (const agent of next) {
+          if (!updated[agent.agent_type]) {
+            updated[agent.agent_type] = buildAgentDraft(agent)
           }
-          return updated
-        })
-        setConfigErrors((prev) => {
-          const updated = { ...prev }
-          for (const agent of next) {
-            if (typeof updated[agent.agent_type] !== "undefined") continue
-            const configText =
-              typeof agent.config_json === "string" ? agent.config_json : ""
-            updated[agent.agent_type] = parseConfigJsonText(configText).error
-          }
-          return updated
-        })
-      } catch (err) {
-        const message = toErrorMessage(err)
-        setLoadingError(message)
-      } finally {
-        setLoadingAgents(false)
-      }
-    },
-    []
-  )
-
-  useEffect(() => {
-    if (houflow.session.status !== "signed_in") return
-    if (houflow.status !== "ready") return
-    const syncedAt = houflow.snapshot?.syncedAt
-    if (!syncedAt || lastHouflowProviderSyncRef.current === syncedAt) return
-    lastHouflowProviderSyncRef.current = syncedAt
-    void refreshAgents({ replaceDrafts: true })
-  }, [
-    houflow.session.status,
-    houflow.snapshot?.syncedAt,
-    houflow.status,
-    refreshAgents,
-  ])
+        }
+        return updated
+      })
+      setConfigErrors((prev) => {
+        const updated = { ...prev }
+        for (const agent of next) {
+          if (typeof updated[agent.agent_type] !== "undefined") continue
+          const configText =
+            typeof agent.config_json === "string" ? agent.config_json : ""
+          updated[agent.agent_type] = parseConfigJsonText(configText).error
+        }
+        return updated
+      })
+    } catch (err) {
+      const message = toErrorMessage(err)
+      setLoadingError(message)
+    } finally {
+      setLoadingAgents(false)
+    }
+  }, [])
 
   const runPreflight = useCallback(
     async (agentType: AgentType, forceRefresh?: boolean) => {
@@ -4101,6 +3977,7 @@ export function AcpAgentSettings() {
 
         if (versionState.status === "fulfilled") {
           setAgents((prev) => {
+            if (versionState.value === null) return prev
             let changed = false
             const next = prev.map((agent) => {
               if (agent.agent_type !== agentType) return agent
@@ -4286,37 +4163,12 @@ export function AcpAgentSettings() {
       modelProviderId?: number | null
     ) => {
       const parsedEnv = parseEnvText(envText)
-      const requestedModelProvider =
-        modelProviderId == null
-          ? null
-          : (modelProviders.find(
-              (provider) => provider.id === modelProviderId
-            ) ?? null)
-      const modelProviderIsValid =
-        requestedModelProvider == null
-          ? modelProviderId == null
-          : modelProviderSupportsAgentType(requestedModelProvider, agentType)
-      if (!modelProviderIsValid) {
-        if (enabled) {
-          throw new Error(
-            t("toasts.modelProviderIncompatible", {
-              provider:
-                requestedModelProvider?.name ?? String(modelProviderId ?? ""),
-              agent: agentType,
-            })
-          )
-        }
-        toast.info(t("toasts.modelProviderClearedOnDisable"))
-      }
-      const effectiveModelProviderId = modelProviderIsValid
-        ? (modelProviderId ?? null)
-        : null
       setSavingEnv((prev) => ({ ...prev, [agentType]: true }))
       try {
         const affected = await acpUpdateAgentEnv(agentType, {
           enabled,
           env: parsedEnv,
-          modelProviderId: effectiveModelProviderId,
+          modelProviderId: modelProviderId ?? null,
         })
         setAgents((prev) =>
           prev.map((agent) =>
@@ -4325,7 +4177,7 @@ export function AcpAgentSettings() {
                   ...agent,
                   enabled,
                   env: parsedEnv,
-                  model_provider_id: effectiveModelProviderId,
+                  model_provider_id: modelProviderId ?? null,
                 }
               : agent
           )
@@ -4335,7 +4187,7 @@ export function AcpAgentSettings() {
         setSavingEnv((prev) => ({ ...prev, [agentType]: false }))
       }
     },
-    [modelProviders, reportAffectedSessions, t]
+    [reportAffectedSessions]
   )
 
   const persistConfig = useCallback(
@@ -4547,7 +4399,7 @@ export function AcpAgentSettings() {
             action: actionLabel,
           }),
           {
-            description: installErrorDescription(message, agent.name),
+            description: message,
           }
         )
         if (clearCache) {
@@ -4581,7 +4433,7 @@ export function AcpAgentSettings() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [installErrorDescription, runPreflight, t, installStream.start]
+    [runPreflight, t, installStream.start]
   )
 
   const runNpxAction = useCallback(
@@ -4654,13 +4506,14 @@ export function AcpAgentSettings() {
         )
       } catch (err) {
         const message = toErrorMessage(err)
+        const hintKey = getInstallErrorHintKey(message)
         toast.error(
           t("toasts.agentActionFailed", {
             name: agent.name,
             action: actionLabel,
           }),
           {
-            description: installErrorDescription(message, agent.name),
+            description: hintKey ? t(hintKey, { name: agent.name }) : message,
           }
         )
         if (cleanFirst) {
@@ -4693,7 +4546,7 @@ export function AcpAgentSettings() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [installErrorDescription, runPreflight, t, installStream.start]
+    [runPreflight, t, installStream.start]
   )
 
   /**
@@ -4754,8 +4607,9 @@ export function AcpAgentSettings() {
         })
       } catch (err) {
         const message = toErrorMessage(err)
+        const hintKey = getInstallErrorHintKey(message)
         toast.error(t("toasts.uninstallFailed", { name: agent.name }), {
-          description: installErrorDescription(message, agent.name),
+          description: hintKey ? t(hintKey, { name: agent.name }) : message,
         })
         throw err
       } finally {
@@ -4768,7 +4622,7 @@ export function AcpAgentSettings() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [installErrorDescription, runPreflight, t, installStream.start]
+    [runPreflight, t, installStream.start]
   )
 
   // Install ONLY the uv runtime (uvx) — separate from preparing a uvx agent's
@@ -4798,7 +4652,7 @@ export function AcpAgentSettings() {
         const message = toErrorMessage(err)
         toast.error(
           t("toasts.agentActionFailed", { name: "uv", action: actionLabel }),
-          { description: installErrorDescription(message, "uv") }
+          { description: message }
         )
         throw err
       } finally {
@@ -4811,7 +4665,7 @@ export function AcpAgentSettings() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [installErrorDescription, runPreflight, t, installStream.start]
+    [runPreflight, t, installStream.start]
   )
 
   const handleFixAction = async (agent: AcpAgentInfo, action: UiFixAction) => {
@@ -5079,80 +4933,10 @@ export function AcpAgentSettings() {
 
   const selectedModelProviders = useMemo(() => {
     if (!selectedAgent) return []
-    return modelProviders.filter((provider) =>
-      modelProviderSupportsAgentType(provider, selectedAgent.agent_type)
+    return modelProviders.filter(
+      (p) => p.agent_type === selectedAgent.agent_type
     )
   }, [modelProviders, selectedAgent])
-  const selectedModelProvider = useMemo(() => {
-    if (!selectedAgent) return null
-    if (!selectedDraft?.modelProviderId) return null
-    const provider =
-      modelProviders.find((p) => p.id === selectedDraft.modelProviderId) ?? null
-    return provider &&
-      modelProviderSupportsAgentType(provider, selectedAgent.agent_type)
-      ? provider
-      : null
-  }, [modelProviders, selectedAgent, selectedDraft?.modelProviderId])
-  const selectedIncompatibleModelProvider = useMemo(() => {
-    if (!selectedAgent) return null
-    if (!selectedDraft?.modelProviderId) return null
-    const provider =
-      modelProviders.find((p) => p.id === selectedDraft.modelProviderId) ?? null
-    if (!provider) return null
-    return modelProviderSupportsAgentType(provider, selectedAgent.agent_type)
-      ? null
-      : provider
-  }, [modelProviders, selectedAgent, selectedDraft?.modelProviderId])
-  const selectedCompatibleModelProviderId = useMemo(() => {
-    if (!selectedAgent) return null
-    return resolveCompatibleModelProviderId(
-      selectedAgent.agent_type,
-      selectedDraft?.modelProviderId,
-      modelProviders
-    )
-  }, [modelProviders, selectedAgent, selectedDraft?.modelProviderId])
-  const selectedProviderModelOptions = useMemo(() => {
-    const seen = new Set<string>()
-    return (selectedModelProvider?.models ?? [])
-      .map(removeSlotPrefixedModel)
-      .filter((model) => {
-        if (!model || seen.has(model)) return false
-        seen.add(model)
-        return true
-      })
-  }, [selectedModelProvider])
-  const selectedProviderDefaultModel = useMemo(() => {
-    const configured = removeSlotPrefixedModel(
-      selectedModelProvider?.model ?? ""
-    )
-    if (
-      configured &&
-      (selectedProviderModelOptions.length === 0 ||
-        selectedProviderModelOptions.includes(configured))
-    ) {
-      return configured
-    }
-    return selectedProviderModelOptions[0] ?? ""
-  }, [selectedModelProvider?.model, selectedProviderModelOptions])
-  const selectedGrokProviderModel =
-    selectedAgent?.agent_type === "grok" && selectedDraft
-      ? selectedProviderModelOptions.includes(selectedDraft.model.trim())
-        ? selectedDraft.model.trim()
-        : selectedProviderDefaultModel
-      : ""
-  const selectedGrokHasCredential =
-    selectedAgent?.agent_type === "grok" && selectedDraft
-      ? hasEffectiveGrokCredential({
-          providerApiKey: selectedModelProvider?.api_key,
-          envApiKey: selectedDraft.apiKey,
-          customModelId: selectedDraft.grokCustomModelId,
-          customApiKey: selectedDraft.grokCustomApiKey,
-        })
-      : false
-  const selectedCodexUsesCatalog =
-    selectedAgent?.agent_type === "codex" && selectedModelProvider
-      ? modelProviderUsesCodexCatalog(selectedModelProvider)
-      : false
 
   const selectedNeedsModelProvider = useMemo(() => {
     if (!selectedDraft) return false
@@ -5163,31 +4947,13 @@ export function AcpAgentSettings() {
     if (at === "codex") return selectedDraft.codexAuthMode === "model_provider"
     if (at === "gemini")
       return selectedDraft.geminiAuthMode === "model_provider"
-    if (at === "grok") return selectedDraft.modelProviderId != null
     return false
   }, [selectedAgent, selectedDraft])
 
-  const selectedModelProviderErrorMessage =
-    selectedNeedsModelProvider && selectedIncompatibleModelProvider
-      ? t("toasts.modelProviderIncompatible", {
-          provider: selectedIncompatibleModelProvider.name,
-          agent: selectedAgent?.name ?? "",
-        })
-      : selectedNeedsModelProvider && selectedCompatibleModelProviderId == null
-        ? t("toasts.modelProviderRequired")
-        : null
-  const selectedMissingModelProvider = selectedModelProviderErrorMessage != null
+  const selectedMissingModelProvider =
+    selectedNeedsModelProvider && selectedDraft?.modelProviderId == null
   const selectedConfigText = selectedDraft?.configText ?? ""
   const selectedOpenCodeAuthJsonText = selectedDraft?.openCodeAuthJsonText ?? ""
-  const selectedCodexReasoningEffortOptions =
-    selectedAgent?.agent_type === "codex" && selectedDraft
-      ? CODEX_REASONING_EFFORT_OPTIONS.filter((option) =>
-          modelReasoningEfforts({
-            engine: "codex",
-            model: selectedDraft.model,
-          }).includes(option.value)
-        )
-      : CODEX_REASONING_EFFORT_OPTIONS
   const selectedCodexReasoningEffortOption =
     selectedAgent?.agent_type === "codex" && selectedDraft
       ? (CODEX_REASONING_EFFORT_OPTIONS.find(
@@ -5219,14 +4985,81 @@ export function AcpAgentSettings() {
     selectedConfigText,
     selectedOpenCodeAuthJsonText,
   ])
-  const openCodeModelOptions = useMemo(
-    () => buildOpenCodeModelOptions(selectedOpenCodeConfig),
-    [selectedOpenCodeConfig]
+  const openCodeConnected = useMemo(() => {
+    if (selectedAgentKind !== "open_code") return []
+    return buildConnectedProviders({
+      configText: selectedConfigText,
+      authJsonText: selectedOpenCodeAuthJsonText,
+      catalog: openCodeCatalog,
+    })
+  }, [
+    selectedAgentKind,
+    selectedConfigText,
+    selectedOpenCodeAuthJsonText,
+    openCodeCatalog,
+  ])
+  const openCodeModelOptions = useMemo(() => {
+    const catalogGroups = buildConnectedModelOptions({
+      connected: openCodeConnected,
+      catalog: openCodeCatalog,
+    })
+    // Fall back to the config-derived groups before the catalog has loaded.
+    return catalogGroups.length > 0
+      ? catalogGroups
+      : buildOpenCodeModelOptions(selectedOpenCodeConfig)
+  }, [openCodeConnected, openCodeCatalog, selectedOpenCodeConfig])
+  const openCodeCatalogIds = useMemo(
+    () => new Set(openCodeCatalog.map((p) => p.id)),
+    [openCodeCatalog]
   )
+  // Split connected providers into two single-purpose surfaces:
+  //  - well-known (catalog) providers connected via auth.json → top list
+  //  - custom OpenAI-compatible endpoints (a `provider.<id>` block NOT in the
+  //    catalog) → the bottom "custom provider" editor.
+  // The discriminator is `hasConfigBlock && !inCatalog`, so an auth-only
+  // well-known provider (no block) stays in the top list even if the catalog
+  // fails to load — it can never be misfiled as custom and vanish.
+  const openCodeWellKnownConnected = useMemo(
+    () => openCodeConnected.filter((p) => !(p.hasConfigBlock && !p.inCatalog)),
+    [openCodeConnected]
+  )
+  const openCodeCustomProviderIds = useMemo(
+    () =>
+      (selectedOpenCodeConfig?.providerIds ?? []).filter(
+        (id) => !openCodeCatalogIds.has(id)
+      ),
+    [selectedOpenCodeConfig, openCodeCatalogIds]
+  )
+  // Lazily load the models.dev catalog the first time an OpenCode agent is
+  // viewed. Backend resolves live → cache → bundled snapshot, so this never
+  // hard-fails; on error we keep an empty catalog (custom-only flow) and allow
+  // a retry the next time OpenCode is selected. The ref dedupes so we depend
+  // only on `selectedAgentKind` — depending on the loading flag we set here
+  // would re-run the effect and cancel its own in-flight request.
+  useEffect(() => {
+    if (selectedAgentKind !== "open_code") return
+    if (openCodeCatalogRequestedRef.current) return
+    openCodeCatalogRequestedRef.current = true
+    setOpenCodeCatalogLoading(true)
+    opencodeProviderCatalog()
+      .then((list) => {
+        setOpenCodeCatalog(list)
+      })
+      .catch((err) => {
+        console.error("[Settings] opencode catalog load failed:", err)
+        openCodeCatalogRequestedRef.current = false
+      })
+      .finally(() => {
+        setOpenCodeCatalogLoading(false)
+        setOpenCodeCatalogReady(true)
+      })
+  }, [selectedAgentKind])
+
   const selectedChecks = useMemo(() => {
     if (!selectedAgent || !locale) return []
     return getAgentChecks(selectedAgent, selectedCurrent)
   }, [locale, selectedAgent, selectedCurrent])
+
   useEffect(() => {
     if (!selectedAgent || selectedChecks.length === 0) return
     setExpandedChecks((prev) => {
@@ -5577,18 +5410,10 @@ export function AcpAgentSettings() {
   const handleModelProviderSelect = useCallback(
     (providerIdStr: string) => {
       if (!selectedAgent || !selectedDraft) return
-      const providerId =
-        providerIdStr && providerIdStr !== MODEL_PROVIDER_MANUAL_VALUE
-          ? Number(providerIdStr)
-          : null
+      const providerId = providerIdStr ? Number(providerIdStr) : null
       const provider = providerId
-        ? modelProviders.find(
-            (p) =>
-              p.id === providerId &&
-              modelProviderSupportsAgentType(p, selectedAgent.agent_type)
-          )
+        ? modelProviders.find((p) => p.id === providerId)
         : null
-      const effectiveProviderId = provider ? provider.id : null
       const apiUrl = provider?.api_url ?? ""
       const apiKey = provider?.api_key ?? ""
       const agentType = selectedAgent.agent_type
@@ -5693,7 +5518,7 @@ export function AcpAgentSettings() {
           )
           return {
             ...current,
-            modelProviderId: effectiveProviderId,
+            modelProviderId: providerId,
             apiBaseUrl: apiUrl,
             apiKey,
             claudeMainModel: claudeMain,
@@ -5709,27 +5534,19 @@ export function AcpAgentSettings() {
           }
         })
       } else if (agentType === "codex") {
-        const codexCatalogEnabled = Boolean(
-          provider && modelProviderUsesCodexCatalog(provider)
-        )
+        // The provider stores a structured model config; root `model` is its
+        // default slug and we reference the catalog the bind path generates.
         const codexList = parseCodexModelConfig(provider?.model ?? null)
         const codexHasConfig =
-          codexCatalogEnabled &&
-          (codexList.customs.length > 0 ||
-            (codexList.excludedOfficials?.length ?? 0) > 0)
-        const providerModels = (provider?.models ?? [])
-          .map(removeSlotPrefixedModel)
-          .filter(Boolean)
-        const codexModel = codexCatalogEnabled
-          ? (codexList.default ?? codexList.customs[0]?.slug ?? "")
-          : providerModels.includes(selectedDraft.model)
-            ? selectedDraft.model
-            : (providerModels[0] ?? "")
+          codexList.customs.length > 0 ||
+          (codexList.excludedOfficials?.length ?? 0) > 0
+        const codexModel = codexList.default ?? codexList.customs[0]?.slug ?? ""
         const nextAuthPatch = patchCodexAuthJsonText(
           selectedDraft.codexAuthJsonText,
           { apiKey, authMode: null }
         )
         const nextAuthJsonText = nextAuthPatch.authJsonText
+        // Always pass the provider's model (empty string clears it from the toml).
         let nextConfigTomlText = patchCodexConfigTomlText(
           selectedDraft.codexConfigTomlText,
           {
@@ -5749,11 +5566,11 @@ export function AcpAgentSettings() {
         )
         updateSelectedDraft((current) => ({
           ...current,
-          modelProviderId: effectiveProviderId,
+          modelProviderId: providerId,
           apiBaseUrl: apiUrl,
           apiKey,
           model: codexModel,
-          codexModelList: codexCatalogEnabled ? codexList : { customs: [] },
+          codexModelList: codexList,
           codexAuthJsonText: nextAuthJsonText,
           codexConfigTomlText: nextConfigTomlText,
           codexModelProvider: CODEX_DEFAULT_MODEL_PROVIDER,
@@ -5765,6 +5582,7 @@ export function AcpAgentSettings() {
           }),
         }))
       } else if (agentType === "gemini") {
+        const geminiModel = provider?.model?.trim() ?? ""
         const nextConfigJson = patchGeminiConfigText(selectedDraft.configText, {
           apiBaseUrl: apiUrl,
           geminiApiKey: apiKey,
@@ -5774,98 +5592,50 @@ export function AcpAgentSettings() {
           [agentType]: null,
         }))
         updateSelectedDraft((current) => {
-          const nextEnvText = patchGeminiEnvText(current.envText, {
+          let nextEnvText = patchGeminiEnvText(current.envText, {
             apiBaseUrl: apiUrl,
             geminiApiKey: apiKey,
           })
+          // Always overwrite GEMINI_MODEL with the provider's value (empty
+          // string clears it).
+          nextEnvText = patchEnvText(nextEnvText, {
+            GEMINI_MODEL: geminiModel,
+          })
           return {
             ...current,
-            modelProviderId: effectiveProviderId,
+            modelProviderId: providerId,
             apiBaseUrl: apiUrl,
             apiKey,
             geminiApiKey: apiKey,
+            model: geminiModel,
             envText: nextEnvText,
             configText: nextConfigJson.configText,
-          }
-        })
-      } else if (agentType === "grok") {
-        const providerModels = (provider?.models ?? [])
-          .map(removeSlotPrefixedModel)
-          .filter(Boolean)
-        const configuredModel = removeSlotPrefixedModel(provider?.model ?? "")
-        const providerModel =
-          configuredModel &&
-          (providerModels.length === 0 ||
-            providerModels.includes(configuredModel))
-            ? configuredModel
-            : (providerModels[0] ?? "")
-        updateSelectedDraft((current) => {
-          let envText = patchEnvByImportantKey(
-            agentType,
-            current.envText,
-            "model",
-            provider ? providerModel : ""
-          )
-          if (provider) {
-            envText = patchEnvText(envText, {
-              GROK_AUTH_MODE: "api_key",
-            })
-          }
-          return {
-            ...current,
-            modelProviderId: effectiveProviderId,
-            model: provider ? providerModel : "",
-            grokAuthMode: provider ? "api_key" : current.grokAuthMode,
-            envText,
           }
         })
       } else {
         updateSelectedDraft((current) => ({
           ...current,
-          modelProviderId: effectiveProviderId,
+          modelProviderId: providerId,
         }))
       }
     },
     [selectedAgent, selectedDraft, modelProviders, updateSelectedDraft]
   )
 
-  const persistSelectedModelProviderModel = useCallback(
-    async (agentType: AgentType, draft: AgentDraft): Promise<void> => {
-      if (draft.modelProviderId == null) return
-      const provider = modelProviders.find(
-        (item) =>
-          item.id === draft.modelProviderId &&
-          modelProviderSupportsAgentType(item, agentType)
-      )
-      if (!provider) return
-      const model =
-        agentType === "claude_code"
-          ? JSON.stringify(
-              {
-                main: draft.claudeMainModel.trim() || undefined,
-                reasoning: draft.claudeReasoningModel.trim() || undefined,
-                haiku: draft.claudeDefaultHaikuModel.trim() || undefined,
-                sonnet: draft.claudeDefaultSonnetModel.trim() || undefined,
-                opus: draft.claudeDefaultOpusModel.trim() || undefined,
-              },
-              null,
-              2
-            )
-          : null
-      if (model == null || provider.model === model) return
-      const result = await updateModelProvider({
-        id: provider.id,
-        model,
-      })
-      setModelProviders((prev) =>
-        prev.map((item) =>
-          item.id === result.provider.id ? result.provider : item
-        )
-      )
-      reportAffectedSessions(result.affectedRunningSessions)
-    },
-    [modelProviders, reportAffectedSessions]
-  )
+  // Auto-select the first available provider when the user switches an agent to
+  // "model_provider" auth mode and hasn't picked one yet. If the list is empty,
+  // the existing "noModelProviderAvailable" hint handles the empty state.
+  useEffect(() => {
+    if (!selectedNeedsModelProvider) return
+    if (selectedDraft?.modelProviderId != null) return
+    if (selectedModelProviders.length === 0) return
+    handleModelProviderSelect(String(selectedModelProviders[0].id))
+  }, [
+    selectedNeedsModelProvider,
+    selectedDraft?.modelProviderId,
+    selectedModelProviders,
+    handleModelProviderSelect,
+  ])
 
   const handleGeminiFieldChange = useCallback(
     (
@@ -6267,63 +6037,127 @@ export function AcpAgentSettings() {
     [handleOpenCodeConfigPatch]
   )
 
-  const handleOpenCodeAddProvider = useCallback(() => {
-    if (!selectedOpenCodeConfig) return
-    const providerId = openCodeNewProviderId.trim()
-    if (!providerId) return
-    if (!/^[A-Za-z0-9_.-]+$/.test(providerId)) {
-      toast.error(t("errors.providerIdPattern"))
-      return
-    }
-    if (selectedOpenCodeConfig.providerIds.includes(providerId)) {
-      toast.error(t("errors.providerExists", { providerId }))
-      return
-    }
-    handleOpenCodeConfigPatch((config) => {
-      const providerRoot = asObjectRecord(config.provider) ?? {}
-      if (!asObjectRecord(config.provider)) {
-        config.provider = providerRoot
+  // Connect a provider from the dialog: sync the draft, then persist both files.
+  const applyOpenCodeConnect = useCallback(
+    async (
+      next: { configText: string; authJsonText: string },
+      providerId: string
+    ) => {
+      if (!selectedAgent || selectedAgent.agent_type !== "open_code") return
+      const parsed = extractOpenCodeConfigValues(
+        next.configText,
+        next.authJsonText
+      )
+      updateSelectedDraft((current) => ({
+        ...current,
+        configText: next.configText,
+        openCodeAuthJsonText: next.authJsonText,
+        model: parsed.model,
+      }))
+      setConfigErrors((prev) => ({ ...prev, open_code: null }))
+      try {
+        await persistConfig("open_code", next.configText, {
+          openCodeAuthJsonText: next.authJsonText,
+        })
+        toast.success(t("toasts.providerConnected", { providerId }), {
+          description: t("toasts.configSavedHint"),
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        toast.error(t("toasts.connectFailed", { providerId }), {
+          description: message,
+        })
+        throw err
       }
-      providerRoot[providerId] = {
-        npm: OPENCODE_PROVIDER_NPM_OPTIONS[0].value,
-        options: {},
-        models: {},
-      }
+    },
+    [selectedAgent, updateSelectedDraft, persistConfig, t]
+  )
 
+  const handleOpenCodeDisconnect = useCallback(
+    async (providerId: string, hasConfigBlock: boolean) => {
       if (
-        Array.isArray(config.enabled_providers) &&
-        config.enabled_providers.length > 0
-      ) {
-        const enabledProviders = config.enabled_providers
-          .filter((item): item is string => typeof item === "string")
-          .map((item) => item.trim())
-          .filter(Boolean)
-        if (!enabledProviders.includes(providerId)) {
-          enabledProviders.push(providerId)
-        }
-        config.enabled_providers = enabledProviders
+        !selectedAgent ||
+        !selectedDraft ||
+        selectedAgent.agent_type !== "open_code"
+      )
+        return
+      const next = disconnectProvider({
+        configText: selectedDraft.configText,
+        authJsonText: selectedDraft.openCodeAuthJsonText,
+        providerId,
+        removeConfigBlock: hasConfigBlock,
+      })
+      const parsed = extractOpenCodeConfigValues(
+        next.configText,
+        next.authJsonText
+      )
+      updateSelectedDraft((current) => ({
+        ...current,
+        configText: next.configText,
+        openCodeAuthJsonText: next.authJsonText,
+        model: parsed.model,
+      }))
+      try {
+        await persistConfig("open_code", next.configText, {
+          openCodeAuthJsonText: next.authJsonText,
+        })
+        toast.success(t("toasts.providerDisconnected", { providerId }))
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        toast.error(t("toasts.disconnectFailed", { providerId }), {
+          description: message,
+        })
       }
+    },
+    [selectedAgent, selectedDraft, updateSelectedDraft, persistConfig, t]
+  )
 
-      if (Array.isArray(config.disabled_providers)) {
-        const disabledProviders = config.disabled_providers
-          .filter((item): item is string => typeof item === "string")
-          .map((item) => item.trim())
-          .filter((item) => item && item !== providerId)
-        if (disabledProviders.length > 0) {
-          config.disabled_providers = disabledProviders
-        } else {
-          delete config.disabled_providers
-        }
+  const handleOpenCodeToggleEnabled = useCallback(
+    async (providerId: string, enabled: boolean) => {
+      if (
+        !selectedAgent ||
+        !selectedDraft ||
+        selectedAgent.agent_type !== "open_code"
+      )
+        return
+      const nextConfig = setProviderEnabled({
+        configText: selectedDraft.configText,
+        providerId,
+        enabled,
+      })
+      updateSelectedDraft((current) => ({
+        ...current,
+        configText: nextConfig,
+      }))
+      try {
+        await persistConfig("open_code", nextConfig, {
+          openCodeAuthJsonText: selectedDraft.openCodeAuthJsonText,
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        toast.error(t("toasts.saveOpenCodeFailed"), { description: message })
       }
-    })
-    setOpenCodeProviderId(providerId)
-    setOpenCodeNewProviderId("")
-  }, [
-    handleOpenCodeConfigPatch,
-    openCodeNewProviderId,
-    selectedOpenCodeConfig,
-    t,
-  ])
+    },
+    [selectedAgent, selectedDraft, updateSelectedDraft, persistConfig, t]
+  )
+
+  // Force a fresh models.dev fetch (bypassing the 24h cache) on demand.
+  const handleOpenCodeRefreshCatalog = useCallback(async () => {
+    setOpenCodeCatalogLoading(true)
+    try {
+      const list = await opencodeProviderCatalog(true)
+      setOpenCodeCatalog(list)
+      openCodeCatalogRequestedRef.current = true
+      toast.success(t("toasts.catalogRefreshed", { count: list.length }))
+    } catch (err) {
+      console.error("[Settings] opencode catalog refresh failed:", err)
+      toast.error(t("toasts.catalogRefreshFailed"), {
+        description: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setOpenCodeCatalogLoading(false)
+    }
+  }, [t])
 
   const handleOpenCodeRemoveProvider = useCallback(
     (providerId: string) => {
@@ -6368,6 +6202,18 @@ export function AcpAgentSettings() {
             config.disabled_providers = disabledProviders
           } else {
             delete config.disabled_providers
+          }
+
+          // Don't leave model/small_model pointing at the removed provider.
+          for (const key of [
+            "model",
+            "small_model",
+            "smallModel",
+            "small-model",
+          ]) {
+            if (modelReferencesProvider(config[key], targetId)) {
+              delete config[key]
+            }
           }
         }
       )
@@ -6532,6 +6378,31 @@ export function AcpAgentSettings() {
     ) => {
       const targetId = providerId.trim()
       if (!targetId) return
+
+      // The API key is a secret: it goes ONLY into auth.json, never into
+      // opencode.json. setProviderApiKey also scrubs any stale options.apiKey.
+      if (key === "apiKey") {
+        if (!selectedDraft) return
+        const next = setProviderApiKey({
+          configText: selectedDraft.configText,
+          authJsonText: selectedDraft.openCodeAuthJsonText,
+          providerId: targetId,
+          apiKey: value,
+        })
+        const parsed = extractOpenCodeConfigValues(
+          next.configText,
+          next.authJsonText
+        )
+        setConfigErrors((prev) => ({ ...prev, open_code: null }))
+        updateSelectedDraft((current) => ({
+          ...current,
+          configText: next.configText,
+          openCodeAuthJsonText: next.authJsonText,
+          model: parsed.model,
+        }))
+        return
+      }
+
       handleOpenCodeConfigPatch((config) => {
         const providerRoot = asObjectRecord(config.provider) ?? {}
         if (!asObjectRecord(config.provider)) {
@@ -6543,7 +6414,7 @@ export function AcpAgentSettings() {
           providerRoot[targetId] = currentProvider
         }
         const trimmed = value.trim()
-        if (key === "baseURL" || key === "apiKey") {
+        if (key === "baseURL") {
           const options = asObjectRecord(currentProvider.options) ?? {}
           if (!asObjectRecord(currentProvider.options)) {
             currentProvider.options = options
@@ -6564,32 +6435,6 @@ export function AcpAgentSettings() {
           delete currentProvider[key]
         }
       })
-      if (key === "apiKey" && selectedDraft) {
-        const nextAuth = patchOpenCodeAuthJsonText(
-          selectedDraft.openCodeAuthJsonText,
-          (authObject) => {
-            const entry = asObjectRecord(authObject[targetId]) ?? {}
-            if (!asObjectRecord(authObject[targetId])) {
-              authObject[targetId] = entry
-            }
-            const trimmed = value.trim()
-            if (!trimmed) {
-              delete entry.key
-              if (entry.type === "api") delete entry.type
-              if (Object.keys(entry).length === 0) {
-                delete authObject[targetId]
-              }
-              return
-            }
-            entry.type = "api"
-            entry.key = trimmed
-          }
-        )
-        updateSelectedDraft((current) => ({
-          ...current,
-          openCodeAuthJsonText: nextAuth.authJsonText,
-        }))
-      }
     },
     [handleOpenCodeConfigPatch, selectedDraft, updateSelectedDraft]
   )
@@ -7293,8 +7138,6 @@ export function AcpAgentSettings() {
         </div>
       )}
 
-      <AgentHubTargetsSummary />
-
       <div className="flex-1 min-h-0 grid gap-3 lg:grid-cols-[minmax(240px,320px)_1fr]">
         <div className="min-h-0 min-w-0 rounded-lg border bg-card flex flex-col overflow-hidden">
           <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
@@ -7455,6 +7298,18 @@ export function AcpAgentSettings() {
                     <Badge variant="outline" className="shrink-0">
                       {selectedAgent.distribution_type}
                     </Badge>
+                    {/* Names the thing HouHub actually installs, right next to
+                        the vendor's name — so the split is visible even before
+                        anyone reads the preflight card below. */}
+                    {selectedAgent.is_acp_adapter && (
+                      <Badge
+                        variant="secondary"
+                        className="shrink-0"
+                        title={t("adapter.badgeHint")}
+                      >
+                        {t("adapter.badge")}
+                      </Badge>
+                    )}
                     {isCustomAgentType(selectedAgent.agent_type) && (
                       <Badge variant="secondary" className="shrink-0">
                         {t("customAgentBadge")}
@@ -7492,10 +7347,6 @@ export function AcpAgentSettings() {
                       )}
                       onClick={() => {
                         const nextEnabled = !selectedDraft.enabled
-                        if (nextEnabled && selectedModelProviderErrorMessage) {
-                          toast.error(selectedModelProviderErrorMessage)
-                          return
-                        }
                         const nextDraft = {
                           ...selectedDraft,
                           enabled: nextEnabled,
@@ -7549,17 +7400,6 @@ export function AcpAgentSettings() {
                     <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400 flex items-start gap-2">
                       <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                       <span className="break-all">{selectedCurrent.error}</span>
-                    </div>
-                  )}
-                  {selectedIncompatibleModelProvider && (
-                    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-500 flex items-start gap-2">
-                      <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                      <span>
-                        {t("modelProviderIncompatibleWarning", {
-                          provider: selectedIncompatibleModelProvider.name,
-                          agent: selectedAgent.name,
-                        })}
-                      </span>
                     </div>
                   )}
                   <div className="flex items-center justify-between gap-2">
@@ -7824,8 +7664,8 @@ export function AcpAgentSettings() {
                         {selectedModelProviders.length > 0 ? (
                           <Select
                             value={
-                              selectedCompatibleModelProviderId != null
-                                ? String(selectedCompatibleModelProviderId)
+                              selectedDraft.modelProviderId != null
+                                ? String(selectedDraft.modelProviderId)
                                 : ""
                             }
                             onValueChange={handleModelProviderSelect}
@@ -7931,35 +7771,13 @@ export function AcpAgentSettings() {
                     {(selectedDraft.codexAuthMode === "api_key" ||
                       selectedDraft.codexAuthMode === "model_provider") && (
                       <div className="space-y-1.5">
-                        {selectedDraft.codexAuthMode === "model_provider" &&
-                        !selectedCodexUsesCatalog &&
-                        selectedProviderModelOptions.length > 0 ? (
-                          <Select
-                            value={selectedDraft.model}
-                            onValueChange={(value) => {
-                              handleCodexImportantConfigChange("model", value)
-                            }}
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue placeholder={t("codex.modelName")} />
-                            </SelectTrigger>
-                            <SelectContent align="start">
-                              {selectedProviderModelOptions.map((model) => (
-                                <SelectItem key={model} value={model}>
-                                  {model}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <CodexModelListEditor
-                            value={selectedDraft.codexModelList}
-                            onChange={handleCodexModelListChange}
-                            readOnly={
-                              selectedDraft.codexAuthMode === "model_provider"
-                            }
-                          />
-                        )}
+                        <CodexModelListEditor
+                          value={selectedDraft.codexModelList}
+                          onChange={handleCodexModelListChange}
+                          readOnly={
+                            selectedDraft.codexAuthMode === "model_provider"
+                          }
+                        />
                       </div>
                     )}
 
@@ -7982,7 +7800,7 @@ export function AcpAgentSettings() {
                           />
                         </SelectTrigger>
                         <SelectContent align="start">
-                          {selectedCodexReasoningEffortOptions.map((option) => (
+                          {CODEX_REASONING_EFFORT_OPTIONS.map((option) => (
                             <SelectItem key={option.value} value={option.value}>
                               {option.label}
                             </SelectItem>
@@ -8262,11 +8080,11 @@ model_reasoning_effort = "high"
 model_provider = "houhub"
 
 [features]
-responses_websockets_v2 = false
+responses_websockets_v2 = true
 
 [model_providers.houhub]
-base_url = "https://api.houshanai.com/v1"
-supports_websockets = false`}
+base_url = "https://api.openai.com/v1"
+supports_websockets = true`}
                         className="min-h-40 max-h-80 font-mono text-xs"
                       />
                     </div>
@@ -8276,10 +8094,7 @@ supports_websockets = false`}
                         size="sm"
                         onClick={() => {
                           if (selectedMissingModelProvider) {
-                            toast.error(
-                              selectedModelProviderErrorMessage ??
-                                t("toasts.modelProviderRequired")
-                            )
+                            toast.error(t("toasts.modelProviderRequired"))
                             return
                           }
                           const codexEnvText =
@@ -8304,7 +8119,7 @@ supports_websockets = false`}
                             selectedAgent.agent_type,
                             selectedDraft.enabled,
                             codexEnvText,
-                            selectedCompatibleModelProviderId
+                            selectedDraft.modelProviderId
                           )
                             .then(() =>
                               persistConfig(
@@ -8407,8 +8222,8 @@ supports_websockets = false`}
                         {selectedModelProviders.length > 0 ? (
                           <Select
                             value={
-                              selectedCompatibleModelProviderId != null
-                                ? String(selectedCompatibleModelProviderId)
+                              selectedDraft.modelProviderId != null
+                                ? String(selectedDraft.modelProviderId)
                                 : ""
                             }
                             onValueChange={handleModelProviderSelect}
@@ -8441,34 +8256,16 @@ supports_websockets = false`}
                       <label className="text-[11px] text-muted-foreground">
                         Model
                       </label>
-                      {selectedDraft.geminiAuthMode === "model_provider" &&
-                      selectedProviderModelOptions.length > 0 ? (
-                        <Select
-                          value={selectedDraft.model}
-                          onValueChange={(value) => {
-                            handleGeminiFieldChange("model", value)
-                          }}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Model" />
-                          </SelectTrigger>
-                          <SelectContent align="start">
-                            {selectedProviderModelOptions.map((model) => (
-                              <SelectItem key={model} value={model}>
-                                {model}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <Input
-                          value={selectedDraft.model}
-                          onChange={(event) => {
-                            handleGeminiFieldChange("model", event.target.value)
-                          }}
-                          placeholder="gemini-3-pro-preview"
-                        />
-                      )}
+                      <Input
+                        value={selectedDraft.model}
+                        readOnly={
+                          selectedDraft.geminiAuthMode === "model_provider"
+                        }
+                        onChange={(event) => {
+                          handleGeminiFieldChange("model", event.target.value)
+                        }}
+                        placeholder="gemini-3-pro-preview"
+                      />
                       <p className="text-[11px] text-muted-foreground">
                         {t("modelHintDefault")}
                       </p>
@@ -8645,10 +8442,7 @@ supports_websockets = false`}
                         size="sm"
                         onClick={() => {
                           if (selectedMissingModelProvider) {
-                            toast.error(
-                              selectedModelProviderErrorMessage ??
-                                t("toasts.modelProviderRequired")
-                            )
+                            toast.error(t("toasts.modelProviderRequired"))
                             return
                           }
                           Promise.all([
@@ -8656,7 +8450,7 @@ supports_websockets = false`}
                               selectedAgent.agent_type,
                               selectedDraft.enabled,
                               selectedDraft.envText,
-                              selectedCompatibleModelProviderId
+                              selectedDraft.modelProviderId
                             ),
                             persistConfig(
                               selectedAgent.agent_type,
@@ -8748,552 +8542,704 @@ supports_websockets = false`}
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap gap-2">
-                        <Input
-                          value={openCodeNewProviderId}
-                          onChange={(event) => {
-                            setOpenCodeNewProviderId(event.target.value)
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => {
+                            setOpenCodeEditProviderId(null)
+                            setOpenCodeConnectOpen(true)
                           }}
-                          className="w-[220px]"
-                          placeholder="new-provider-id"
-                        />
+                        >
+                          <Plug className="h-3.5 w-3.5" />
+                          {t("openCode.connectProvider")}
+                        </Button>
                         <Button
                           type="button"
                           size="sm"
                           variant="outline"
-                          onClick={handleOpenCodeAddProvider}
+                          onClick={() => {
+                            void handleOpenCodeRefreshCatalog()
+                          }}
+                          disabled={openCodeCatalogLoading}
+                          title={t("openCode.refreshCatalog")}
                         >
-                          {t("openCode.addProvider")}
+                          <RefreshCw
+                            className={cn(
+                              "h-3.5 w-3.5",
+                              openCodeCatalogLoading && "animate-spin"
+                            )}
+                          />
+                          {t("openCode.refreshCatalog")}
                         </Button>
+                        {openCodeCatalogLoading &&
+                          openCodeCatalog.length === 0 && (
+                            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              {t("openCode.connect.loading")}
+                            </span>
+                          )}
                       </div>
 
-                      {(selectedOpenCodeConfig?.providerIds.length ?? 0) ===
-                      0 ? (
+                      {openCodeWellKnownConnected.length === 0 ? (
+                        <div className="text-[11px] text-muted-foreground">
+                          {t("openCode.noConnectedProviders")}
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <label className="text-[11px] font-medium">
+                            {t("openCode.connectedProviders")}
+                          </label>
+                          <div className="space-y-1.5">
+                            {openCodeWellKnownConnected.map((provider) => (
+                              <div
+                                key={provider.id}
+                                className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/20 px-2.5 py-1.5"
+                              >
+                                <div className="flex min-w-0 flex-1 items-center gap-2">
+                                  <span className="truncate text-xs font-medium">
+                                    {provider.name}
+                                  </span>
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {provider.id}
+                                  </span>
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[10px]"
+                                  >
+                                    {provider.authKind === "oauth"
+                                      ? t("openCode.authKindOauth")
+                                      : provider.authKind === "api"
+                                        ? t("openCode.authKindApi")
+                                        : t("openCode.authKindNone")}
+                                  </Badge>
+                                  {!provider.inCatalog && (
+                                    <Badge
+                                      variant="secondary"
+                                      className="text-[10px]"
+                                    >
+                                      {t("openCode.customBadge")}
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2.5">
+                                  <Switch
+                                    checked={provider.enabled}
+                                    onCheckedChange={(checked) => {
+                                      void handleOpenCodeToggleEnabled(
+                                        provider.id,
+                                        checked
+                                      )
+                                    }}
+                                    aria-label={t(
+                                      "openCode.providerEnabledState",
+                                      { providerId: provider.id }
+                                    )}
+                                  />
+                                  {provider.authKind !== "oauth" && (
+                                    <Button
+                                      type="button"
+                                      size="xs"
+                                      variant="ghost"
+                                      onClick={() => {
+                                        // Top list is well-known only → the
+                                        // guided dialog edits the key/base URL.
+                                        setOpenCodeEditProviderId(provider.id)
+                                        setOpenCodeConnectOpen(true)
+                                      }}
+                                    >
+                                      {t("openCode.editConfig")}
+                                    </Button>
+                                  )}
+                                  <Button
+                                    type="button"
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={() => {
+                                      void handleOpenCodeDisconnect(
+                                        provider.id,
+                                        provider.hasConfigBlock
+                                      )
+                                    }}
+                                  >
+                                    {t("openCode.disconnect")}
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <OpenCodeConnectDialog
+                        open={openCodeConnectOpen}
+                        onOpenChange={(o) => {
+                          setOpenCodeConnectOpen(o)
+                          if (!o) setOpenCodeEditProviderId(null)
+                        }}
+                        catalog={openCodeCatalog}
+                        catalogLoading={openCodeCatalogLoading}
+                        configText={selectedDraft.configText}
+                        authJsonText={selectedDraft.openCodeAuthJsonText}
+                        editProviderId={openCodeEditProviderId}
+                        onConnect={applyOpenCodeConnect}
+                      />
+
+                      <OpenCodeCustomProviderDialog
+                        open={openCodeCustomOpen}
+                        onOpenChange={setOpenCodeCustomOpen}
+                        existingProviderIds={
+                          selectedOpenCodeConfig?.providerIds ?? []
+                        }
+                        catalogIds={openCodeCatalog.map((p) => p.id)}
+                        configText={selectedDraft.configText}
+                        authJsonText={selectedDraft.openCodeAuthJsonText}
+                        onConnect={applyOpenCodeConnect}
+                      />
+
+                      <div className="space-y-1 border-t pt-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-[11px] font-medium text-muted-foreground">
+                            {t("openCode.advancedProviderConfig")}
+                          </div>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            onClick={() => setOpenCodeCustomOpen(true)}
+                            disabled={
+                              openCodeCatalogLoading || !openCodeCatalogReady
+                            }
+                            title={
+                              openCodeCatalogLoading || !openCodeCatalogReady
+                                ? t("openCode.connect.loading")
+                                : undefined
+                            }
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                            {t("openCode.addCustomProvider")}
+                          </Button>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground">
+                          {t("openCode.customProviderConfigHint")}
+                        </p>
+                      </div>
+
+                      {openCodeCustomProviderIds.length === 0 ? (
                         <div className="text-[11px] text-muted-foreground">
                           {t("openCode.emptyProvider")}
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          {selectedOpenCodeConfig?.providerIds.map(
-                            (providerId) => {
-                              const provider =
-                                selectedOpenCodeConfig.providers[providerId]
-                              if (!provider) return null
-                              const expanded = openCodeProviderId === providerId
-                              const isDisabled =
-                                selectedOpenCodeConfig.disabledProviders.includes(
+                          {openCodeCustomProviderIds.map((providerId) => {
+                            if (!selectedOpenCodeConfig) return null
+                            const provider =
+                              selectedOpenCodeConfig.providers[providerId]
+                            if (!provider) return null
+                            const expanded = openCodeProviderId === providerId
+                            const isDisabled =
+                              selectedOpenCodeConfig.disabledProviders.includes(
+                                providerId
+                              ) ||
+                              (selectedOpenCodeConfig.enabledProviders.length >
+                                0 &&
+                                !selectedOpenCodeConfig.enabledProviders.includes(
                                   providerId
-                                ) ||
-                                (selectedOpenCodeConfig.enabledProviders
-                                  .length > 0 &&
-                                  !selectedOpenCodeConfig.enabledProviders.includes(
-                                    providerId
-                                  ))
-                              return (
-                                <Collapsible
-                                  key={providerId}
-                                  open={expanded}
-                                  onOpenChange={(open) => {
-                                    setOpenCodeProviderId(
-                                      open ? providerId : ""
-                                    )
-                                  }}
-                                >
-                                  <div className="rounded-md border bg-muted/20">
-                                    <div className="flex items-center justify-between gap-2 px-2.5 py-2">
-                                      <button
+                                ))
+                            return (
+                              <Collapsible
+                                key={providerId}
+                                open={expanded}
+                                onOpenChange={(open) => {
+                                  setOpenCodeProviderId(open ? providerId : "")
+                                }}
+                              >
+                                <div className="rounded-md border bg-muted/20">
+                                  <div className="flex items-center justify-between gap-2 px-2.5 py-2">
+                                    <button
+                                      type="button"
+                                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                      onClick={() => {
+                                        setOpenCodeProviderId((current) =>
+                                          current === providerId
+                                            ? ""
+                                            : providerId
+                                        )
+                                      }}
+                                    >
+                                      <ChevronDown
+                                        className={cn(
+                                          "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+                                          expanded && "rotate-180"
+                                        )}
+                                      />
+                                      <span className="truncate text-xs font-medium">
+                                        {providerId}
+                                      </span>
+                                      <span className="text-[11px] text-muted-foreground">
+                                        models: {provider.modelCount}
+                                      </span>
+                                    </button>
+                                    <div className="flex items-center gap-3">
+                                      <span className="text-[11px] text-muted-foreground">
+                                        {isDisabled
+                                          ? t("status.disabled")
+                                          : t("status.enabled")}
+                                      </span>
+                                      <Switch
+                                        checked={!isDisabled}
+                                        onCheckedChange={(checked) => {
+                                          handleOpenCodeProviderStatusChange(
+                                            providerId,
+                                            checked
+                                          )
+                                        }}
+                                        aria-label={t(
+                                          "openCode.providerEnabledState",
+                                          { providerId }
+                                        )}
+                                        title={
+                                          isDisabled
+                                            ? t("actions.clickEnable", {
+                                                name: providerId,
+                                              })
+                                            : t("actions.clickDisable", {
+                                                name: providerId,
+                                              })
+                                        }
+                                      />
+                                      <Button
                                         type="button"
-                                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                        size="xs"
+                                        variant="outline"
                                         onClick={() => {
-                                          setOpenCodeProviderId((current) =>
-                                            current === providerId
-                                              ? ""
-                                              : providerId
+                                          setOpenCodeDeleteProviderId(
+                                            providerId
                                           )
                                         }}
                                       >
-                                        <ChevronDown
-                                          className={cn(
-                                            "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
-                                            expanded && "rotate-180"
-                                          )}
-                                        />
-                                        <span className="truncate text-xs font-medium">
-                                          {providerId}
-                                        </span>
-                                        <span className="text-[11px] text-muted-foreground">
-                                          models: {provider.modelCount}
-                                        </span>
-                                      </button>
-                                      <div className="flex items-center gap-3">
-                                        <span className="text-[11px] text-muted-foreground">
-                                          {isDisabled
-                                            ? t("status.disabled")
-                                            : t("status.enabled")}
-                                        </span>
-                                        <Switch
-                                          checked={!isDisabled}
-                                          onCheckedChange={(checked) => {
-                                            handleOpenCodeProviderStatusChange(
+                                        {t("actions.delete")}
+                                      </Button>
+                                    </div>
+                                  </div>
+
+                                  <CollapsibleContent className="px-2.5 pb-2.5">
+                                    <div className="grid gap-3 border-t pt-2.5 md:grid-cols-2">
+                                      <div className="space-y-1.5">
+                                        <label className="text-[11px] text-muted-foreground">
+                                          provider.name
+                                        </label>
+                                        <Input
+                                          value={provider.name}
+                                          onChange={(event) => {
+                                            handleOpenCodeProviderFieldChange(
                                               providerId,
-                                              checked
+                                              "name",
+                                              event.target.value
                                             )
                                           }}
-                                          aria-label={t(
-                                            "openCode.providerEnabledState",
-                                            { providerId }
-                                          )}
-                                          title={
-                                            isDisabled
-                                              ? t("actions.clickEnable", {
-                                                  name: providerId,
-                                                })
-                                              : t("actions.clickDisable", {
-                                                  name: providerId,
-                                                })
-                                          }
+                                          placeholder="My Provider"
                                         />
-                                        <Button
-                                          type="button"
-                                          size="xs"
-                                          variant="outline"
-                                          onClick={() => {
-                                            setOpenCodeDeleteProviderId(
-                                              providerId
+                                      </div>
+                                      <div className="space-y-1.5">
+                                        <label className="text-[11px] text-muted-foreground">
+                                          provider.npm
+                                        </label>
+                                        <Select
+                                          value={
+                                            provider.npm.trim()
+                                              ? provider.npm
+                                              : OPENCODE_PROVIDER_NPM_OPTIONS[0]
+                                                  .value
+                                          }
+                                          onValueChange={(value) => {
+                                            handleOpenCodeProviderFieldChange(
+                                              providerId,
+                                              "npm",
+                                              value
                                             )
                                           }}
                                         >
-                                          {t("actions.delete")}
-                                        </Button>
+                                          <SelectTrigger className="w-full">
+                                            <SelectValue
+                                              placeholder={t(
+                                                "openCode.selectProviderNpm"
+                                              )}
+                                            />
+                                          </SelectTrigger>
+                                          <SelectContent align="start">
+                                            {buildOpenCodeNpmOptions(
+                                              provider.npm
+                                            ).map((npmOption) => (
+                                              <SelectItem
+                                                key={npmOption}
+                                                value={npmOption}
+                                              >
+                                                {npmOption}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                      <div className="space-y-1.5">
+                                        <label className="text-[11px] text-muted-foreground">
+                                          provider.api
+                                        </label>
+                                        <Input
+                                          value={provider.api}
+                                          onChange={(event) => {
+                                            handleOpenCodeProviderFieldChange(
+                                              providerId,
+                                              "api",
+                                              event.target.value
+                                            )
+                                          }}
+                                          placeholder="openai.responses"
+                                        />
+                                      </div>
+                                      <div className="space-y-1.5">
+                                        <label className="text-[11px] text-muted-foreground">
+                                          provider.options.baseURL
+                                        </label>
+                                        <Input
+                                          value={provider.baseUrl}
+                                          onChange={(event) => {
+                                            handleOpenCodeProviderFieldChange(
+                                              providerId,
+                                              "baseURL",
+                                              event.target.value
+                                            )
+                                          }}
+                                          placeholder="https://api.example.com/v1"
+                                        />
+                                      </div>
+                                      <div className="space-y-1.5 md:col-span-2">
+                                        <label className="text-[11px] text-muted-foreground">
+                                          provider.options.apiKey
+                                        </label>
+                                        <div className="flex items-center gap-2">
+                                          <Input
+                                            type={
+                                              showApiKeys[
+                                                selectedAgent.agent_type
+                                              ]
+                                                ? "text"
+                                                : "password"
+                                            }
+                                            value={provider.apiKey}
+                                            onChange={(event) => {
+                                              handleOpenCodeProviderFieldChange(
+                                                providerId,
+                                                "apiKey",
+                                                event.target.value
+                                              )
+                                            }}
+                                            placeholder="sk-..."
+                                          />
+                                          <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => {
+                                              setShowApiKeys((prev) => ({
+                                                ...prev,
+                                                [selectedAgent.agent_type]:
+                                                  !prev[
+                                                    selectedAgent.agent_type
+                                                  ],
+                                              }))
+                                            }}
+                                            title={
+                                              showApiKeys[
+                                                selectedAgent.agent_type
+                                              ]
+                                                ? t("actions.hideKey")
+                                                : t("actions.showKey")
+                                            }
+                                          >
+                                            {showApiKeys[
+                                              selectedAgent.agent_type
+                                            ] ? (
+                                              <EyeOff className="h-3.5 w-3.5" />
+                                            ) : (
+                                              <Eye className="h-3.5 w-3.5" />
+                                            )}
+                                          </Button>
+                                        </div>
                                       </div>
                                     </div>
-
-                                    <CollapsibleContent className="px-2.5 pb-2.5">
-                                      <div className="grid gap-3 border-t pt-2.5 md:grid-cols-2">
-                                        <div className="space-y-1.5">
-                                          <label className="text-[11px] text-muted-foreground">
-                                            provider.name
-                                          </label>
-                                          <Input
-                                            value={provider.name}
-                                            onChange={(event) => {
-                                              handleOpenCodeProviderFieldChange(
-                                                providerId,
-                                                "name",
-                                                event.target.value
-                                              )
-                                            }}
-                                            placeholder="My Provider"
-                                          />
-                                        </div>
-                                        <div className="space-y-1.5">
-                                          <label className="text-[11px] text-muted-foreground">
-                                            provider.npm
-                                          </label>
-                                          <Select
-                                            value={
-                                              provider.npm.trim()
-                                                ? provider.npm
-                                                : OPENCODE_PROVIDER_NPM_OPTIONS[0]
-                                                    .value
-                                            }
-                                            onValueChange={(value) => {
-                                              handleOpenCodeProviderFieldChange(
-                                                providerId,
-                                                "npm",
-                                                value
-                                              )
-                                            }}
-                                          >
-                                            <SelectTrigger className="w-full">
-                                              <SelectValue
-                                                placeholder={t(
-                                                  "openCode.selectProviderNpm"
-                                                )}
-                                              />
-                                            </SelectTrigger>
-                                            <SelectContent align="start">
-                                              {buildOpenCodeNpmOptions(
-                                                provider.npm
-                                              ).map((npmOption) => (
-                                                <SelectItem
-                                                  key={npmOption}
-                                                  value={npmOption}
-                                                >
-                                                  {npmOption}
-                                                </SelectItem>
-                                              ))}
-                                            </SelectContent>
-                                          </Select>
-                                        </div>
-                                        <div className="space-y-1.5">
-                                          <label className="text-[11px] text-muted-foreground">
-                                            provider.api
-                                          </label>
-                                          <Input
-                                            value={provider.api}
-                                            onChange={(event) => {
-                                              handleOpenCodeProviderFieldChange(
-                                                providerId,
-                                                "api",
-                                                event.target.value
-                                              )
-                                            }}
-                                            placeholder="openai.responses"
-                                          />
-                                        </div>
-                                        <div className="space-y-1.5">
-                                          <label className="text-[11px] text-muted-foreground">
-                                            provider.options.baseURL
-                                          </label>
-                                          <Input
-                                            value={provider.baseUrl}
-                                            onChange={(event) => {
-                                              handleOpenCodeProviderFieldChange(
-                                                providerId,
-                                                "baseURL",
-                                                event.target.value
-                                              )
-                                            }}
-                                            placeholder="https://api.example.com/v1"
-                                          />
-                                        </div>
-                                        <div className="space-y-1.5 md:col-span-2">
-                                          <label className="text-[11px] text-muted-foreground">
-                                            provider.options.apiKey
-                                          </label>
+                                    <Collapsible
+                                      open={Boolean(
+                                        openCodeModelConfigExpanded[providerId]
+                                      )}
+                                      onOpenChange={(open) => {
+                                        setOpenCodeModelConfigExpanded(
+                                          (prev) => ({
+                                            ...prev,
+                                            [providerId]: open,
+                                          })
+                                        )
+                                      }}
+                                    >
+                                      <div className="mt-3 rounded-md border bg-background/50 p-2.5">
+                                        <button
+                                          type="button"
+                                          className="flex w-full items-center justify-between gap-2 text-left"
+                                          onClick={() => {
+                                            setOpenCodeModelConfigExpanded(
+                                              (prev) => ({
+                                                ...prev,
+                                                [providerId]: !prev[providerId],
+                                              })
+                                            )
+                                          }}
+                                        >
                                           <div className="flex items-center gap-2">
+                                            <ChevronDown
+                                              className={cn(
+                                                "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+                                                openCodeModelConfigExpanded[
+                                                  providerId
+                                                ] && "rotate-180"
+                                              )}
+                                            />
+                                            <span className="text-[11px] font-medium">
+                                              {t("openCode.modelManagement")}
+                                            </span>
+                                          </div>
+                                          <span className="text-[11px] text-muted-foreground">
+                                            {t("openCode.modelCount", {
+                                              count: provider.modelCount,
+                                            })}
+                                          </span>
+                                        </button>
+                                        <CollapsibleContent className="pt-2">
+                                          <p className="text-[11px] text-muted-foreground">
+                                            {t("openCode.modelDescription")}
+                                          </p>
+
+                                          <div className="mt-2 flex flex-wrap items-center gap-2">
                                             <Input
-                                              type={
-                                                showApiKeys[
-                                                  selectedAgent.agent_type
-                                                ]
-                                                  ? "text"
-                                                  : "password"
+                                              value={
+                                                openCodeNewModelIds[
+                                                  providerId
+                                                ] ?? ""
                                               }
-                                              value={provider.apiKey}
                                               onChange={(event) => {
-                                                handleOpenCodeProviderFieldChange(
+                                                handleOpenCodeModelDraftChange(
                                                   providerId,
-                                                  "apiKey",
                                                   event.target.value
                                                 )
                                               }}
-                                              placeholder="sk-..."
+                                              className="w-[240px]"
+                                              placeholder="new-model-id"
                                             />
                                             <Button
                                               type="button"
-                                              variant="outline"
                                               size="sm"
+                                              variant="outline"
                                               onClick={() => {
-                                                setShowApiKeys((prev) => ({
-                                                  ...prev,
-                                                  [selectedAgent.agent_type]:
-                                                    !prev[
-                                                      selectedAgent.agent_type
-                                                    ],
-                                                }))
+                                                handleOpenCodeAddModel(
+                                                  providerId
+                                                )
                                               }}
-                                              title={
-                                                showApiKeys[
-                                                  selectedAgent.agent_type
-                                                ]
-                                                  ? t("actions.hideKey")
-                                                  : t("actions.showKey")
-                                              }
                                             >
-                                              {showApiKeys[
-                                                selectedAgent.agent_type
-                                              ] ? (
-                                                <EyeOff className="h-3.5 w-3.5" />
-                                              ) : (
-                                                <Eye className="h-3.5 w-3.5" />
-                                              )}
+                                              {t("openCode.addModel")}
                                             </Button>
                                           </div>
-                                        </div>
-                                      </div>
-                                      <Collapsible
-                                        open={Boolean(
-                                          openCodeModelConfigExpanded[
-                                            providerId
-                                          ]
-                                        )}
-                                        onOpenChange={(open) => {
-                                          setOpenCodeModelConfigExpanded(
-                                            (prev) => ({
-                                              ...prev,
-                                              [providerId]: open,
-                                            })
-                                          )
-                                        }}
-                                      >
-                                        <div className="mt-3 rounded-md border bg-background/50 p-2.5">
-                                          <button
-                                            type="button"
-                                            className="flex w-full items-center justify-between gap-2 text-left"
-                                            onClick={() => {
-                                              setOpenCodeModelConfigExpanded(
-                                                (prev) => ({
-                                                  ...prev,
-                                                  [providerId]:
-                                                    !prev[providerId],
-                                                })
-                                              )
-                                            }}
-                                          >
-                                            <div className="flex items-center gap-2">
-                                              <ChevronDown
-                                                className={cn(
-                                                  "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
-                                                  openCodeModelConfigExpanded[
-                                                    providerId
-                                                  ] && "rotate-180"
-                                                )}
-                                              />
-                                              <span className="text-[11px] font-medium">
-                                                {t("openCode.modelManagement")}
-                                              </span>
-                                            </div>
-                                            <span className="text-[11px] text-muted-foreground">
-                                              {t("openCode.modelCount", {
-                                                count: provider.modelCount,
-                                              })}
-                                            </span>
-                                          </button>
-                                          <CollapsibleContent className="pt-2">
-                                            <p className="text-[11px] text-muted-foreground">
-                                              {t("openCode.modelDescription")}
-                                            </p>
 
-                                            <div className="mt-2 flex flex-wrap items-center gap-2">
-                                              <Input
-                                                value={
-                                                  openCodeNewModelIds[
-                                                    providerId
-                                                  ] ?? ""
-                                                }
-                                                onChange={(event) => {
-                                                  handleOpenCodeModelDraftChange(
-                                                    providerId,
-                                                    event.target.value
-                                                  )
-                                                }}
-                                                className="w-[240px]"
-                                                placeholder="new-model-id"
-                                              />
-                                              <Button
-                                                type="button"
-                                                size="sm"
-                                                variant="outline"
-                                                onClick={() => {
-                                                  handleOpenCodeAddModel(
-                                                    providerId
-                                                  )
-                                                }}
-                                              >
-                                                {t("openCode.addModel")}
-                                              </Button>
+                                          {provider.modelIds.length === 0 ? (
+                                            <div className="mt-2 text-[11px] text-muted-foreground">
+                                              {t("openCode.emptyModel")}
                                             </div>
-
-                                            {provider.modelIds.length === 0 ? (
-                                              <div className="mt-2 text-[11px] text-muted-foreground">
-                                                {t("openCode.emptyModel")}
-                                              </div>
-                                            ) : (
-                                              <div className="mt-2 space-y-1">
-                                                <div className="flex items-center gap-2 px-1 text-[10px] text-muted-foreground">
-                                                  <div className="min-w-0 flex-1">
-                                                    {t("openCode.modelId")}
-                                                  </div>
-                                                  <div className="min-w-0 flex-1">
-                                                    {t("openCode.modelName")}
-                                                  </div>
-                                                  <div className="size-8 shrink-0" />
+                                          ) : (
+                                            <div className="mt-2 space-y-1">
+                                              <div className="flex items-center gap-2 px-1 text-[10px] text-muted-foreground">
+                                                <div className="min-w-0 flex-1">
+                                                  {t("openCode.modelId")}
                                                 </div>
-                                                {provider.modelIds.map(
-                                                  (modelId) => {
-                                                    const model =
-                                                      provider.models[modelId]
-                                                    if (!model) return null
-                                                    const modelDraftKey = `${providerId}:${modelId}`
-                                                    return (
-                                                      <div
-                                                        key={`${providerId}:${modelId}`}
-                                                        className="flex items-center gap-2"
-                                                      >
-                                                        <Input
-                                                          value={
-                                                            openCodeModelIdDrafts[
-                                                              modelDraftKey
-                                                            ] ?? model.id
-                                                          }
-                                                          onChange={(event) => {
-                                                            handleOpenCodeModelIdDraftChange(
-                                                              providerId,
-                                                              modelId,
-                                                              event.target.value
-                                                            )
-                                                          }}
-                                                          onBlur={() => {
+                                                <div className="min-w-0 flex-1">
+                                                  {t("openCode.modelName")}
+                                                </div>
+                                                <div className="size-8 shrink-0" />
+                                              </div>
+                                              {provider.modelIds.map(
+                                                (modelId) => {
+                                                  const model =
+                                                    provider.models[modelId]
+                                                  if (!model) return null
+                                                  const modelDraftKey = `${providerId}:${modelId}`
+                                                  return (
+                                                    <div
+                                                      key={`${providerId}:${modelId}`}
+                                                      className="flex items-center gap-2"
+                                                    >
+                                                      <Input
+                                                        value={
+                                                          openCodeModelIdDrafts[
+                                                            modelDraftKey
+                                                          ] ?? model.id
+                                                        }
+                                                        onChange={(event) => {
+                                                          handleOpenCodeModelIdDraftChange(
+                                                            providerId,
+                                                            modelId,
+                                                            event.target.value
+                                                          )
+                                                        }}
+                                                        onBlur={() => {
+                                                          handleOpenCodeModelIdCommit(
+                                                            providerId,
+                                                            modelId
+                                                          )
+                                                        }}
+                                                        onKeyDown={(event) => {
+                                                          if (
+                                                            event.key ===
+                                                            "Enter"
+                                                          ) {
+                                                            event.preventDefault()
                                                             handleOpenCodeModelIdCommit(
                                                               providerId,
                                                               modelId
                                                             )
-                                                          }}
-                                                          onKeyDown={(
-                                                            event
-                                                          ) => {
-                                                            if (
-                                                              event.key ===
-                                                              "Enter"
-                                                            ) {
-                                                              event.preventDefault()
-                                                              handleOpenCodeModelIdCommit(
-                                                                providerId,
-                                                                modelId
-                                                              )
-                                                              event.currentTarget.blur()
-                                                              return
-                                                            }
-                                                            if (
-                                                              event.key ===
-                                                              "Escape"
-                                                            ) {
-                                                              setOpenCodeModelIdDrafts(
-                                                                (prev) => {
-                                                                  if (
-                                                                    typeof prev[
-                                                                      modelDraftKey
-                                                                    ] ===
-                                                                    "undefined"
-                                                                  ) {
-                                                                    return prev
-                                                                  }
-                                                                  const next = {
-                                                                    ...prev,
-                                                                  }
-                                                                  delete next[
+                                                            event.currentTarget.blur()
+                                                            return
+                                                          }
+                                                          if (
+                                                            event.key ===
+                                                            "Escape"
+                                                          ) {
+                                                            setOpenCodeModelIdDrafts(
+                                                              (prev) => {
+                                                                if (
+                                                                  typeof prev[
                                                                     modelDraftKey
-                                                                  ]
-                                                                  return next
+                                                                  ] ===
+                                                                  "undefined"
+                                                                ) {
+                                                                  return prev
                                                                 }
-                                                              )
-                                                              event.currentTarget.blur()
-                                                            }
-                                                          }}
-                                                          className="h-8 min-w-0 flex-1"
-                                                          placeholder="model.id"
-                                                        />
-                                                        <Input
-                                                          value={model.name}
-                                                          onChange={(event) => {
-                                                            handleOpenCodeModelFieldChange(
-                                                              providerId,
-                                                              modelId,
-                                                              event.target.value
+                                                                const next = {
+                                                                  ...prev,
+                                                                }
+                                                                delete next[
+                                                                  modelDraftKey
+                                                                ]
+                                                                return next
+                                                              }
                                                             )
-                                                          }}
-                                                          className="h-8 min-w-0 flex-1"
-                                                          placeholder="model.name"
-                                                        />
-                                                        <Button
-                                                          type="button"
-                                                          size="icon-sm"
-                                                          variant="ghost"
-                                                          className="shrink-0 text-muted-foreground hover:text-destructive"
-                                                          aria-label={t(
-                                                            "openCode.deleteModel",
-                                                            { modelId }
-                                                          )}
-                                                          title={t(
-                                                            "openCode.deleteModel",
-                                                            { modelId }
-                                                          )}
-                                                          onClick={() => {
-                                                            handleOpenCodeRemoveModel(
-                                                              providerId,
-                                                              modelId
-                                                            )
-                                                          }}
-                                                        >
-                                                          <Minus className="h-3.5 w-3.5" />
-                                                        </Button>
-                                                      </div>
-                                                    )
-                                                  }
-                                                )}
-                                              </div>
-                                            )}
-                                          </CollapsibleContent>
-                                        </div>
-                                      </Collapsible>
-                                      <div className="mt-3 flex justify-end">
-                                        <Button
-                                          type="button"
-                                          size="sm"
-                                          onClick={() => {
-                                            persistConfig(
-                                              selectedAgent.agent_type,
-                                              selectedDraft.configText,
-                                              {
-                                                openCodeAuthJsonText:
-                                                  selectedDraft.openCodeAuthJsonText,
-                                              }
-                                            )
-                                              .then(() => {
-                                                toast.success(
-                                                  t("toasts.providerSaved", {
-                                                    providerId,
-                                                  }),
-                                                  {
-                                                    description: `${t("toasts.openCodeConfigSynced")} ${t("toasts.configSavedHint")}`,
-                                                  }
-                                                )
-                                              })
-                                              .catch((err) => {
-                                                console.error(
-                                                  "[Settings] save opencode provider failed:",
-                                                  err
-                                                )
-                                                const message =
-                                                  err instanceof Error
-                                                    ? err.message
-                                                    : String(err)
-                                                toast.error(
-                                                  t(
-                                                    "toasts.saveProviderFailed",
-                                                    {
-                                                      providerId,
-                                                    }
-                                                  ),
-                                                  {
-                                                    description: message,
-                                                  }
-                                                )
-                                              })
-                                          }}
-                                          disabled={selectedIsSavingConfig}
-                                        >
-                                          {selectedIsSavingConfig ? (
-                                            <>
-                                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                              {t("actions.saving")}
-                                            </>
-                                          ) : (
-                                            <>
-                                              <Save className="h-3.5 w-3.5" />
-                                              {t("actions.saveCurrentProvider")}
-                                            </>
+                                                            event.currentTarget.blur()
+                                                          }
+                                                        }}
+                                                        className="h-8 min-w-0 flex-1"
+                                                        placeholder="model.id"
+                                                      />
+                                                      <Input
+                                                        value={model.name}
+                                                        onChange={(event) => {
+                                                          handleOpenCodeModelFieldChange(
+                                                            providerId,
+                                                            modelId,
+                                                            event.target.value
+                                                          )
+                                                        }}
+                                                        className="h-8 min-w-0 flex-1"
+                                                        placeholder="model.name"
+                                                      />
+                                                      <Button
+                                                        type="button"
+                                                        size="icon-sm"
+                                                        variant="ghost"
+                                                        className="shrink-0 text-muted-foreground hover:text-destructive"
+                                                        aria-label={t(
+                                                          "openCode.deleteModel",
+                                                          { modelId }
+                                                        )}
+                                                        title={t(
+                                                          "openCode.deleteModel",
+                                                          { modelId }
+                                                        )}
+                                                        onClick={() => {
+                                                          handleOpenCodeRemoveModel(
+                                                            providerId,
+                                                            modelId
+                                                          )
+                                                        }}
+                                                      >
+                                                        <Minus className="h-3.5 w-3.5" />
+                                                      </Button>
+                                                    </div>
+                                                  )
+                                                }
+                                              )}
+                                            </div>
                                           )}
-                                        </Button>
+                                        </CollapsibleContent>
                                       </div>
-                                    </CollapsibleContent>
-                                  </div>
-                                </Collapsible>
-                              )
-                            }
-                          )}
+                                    </Collapsible>
+                                    <div className="mt-3 flex justify-end">
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        onClick={() => {
+                                          persistConfig(
+                                            selectedAgent.agent_type,
+                                            selectedDraft.configText,
+                                            {
+                                              openCodeAuthJsonText:
+                                                selectedDraft.openCodeAuthJsonText,
+                                            }
+                                          )
+                                            .then(() => {
+                                              toast.success(
+                                                t("toasts.providerSaved", {
+                                                  providerId,
+                                                }),
+                                                {
+                                                  description: `${t("toasts.openCodeConfigSynced")} ${t("toasts.configSavedHint")}`,
+                                                }
+                                              )
+                                            })
+                                            .catch((err) => {
+                                              console.error(
+                                                "[Settings] save opencode provider failed:",
+                                                err
+                                              )
+                                              const message =
+                                                err instanceof Error
+                                                  ? err.message
+                                                  : String(err)
+                                              toast.error(
+                                                t("toasts.saveProviderFailed", {
+                                                  providerId,
+                                                }),
+                                                {
+                                                  description: message,
+                                                }
+                                              )
+                                            })
+                                        }}
+                                        disabled={selectedIsSavingConfig}
+                                      >
+                                        {selectedIsSavingConfig ? (
+                                          <>
+                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                            {t("actions.saving")}
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Save className="h-3.5 w-3.5" />
+                                            {t("actions.saveCurrentProvider")}
+                                          </>
+                                        )}
+                                      </Button>
+                                    </div>
+                                  </CollapsibleContent>
+                                </div>
+                              </Collapsible>
+                            )
+                          })}
                         </div>
                       )}
                     </div>
@@ -9651,7 +9597,7 @@ supports_websockets = false`}
                               selectedAgent.agent_type,
                               selectedDraft.enabled,
                               selectedDraft.envText,
-                              selectedCompatibleModelProviderId
+                              selectedDraft.modelProviderId
                             ),
                             persistConfig(
                               selectedAgent.agent_type,
@@ -10029,7 +9975,6 @@ supports_websockets = false`}
                       )
                     }
                     onSaved={refreshAgents}
-                    modelProviders={modelProviders}
                   />
                 ) : selectedAgent.agent_type === "cursor" ? (
                   <CursorConfigPanel
@@ -10040,7 +9985,7 @@ supports_websockets = false`}
                         selectedAgent.agent_type,
                         enabled,
                         envMapToText(env),
-                        null
+                        selectedAgent.model_provider_id
                       )
                     }
                     onSaved={refreshAgents}
@@ -10144,237 +10089,149 @@ supports_websockets = false`}
                       </div>
                     </div>
 
-                    {/* A shared provider remains available in addition to Grok's
-                        native subscription, API key, and custom endpoint modes. */}
-                    <div className="space-y-2.5 rounded-md border p-2.5">
-                      <div className="space-y-1.5">
-                        <label className="text-[11px] font-medium">
-                          {t("selectModelProvider")}
-                        </label>
-                        <Select
-                          value={
-                            selectedCompatibleModelProviderId != null
-                              ? String(selectedCompatibleModelProviderId)
-                              : MODEL_PROVIDER_MANUAL_VALUE
-                          }
-                          disabled={grokSaving}
-                          onValueChange={handleModelProviderSelect}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent align="start">
-                            <SelectItem value={MODEL_PROVIDER_MANUAL_VALUE}>
-                              {t("authModeCustomEndpoint")}
-                            </SelectItem>
-                            {selectedModelProviders.map((provider) => (
-                              <SelectItem
-                                key={provider.id}
-                                value={String(provider.id)}
-                              >
-                                {provider.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <p className="text-[11px] text-muted-foreground">
-                          {selectedGrokHasCredential
-                            ? t("grok.authKeyConfigured")
-                            : t("grok.authKeyMissing")}
-                        </p>
-                      </div>
-
-                      {selectedCompatibleModelProviderId != null && (
-                        <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
-                            {t("codex.modelName")}
-                          </label>
-                          {selectedProviderModelOptions.length > 0 ? (
-                            <Select
-                              value={selectedGrokProviderModel}
-                              disabled={grokSaving}
-                              onValueChange={(value) =>
-                                handleImportantConfigChange("model", value)
-                              }
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue
-                                  placeholder={t("codex.modelName")}
-                                />
-                              </SelectTrigger>
-                              <SelectContent align="start">
-                                {selectedProviderModelOptions.map((model) => (
-                                  <SelectItem key={model} value={model}>
-                                    {model}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          ) : (
-                            <Input
-                              value={selectedDraft.model}
-                              onChange={(event) =>
-                                handleImportantConfigChange(
-                                  "model",
-                                  event.target.value
-                                )
-                              }
-                              placeholder="grok-4.5"
-                              disabled={grokSaving}
-                            />
-                          )}
-                        </div>
-                      )}
-                    </div>
-
                     {/* Authentication — method selector + method-specific body.
                         Mirrors the Cursor panel: an explicit choice between the
                         `grok login` subscription and an XAI_API_KEY, recognized
                         on load via inferGrokMode and recorded as GROK_AUTH_MODE. */}
-                    {selectedCompatibleModelProviderId == null && (
-                      <div className="space-y-2.5 rounded-md border p-2.5">
-                        <div className="space-y-1.5">
-                          <label className="text-[11px] font-medium">
-                            {t("grok.authTitle")}
-                          </label>
-                          <Select
-                            value={selectedDraft.grokAuthMode}
-                            disabled={grokSaving}
-                            onValueChange={(value) =>
-                              handleGrokAuthModeChange(value as GrokAuthMethod)
-                            }
+                    <div className="space-y-2.5 rounded-md border p-2.5">
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] font-medium">
+                          {t("grok.authTitle")}
+                        </label>
+                        <Select
+                          value={selectedDraft.grokAuthMode}
+                          disabled={grokSaving}
+                          onValueChange={(value) =>
+                            handleGrokAuthModeChange(value as GrokAuthMethod)
+                          }
+                        >
+                          <SelectTrigger
+                            className="w-full"
+                            aria-label={t("grok.authMode")}
                           >
-                            <SelectTrigger
-                              className="w-full"
-                              aria-label={t("grok.authMode")}
-                            >
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="subscription">
-                                {t("authModeOfficialSubscription")}
-                              </SelectItem>
-                              <SelectItem value="api_key">
-                                {t("grok.authModeApiKey")}
-                              </SelectItem>
-                              <SelectItem value="custom">
-                                {t("grok.authModeCustom")}
-                              </SelectItem>
-                            </SelectContent>
-                          </Select>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="subscription">
+                              {t("authModeOfficialSubscription")}
+                            </SelectItem>
+                            <SelectItem value="api_key">
+                              {t("grok.authModeApiKey")}
+                            </SelectItem>
+                            <SelectItem value="custom">
+                              {t("grok.authModeCustom")}
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-[11px] text-muted-foreground">
+                          {selectedDraft.grokAuthMode === "subscription"
+                            ? t("grok.subscriptionHint")
+                            : selectedDraft.grokAuthMode === "custom"
+                              ? t("grok.authModeCustomHint")
+                              : t("grok.authModeApiKeyHint")}
+                        </p>
+                      </div>
+
+                      {selectedDraft.grokAuthMode === "subscription" ? (
+                        // Subscription: a copyable `grok login` command. Its
+                        // session lives in ~/.grok/auth.json (untouched here); the
+                        // launch path strips any inherited XAI_API_KEY.
+                        <div className="space-y-1.5">
                           <p className="text-[11px] text-muted-foreground">
-                            {selectedDraft.grokAuthMode === "subscription"
-                              ? t("grok.subscriptionHint")
-                              : selectedDraft.grokAuthMode === "custom"
-                                ? t("grok.authModeCustomHint")
-                                : t("grok.authModeApiKeyHint")}
+                            {t("grok.loginHint")}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-[11px] font-mono whitespace-nowrap">
+                              {GROK_LOGIN_COMMAND}
+                            </code>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 shrink-0 p-0"
+                              onClick={async () => {
+                                const ok =
+                                  await copyTextToClipboard(GROK_LOGIN_COMMAND)
+                                if (ok) toast.success(t("grok.commandCopied"))
+                              }}
+                              title={t("grok.copyCommand")}
+                              aria-label={t("grok.copyCommand")}
+                            >
+                              <Copy className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+                      ) : selectedDraft.grokAuthMode === "api_key" ? (
+                        // API key: the non-interactive XAI_API_KEY credential.
+                        <div className="space-y-1.5">
+                          <label className="text-[11px] text-muted-foreground">
+                            XAI_API_KEY
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type={
+                                showApiKeys[selectedAgent.agent_type]
+                                  ? "text"
+                                  : "password"
+                              }
+                              value={selectedDraft.apiKey}
+                              onChange={(event) =>
+                                handleImportantConfigChange(
+                                  "apiKey",
+                                  event.target.value
+                                )
+                              }
+                              placeholder="xai-..."
+                              aria-label="XAI_API_KEY"
+                              name="grok-xai-api-key"
+                              autoComplete="off"
+                              spellCheck={false}
+                              disabled={grokSaving}
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={grokSaving}
+                              onClick={() =>
+                                setShowApiKeys((prev) => ({
+                                  ...prev,
+                                  [selectedAgent.agent_type]:
+                                    !prev[selectedAgent.agent_type],
+                                }))
+                              }
+                              aria-label={
+                                showApiKeys[selectedAgent.agent_type]
+                                  ? t("actions.hideApiKey")
+                                  : t("actions.showApiKey")
+                              }
+                              title={
+                                showApiKeys[selectedAgent.agent_type]
+                                  ? t("actions.hideApiKey")
+                                  : t("actions.showApiKey")
+                              }
+                            >
+                              {showApiKeys[selectedAgent.agent_type] ? (
+                                <EyeOff className="h-3.5 w-3.5" />
+                              ) : (
+                                <Eye className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            {selectedDraft.apiKey.trim()
+                              ? t("grok.authKeyConfigured")
+                              : t("grok.authKeyMissing")}
                           </p>
                         </div>
-
-                        {selectedDraft.grokAuthMode === "subscription" ? (
-                          // Subscription: a copyable `grok login` command. Its
-                          // session lives in ~/.grok/auth.json (untouched here); the
-                          // launch path strips any inherited XAI_API_KEY.
-                          <div className="space-y-1.5">
-                            <p className="text-[11px] text-muted-foreground">
-                              {t("grok.loginHint")}
-                            </p>
-                            <div className="flex items-center gap-2">
-                              <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-[11px] font-mono whitespace-nowrap">
-                                {GROK_LOGIN_COMMAND}
-                              </code>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 w-7 shrink-0 p-0"
-                                onClick={async () => {
-                                  const ok =
-                                    await copyTextToClipboard(
-                                      GROK_LOGIN_COMMAND
-                                    )
-                                  if (ok) toast.success(t("grok.commandCopied"))
-                                }}
-                                title={t("grok.copyCommand")}
-                                aria-label={t("grok.copyCommand")}
-                              >
-                                <Copy className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          </div>
-                        ) : selectedDraft.grokAuthMode === "api_key" ? (
-                          // API key: the non-interactive XAI_API_KEY credential.
-                          <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
-                              XAI_API_KEY
-                            </label>
-                            <div className="flex items-center gap-2">
-                              <Input
-                                type={
-                                  showApiKeys[selectedAgent.agent_type]
-                                    ? "text"
-                                    : "password"
-                                }
-                                value={selectedDraft.apiKey}
-                                onChange={(event) =>
-                                  handleImportantConfigChange(
-                                    "apiKey",
-                                    event.target.value
-                                  )
-                                }
-                                placeholder="xai-..."
-                                aria-label="XAI_API_KEY"
-                                name="grok-xai-api-key"
-                                autoComplete="off"
-                                spellCheck={false}
-                                disabled={grokSaving}
-                              />
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                disabled={grokSaving}
-                                onClick={() =>
-                                  setShowApiKeys((prev) => ({
-                                    ...prev,
-                                    [selectedAgent.agent_type]:
-                                      !prev[selectedAgent.agent_type],
-                                  }))
-                                }
-                                aria-label={
-                                  showApiKeys[selectedAgent.agent_type]
-                                    ? t("actions.hideApiKey")
-                                    : t("actions.showApiKey")
-                                }
-                                title={
-                                  showApiKeys[selectedAgent.agent_type]
-                                    ? t("actions.hideApiKey")
-                                    : t("actions.showApiKey")
-                                }
-                              >
-                                {showApiKeys[selectedAgent.agent_type] ? (
-                                  <EyeOff className="h-3.5 w-3.5" />
-                                ) : (
-                                  <Eye className="h-3.5 w-3.5" />
-                                )}
-                              </Button>
-                            </div>
-                            <p className="text-[11px] text-muted-foreground">
-                              {selectedDraft.apiKey.trim()
-                                ? t("grok.authKeyConfigured")
-                                : t("grok.authKeyMissing")}
-                            </p>
-                          </div>
-                        ) : null}
-                      </div>
-                    )}
+                      ) : null}
+                    </div>
 
                     {/* Custom model (BYO endpoint) → [model.<id>] + [models].default.
                         Only shown (and saved) in the `custom` auth method: a model
                         id registers a custom Grok model as the default; the other
                         methods omit the HouHub-managed block. */}
-                    {selectedCompatibleModelProviderId == null &&
-                    selectedDraft.grokAuthMode === "custom" ? (
+                    {selectedDraft.grokAuthMode === "custom" ? (
                       <div className="space-y-2.5 rounded-md border p-2.5">
                         <div>
                           <label className="text-[11px] font-medium">
@@ -10644,20 +10501,10 @@ supports_websockets = false`}
                             // If it fails after config committed, report that
                             // partial outcome honestly rather than a blanket fail.
                             try {
-                              const envText =
-                                selectedCompatibleModelProviderId != null &&
-                                selectedGrokProviderModel
-                                  ? patchEnvByImportantKey(
-                                      "grok",
-                                      selectedDraft.envText,
-                                      "model",
-                                      selectedGrokProviderModel
-                                    )
-                                  : selectedDraft.envText
                               await persistEnv(
                                 selectedAgent.agent_type,
                                 selectedDraft.enabled,
-                                envText,
+                                selectedDraft.envText,
                                 selectedDraft.modelProviderId
                               )
                             } catch (envErr) {
@@ -10834,8 +10681,8 @@ supports_websockets = false`}
                           {selectedModelProviders.length > 0 ? (
                             <Select
                               value={
-                                selectedCompatibleModelProviderId != null
-                                  ? String(selectedCompatibleModelProviderId)
+                                selectedDraft.modelProviderId != null
+                                  ? String(selectedDraft.modelProviderId)
                                   : ""
                               }
                               onValueChange={handleModelProviderSelect}
@@ -10948,231 +10795,96 @@ supports_websockets = false`}
                             <label className="text-[11px] text-muted-foreground">
                               {t("claude.mainModel")}
                             </label>
-                            {selectedDraft.claudeAuthMode ===
-                              "model_provider" &&
-                            selectedProviderModelOptions.length > 0 ? (
-                              <Select
-                                value={selectedDraft.claudeMainModel}
-                                onValueChange={(value) => {
-                                  handleImportantConfigChange(
-                                    "claudeMainModel",
-                                    value
-                                  )
-                                }}
-                              >
-                                <SelectTrigger className="w-full">
-                                  <SelectValue
-                                    placeholder={t("claude.mainModel")}
-                                  />
-                                </SelectTrigger>
-                                <SelectContent align="start">
-                                  {selectedProviderModelOptions.map((model) => (
-                                    <SelectItem key={model} value={model}>
-                                      {model}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            ) : (
-                              <Input
-                                value={selectedDraft.claudeMainModel}
-                                readOnly={
-                                  selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                                }
-                                onChange={(event) => {
-                                  handleImportantConfigChange(
-                                    "claudeMainModel",
-                                    event.target.value
-                                  )
-                                }}
-                                placeholder="claude-sonnet-5"
-                              />
-                            )}
+                            <Input
+                              value={selectedDraft.claudeMainModel}
+                              readOnly={
+                                selectedDraft.claudeAuthMode ===
+                                "model_provider"
+                              }
+                              onChange={(event) => {
+                                handleImportantConfigChange(
+                                  "claudeMainModel",
+                                  event.target.value
+                                )
+                              }}
+                              placeholder="claude-sonnet-5"
+                            />
                           </div>
                           <div className="space-y-1.5">
                             <label className="text-[11px] text-muted-foreground">
                               {t("claude.reasoningModel")}
                             </label>
-                            {selectedDraft.claudeAuthMode ===
-                              "model_provider" &&
-                            selectedProviderModelOptions.length > 0 ? (
-                              <Select
-                                value={selectedDraft.claudeReasoningModel}
-                                onValueChange={(value) => {
-                                  handleImportantConfigChange(
-                                    "claudeReasoningModel",
-                                    value
-                                  )
-                                }}
-                              >
-                                <SelectTrigger className="w-full">
-                                  <SelectValue
-                                    placeholder={t("claude.reasoningModel")}
-                                  />
-                                </SelectTrigger>
-                                <SelectContent align="start">
-                                  {selectedProviderModelOptions.map((model) => (
-                                    <SelectItem key={model} value={model}>
-                                      {model}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            ) : (
-                              <Input
-                                value={selectedDraft.claudeReasoningModel}
-                                readOnly={
-                                  selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                                }
-                                onChange={(event) => {
-                                  handleImportantConfigChange(
-                                    "claudeReasoningModel",
-                                    event.target.value
-                                  )
-                                }}
-                                placeholder="claude-opus-4-8"
-                              />
-                            )}
+                            <Input
+                              value={selectedDraft.claudeReasoningModel}
+                              readOnly={
+                                selectedDraft.claudeAuthMode ===
+                                "model_provider"
+                              }
+                              onChange={(event) => {
+                                handleImportantConfigChange(
+                                  "claudeReasoningModel",
+                                  event.target.value
+                                )
+                              }}
+                              placeholder="claude-opus-5"
+                            />
                           </div>
                           <div className="space-y-1.5">
                             <label className="text-[11px] text-muted-foreground">
                               {t("claude.haikuDefaultModel")}
                             </label>
-                            {selectedDraft.claudeAuthMode ===
-                              "model_provider" &&
-                            selectedProviderModelOptions.length > 0 ? (
-                              <Select
-                                value={selectedDraft.claudeDefaultHaikuModel}
-                                onValueChange={(value) => {
-                                  handleImportantConfigChange(
-                                    "claudeDefaultHaikuModel",
-                                    value
-                                  )
-                                }}
-                              >
-                                <SelectTrigger className="w-full">
-                                  <SelectValue
-                                    placeholder={t("claude.haikuDefaultModel")}
-                                  />
-                                </SelectTrigger>
-                                <SelectContent align="start">
-                                  {selectedProviderModelOptions.map((model) => (
-                                    <SelectItem key={model} value={model}>
-                                      {model}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            ) : (
-                              <Input
-                                value={selectedDraft.claudeDefaultHaikuModel}
-                                readOnly={
-                                  selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                                }
-                                onChange={(event) => {
-                                  handleImportantConfigChange(
-                                    "claudeDefaultHaikuModel",
-                                    event.target.value
-                                  )
-                                }}
-                                placeholder="claude-haiku-4-5-20251001"
-                              />
-                            )}
+                            <Input
+                              value={selectedDraft.claudeDefaultHaikuModel}
+                              readOnly={
+                                selectedDraft.claudeAuthMode ===
+                                "model_provider"
+                              }
+                              onChange={(event) => {
+                                handleImportantConfigChange(
+                                  "claudeDefaultHaikuModel",
+                                  event.target.value
+                                )
+                              }}
+                              placeholder="claude-haiku-4-5"
+                            />
                           </div>
                           <div className="space-y-1.5">
                             <label className="text-[11px] text-muted-foreground">
                               {t("claude.sonnetDefaultModel")}
                             </label>
-                            {selectedDraft.claudeAuthMode ===
-                              "model_provider" &&
-                            selectedProviderModelOptions.length > 0 ? (
-                              <Select
-                                value={selectedDraft.claudeDefaultSonnetModel}
-                                onValueChange={(value) => {
-                                  handleImportantConfigChange(
-                                    "claudeDefaultSonnetModel",
-                                    value
-                                  )
-                                }}
-                              >
-                                <SelectTrigger className="w-full">
-                                  <SelectValue
-                                    placeholder={t("claude.sonnetDefaultModel")}
-                                  />
-                                </SelectTrigger>
-                                <SelectContent align="start">
-                                  {selectedProviderModelOptions.map((model) => (
-                                    <SelectItem key={model} value={model}>
-                                      {model}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            ) : (
-                              <Input
-                                value={selectedDraft.claudeDefaultSonnetModel}
-                                readOnly={
-                                  selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                                }
-                                onChange={(event) => {
-                                  handleImportantConfigChange(
-                                    "claudeDefaultSonnetModel",
-                                    event.target.value
-                                  )
-                                }}
-                                placeholder="claude-sonnet-5"
-                              />
-                            )}
+                            <Input
+                              value={selectedDraft.claudeDefaultSonnetModel}
+                              readOnly={
+                                selectedDraft.claudeAuthMode ===
+                                "model_provider"
+                              }
+                              onChange={(event) => {
+                                handleImportantConfigChange(
+                                  "claudeDefaultSonnetModel",
+                                  event.target.value
+                                )
+                              }}
+                              placeholder="claude-sonnet-5"
+                            />
                           </div>
                           <div className="space-y-1.5 md:col-span-2">
                             <label className="text-[11px] text-muted-foreground">
                               {t("claude.opusDefaultModel")}
                             </label>
-                            {selectedDraft.claudeAuthMode ===
-                              "model_provider" &&
-                            selectedProviderModelOptions.length > 0 ? (
-                              <Select
-                                value={selectedDraft.claudeDefaultOpusModel}
-                                onValueChange={(value) => {
-                                  handleImportantConfigChange(
-                                    "claudeDefaultOpusModel",
-                                    value
-                                  )
-                                }}
-                              >
-                                <SelectTrigger className="w-full">
-                                  <SelectValue
-                                    placeholder={t("claude.opusDefaultModel")}
-                                  />
-                                </SelectTrigger>
-                                <SelectContent align="start">
-                                  {selectedProviderModelOptions.map((model) => (
-                                    <SelectItem key={model} value={model}>
-                                      {model}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            ) : (
-                              <Input
-                                value={selectedDraft.claudeDefaultOpusModel}
-                                readOnly={
-                                  selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                                }
-                                onChange={(event) => {
-                                  handleImportantConfigChange(
-                                    "claudeDefaultOpusModel",
-                                    event.target.value
-                                  )
-                                }}
-                                placeholder="claude-opus-4-8"
-                              />
-                            )}
+                            <Input
+                              value={selectedDraft.claudeDefaultOpusModel}
+                              readOnly={
+                                selectedDraft.claudeAuthMode ===
+                                "model_provider"
+                              }
+                              onChange={(event) => {
+                                handleImportantConfigChange(
+                                  "claudeDefaultOpusModel",
+                                  event.target.value
+                                )
+                              }}
+                              placeholder="claude-opus-5"
+                            />
                           </div>
                         </div>
                         <p className="text-[11px] text-muted-foreground">
@@ -11196,7 +10908,7 @@ supports_websockets = false`}
                                     event.target.value
                                   )
                                 }}
-                                placeholder="my-gateway/claude-opus-4-8"
+                                placeholder="my-gateway/claude-opus-5"
                               />
                             </div>
                             <div className="space-y-1.5">
@@ -11325,37 +11037,17 @@ supports_websockets = false`}
                         <label className="text-[11px] text-muted-foreground">
                           Model
                         </label>
-                        {selectedCompatibleModelProviderId != null &&
-                        selectedProviderModelOptions.length > 0 ? (
-                          <Select
-                            value={selectedDraft.model}
-                            onValueChange={(value) => {
-                              handleImportantConfigChange("model", value)
-                            }}
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue placeholder="Model" />
-                            </SelectTrigger>
-                            <SelectContent align="start">
-                              {selectedProviderModelOptions.map((model) => (
-                                <SelectItem key={model} value={model}>
-                                  {model}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <Input
-                            value={selectedDraft.model}
-                            onChange={(event) => {
-                              handleImportantConfigChange(
-                                "model",
-                                event.target.value
-                              )
-                            }}
-                            placeholder="gpt-5 / claude-sonnet / gemini-2.5-pro"
-                          />
-                        )}
+                        <Input
+                          value={selectedDraft.model}
+                          readOnly={selectedDraft.modelProviderId != null}
+                          onChange={(event) => {
+                            handleImportantConfigChange(
+                              "model",
+                              event.target.value
+                            )
+                          }}
+                          placeholder="gpt-5 / claude-sonnet / gemini-2.5-pro"
+                        />
                       </div>
                     )}
 
@@ -11388,98 +11080,116 @@ supports_websockets = false`}
                     <div className="flex justify-end">
                       <Button
                         size="sm"
-                        onClick={async () => {
+                        onClick={() => {
                           if (selectedMissingModelProvider) {
-                            toast.error(
-                              selectedModelProviderErrorMessage ??
-                                t("toasts.modelProviderRequired")
-                            )
+                            toast.error(t("toasts.modelProviderRequired"))
                             return
                           }
-                          try {
-                            await persistSelectedModelProviderModel(
-                              selectedAgent.agent_type,
-                              selectedDraft
+                          // When a Claude provider is bound, the on-disk config
+                          // loaded into configText may carry stale model keys
+                          // (e.g. a leftover custom model option) from before the
+                          // binding — re-derive them from the provider so
+                          // persistConfig cannot write a stale value back over
+                          // the backend bind cascade (invalid JSON passes through
+                          // so persistConfig still surfaces the error). Sequence
+                          // env→config (never parallel): persistEnv also rewrites
+                          // config.env on the backend, so concurrent writes would
+                          // interleave two writers of ~/.claude/settings.json.
+                          let configToSave = configTextForClaudeSave(
+                            selectedDraft.configText,
+                            selectedAgent.agent_type,
+                            selectedDraft.modelProviderId,
+                            modelProviders.find(
+                              (p) => p.id === selectedDraft.modelProviderId
                             )
-                            // Provider-derived model settings must be resolved
-                            // before the Claude privacy flags are materialized.
-                            // Persist env before config because both writes update
-                            // the same native settings file.
-                            let configToSave = configTextForClaudeSave(
-                              selectedDraft.configText,
-                              selectedAgent.agent_type,
-                              selectedCompatibleModelProviderId,
-                              selectedModelProvider ?? undefined
-                            )
-                            let envToSave = selectedDraft.envText
-                            if (selectedAgent.agent_type === "claude_code") {
-                              const materialized =
-                                materializeClaudeHardeningFlags(
-                                  configToSave,
-                                  envToSave,
-                                  {
-                                    sendAttributionHeader:
-                                      selectedDraft.claudeSendAttributionHeader,
-                                    disableNonessentialTraffic:
-                                      selectedDraft.claudeDisableNonessentialTraffic,
-                                  }
-                                )
-                              configToSave = materialized.configText
-                              envToSave = materialized.envText
-                            }
-                            await persistEnv(
-                              selectedAgent.agent_type,
-                              selectedDraft.enabled,
-                              envToSave,
-                              selectedCompatibleModelProviderId
-                            )
-                            await persistConfig(
-                              selectedAgent.agent_type,
-                              configToSave
-                            )
-                            const syncedConfig =
-                              configToSave !== selectedDraft.configText
-                                ? normalizeConfigText(configToSave)
-                                : null
-                            const syncEnv = envToSave !== selectedDraft.envText
-                            if (syncedConfig !== null || syncEnv) {
-                              updateSelectedDraft((current) => {
-                                let next = current
-                                if (
-                                  syncedConfig !== null &&
-                                  current.configText ===
-                                    selectedDraft.configText
-                                ) {
-                                  next = {
-                                    ...next,
-                                    configText: syncedConfig,
-                                  }
+                          )
+                          // Materialize the Claude hardening toggles so the shown
+                          // default positions are actually applied on save —
+                          // writing the explicit "1"/"0" into both the native
+                          // config `env` and the DB env overlay — regardless of
+                          // whether the user touched the switches. Invalid JSON is
+                          // left untouched so persistConfig surfaces the error.
+                          let envToSave = selectedDraft.envText
+                          if (selectedAgent.agent_type === "claude_code") {
+                            const materialized =
+                              materializeClaudeHardeningFlags(
+                                configToSave,
+                                envToSave,
+                                {
+                                  sendAttributionHeader:
+                                    selectedDraft.claudeSendAttributionHeader,
+                                  disableNonessentialTraffic:
+                                    selectedDraft.claudeDisableNonessentialTraffic,
                                 }
-                                if (
-                                  syncEnv &&
-                                  current.envText === selectedDraft.envText
-                                ) {
-                                  next = { ...next, envText: envToSave }
-                                }
-                                return next
-                              })
-                            }
-                            toast.success(t("toasts.configSaved"), {
-                              description: t("toasts.configSavedHint"),
-                            })
-                          } catch (err) {
-                            console.error(
-                              "[Settings] save config management failed:",
-                              err
-                            )
-                            const message = toErrorMessage(err)
-                            toast.error(
-                              t("toasts.saveConfigManagementFailed"),
-                              {
-                                description: message,
-                              }
-                            )
+                              )
+                            configToSave = materialized.configText
+                            envToSave = materialized.envText
                           }
+                          persistEnv(
+                            selectedAgent.agent_type,
+                            selectedDraft.enabled,
+                            envToSave,
+                            selectedDraft.modelProviderId
+                          )
+                            .then(() =>
+                              persistConfig(
+                                selectedAgent.agent_type,
+                                configToSave
+                              )
+                            )
+                            .then(() => {
+                              // Reflect the provider-authoritative rewrite AND the
+                              // materialized hardening flags in the editors so the
+                              // textareas don't show stale values until reload —
+                              // and so a later env-only save doesn't persist a
+                              // stale envText that drops the flags from the DB
+                              // overlay. Each inner guard preserves an edit the
+                              // user typed while the save was in flight.
+                              const syncedConfig =
+                                configToSave !== selectedDraft.configText
+                                  ? normalizeConfigText(configToSave)
+                                  : null
+                              const syncEnv =
+                                envToSave !== selectedDraft.envText
+                              if (syncedConfig !== null || syncEnv) {
+                                updateSelectedDraft((current) => {
+                                  let next = current
+                                  if (
+                                    syncedConfig !== null &&
+                                    current.configText ===
+                                      selectedDraft.configText
+                                  ) {
+                                    next = {
+                                      ...next,
+                                      configText: syncedConfig,
+                                    }
+                                  }
+                                  if (
+                                    syncEnv &&
+                                    current.envText === selectedDraft.envText
+                                  ) {
+                                    next = { ...next, envText: envToSave }
+                                  }
+                                  return next
+                                })
+                              }
+                              toast.success(t("toasts.configSaved"), {
+                                description: t("toasts.configSavedHint"),
+                              })
+                            })
+                            .catch((err) => {
+                              console.error(
+                                "[Settings] save config management failed:",
+                                err
+                              )
+                              const message = toErrorMessage(err)
+                              toast.error(
+                                t("toasts.saveConfigManagementFailed"),
+                                {
+                                  description: message,
+                                }
+                              )
+                            })
                         }}
                         disabled={selectedIsSavingEnv || selectedIsSavingConfig}
                       >

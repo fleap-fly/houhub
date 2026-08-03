@@ -64,6 +64,7 @@ vi.mock("@/lib/transport", () => ({
 
 describe("HouflowDesktopProvider workspace selection", () => {
   beforeEach(() => {
+    localStorage.clear()
     mocks.loadHouflowControlSnapshot.mockReset()
     mocks.fetchOpenAiCompatibleModels.mockReset()
     mocks.saveHouflowSessionMetadata.mockReset()
@@ -91,6 +92,21 @@ describe("HouflowDesktopProvider workspace selection", () => {
           options?.gatewayCatalogMode === "skip" ? null : gatewayCatalog()
         )
     )
+  })
+
+  it("does not load Houflow targets when the project identity owns the gate", async () => {
+    localStorage.setItem("houhub:active-account-identity:v1", "project")
+
+    render(
+      <HouflowDesktopProvider>
+        <Probe />
+      </HouflowDesktopProvider>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText(/signed_out:/)).toBeInTheDocument()
+    })
+    expect(mocks.loadHouflowControlSnapshot).not.toHaveBeenCalled()
   })
 
   it("does not sync gateway models when switching workspace", async () => {

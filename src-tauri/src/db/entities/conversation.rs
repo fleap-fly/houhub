@@ -64,6 +64,8 @@ pub struct Model {
     /// the sidebar's "Pinned" section (sorted by this timestamp descending).
     /// Pinning never bumps `updated_at` — it is a view preference, not activity.
     pub pinned_at: Option<DateTimeUtc>,
+    /// Original working directory for sessions moved out of a task worktree.
+    pub origin_cwd: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

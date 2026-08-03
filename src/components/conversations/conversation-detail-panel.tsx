@@ -37,7 +37,6 @@ import { useTaskContext } from "@/contexts/task-context"
 import { cn, copyTextFromMenu, randomUUID } from "@/lib/utils"
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
 import { useMessageQueue, type QueuedMessage } from "@/hooks/use-message-queue"
-import { buildOptimisticUserTurnFromDraft } from "@/lib/optimistic-user-turn"
 import { MessageListView } from "@/components/message/message-list-view"
 import {
   GoalControlProvider,
@@ -84,11 +83,18 @@ import {
   shouldRejectDuplicateCreate,
 } from "@/lib/queue-flush"
 import { TurnBusyError } from "@/lib/turn-busy"
-import { useConversationRuntime } from "@/contexts/conversation-runtime-context"
-import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
+import {
+  getConversationIdByExternalIdFromStore,
+  getRuntimeSession,
+  useConversationRuntimeActions,
+  useConversationRuntimeStore,
+} from "@/stores/conversation-runtime-store"
 import { useShallow } from "zustand/react/shallow"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
-import { getPromptDraftDisplayText } from "@/lib/prompt-draft"
+import {
+  extractUserImagesFromDraft,
+  getPromptDraftDisplayText,
+} from "@/lib/prompt-draft"
 import {
   type AgentType,
   type ContentBlock,
@@ -152,6 +158,36 @@ interface ConversationTabViewProps {
   groupId: string
 }
 
+function buildOptimisticUserTurnFromDraft(
+  draft: PromptDraft,
+  attachedResourcesFallback: string
+): MessageTurn {
+  // `draft.displayText` is the composer's full Markdown, which already renders
+  // every inline file/resource badge as a `[label](uri)` link (see
+  // `referenceToMarkdown`). Re-appending the resource blocks here would duplicate
+  // each attached file in the optimistic bubble, so the display text is used
+  // as-is — images are the only out-of-band content left to add as blocks.
+  const text = getPromptDraftDisplayText(draft, attachedResourcesFallback)
+
+  const blocks: ContentBlock[] = []
+  for (const image of extractUserImagesFromDraft(draft)) {
+    blocks.push({
+      type: "image",
+      data: image.data,
+      mime_type: image.mime_type,
+      uri: image.uri ?? null,
+    })
+  }
+  blocks.push({ type: "text", text })
+
+  return {
+    id: `optimistic-${randomUUID()}`,
+    role: "user",
+    blocks,
+    timestamp: new Date().toISOString(),
+  }
+}
+
 /** Build a user `MessageTurn` from a broadcast `user_message` (event or
  *  snapshot `pending_user_message`). Used by cross-client VIEWERS to render the
  *  sender's prompt. The turn `id` is the broadcast `message_id` so the runtime
@@ -207,6 +243,13 @@ const ConversationTabView = memo(function ConversationTabView({
   const ownTab = useTabStore(
     (s) => s.tabs.find((tab) => tab.id === tabId) ?? null
   )
+  // Resolve this panel's folder from ITS OWN tab, not the global active folder.
+  // A keep-alive panel for a background tab must NOT re-render when the active
+  // tab switches to a different folder. For the active tab this equals the old
+  // `activeFolderId` (which is itself derived from the active tab's folderId via
+  // `syncActiveFolderId`); it also avoids the brief post-switch window where the
+  // global `activeFolderId` still lags on the previous tab's folder (same
+  // rationale as the per-tab `workingDir` used for the connection below).
   const ownFolderId = ownTab?.folderId ?? null
   const folder = useAppWorkspaceStore((s) =>
     ownFolderId != null
@@ -233,11 +276,12 @@ const ConversationTabView = memo(function ConversationTabView({
     syncTurnMetadata,
     removeConversation,
     setAcpLoadError,
+    setDbConversationId,
     setExternalId,
     setLiveMessage,
     setPendingCleanup,
     setSyncState,
-  } = useConversationRuntime()
+  } = useConversationRuntimeActions()
   const acpActions = useAcpActions()
 
   // Stable runtime session key — set once at mount, never changes.
@@ -322,7 +366,19 @@ const ConversationTabView = memo(function ConversationTabView({
 
   useEffect(() => {
     dbConvIdRef.current = dbConversationId
-  }, [dbConversationId])
+    // Bind the DB row id onto the runtime session when the two ids diverge
+    // (draft-started tab: virtual runtime key, row created on first send).
+    // `refetchDetail` on the runtime key fetches with this binding — without
+    // it, a settle-driven refetch (background task finished) asks the backend
+    // for the virtual id and silently fails, leaving stale live turns on
+    // screen forever.
+    if (
+      dbConversationId != null &&
+      dbConversationId !== effectiveConversationId
+    ) {
+      setDbConversationId(effectiveConversationId, dbConversationId)
+    }
+  }, [dbConversationId, effectiveConversationId, setDbConversationId])
 
   useEffect(() => {
     selectedAgentRef.current = selectedAgent
@@ -446,6 +502,15 @@ const ConversationTabView = memo(function ConversationTabView({
       info != null && info.enabled && info.available && !info.installed_version
     )
   }, [acpAgents, selectedAgent])
+  // Claude Code / Codex install a separate ACP adapter package rather than the
+  // vendor CLI, so the generic "not installed" banner reads as wrong to anyone
+  // who has `claude`/`codex` in their terminal. Name the adapter instead.
+  const selectedAgentIsAcpAdapter = useMemo(
+    () =>
+      acpAgents.find((a) => a.agent_type === selectedAgent)?.is_acp_adapter ===
+      true,
+    [acpAgents, selectedAgent]
+  )
   const canAutoConnect =
     (hasPersistedConversation || (agentsLoaded && usableAgentCount > 0)) &&
     !awaitingHistoricalSessionId &&
@@ -603,7 +668,12 @@ const ConversationTabView = memo(function ConversationTabView({
   // appears the moment a not-installed agent is selected, independent of whether
   // a (deduped/superseded) connect attempt ever reached the preflight.
   const composerBlockedMessage = selectedAgentNotInstalled
-    ? tWelcome("agentNotInstalled", { agent: getAgentLabel(selectedAgent) })
+    ? tWelcome(
+        selectedAgentIsAcpAdapter
+          ? "agentAdapterNotInstalled"
+          : "agentNotInstalled",
+        { agent: getAgentLabel(selectedAgent) }
+      )
     : (autoConnectError ?? agentConnectError)
 
   useEffect(() => {
@@ -621,10 +691,10 @@ const ConversationTabView = memo(function ConversationTabView({
     setAcpLoadError(effectiveConversationId, connLoadError ?? null)
   }, [connLoadError, effectiveConversationId, setAcpLoadError])
 
-  // completeTurn MUST be declared BEFORE setLiveMessage so that React runs
-  // its cleanup/setup before setLiveMessage's cleanup. When connStatus
-  // Promote the completed turn on the prompting-to-idle edge. The connection
-  // dispatch mirrors liveMessage into the runtime store synchronously.
+  // Promote the completed turn on the prompting→idle edge. (There is no longer
+  // an ordering constraint against a setLiveMessage cleanup: the liveMessage
+  // sink writes the runtime store from the connection dispatch, not a React
+  // effect — see registerLiveMessageSink.)
   const prevConnStatusRef = useRef(connStatus)
   useEffect(() => {
     const wasPrompting = prevConnStatusRef.current === "prompting"
@@ -632,7 +702,12 @@ const ConversationTabView = memo(function ConversationTabView({
     if (!wasPrompting || connStatus === "prompting") return
 
     // Turn completed — promote liveMessage + optimisticTurns to localTurns.
-    // The sink has already written the final stream chunk into the runtime.
+    // Don't pass conn.liveMessage: this panel no longer subscribes to it (the
+    // connection snapshot is stable across streaming tokens — see useConnection),
+    // so reading it here would be stale. COMPLETE_TURN falls back to
+    // session.liveMessage, which the connection dispatch's sink wrote
+    // synchronously as the final chunk landed (turn_complete flushes the stream
+    // queue BEFORE the status change), so it already holds the final message.
     completeTurn(effectiveConversationId)
 
     // Cancel previous metadata sync (handles rapid consecutive turns)
@@ -717,6 +792,18 @@ const ConversationTabView = memo(function ConversationTabView({
     workingDirForConnection,
   ])
 
+  // Mirror the connection's liveMessage into the runtime session OUTSIDE React.
+  // The connection dispatch invokes this sink synchronously whenever liveMessage
+  // changes (streaming deltas, tool updates, the prompt-start reset), so the
+  // streaming content flows straight to the runtime store — which the message
+  // list renders — WITHOUT this keep-alive panel re-rendering per token (the old
+  // mirror effect required a per-token render just to run). The sink writes
+  // non-null values with isLive = (status === "prompting"), which tells the
+  // runtime reducer to bypass its stale-reconnect-replay guard (matters for the
+  // rekey path: close+reopen mid-turn, where detail.turns may already hold user
+  // turns that would otherwise drop the live assistant stream). Turn-end clearing
+  // is owned by COMPLETE_TURN (nulls liveMessage); unmount clearing by
+  // removeConversation. `tabId` is the connection contextKey.
   useEffect(() => {
     return acpActions.registerLiveMessageSink(tabId, (liveMessage, isLive) =>
       setLiveMessage(effectiveConversationId, liveMessage, isLive)
@@ -976,6 +1063,10 @@ const ConversationTabView = memo(function ConversationTabView({
             sendFolderId = res.folderId
             dbConvIdRef.current = newConversationId
             setExternalId(effectiveConversationId, sessionIdRef.current ?? null)
+            // Bind the DB id BEFORE the prompt goes out. The mirror effect
+            // below also binds, but only after a re-render — this closes that
+            // window and covers the unmounted-early return just under it.
+            setDbConversationId(effectiveConversationId, newConversationId)
             if (!mountedRef.current) {
               setPendingCleanup(effectiveConversationId, true)
               refreshConversations()
@@ -1008,6 +1099,8 @@ const ConversationTabView = memo(function ConversationTabView({
             // DB persistence of external_id is now backend-driven from
             // send_prompt_linked once the row is linked, so no explicit DB write here.
             setExternalId(effectiveConversationId, sessionIdRef.current ?? null)
+            // Bind the DB id BEFORE the prompt goes out (see the chat branch).
+            setDbConversationId(effectiveConversationId, newConversationId)
             if (!mountedRef.current) {
               // Component unmounted while creating — mark for deferred cleanup
               // so the background turn_complete handler can clean up later.
@@ -1082,6 +1175,7 @@ const ConversationTabView = memo(function ConversationTabView({
       pinTab,
       refreshConversations,
       selectedAgent,
+      setDbConversationId,
       setExternalId,
       setPendingCleanup,
       setSyncState,
@@ -1122,6 +1216,12 @@ const ConversationTabView = memo(function ConversationTabView({
         // Backend performs all DB writes in one transaction-shaped call:
         // - current row: external_id=S2, title="[Fork] ..."
         // - sibling row: created with external_id=S1, status=pending_review
+        // Pass (conversationId, folderId) so a conversation opened from history
+        // — whose connection resumed via session_id but isn't row-linked until
+        // its first prompt — is adopted by the backend before forking (a
+        // fork-send forks BEFORE that prompt). No-op once already linked. Use
+        // the real persisted DB id (`dbConvIdRef`, same as the send path below),
+        // NOT the runtime key `effectiveConversationId` which can be virtual.
         const { forkedSessionId } = await acpFork(
           connectionId,
           dbConvIdRef.current,
@@ -1131,6 +1231,14 @@ const ConversationTabView = memo(function ConversationTabView({
         sessionIdRef.current = forkedSessionId
         setExternalId(effectiveConversationId, forkedSessionId)
 
+        // NOTE: a fork is a transcript discontinuity — the row's session flips
+        // S1→S2, and S2 is a COPY of S1's transcript plus the turns to come.
+        // The pre-fork history is NOT re-surfaced here: the backend background
+        // watcher correctly excludes the fork-copied prefix from the out-of-turn
+        // overlay (see `baseline_offset_since`), so `detail.turns` (S1 parse) +
+        // the new local turns render each exchange exactly once. No detail
+        // refetch is needed or wanted — an early one races the forked turn and
+        // can drop the just-sent message.
         refreshConversations()
         // Send the message on the forked session (S2)
         handleSend(draft, selectedModeIdArg)
@@ -1302,9 +1410,17 @@ const ConversationTabView = memo(function ConversationTabView({
     [acpActions, tabId]
   )
 
-  // Grok discards feedback while it keeps planning. Mirror its native TUI by
-  // following a "request changes" approval with a normal user prompt, which
-  // stays durable and is queued when the approval turn is still winding down.
+  // Grok `exit_plan_mode` approval: resolve the blocked ext request. The backend
+  // broadcasts `plan_approval_resolved` to clear the card on every client.
+  //
+  // "Request changes" is special. Grok discards the reply `feedback` on the
+  // keep-planning path (confirmed against 0.2.111 — only `approved`/`abandoned`
+  // consume it), and its own TUI instead delivers the revision notes as a
+  // follow-up user turn (`s` moves focus to the prompt). Mirror that: after
+  // resolving keep-planning, send the notes as a normal prompt so Grok — still
+  // in plan mode — revises and re-presents the plan. The send path queues the
+  // prompt if the keep-planning turn is still winding down, then flushes when
+  // idle (same optimistic-turn + re-queue dance as `handleAnswerQuestion`).
   const handleAnswerPlanApproval = useCallback(
     (approvalId: string, answer: PlanApprovalAnswer) => {
       const result = acpActions.answerPlanApproval(tabId, approvalId, answer)
@@ -1333,6 +1449,8 @@ const ConversationTabView = memo(function ConversationTabView({
         setSyncState(effectiveConversationId, "awaiting_persist")
         lifecycleSend(draft, null, {
           clientMessageId: optimisticTurn.id,
+          // Rejected because the keep-planning turn was still in flight — roll
+          // back the optimistic turn and re-queue at the tail so it isn't lost.
           onTurnInProgress: () => {
             lastFlushBounceAtRef.current = Date.now()
             removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
@@ -1499,6 +1617,17 @@ const ConversationTabView = memo(function ConversationTabView({
     enabled: feedbackEnabled,
     onResendAsPrompt: resendFeedbackAsPrompt,
   })
+  // Composer "insert into current turn" (native steering only). Rethrows —
+  // MessageInput owns the enqueue fallback and draft-preservation policy, so
+  // this wrapper must not swallow the turn-end race the way `submit` does.
+  const feedbackSteer = feedback.steer
+  const handleSteer = useCallback(
+    async (text: string) => {
+      await feedbackSteer(text)
+    },
+    [feedbackSteer]
+  )
+
   return (
     <ConversationShell
       topBanner={
@@ -1563,6 +1692,14 @@ const ConversationTabView = memo(function ConversationTabView({
         conn.supportsFork &&
         !forkSendBlockedByQueue(msgQueue.length)
           ? handleForkSend
+          : undefined
+      }
+      onSteer={
+        // Native channel only: on pull sessions the prompting branch must
+        // stay pixel-identical (Stop button alone). The prompting scope
+        // itself is enforced where the button renders.
+        feedback.featureEnabled && feedback.channel === "native"
+          ? handleSteer
           : undefined
       }
     >
@@ -1715,6 +1852,7 @@ const ConversationTabView = memo(function ConversationTabView({
         onSubmit={feedback.submit}
         submitting={feedback.submitting}
         agentName={getAgentLabel(selectedAgent)}
+        channel={feedback.channel}
       />
       <AgentDiagnosticsDialog
         open={composerDiagnosticsOpen}
@@ -1772,10 +1910,8 @@ export function ConversationDetailPanel() {
   const tDetails = useTranslations("Folder.sessionDetails")
   const {
     completeTurn: runtimeCompleteTurn,
-    getConversationIdByExternalId,
-    getSession,
     removeConversation: runtimeRemoveConversation,
-  } = useConversationRuntime()
+  } = useConversationRuntimeActions()
   const { activeFolder: folder } = useActiveFolder()
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
@@ -1826,7 +1962,7 @@ export function ConversationDetailPanel() {
       (envelope: EventEnvelope) => {
         if (envelope.type !== "turn_complete") return
 
-        const runtimeConversationId = getConversationIdByExternalId(
+        const runtimeConversationId = getConversationIdByExternalIdFromStore(
           envelope.session_id
         )
         // Event-time read: fresher than a render capture ("`conversations`
@@ -1866,19 +2002,14 @@ export function ConversationDetailPanel() {
         // Promote liveMessage + optimisticTurns to localTurns immediately
         runtimeCompleteTurn(matchedConversationId)
 
-        // If tab was closed while agent was responding, clean up now
-        const session = getSession(matchedConversationId)
+        // If tab was closed while agent was responding, clean up now.
+        // Event-time read: fresh via getState(), no reactive subscription.
+        const session = getRuntimeSession(matchedConversationId)
         if (session?.pendingCleanup) {
           runtimeRemoveConversation(matchedConversationId)
         }
       },
-      [
-        tabs,
-        getConversationIdByExternalId,
-        getSession,
-        runtimeCompleteTurn,
-        runtimeRemoveConversation,
-      ]
+      [tabs, runtimeCompleteTurn, runtimeRemoveConversation]
     )
   )
 
@@ -1973,27 +2104,50 @@ export function ConversationDetailPanel() {
     closeTab(activeTabId)
   }, [activeTabId, closeTab])
 
-  const canExport =
-    activeConversationTab?.conversationId != null &&
-    getSession(activeConversationTab.conversationId)?.detail != null
+  // Narrow reactive reads for the ACTIVE conversation only — a background
+  // conversation's streaming token no longer re-renders this panel. `canExport`
+  // keys on the tab's persisted `conversationId`; the session-details
+  // resolution keys on `runtimeConversationId ?? conversationId` (a brand-new
+  // conversation streams under a virtual runtime id whose live stats differ), so
+  // the two are subscribed SEPARATELY — collapsing them to one lookup would
+  // diverge during the virtual→persisted reconciliation window.
+  const activeExportConversationId =
+    activeConversationTab?.conversationId ?? null
+  const canExport = useConversationRuntimeStore(
+    (s) =>
+      activeExportConversationId != null &&
+      s.byConversationId.get(activeExportConversationId)?.detail != null
+  )
 
   // Resolve the active conversation's summary + live token usage the same way
   // the tab view renders them — a new conversation streams under a virtual
   // `runtimeConversationId` with its usage on `sessionStats`. Extracted so the
   // resolution is unit-tested (see active-session-details.test.ts).
+  const activeRuntimeId =
+    activeConversationTab?.runtimeConversationId ??
+    activeConversationTab?.conversationId ??
+    null
+  const activeRuntimeSession = useConversationRuntimeStore((s) =>
+    activeRuntimeId != null
+      ? (s.byConversationId.get(activeRuntimeId) ?? null)
+      : null
+  )
   const {
     summary: activeSessionSummary,
     stats: activeSessionStats,
     model: activeSessionModel,
   } = resolveActiveSessionDetails(
     activeConversationTab,
-    getSession,
+    // resolveActiveSessionDetails reads only `getSession(runtimeId)`, and its
+    // internal `runtimeId` equals `activeRuntimeId` (identical computation), so
+    // resolving that single pre-selected session is exact.
+    (id) => (id === activeRuntimeId ? activeRuntimeSession : null),
     conversations
   )
 
   const getExportData = useCallback(() => {
     if (!activeConversationTab?.conversationId) return null
-    const session = getSession(activeConversationTab.conversationId)
+    const session = getRuntimeSession(activeConversationTab.conversationId)
     if (!session?.detail) return null
     return {
       summary: session.detail.summary,
@@ -2001,7 +2155,7 @@ export function ConversationDetailPanel() {
       sessionStats: session.detail.session_stats,
       labels: exportLabels,
     }
-  }, [activeConversationTab, getSession, exportLabels])
+  }, [activeConversationTab, exportLabels])
 
   const handleExportMarkdown = useCallback(async () => {
     const data = getExportData()
@@ -2172,7 +2326,7 @@ export function ConversationDetailPanel() {
               )
             : visible
               ? "h-full"
-              : "absolute inset-0 invisible pointer-events-none"
+              : "conversation-tab-hidden absolute inset-0 invisible pointer-events-none"
         )}
         onPointerDownCapture={
           visible && !active ? () => switchTab(tab.id) : undefined

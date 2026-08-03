@@ -87,23 +87,37 @@ describe("HouhubAccountMenu", () => {
     state.workbench.signOut.mockReset().mockResolvedValue(undefined)
   })
 
-  it("keeps both independent sign-in choices in the bottom account menu", async () => {
+  it("requires signing out before switching from Houflow to the project account", async () => {
+    state.houflow.status = "ready"
+    state.houflow.session.status = "signed_in"
+    state.houflow.session.userLabel = "houflow@example.com"
     const user = userEvent.setup()
     renderMenu()
-
-    await user.click(screen.getByRole("button", { name: "Accounts" }))
-    await user.click(screen.getByText("Houflow").closest("[role=menuitem]")!)
-    await waitFor(() => {
-      expect(state.houflow.signInWithHouflow).toHaveBeenCalledOnce()
-    })
 
     await user.click(screen.getByRole("button", { name: "Accounts" }))
     await user.click(
       screen.getByText("Project account").closest("[role=menuitem]")!
     )
-    await waitFor(() => {
-      expect(state.workbench.signIn).toHaveBeenCalledOnce()
-    })
+
+    await waitFor(() => expect(state.workbench.signIn).not.toHaveBeenCalled())
+    expect(state.houflow.signInWithHouflow).not.toHaveBeenCalled()
+  })
+
+  it("requires signing out before switching from the project account to Houflow", async () => {
+    state.workbench.status = "ready"
+    state.workbench.session.status = "signed_in"
+    state.workbench.session.user = { label: "project@example.com" }
+    state.workbench.session.activeProjectId = "project-1"
+    const user = userEvent.setup()
+    renderMenu()
+
+    await user.click(screen.getByRole("button", { name: "Accounts" }))
+    await user.click(screen.getByText("Houflow").closest("[role=menuitem]")!)
+
+    await waitFor(() =>
+      expect(state.houflow.signInWithHouflow).not.toHaveBeenCalled()
+    )
+    expect(state.workbench.signIn).not.toHaveBeenCalled()
   })
 
   it("groups both signed-in identities behind one sign-out row", async () => {

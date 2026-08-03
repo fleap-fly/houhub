@@ -11,7 +11,7 @@ use sea_orm::{
 };
 
 use crate::acp::connection::{
-    spawn_agent_connection, AgentConnection, ConnectionCommand, GoalControlAction,
+    spawn_agent_connection, AgentConnection, ConnectionCommand, GoalControlAction, SteerOutcome,
 };
 use crate::acp::error::AcpError;
 use crate::acp::feedback::{
@@ -1621,6 +1621,7 @@ impl ConnectionManager {
                         updated_at: Set(now),
                         deleted_at: Set(None),
                         pinned_at: Set(None),
+                        origin_cwd: Set(None),
                     };
                     let inserted = sibling.insert(txn).await?;
                     Ok(inserted.id)
@@ -2034,16 +2035,24 @@ impl ConnectionManager {
             )));
         }
         let text = trimmed.to_string();
-        let (state, emitter) = self
-            .get_state_and_emitter(conn_id)
-            .await
-            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.to_string()))?;
-        // Per-connection capability gate: reject if THIS agent never got the
-        // `check_user_feedback` tool (e.g. its session started before the feature
-        // was enabled) — the note could never be read. `feedback_tool_available`
-        // is fixed at launch, so a plain read is race-free.
-        if !state.read().await.feedback_tool_available {
+        let (state, cmd_tx, emitter) = {
+            let connections = self.connections.lock().await;
+            let conn = connections
+                .get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.to_string()))?;
+            (conn.state.clone(), conn.cmd_tx.clone(), conn.emitter.clone())
+        };
+        // A note is deliverable through the native ACP push channel or the
+        // MCP pull tool. Reject only when neither channel is available.
+        let (native, tool_available) = {
+            let s = state.read().await;
+            (s.native_steering_available, s.feedback_tool_available)
+        };
+        if !native && !tool_available {
             return Err(AcpError::FeedbackDisabled);
+        }
+        if native {
+            return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text).await;
         }
         let item =
             FeedbackItem::new_pending(uuid::Uuid::new_v4().to_string(), text, chrono::Utc::now());
@@ -2062,6 +2071,75 @@ impl ConnectionManager {
             return Err(AcpError::NoActiveTurn);
         }
         Ok(item)
+    }
+
+    /// Deliver through ACP's native `_session/steering` channel. The actual
+    /// protocol round-trip and recording run in a detached task so a caller
+    /// disconnect cannot leave an injected note unrecorded.
+    async fn submit_feedback_native(
+        conn_id: &str,
+        state: Arc<tokio::sync::RwLock<crate::acp::session_state::SessionState>>,
+        cmd_tx: tokio::sync::mpsc::Sender<ConnectionCommand>,
+        emitter: EventEmitter,
+        text: String,
+    ) -> Result<FeedbackItem, AcpError> {
+        if !state.read().await.turn_in_flight {
+            return Err(AcpError::NoActiveTurn);
+        }
+        let conn_id_for_task = conn_id.to_string();
+        let handle = tokio::spawn(async move {
+            let outcome: Result<FeedbackItem, AcpError> = async {
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                cmd_tx
+                    .send(ConnectionCommand::Steer {
+                        text: text.clone(),
+                        reply: reply_tx,
+                    })
+                    .await
+                    .map_err(|_| AcpError::ProcessExited)?;
+                match reply_rx
+                    .await
+                    .map_err(|_| AcpError::protocol("Steer reply channel closed".to_string()))??
+                {
+                    SteerOutcome::PromptRequired => return Err(AcpError::NoActiveTurn),
+                    SteerOutcome::Injected => {}
+                    SteerOutcome::StartedNewTurn => {
+                        tracing::warn!(
+                            "[ACP][feedback] _session/steering returned startedNewTurn \
+                             (conn={conn_id_for_task}); downgrading native steering"
+                        );
+                        state.write().await.native_steering_available = false;
+                    }
+                }
+                let item = FeedbackItem::new_delivered(
+                    uuid::Uuid::new_v4().to_string(),
+                    text,
+                    chrono::Utc::now(),
+                );
+                emit_with_state(
+                    &state,
+                    &emitter,
+                    AcpEvent::FeedbackSubmitted { item: item.clone() },
+                )
+                .await;
+                Ok(item)
+            }
+            .await;
+            if let Err(ref e) = outcome {
+                if !matches!(e, AcpError::NoActiveTurn) {
+                    tracing::error!(
+                        "[ACP][ERROR] native feedback submit failed (conn={conn_id_for_task}): {e}"
+                    );
+                }
+            }
+            outcome
+        });
+        match handle.await {
+            Ok(result) => result,
+            Err(join_err) => Err(AcpError::protocol(format!(
+                "steer task did not complete: {join_err}"
+            ))),
+        }
     }
 
     /// Read the pending feedback for a connection WITHOUT marking it delivered.
@@ -5669,6 +5747,7 @@ mod tests {
             message: "agent exploded".into(),
             agent_type: "claude_code".into(),
             code: Some("sdk_not_installed".into()),
+            details: None,
             terminal: true,
         });
         let captured = s.last_error.as_ref().expect("error must be captured");
@@ -5682,6 +5761,7 @@ mod tests {
             message: "second failure".into(),
             agent_type: "claude_code".into(),
             code: None,
+            details: None,
             terminal: true,
         });
         let captured = s.last_error.as_ref().unwrap();

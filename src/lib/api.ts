@@ -29,6 +29,13 @@ import type {
   Automation,
   AutomationRun,
   AutomationDraft,
+  WorkTask,
+  WorkTaskChangedFile,
+  WorkTaskConfig,
+  WorkTaskDraft,
+  WorkTaskEvent,
+  WorkTaskFolderSettings,
+  WorkTaskTemplate,
   ConversationSummary,
   ConversationDetail,
   DbConversationDetail,
@@ -50,6 +57,7 @@ import type {
   CursorAuthStatus,
   CursorModelsResult,
   CodexModelInfo,
+  OpenCodeCatalogProvider,
   AgentSkillScope,
   AgentSkillLayout,
   AgentSkillItem,
@@ -691,6 +699,14 @@ export async function acpUpdateKimiCodeConfig(params: {
   vertexProject?: string | null
   vertexLocation?: string | null
   rawConfigToml?: string | null
+  /** Declares a thinking capability on the managed model, which is what makes
+   * `kimi acp` advertise its Thinking picker in the composer at all. */
+  reasoningEnabled?: boolean | null
+  /** Declares `always_thinking` instead of `thinking` — no "Off" row. */
+  alwaysThinking?: boolean | null
+  /** The reasoning levels the composer offers; passed to the provider verbatim. */
+  supportEfforts?: string[] | null
+  defaultEffort?: string | null
 }): Promise<number> {
   return getTransport().call("acp_update_kimi_code_config", {
     mode: params.mode,
@@ -703,6 +719,10 @@ export async function acpUpdateKimiCodeConfig(params: {
     vertexProject: params.vertexProject ?? null,
     vertexLocation: params.vertexLocation ?? null,
     rawConfigToml: params.rawConfigToml ?? null,
+    reasoningEnabled: params.reasoningEnabled ?? null,
+    alwaysThinking: params.alwaysThinking ?? null,
+    supportEfforts: params.supportEfforts ?? null,
+    defaultEffort: params.defaultEffort ?? null,
   })
 }
 
@@ -932,6 +952,14 @@ export async function acpPreflight(
 
 export async function opencodeListPlugins(): Promise<PluginCheckSummary> {
   return getTransport().call("opencode_list_plugins", {})
+}
+
+export async function opencodeProviderCatalog(
+  forceRefresh?: boolean
+): Promise<OpenCodeCatalogProvider[]> {
+  return getTransport().call("opencode_provider_catalog", {
+    forceRefresh: forceRefresh ?? null,
+  })
 }
 
 export async function codexBundledCatalog(
@@ -2559,6 +2587,152 @@ export async function automationRunNow(automationId: number): Promise<number> {
 /** Cancel an in-flight (or clear a wedged) run. */
 export async function automationCancelRun(runId: number): Promise<void> {
   return getTransport().call("automation_cancel_run", { runId })
+}
+
+// Work tasks
+
+export async function workTaskList(
+  folderId?: number | null
+): Promise<WorkTask[]> {
+  return getTransport().call("work_task_list", { folderId: folderId ?? null })
+}
+
+export async function workTaskGet(id: number): Promise<WorkTask> {
+  return getTransport().call("work_task_get", { id })
+}
+
+export async function workTaskEvents(
+  taskId: number,
+  limit = 500
+): Promise<WorkTaskEvent[]> {
+  return getTransport().call("work_task_events", { taskId, limit })
+}
+
+export async function workTaskCreate(draft: WorkTaskDraft): Promise<WorkTask> {
+  return getTransport().call("work_task_create", { draft })
+}
+
+export async function workTaskUpdate(
+  id: number,
+  draft: WorkTaskDraft
+): Promise<WorkTask> {
+  return getTransport().call("work_task_update", { id, draft })
+}
+
+export async function workTaskReorder(
+  folderId: number,
+  orderedIds: number[]
+): Promise<void> {
+  return getTransport().call("work_task_reorder", { folderId, orderedIds })
+}
+
+export async function workTaskDelete(
+  id: number,
+  deleteWorktree = false
+): Promise<void> {
+  return getTransport().call("work_task_delete", { id, deleteWorktree })
+}
+
+export async function workTaskStart(id: number): Promise<void> {
+  return getTransport().call("work_task_start", { id })
+}
+
+export async function workTaskStartAll(folderId: number | null): Promise<number> {
+  return getTransport().call("work_task_start_all", { folderId })
+}
+
+export async function workTaskRetry(id: number): Promise<void> {
+  return getTransport().call("work_task_retry", { id })
+}
+
+export async function workTaskRequeue(id: number): Promise<void> {
+  return getTransport().call("work_task_requeue", { id })
+}
+
+export async function workTaskReturn(id: number, feedback: string): Promise<void> {
+  return getTransport().call("work_task_return", { id, feedback })
+}
+
+export async function workTaskCancel(id: number): Promise<void> {
+  return getTransport().call("work_task_cancel", { id })
+}
+
+export async function workTaskMerge(
+  id: number,
+  message: string | null,
+  deleteWorktree: boolean
+): Promise<void> {
+  return getTransport().call("work_task_merge", {
+    id,
+    message,
+    deleteWorktree,
+  })
+}
+
+export async function workTaskArchive(
+  id: number,
+  archived: boolean
+): Promise<void> {
+  return getTransport().call("work_task_archive", { id, archived })
+}
+
+export async function workTaskCleanup(id: number): Promise<void> {
+  return getTransport().call("work_task_cleanup", { id })
+}
+
+export async function workTaskDiff(id: number, file?: string | null): Promise<string> {
+  return getTransport().call("work_task_diff", { id, file: file ?? null })
+}
+
+export async function workTaskChangedFiles(
+  id: number
+): Promise<WorkTaskChangedFile[]> {
+  return getTransport().call("work_task_changed_files", { id })
+}
+
+export async function workTaskSettingsEffective(
+  folderId: number
+): Promise<WorkTaskFolderSettings> {
+  return getTransport().call("work_task_settings_effective", { folderId })
+}
+
+export async function workTaskSettingsGet(
+  folderId: number
+): Promise<WorkTaskFolderSettings> {
+  return getTransport().call("work_task_settings_get", { folderId })
+}
+
+export async function workTaskSettingsGetOwn(
+  folderId: number
+): Promise<WorkTaskFolderSettings | null> {
+  return getTransport().call("work_task_settings_get_own", { folderId })
+}
+
+export async function workTaskSettingsSet(
+  folderId: number,
+  settings: WorkTaskFolderSettings
+): Promise<void> {
+  return getTransport().call("work_task_settings_set", { folderId, settings })
+}
+
+export async function workTaskSettingsDelete(folderId: number): Promise<void> {
+  return getTransport().call("work_task_settings_delete", { folderId })
+}
+
+export async function workTaskTemplateList(): Promise<WorkTaskTemplate[]> {
+  return getTransport().call("work_task_template_list", {})
+}
+
+export async function workTaskTemplateSave(draft: {
+  name: string
+  title: string
+  config: WorkTaskConfig
+}): Promise<WorkTaskTemplate> {
+  return getTransport().call("work_task_template_save", { draft })
+}
+
+export async function workTaskTemplateDelete(id: number): Promise<void> {
+  return getTransport().call("work_task_template_delete", { id })
 }
 
 // Directory browser (for web/server mode)

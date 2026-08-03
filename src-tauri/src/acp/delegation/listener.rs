@@ -19,12 +19,14 @@ use crate::acp::delegation::broker::{DelegationBroker, StatusWait};
 use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
     BrokerCommitFeedbackRequest, BrokerFeedbackRequest, BrokerMessage, BrokerRequest,
-    BrokerResponse, BrokerSessionRequest, BrokerStatusRequest,
+    BrokerResponse, BrokerSessionRequest, BrokerStatusRequest, BrokerTaskCompleteRequest,
+    BrokerTaskProgressRequest,
 };
 use crate::acp::delegation::types::{DelegationRequest, DelegationTaskReport, TaskStatus};
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
 use crate::acp::session_info::{SessionInfo, SessionInfoAccess};
+use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
 use crate::models::AgentType;
 use serde_json::Value;
 
@@ -94,6 +96,8 @@ pub struct DelegationListener {
     /// other arms this is NOT parent-scoped — it looks any non-deleted session up
     /// by its houhub conversation id (still token-gated against an invalid caller).
     pub session_info: Arc<dyn SessionInfoAccess>,
+    /// Records progress and completion reports for the owning work task.
+    pub tasks: Arc<dyn WorkTaskToolAccess>,
 }
 
 impl DelegationListener {
@@ -106,6 +110,27 @@ impl DelegationListener {
         questions: Arc<dyn SessionQuestionAccess>,
         session_info: Arc<dyn SessionInfoAccess>,
     ) -> Arc<Self> {
+        Self::new_with_tasks(
+            broker,
+            tokens,
+            parent_lookup,
+            feedback,
+            questions,
+            session_info,
+            Arc::new(StubTaskTools),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_tasks(
+        broker: Arc<DelegationBroker>,
+        tokens: Arc<TokenRegistry>,
+        parent_lookup: Arc<dyn ParentSessionLookup>,
+        feedback: Arc<dyn SessionFeedbackAccess>,
+        questions: Arc<dyn SessionQuestionAccess>,
+        session_info: Arc<dyn SessionInfoAccess>,
+        tasks: Arc<dyn WorkTaskToolAccess>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             broker,
             tokens,
@@ -113,6 +138,7 @@ impl DelegationListener {
             feedback,
             questions,
             session_info,
+            tasks,
         })
     }
 
@@ -307,6 +333,12 @@ impl DelegationListener {
                 // and there is nothing to tear down on cancel.
                 session_response(self.process_session_info(req).await)?
             }
+            BrokerMessage::TaskProgress(req) => {
+                task_ack_response(self.process_task_progress(req).await)?
+            }
+            BrokerMessage::TaskComplete(req) => {
+                task_ack_response(self.process_task_complete(req).await)?
+            }
             BrokerMessage::Cancel(cancel) => {
                 self.process_cancel(cancel).await;
                 // Empty ack — the companion only uses this to detect the
@@ -482,6 +514,28 @@ impl DelegationListener {
             .await
     }
 
+    async fn process_task_progress(&self, req: BrokerTaskProgressRequest) -> TaskReportAck {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return TaskReportAck::rejected("invalid token");
+        };
+        self.tasks
+            .report_progress(&entry.parent_connection_id, &req.message)
+            .await
+    }
+
+    async fn process_task_complete(&self, req: BrokerTaskCompleteRequest) -> TaskReportAck {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return TaskReportAck::rejected("invalid token");
+        };
+        self.tasks
+            .complete(
+                &entry.parent_connection_id,
+                &req.verdict,
+                req.summary.as_deref(),
+            )
+            .await
+    }
+
     async fn process(&self, req: BrokerRequest) -> DelegationTaskReport {
         // 1. Token + parent_connection_id consistency check. Treat both as
         //    "canceled" since the LLM can't usefully react to either —
@@ -546,6 +600,24 @@ impl DelegationListener {
     }
 }
 
+struct StubTaskTools;
+
+#[async_trait]
+impl WorkTaskToolAccess for StubTaskTools {
+    async fn report_progress(&self, _parent: &str, _message: &str) -> TaskReportAck {
+        TaskReportAck::rejected("no task engine in this process")
+    }
+
+    async fn complete(
+        &self,
+        _parent: &str,
+        _verdict: &str,
+        _summary: Option<&str>,
+    ) -> TaskReportAck {
+        TaskReportAck::rejected("no task engine in this process")
+    }
+}
+
 /// Serialize a [`DelegationTaskReport`] into a [`BrokerResponse`] for the wire.
 /// Used by the `Call` / `CancelTask` arms, which each resolve to one report.
 fn report_response(report: DelegationTaskReport) -> std::io::Result<BrokerResponse> {
@@ -607,6 +679,14 @@ fn ask_response(outcome: &QuestionOutcome) -> std::io::Result<BrokerResponse> {
 fn session_response(info: SessionInfo) -> std::io::Result<BrokerResponse> {
     Ok(BrokerResponse {
         outcome: serde_json::to_value(&info).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn task_ack_response(ack: TaskReportAck) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&ack).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
         })?,
     })

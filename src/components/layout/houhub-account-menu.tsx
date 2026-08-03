@@ -46,6 +46,7 @@ interface AccountMenuCopy {
   signOutProject: string
   loginFailed: string
   logoutFailed: string
+  switchRequiresSignOut: string
 }
 
 const COPY: Record<string, AccountMenuCopy> = {
@@ -62,6 +63,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signOutProject: "退出项目账户",
     loginFailed: "登录失败",
     logoutFailed: "退出登录失败",
+    switchRequiresSignOut: "请先退出当前账户，再登录另一个账户",
   },
   "zh-TW": {
     accounts: "帳戶",
@@ -76,6 +78,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signOutProject: "登出專案帳戶",
     loginFailed: "登入失敗",
     logoutFailed: "登出失敗",
+    switchRequiresSignOut: "請先登出目前帳戶，再登入另一個帳戶",
   },
   en: {
     accounts: "Accounts",
@@ -90,6 +93,8 @@ const COPY: Record<string, AccountMenuCopy> = {
     signOutProject: "Sign out of project account",
     loginFailed: "Sign-in failed",
     logoutFailed: "Sign-out failed",
+    switchRequiresSignOut:
+      "Sign out of the current account before signing into the other",
   },
   ja: {
     accounts: "アカウント",
@@ -104,6 +109,8 @@ const COPY: Record<string, AccountMenuCopy> = {
     signOutProject: "プロジェクトからサインアウト",
     loginFailed: "サインインに失敗しました",
     logoutFailed: "サインアウトに失敗しました",
+    switchRequiresSignOut:
+      "別のアカウントにサインインする前に、現在のアカウントからサインアウトしてください",
   },
   ko: {
     accounts: "계정",
@@ -118,6 +125,8 @@ const COPY: Record<string, AccountMenuCopy> = {
     signOutProject: "프로젝트 계정 로그아웃",
     loginFailed: "로그인 실패",
     logoutFailed: "로그아웃 실패",
+    switchRequiresSignOut:
+      "다른 계정으로 로그인하기 전에 현재 계정에서 로그아웃하세요",
   },
   es: {
     accounts: "Cuentas",
@@ -132,6 +141,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signOutProject: "Cerrar sesión del proyecto",
     loginFailed: "Error al iniciar sesión",
     logoutFailed: "Error al cerrar sesión",
+    switchRequiresSignOut: "Cierra la sesión actual antes de iniciar la otra",
   },
   de: {
     accounts: "Konten",
@@ -146,6 +156,8 @@ const COPY: Record<string, AccountMenuCopy> = {
     signOutProject: "Vom Projektkonto abmelden",
     loginFailed: "Anmeldung fehlgeschlagen",
     logoutFailed: "Abmeldung fehlgeschlagen",
+    switchRequiresSignOut:
+      "Melden Sie sich vom aktuellen Konto ab, bevor Sie das andere Konto anmelden",
   },
   fr: {
     accounts: "Comptes",
@@ -160,6 +172,8 @@ const COPY: Record<string, AccountMenuCopy> = {
     signOutProject: "Se déconnecter du projet",
     loginFailed: "Échec de la connexion",
     logoutFailed: "Échec de la déconnexion",
+    switchRequiresSignOut:
+      "Déconnectez-vous du compte actuel avant de vous connecter à l’autre",
   },
   pt: {
     accounts: "Contas",
@@ -174,6 +188,7 @@ const COPY: Record<string, AccountMenuCopy> = {
     signOutProject: "Sair da conta do projeto",
     loginFailed: "Falha ao entrar",
     logoutFailed: "Falha ao sair",
+    switchRequiresSignOut: "Saia da conta atual antes de entrar na outra",
   },
   ar: {
     accounts: "الحسابات",
@@ -188,6 +203,8 @@ const COPY: Record<string, AccountMenuCopy> = {
     signOutProject: "تسجيل الخروج من حساب المشروع",
     loginFailed: "فشل تسجيل الدخول",
     logoutFailed: "فشل تسجيل الخروج",
+    switchRequiresSignOut:
+      "سجّل الخروج من الحساب الحالي قبل تسجيل الدخول إلى الحساب الآخر",
   },
 }
 
@@ -244,6 +261,10 @@ export function HouhubAccountMenu() {
   )
 
   const signInHouflow = useCallback(async () => {
+    if (projectConnected) {
+      toast.error(copy.switchRequiresSignOut)
+      return
+    }
     setPending("houflow")
     try {
       await houflow.signIn({ openAuthorizationUrl: openUrl })
@@ -252,9 +273,13 @@ export function HouhubAccountMenu() {
     } finally {
       setPending(null)
     }
-  }, [copy.loginFailed, houflow])
+  }, [copy.loginFailed, copy.switchRequiresSignOut, houflow, projectConnected])
 
   const signInProject = useCallback(async () => {
+    if (houflowConnected) {
+      toast.error(copy.switchRequiresSignOut)
+      return
+    }
     setPending("project")
     try {
       await workbench.signIn({ openAuthorizationUrl: openUrl })
@@ -263,7 +288,12 @@ export function HouhubAccountMenu() {
     } finally {
       setPending(null)
     }
-  }, [copy.loginFailed, workbench])
+  }, [
+    copy.loginFailed,
+    copy.switchRequiresSignOut,
+    houflowConnected,
+    workbench,
+  ])
 
   const signOut = useCallback(
     async (provider: "houflow" | "project") => {
@@ -340,7 +370,9 @@ export function HouhubAccountMenu() {
             <span className="block truncate text-xs text-muted-foreground">
               {houflowConnected
                 ? houflow.session.userLabel || copy.signedIn
-                : copy.signIn}
+                : projectConnected
+                  ? copy.switchRequiresSignOut
+                  : copy.signIn}
             </span>
           </span>
           {pending === "houflow" ? (
@@ -397,7 +429,9 @@ export function HouhubAccountMenu() {
                 ? activeProject?.name ||
                   workbench.session.user?.label ||
                   copy.signedIn
-                : copy.signIn}
+                : houflowConnected
+                  ? copy.switchRequiresSignOut
+                  : copy.signIn}
             </span>
           </span>
           {pending === "project" ? (

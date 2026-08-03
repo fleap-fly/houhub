@@ -37,5 +37,6 @@ pub mod terminal;
 pub mod version_control;
 #[cfg(feature = "tauri-runtime")]
 pub mod windows;
+pub mod work_task;
 pub mod workbench;
 pub mod workspace_state;

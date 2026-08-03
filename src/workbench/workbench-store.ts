@@ -1,6 +1,11 @@
 import { create } from "zustand"
 import { isDesktop, openUrl } from "@/lib/platform"
 import { toErrorMessage } from "@/lib/app-error"
+import {
+  claimAccountIdentity,
+  loadActiveAccountIdentity,
+  releaseAccountIdentity,
+} from "@/lib/account-identity"
 import { getWebAuthToken } from "@/lib/transport/web-auth"
 import {
   beginWorkbenchDeviceAuth,
@@ -53,7 +58,14 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
 
   initialize: async () => {
     const cached = loadWorkbenchSessionMetadata()
-    if (!isDesktop() && !getWebAuthToken()) {
+
+    // Older builds could persist both PS and Houflow sessions. Houflow owns
+    // the marker when it is active, so discard the PS projection before it can
+    // load project assistants and duplicate the same Agent Hub resources.
+    if (loadActiveAccountIdentity() === "houflow") {
+      if (isDesktop() || getWebAuthToken()) {
+        await signOutWorkbench().catch(() => undefined)
+      }
       clearWorkbenchSessionMetadata()
       set({
         session: WORKBENCH_SIGNED_OUT_SESSION,
@@ -62,14 +74,51 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
       })
       return
     }
-    if (cached.status === "signed_in") set({ session: cached })
+
+    if (!isDesktop() && !getWebAuthToken()) {
+      clearWorkbenchSessionMetadata()
+      releaseAccountIdentity("project")
+      set({
+        session: WORKBENCH_SIGNED_OUT_SESSION,
+        status: "signed_out",
+        error: null,
+      })
+      return
+    }
+    if (cached.status === "signed_in") {
+      try {
+        claimAccountIdentity("project")
+      } catch {
+        clearWorkbenchSessionMetadata()
+        set({
+          session: WORKBENCH_SIGNED_OUT_SESSION,
+          status: "signed_out",
+          error: null,
+        })
+        return
+      }
+      set({ session: cached })
+    }
     try {
       const authoritative = await getWorkbenchSession()
       if (authoritative.status === "signed_in") {
+        try {
+          claimAccountIdentity("project")
+        } catch {
+          await signOutWorkbench().catch(() => undefined)
+          clearWorkbenchSessionMetadata()
+          set({
+            session: WORKBENCH_SIGNED_OUT_SESSION,
+            status: "signed_out",
+            error: null,
+          })
+          return
+        }
         saveWorkbenchSessionMetadata(authoritative)
         set({ session: authoritative, status: "ready", error: null })
       } else {
         clearWorkbenchSessionMetadata()
+        releaseAccountIdentity("project")
         set({
           session: WORKBENCH_SIGNED_OUT_SESSION,
           status: "signed_out",
@@ -82,6 +131,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
   },
 
   signIn: async (options: WorkbenchSignInOptions = {}) => {
+    claimAccountIdentity("project")
     signInAbortController?.abort()
     const abort = new AbortController()
     signInAbortController = abort
@@ -89,6 +139,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
     const host = options.host?.trim() || WORKBENCH_DEFAULT_HOST
 
     set({ status: "signing_in", error: null })
+    let persisted = false
     try {
       const start = await beginWorkbenchDeviceAuth(host)
       await open(start.authorizeUrl)
@@ -114,8 +165,10 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
         expiresAt: null,
       }
       saveWorkbenchSessionMetadata(next)
+      persisted = true
       set({ session: next, status: "ready", error: null })
     } catch (err) {
+      if (!persisted) releaseAccountIdentity("project")
       const message = toErrorMessage(err)
       set({ error: message, status: "error" })
       throw err instanceof Error ? err : new Error(message)
@@ -139,10 +192,12 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
   refresh: async () => {
     const authoritative = await getWorkbenchSession()
     if (authoritative.status === "signed_in") {
+      claimAccountIdentity("project")
       saveWorkbenchSessionMetadata(authoritative)
       set({ session: authoritative, status: "ready", error: null })
     } else {
       clearWorkbenchSessionMetadata()
+      releaseAccountIdentity("project")
       set({
         session: WORKBENCH_SIGNED_OUT_SESSION,
         status: "signed_out",
@@ -154,16 +209,14 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
   signOut: async () => {
     signInAbortController?.abort()
     signInAbortController = null
-    try {
-      await signOutWorkbench()
-    } finally {
-      clearWorkbenchSessionMetadata()
-      set({
-        session: WORKBENCH_SIGNED_OUT_SESSION,
-        error: null,
-        status: "signed_out",
-      })
-    }
+    await signOutWorkbench()
+    clearWorkbenchSessionMetadata()
+    releaseAccountIdentity("project")
+    set({
+      session: WORKBENCH_SIGNED_OUT_SESSION,
+      error: null,
+      status: "signed_out",
+    })
   },
 }))
 

@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { useTerminalContext } from "@/contexts/terminal-context"
+import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { useIsMac } from "@/hooks/use-is-mac"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useZoomLevel } from "@/hooks/use-appearance"
@@ -26,6 +28,8 @@ import { rightChromeClusterWidth } from "@/lib/window-chrome"
 export function RightEdgeChrome() {
   const tTitleBar = useTranslations("Folder.folderTitleBar")
   const { activeFolder } = useActiveFolder()
+  const isChatMode = useIsActiveChatMode()
+  const { isConversations } = useWorkbenchRoute()
   const auxPanelOpen = useAuxPanelStore((state) => state.isOpen)
   const toggleAuxPanel = useAuxPanelStore((state) => state.toggle)
   const { isOpen: terminalOpen, toggle: toggleTerminal } = useTerminalContext()
@@ -47,31 +51,42 @@ export function RightEdgeChrome() {
       {/* Empty head is a window-drag region; buttons stay flush right. */}
       <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
       <div className="flex items-center gap-1 pr-3">
-        <Button
-          variant="ghost"
-          size="icon"
-          className={`h-6 w-6 hover:bg-foreground/10 hover:text-foreground/80 dark:hover:bg-foreground/10 ${terminalOpen ? "bg-accent" : ""}`}
-          onClick={() => toggleTerminal()}
-          disabled={!activeFolder}
-          title={tTitleBar("withShortcut", {
-            label: tTitleBar("toggleTerminal"),
-            shortcut: formatShortcutLabel(shortcuts.toggle_terminal, isMac),
-          })}
-        >
-          <SquareTerminal className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className={`h-6 w-6 hover:bg-foreground/10 hover:text-foreground/80 dark:hover:bg-foreground/10 ${auxPanelOpen ? "bg-accent" : ""}`}
-          onClick={toggleAuxPanel}
-          title={tTitleBar("withShortcut", {
-            label: tTitleBar("toggleAuxPanel"),
-            shortcut: formatShortcutLabel(shortcuts.toggle_aux_panel, isMac),
-          })}
-        >
-          <PanelRight className="h-3.5 w-3.5" />
-        </Button>
+        {isConversations && (
+          <>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={`h-6 w-6 hover:bg-foreground/10 hover:text-foreground/80 dark:hover:bg-foreground/10 ${terminalOpen ? "bg-accent" : ""}`}
+              onClick={() => toggleTerminal()}
+              disabled={!activeFolder}
+              title={tTitleBar("withShortcut", {
+                label: tTitleBar("toggleTerminal"),
+                shortcut: formatShortcutLabel(
+                  shortcuts.toggle_terminal,
+                  isMac
+                ),
+              })}
+            >
+              <SquareTerminal className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={`h-6 w-6 hover:bg-foreground/10 hover:text-foreground/80 dark:hover:bg-foreground/10 ${auxPanelOpen ? "bg-accent" : ""}`}
+              onClick={toggleAuxPanel}
+              disabled={!activeFolder && !isChatMode}
+              title={tTitleBar("withShortcut", {
+                label: tTitleBar("toggleAuxPanel"),
+                shortcut: formatShortcutLabel(
+                  shortcuts.toggle_aux_panel,
+                  isMac
+                ),
+              })}
+            >
+              <PanelRight className="h-3.5 w-3.5" />
+            </Button>
+          </>
+        )}
         <Button
           variant="ghost"
           size="icon"

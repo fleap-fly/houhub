@@ -318,6 +318,7 @@ async fn import_one(
         updated_at: Set(updated_at),
         deleted_at: Set(None),
         pinned_at: Set(None),
+        origin_cwd: Set(None),
     };
     conv.insert(conn).await?;
     Ok(ImportOutcome::Imported)
@@ -561,6 +562,7 @@ mod tests {
             model: Set(None),
             git_branch: Set(None),
             external_id: Set(Some("child-ext".to_string())),
+            origin_cwd: Set(None),
             parent_id: Set(Some(parent_id)),
             parent_tool_use_id: Set(None),
             delegation_call_id: Set(None),

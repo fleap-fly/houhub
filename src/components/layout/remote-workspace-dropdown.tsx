@@ -1,7 +1,14 @@
 "use client"
 
 import { useCallback, useMemo, useState } from "react"
-import { Check, Cloud, Loader2, MonitorCloud, Settings } from "lucide-react"
+import {
+  BriefcaseBusiness,
+  Check,
+  Cloud,
+  Loader2,
+  MonitorCloud,
+  Settings,
+} from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
@@ -13,7 +20,12 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { RemoteWorkspaceConnection } from "@/lib/types"
 import { isDesktop } from "@/lib/platform"
 import { useHouflowDesktopStore } from "@/houflow"
+import {
+  classifyHouflowWorkspace,
+  personalCloudWorkspaces,
+} from "@/houflow/context"
 import { isHouflowCloudWorkspaceTarget } from "@/houflow/agent-hub-conversation-target"
+import { usePersonalCloudStore } from "@/personal-workbench"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -27,9 +39,11 @@ import { RemoteWorkspaceManageDialog } from "./remote-workspace-manage-dialog"
 
 const ZH_COPY = {
   localRemoteGroup: "远端桌面工作区",
-  houflowGroup: "Houflow 云端工作区",
-  houflowSignedOut: "登录 Houflow 后显示云端工作区",
-  houflowEmpty: "暂无 Houflow 云端工作区",
+  houflowGroup: "个人云工作台",
+  houflowSignedOut: "登录 Houflow 后显示个人云工作台",
+  houflowEmpty: "暂无个人云工作台工作区",
+  projectGroup: "项目云",
+  projectManagedByWorkbench: "项目云由项目工作台管理",
   houflowLoading: "正在同步 Houflow 工作区",
   houflowSwitchFailed: "切换 Houflow 工作区失败",
   houflowActive: "当前",
@@ -40,9 +54,11 @@ type RemoteWorkspaceCopy = Record<keyof typeof ZH_COPY, string>
 
 const EN_COPY: RemoteWorkspaceCopy = {
   localRemoteGroup: "Remote desktop workspaces",
-  houflowGroup: "Houflow cloud workspaces",
-  houflowSignedOut: "Sign in to Houflow to show cloud workspaces",
-  houflowEmpty: "No Houflow cloud workspaces",
+  houflowGroup: "Personal Cloud",
+  houflowSignedOut: "Sign in to Houflow to show Personal Cloud workspaces",
+  houflowEmpty: "No Personal Cloud workspaces",
+  projectGroup: "Project Cloud",
+  projectManagedByWorkbench: "Project Cloud is managed by Project Workbench",
   houflowLoading: "Syncing Houflow workspaces",
   houflowSwitchFailed: "Failed to switch Houflow workspace",
   houflowActive: "Active",
@@ -71,6 +87,9 @@ export function RemoteWorkspaceDropdown({
       selectWorkspace: state.selectWorkspace,
     }))
   )
+  const selectPersonalCloudWorkspace = usePersonalCloudStore(
+    (state) => state.selectWorkspace
+  )
   const [connections, setConnections] = useState<RemoteWorkspaceConnection[]>(
     []
   )
@@ -89,13 +108,20 @@ export function RemoteWorkspaceDropdown({
     }
   }, [desktop, t])
 
-  const houflowWorkspaces = houflow.snapshot?.workspaces ?? []
+  const allHouflowWorkspaces = houflow.snapshot?.workspaces ?? []
+  const houflowWorkspaces = personalCloudWorkspaces(allHouflowWorkspaces)
   const activeHouflowWorkspace =
     houflowWorkspaces.find((workspace) => workspace.isActive) ??
     houflowWorkspaces.find(
       (workspace) => workspace.id === houflow.session.workspaceId
     ) ??
     null
+  const activeProjectWorkspace = allHouflowWorkspaces.find(
+    (workspace) => workspace.id === houflow.session.workspaceId
+  )
+  const activeProjectClassification = activeProjectWorkspace
+    ? classifyHouflowWorkspace(activeProjectWorkspace)
+    : null
   const houflowTargets = (houflow.snapshot?.targets ?? []).filter(
     isHouflowCloudWorkspaceTarget
   )
@@ -115,6 +141,7 @@ export function RemoteWorkspaceDropdown({
       setSwitchingHouflowWorkspace(workspaceId)
       try {
         await houflow.selectWorkspace(workspaceId)
+        selectPersonalCloudWorkspace({ workspaceId })
       } catch (err) {
         toast.error(copy.houflowSwitchFailed, {
           description: toErrorMessage(err),
@@ -123,7 +150,7 @@ export function RemoteWorkspaceDropdown({
         setSwitchingHouflowWorkspace(null)
       }
     },
-    [copy.houflowSwitchFailed, houflow]
+    [copy.houflowSwitchFailed, houflow, selectPersonalCloudWorkspace]
   )
 
   if (!desktop && houflow.session.status !== "signed_in") return null
@@ -131,7 +158,9 @@ export function RemoteWorkspaceDropdown({
   const triggerTitle =
     activeHouflowWorkspace && houflow.session.status === "signed_in"
       ? `${t("openRemoteWorkspace")} · ${activeHouflowWorkspace.name}`
-      : t("openRemoteWorkspace")
+      : activeProjectClassification?.context === "project"
+        ? copy.projectManagedByWorkbench
+        : t("openRemoteWorkspace")
 
   return (
     <>
@@ -239,6 +268,20 @@ export function RemoteWorkspaceDropdown({
               )
             })
           )}
+          {activeProjectClassification?.context === "project" ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">
+                {copy.projectGroup}
+              </DropdownMenuLabel>
+              <DropdownMenuItem disabled>
+                <BriefcaseBusiness className="h-3.5 w-3.5" />
+                <span className="min-w-0 truncate">
+                  {copy.projectManagedByWorkbench}
+                </span>
+              </DropdownMenuItem>
+            </>
+          ) : null}
           {desktop ? (
             <>
               <DropdownMenuSeparator />

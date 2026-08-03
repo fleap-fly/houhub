@@ -5,8 +5,12 @@ import {
   useWorkbenchRoute,
   type WorkbenchRouteId,
 } from "@/contexts/workbench-route-context"
-import { AutomationsPage } from "@/components/automations/automations-page"
+import {
+  AutomationsPage,
+  AutomationsPageTitle,
+} from "@/components/automations/automations-page"
 import { CloudSessionPage } from "@/components/houflow/cloud-session-page"
+import { TasksPage, TasksPageTitle } from "@/components/tasks/tasks-page"
 
 /**
  * Registry of full-page routes that take over the main content region. The
@@ -18,7 +22,14 @@ import { CloudSessionPage } from "@/components/houflow/cloud-session-page"
 const WORKBENCH_ROUTES: Partial<Record<WorkbenchRouteId, ComponentType>> = {
   automations: AutomationsPage,
   cloud: CloudSessionPage,
+  tasks: TasksPage,
 }
+
+const WORKBENCH_ROUTE_STRIPS: Partial<Record<WorkbenchRouteId, ComponentType>> =
+  {
+    automations: AutomationsPageTitle,
+    tasks: TasksPageTitle,
+  }
 
 /**
  * Renders the active non-conversation route page, or nothing when the
@@ -29,4 +40,15 @@ export function WorkbenchRoutePage() {
   const { routeId } = useWorkbenchRoute()
   const Page = WORKBENCH_ROUTES[routeId]
   return Page ? <Page /> : null
+}
+
+export function WorkbenchRouteStrip() {
+  const { routeId } = useWorkbenchRoute()
+  const Strip = WORKBENCH_ROUTE_STRIPS[routeId]
+  return Strip ? <Strip /> : null
+}
+
+export function useHasWorkbenchRouteStrip(): boolean {
+  const { routeId } = useWorkbenchRoute()
+  return WORKBENCH_ROUTE_STRIPS[routeId] != null
 }

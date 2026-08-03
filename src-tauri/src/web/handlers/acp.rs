@@ -770,6 +770,14 @@ pub struct AcpUpdateKimiCodeConfigParams {
     pub vertex_location: Option<String>,
     #[serde(default)]
     pub raw_config_toml: Option<String>,
+    #[serde(default)]
+    pub reasoning_enabled: Option<bool>,
+    #[serde(default)]
+    pub always_thinking: Option<bool>,
+    #[serde(default)]
+    pub support_efforts: Option<Vec<String>>,
+    #[serde(default)]
+    pub default_effort: Option<String>,
 }
 
 pub async fn acp_update_kimi_code_config(
@@ -789,6 +797,10 @@ pub async fn acp_update_kimi_code_config(
             vertex_project: params.vertex_project,
             vertex_location: params.vertex_location,
             raw_config_toml: params.raw_config_toml,
+            reasoning_enabled: params.reasoning_enabled,
+            always_thinking: params.always_thinking,
+            support_efforts: params.support_efforts,
+            default_effort: params.default_effort,
         },
         &state.db,
         &state.connection_manager,
@@ -1032,6 +1044,25 @@ pub async fn opencode_list_plugins() -> Result<Json<PluginCheckSummary>, AppComm
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpencodeProviderCatalogParams {
+    #[serde(default)]
+    pub force_refresh: Option<bool>,
+}
+
+pub async fn opencode_provider_catalog(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<OpencodeProviderCatalogParams>,
+) -> Result<Json<Vec<crate::acp::opencode_catalog::CatalogProvider>>, AppCommandError> {
+    let catalog = acp_commands::opencode_provider_catalog_core(
+        &state.data_dir,
+        params.force_refresh.unwrap_or(false),
+    )
+    .await;
+    Ok(Json(catalog))
 }
 
 #[derive(Deserialize)]

@@ -1,10 +1,11 @@
 // Project System (PS) "workbench" identity for houhub.
 //
-// PS is an independent identity system from Houflow/HQ: a Houflow plan buyer
-// becomes the default workbench admin but can create employees who are NOT
-// Houflow users. houhub therefore offers a distinct "workbench login" whose
-// credential (a PS session token) is held by the Rust backend (desktop keyring
-// / server secret store), never in the webview. The TS layer only orchestrates
+// PS remains an independent identity system from Houflow/HQ: a Houflow plan
+// buyer can create employees who are NOT Houflow users. HouHub still exposes a
+// distinct "workbench login", but the desktop gates it exclusively against a
+// Houflow login so the same Agent Hub resources are not projected twice. The
+// PS credential (a session token) is held by the Rust backend (desktop keyring /
+// server secret store), never in the webview. The TS layer only orchestrates
 // the device-code handshake and caches non-secret session metadata for fast
 // initial render.
 

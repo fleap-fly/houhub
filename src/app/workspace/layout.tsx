@@ -31,12 +31,17 @@ import { selectIsSplit } from "@/stores/tab-store"
 import { SidebarProvider, useSidebarContext } from "@/contexts/sidebar-context"
 import { SearchDialogProvider } from "@/contexts/search-dialog-context"
 import { AutomationsViewProvider } from "@/contexts/automations-view-context"
+import { TasksViewProvider } from "@/contexts/tasks-view-context"
 import {
   WorkbenchRouteProvider,
   useWorkbenchRoute,
 } from "@/contexts/workbench-route-context"
 import { HouflowCloudWorkspaceProvider } from "@/houflow"
-import { WorkbenchRoutePage } from "@/components/workbench/workbench-content"
+import {
+  WorkbenchRoutePage,
+  WorkbenchRouteStrip,
+  useHasWorkbenchRouteStrip,
+} from "@/components/workbench/workbench-content"
 import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
@@ -266,6 +271,7 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
   )
 
   const { isConversations } = useWorkbenchRoute()
+  const hasRouteStrip = useHasWorkbenchRouteStrip()
   const { isOpen: sidebarOpen } = useSidebarContext()
   const auxOpen = useAuxPanelStore((state) => state.isOpen)
   const { isMac, isWindows, isLinux } = usePlatform()
@@ -294,7 +300,13 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
       {/* Kept mounted (and only hidden) when a workbench route takes over, so
           background conversations keep streaming. `inert` drops it from the tab
           order behind the opaque route overlay. */}
-      <div className="h-full min-h-0" inert={!isConversations || undefined}>
+      <div
+        className={cn(
+          "h-full min-h-0",
+          !isConversations && "conversation-tab-hidden invisible"
+        )}
+        inert={!isConversations || undefined}
+      >
         <ResizablePanelGroup
           id={WORKSPACE_PANEL_GROUP_ID}
           ref={panelGroupRef}
@@ -479,11 +491,23 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
         </ResizablePanelGroup>
       </div>
       {!isConversations ? (
-        <div className="absolute inset-0 z-40 flex flex-col ws-surface">
-          {/* Reserve the fixed window-chrome overlays' h-10 corner strip so
-              route content (e.g. the Automations enable switch at the top-right)
-              never renders beneath them. The strip is a window-drag region. */}
-          <div data-tauri-drag-region className="h-10 shrink-0" />
+        <div className="absolute inset-0 z-40 flex flex-col bg-background ws-transparent-bg">
+          <div
+            className={cn(
+              "flex h-10 shrink-0 items-stretch",
+              hasRouteStrip && "border-b border-border/50 ws-chrome-border"
+            )}
+          >
+            {!sidebarOpen && (
+              <div
+                data-tauri-drag-region
+                className="h-full shrink-0"
+                style={{ width: leftReserve }}
+              />
+            )}
+            <WorkbenchRouteStrip />
+            <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
+          </div>
           <div className="min-h-0 flex-1">
             <WorkbenchRoutePage />
           </div>
@@ -496,13 +520,20 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
 function MobileWorkspaceContent({ children }: { children: React.ReactNode }) {
   const { mode, activePane } = useWorkspaceView()
   const { isConversations } = useWorkbenchRoute()
+  const hasRouteStrip = useHasWorkbenchRouteStrip()
 
   const showConversation =
     mode === "conversation" || activePane === "conversation"
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
-      <div className="h-full min-h-0" inert={!isConversations || undefined}>
+      <div
+        className={cn(
+          "h-full min-h-0",
+          !isConversations && "conversation-tab-hidden invisible"
+        )}
+        inert={!isConversations || undefined}
+      >
         {showConversation ? (
           // Mobile mirrors the desktop chrome: no tab strip — the conversation
           // detail header (folder › title) renders inside {children}, and tabs
@@ -524,8 +555,16 @@ function MobileWorkspaceContent({ children }: { children: React.ReactNode }) {
         )}
       </div>
       {!isConversations ? (
-        <div className="absolute inset-0 z-40 ws-surface">
-          <WorkbenchRoutePage />
+        <div className="absolute inset-0 z-40 flex flex-col bg-background ws-transparent-bg">
+          {hasRouteStrip ? (
+            <div className="flex h-10 shrink-0 items-stretch border-b border-border/50 ws-chrome-border">
+              <WorkbenchRouteStrip />
+              <div className="min-w-0 flex-1" />
+            </div>
+          ) : null}
+          <div className="min-h-0 flex-1">
+            <WorkbenchRoutePage />
+          </div>
         </div>
       ) : null}
     </div>
@@ -542,8 +581,13 @@ function MobileFolderWorkspaceShell({
     restored: sidebarRestored,
     toggle: toggleSidebar,
   } = useSidebarContext()
-  const { isOpen: auxOpen, restored: auxRestored } = useAuxPanelStore()
-  const { isOpen: terminalOpen, toggle: toggleTerminal } = useTerminalContext()
+  const { isConversations } = useWorkbenchRoute()
+  const { isOpen: auxOpenRequested, restored: auxRestored } =
+    useAuxPanelStore()
+  const { isOpen: terminalOpenRequested, toggle: toggleTerminal } =
+    useTerminalContext()
+  const auxOpen = auxOpenRequested && isConversations
+  const terminalOpen = terminalOpenRequested && isConversations
 
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -602,7 +646,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     setWidth: setSidebarWidth,
   } = useSidebarContext()
   const {
-    isOpen: auxOpen,
+    isOpen: auxOpenRequested,
     restored: auxRestored,
     width: auxWidth,
     minWidth: auxMinWidth,
@@ -610,12 +654,15 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     setWidth: setAuxWidth,
   } = useAuxPanelStore()
   const {
-    isOpen: terminalOpen,
+    isOpen: terminalOpenRequested,
     height: terminalHeight,
     minHeight: terminalMinHeight,
     maxHeight: terminalMaxHeight,
     setHeight: setTerminalHeight,
   } = useTerminalContext()
+  const { isConversations } = useWorkbenchRoute()
+  const auxOpen = auxOpenRequested && isConversations
+  const terminalOpen = terminalOpenRequested && isConversations
 
   const sidebarAnimating = usePanelSlideOnToggle(sidebarOpen, sidebarRestored)
   const auxAnimating = usePanelSlideOnToggle(auxOpen, auxRestored)
@@ -1171,17 +1218,19 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                         <TerminalProvider>
                           <SearchDialogProvider>
                             <AutomationsViewProvider>
-                              <WorkbenchRouteProvider>
-                                <WorkbenchCloudProvider>
-                                  <HouflowCloudWorkspaceProvider>
-                                    <WorkbenchRouteConversationSync />
-                                    <WorkspaceOpenFolderListener />
-                                    <FolderLayoutShell>
-                                      {children}
-                                    </FolderLayoutShell>
-                                  </HouflowCloudWorkspaceProvider>
-                                </WorkbenchCloudProvider>
-                              </WorkbenchRouteProvider>
+                              <TasksViewProvider>
+                                <WorkbenchRouteProvider>
+                                  <WorkbenchCloudProvider>
+                                    <HouflowCloudWorkspaceProvider>
+                                      <WorkbenchRouteConversationSync />
+                                      <WorkspaceOpenFolderListener />
+                                      <FolderLayoutShell>
+                                        {children}
+                                      </FolderLayoutShell>
+                                    </HouflowCloudWorkspaceProvider>
+                                  </WorkbenchCloudProvider>
+                                </WorkbenchRouteProvider>
+                              </TasksViewProvider>
                             </AutomationsViewProvider>
                           </SearchDialogProvider>
                         </TerminalProvider>

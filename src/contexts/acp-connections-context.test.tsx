@@ -43,6 +43,10 @@ const h = vi.hoisted(() => {
     getFolderConversation: vi.fn(),
     buildDelegationSeedEnvelopes: vi.fn(() => []),
     denormalizeSnapshot: vi.fn(),
+    // Stable across renders so tests can assert on what the error handler
+    // routes to the status-bar alert vs. to the OS notification.
+    pushAlert: vi.fn(),
+    sendSystemNotification: vi.fn(async () => undefined),
   }
 })
 
@@ -60,7 +64,7 @@ vi.mock("@/lib/delegation-seed", () => ({
 }))
 
 vi.mock("@/contexts/alert-context", () => ({
-  useAlertContext: () => ({ pushAlert: vi.fn() }),
+  useAlertContext: () => ({ pushAlert: h.pushAlert }),
 }))
 
 vi.mock("@/contexts/active-folder-context", () => ({
@@ -68,7 +72,7 @@ vi.mock("@/contexts/active-folder-context", () => ({
 }))
 
 vi.mock("@/lib/notification", () => ({
-  sendSystemNotification: vi.fn(async () => undefined),
+  sendSystemNotification: h.sendSystemNotification,
 }))
 
 vi.mock("@/lib/selector-prefs-storage", () => ({
@@ -162,6 +166,7 @@ beforeEach(() => {
     enabled: true,
     available: true,
     installed_version: "1.0.0",
+    is_acp_adapter: true,
   })
   h.acpConnect.mockResolvedValue("spawned-conn")
   h.acpDisconnect.mockResolvedValue(undefined)
@@ -938,6 +943,7 @@ describe("AcpConnectionsProvider Grok cross-agent-type model switch", () => {
       enabled: true,
       available: true,
       installed_version: "0.2.94",
+      is_acp_adapter: false,
     })
     await mountProvider()
     await act(async () => {
@@ -945,6 +951,42 @@ describe("AcpConnectionsProvider Grok cross-agent-type model switch", () => {
     })
     return latestAttachHandlers()
   }
+
+  it("applies a mid-turn config_option_update while the turn is still prompting", async () => {
+    // codex-acp ≥1.1.8 flips `collaboration_mode` back to the default IN THE
+    // MIDDLE of a turn once the user approves a plan review, then keeps
+    // streaming the implementation under the same session/prompt. The selector
+    // must follow — this is metadata, not agent output, so the out-of-turn
+    // guards that drop tool calls / deltas must not touch it.
+    const handlers = await connectGrokOwner()
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "session_config_options",
+      config_options: grokModelOptions("grok-4.5"),
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "prompting",
+    })
+    expect(h.store!.getConnection(TAB)!.status).toBe("prompting")
+
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "session_config_options",
+      config_options: grokModelOptions("grok-composer-2.5-fast"),
+    })
+
+    const conn = h.store!.getConnection(TAB)!
+    expect(conn.status).toBe("prompting")
+    expect(conn.configOptions?.[0]?.kind.current_value).toBe(
+      "grok-composer-2.5-fast"
+    )
+  })
 
   it("reverts the optimistic pick, surfaces the localized error, and keeps the attempted preference", async () => {
     const handlers = await connectGrokOwner()
@@ -1005,6 +1047,92 @@ describe("AcpConnectionsProvider Grok cross-agent-type model switch", () => {
   })
 })
 
+describe("empty-turn error diagnostics", () => {
+  async function connectOwner(): Promise<AttachHandlers> {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+    })
+    return latestAttachHandlers()
+  }
+
+  it("localizes each empty-turn code", async () => {
+    const handlers = await connectOwner()
+
+    const cases = [
+      ["turn_failed_empty", "backendErrors.turnFailedEmpty"],
+      ["turn_failed_empty_protocol", "backendErrors.turnFailedEmptyProtocol"],
+      ["turn_failed_empty_metadata", "backendErrors.turnFailedEmptyMetadata"],
+    ] as const
+
+    // Sequence numbers must advance — the store's seq guard drops replays.
+    cases.forEach(([code, key], i) => {
+      emitAcpEvent(handlers, {
+        seq: i + 1,
+        connection_id: "spawned-conn",
+        type: "error",
+        message: "raw english fallback",
+        agent_type: "claude_code",
+        code,
+      })
+      expect(h.store!.getConnection(TAB)!.error).toBe(key)
+    })
+  })
+
+  it("appends details to the alert but keeps them out of conn.error and the OS notification", async () => {
+    const handlers = await connectOwner()
+    h.pushAlert.mockClear()
+    h.sendSystemNotification.mockClear()
+
+    const details =
+      "dropped 1 update(s) (0 decode, 1 dispatch)\nstderr (this turn, last 1 lines):\n  Error: 401 Unauthorized"
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "error",
+      message: "raw english fallback",
+      agent_type: "claude_code",
+      code: "turn_failed_empty_protocol",
+      details,
+    })
+
+    // The alert's detail slot carries the localized line AND the evidence.
+    const alertCalls = h.pushAlert.mock.calls
+    const [, , alertDetail] = alertCalls[alertCalls.length - 1]!
+    expect(alertDetail).toContain("backendErrors.turnFailedEmptyProtocol")
+    expect(alertDetail).toContain("Error: 401 Unauthorized")
+
+    // `conn.error` feeds the composer tooltip — one line only.
+    expect(h.store!.getConnection(TAB)!.error).toBe(
+      "backendErrors.turnFailedEmptyProtocol"
+    )
+
+    // Notification centers persist their payload outside the app.
+    const notifyCalls = h.sendSystemNotification.mock.calls
+    const notificationArgs = notifyCalls[notifyCalls.length - 1]!
+    expect(JSON.stringify(notificationArgs)).not.toContain("401 Unauthorized")
+  })
+
+  it("omits blank details rather than rendering an empty block", async () => {
+    const handlers = await connectOwner()
+    h.pushAlert.mockClear()
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "error",
+      message: "raw english fallback",
+      agent_type: "claude_code",
+      code: "turn_failed_empty",
+      details: "   \n  ",
+    })
+
+    const alertCalls = h.pushAlert.mock.calls
+    const [, , alertDetail] = alertCalls[alertCalls.length - 1]!
+    expect(alertDetail).toBe("backendErrors.turnFailedEmpty")
+  })
+})
+
 describe("HYDRATE_FROM_SNAPSHOT last_error recovery", () => {
   // Full SnapshotPatch fixture; per-test overrides set connectionId / eventSeq /
   // lastError. `denormalizeSnapshot` is mocked, so onSnapshot dispatches exactly
@@ -1012,6 +1140,7 @@ describe("HYDRATE_FROM_SNAPSHOT last_error recovery", () => {
   function snapshotPatch(overrides: {
     eventSeq: number
     lastError: string | null
+    lastErrorDetails?: string | null
     connectionId?: string
   }) {
     return {
@@ -1033,6 +1162,7 @@ describe("HYDRATE_FROM_SNAPSHOT last_error recovery", () => {
       configStaleKind: null,
       backgroundOutstanding: 0,
       activeDelegations: [],
+      lastErrorDetails: null,
       ...overrides,
     }
   }
@@ -1044,6 +1174,7 @@ describe("HYDRATE_FROM_SNAPSHOT last_error recovery", () => {
       enabled: true,
       available: true,
       installed_version: "1.0.0",
+      is_acp_adapter: true,
     })
     await mountProvider()
     await act(async () => {
@@ -1097,6 +1228,337 @@ describe("HYDRATE_FROM_SNAPSHOT last_error recovery", () => {
       event_seq: 1,
     } as unknown as LiveSessionSnapshot)
     expect(h.store!.getConnection(TAB)!.error).toBeNull()
+  })
+
+  // Alerts are live-only, so a client that attached after the empty turn has
+  // the snapshot as its ONLY channel for the diagnosis.
+  it("raises an alert for snapshot-carried details without touching conn.error or notifications", async () => {
+    const handlers = await connectOwner()
+    h.pushAlert.mockClear()
+    h.sendSystemNotification.mockClear()
+
+    const details =
+      "stderr (this turn, last 1 lines):\n  Error: 401 Unauthorized"
+    h.denormalizeSnapshot.mockReturnValue(
+      snapshotPatch({
+        eventSeq: 5,
+        lastError: "agent ended the turn without producing any response.",
+        lastErrorDetails: details,
+      })
+    )
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+
+    const alertCalls = h.pushAlert.mock.calls
+    const [, , alertDetail] = alertCalls[alertCalls.length - 1]!
+    expect(alertDetail).toContain("Error: 401 Unauthorized")
+    // The tooltip string stays the single-line message.
+    expect(h.store!.getConnection(TAB)!.error).toBe(
+      "agent ended the turn without producing any response."
+    )
+    expect(h.sendSystemNotification).not.toHaveBeenCalled()
+  })
+
+  it("does not re-alert the same details on every re-attach", async () => {
+    const handlers = await connectOwner()
+    h.pushAlert.mockClear()
+
+    const patch = snapshotPatch({
+      eventSeq: 5,
+      lastError: "boom",
+      lastErrorDetails: "stderr (this turn, last 1 lines):\n  same evidence",
+    })
+    h.denormalizeSnapshot.mockReturnValue(patch)
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+    const afterFirst = h.pushAlert.mock.calls.length
+    expect(afterFirst).toBe(1)
+
+    // A reconnect replays the same snapshot.
+    hydrateSnapshot(handlers, {
+      event_seq: 6,
+    } as unknown as LiveSessionSnapshot)
+    expect(h.pushAlert.mock.calls.length).toBe(afterFirst)
+  })
+
+  it("stays silent for snapshot errors that carry no details", async () => {
+    const handlers = await connectOwner()
+    h.pushAlert.mockClear()
+
+    h.denormalizeSnapshot.mockReturnValue(
+      snapshotPatch({ eventSeq: 5, lastError: "some older error" })
+    )
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+
+    // Attaching to a connection with an ordinary past error must not start
+    // raising alerts it never used to.
+    expect(h.pushAlert).not.toHaveBeenCalled()
+  })
+})
+
+describe("global acp://event listener is mount-once", () => {
+  // Regression guard for the duplicated-reply report: `handleMappedEvent`
+  // closes over the i18n `t` / `tChat`, so if the global listener effect
+  // depends on its identity, every provider re-render tears the Tauri
+  // subscription down and re-registers it. Both `listen` and `unlisten` are
+  // async IPC, so that churn leaves two listeners live at once and each
+  // envelope is delivered twice. The handler must be reached through a
+  // latest-ref instead, so the subscription is registered exactly once.
+  let unlisten: ReturnType<typeof vi.fn>
+
+  function mountDesktop() {
+    return render(
+      <AcpConnectionsProvider>
+        <Probe />
+      </AcpConnectionsProvider>
+    )
+  }
+
+  beforeEach(() => {
+    // Desktop firehose path — the web/attach transport skips this effect.
+    h.eventStreamValue = null
+    unlisten = vi.fn()
+    vi.mocked(subscribe).mockClear()
+    vi.mocked(subscribe).mockImplementation(async () => unlisten)
+  })
+
+  // Restore the suite-wide default. `subscribe` is a module-level mock that
+  // the outer `beforeEach` does not reset, so leaving our implementation (or
+  // a bare `mockReset`, which returns `undefined` and would make the
+  // listener's `.then()` throw) installed would break any desktop-path test
+  // added after this block.
+  afterEach(() => {
+    vi.mocked(subscribe).mockImplementation(async () => () => {})
+  })
+
+  it("subscribes exactly once across provider re-renders", async () => {
+    // Precondition: this suite's next-intl mock hands out a FRESH `t` per
+    // call, so every re-render rebuilds `handleMappedEvent`. If that mock ever
+    // becomes memoized, this test would silently stop covering the bug.
+    expect(useTranslations("Folder.chat")).not.toBe(
+      useTranslations("Folder.chat")
+    )
+
+    const { rerender } = mountDesktop()
+    await act(async () => {})
+
+    expect(vi.mocked(subscribe)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(subscribe).mock.calls[0]![0]).toBe("acp://event")
+
+    for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        rerender(
+          <AcpConnectionsProvider>
+            <Probe />
+          </AcpConnectionsProvider>
+        )
+      })
+    }
+
+    expect(vi.mocked(subscribe)).toHaveBeenCalledTimes(1)
+    // Never torn down while mounted — no window with two live listeners.
+    expect(unlisten).not.toHaveBeenCalled()
+  })
+
+  it("keeps delivering events through the surviving listener after re-renders", async () => {
+    // Guards the other half of the fix: the one subscription that survives
+    // must still route, and each delta must land exactly once (the reported
+    // symptom was doubled text). Note this canNOT distinguish an old from a
+    // new `t` closure — the suite's mocked translator returns the key
+    // verbatim, so both produce identical output. Ref freshness itself rests
+    // on the sync effect running every render; what this catches is a dead,
+    // detached, or wrongly-frozen handler.
+    const { rerender } = mountDesktop()
+    await act(async () => {})
+
+    await act(async () => {
+      // No conversationId → skip discovery → owner spawn (acpConnect).
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+    })
+
+    await act(async () => {
+      rerender(
+        <AcpConnectionsProvider>
+          <Probe />
+        </AcpConnectionsProvider>
+      )
+    })
+
+    const onEvent = vi.mocked(subscribe).mock.calls[0]![1] as (
+      envelope: EventEnvelope
+    ) => void
+
+    act(() => {
+      onEvent({
+        seq: 1,
+        connection_id: "spawned-conn",
+        type: "status_changed",
+        status: "prompting",
+      } as EventEnvelope)
+      onEvent({
+        seq: 2,
+        connection_id: "spawned-conn",
+        type: "content_delta",
+        text: "你好",
+      } as EventEnvelope)
+    })
+    // Streaming deltas are queued and flushed on a 16ms timer.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 32))
+    })
+
+    const live = h.store!.getConnection(TAB)!.liveMessage
+    const text = (live!.content as Array<{ type: string; text?: string }>)
+      .filter((b) => b.type === "text")
+      .map((b) => b.text ?? "")
+      .join("")
+    expect(text).toBe("你好")
+  })
+
+  it("unsubscribes on unmount", async () => {
+    const { unmount } = mountDesktop()
+    await act(async () => {})
+
+    expect(vi.mocked(subscribe)).toHaveBeenCalledTimes(1)
+    unmount()
+    expect(unlisten).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("delegation-child attach: mid-turn hydration", () => {
+  // A work-task session viewer attaches to a turn that is ALREADY running.
+  // On desktop the `acp://event` firehose carries only FUTURE events, so
+  // without a snapshot the child sits at DELEGATION_CHILD_ATTACH's synthetic
+  // "connected" with an empty live message — the viewer shows a stale
+  // persisted transcript and never streams. Real delegation children attach
+  // at spawn time and must NOT pay for a snapshot fetch.
+  const CHILD = "task-conn-1"
+
+  function attachChild(hydrate: boolean) {
+    h.actions!.attachDelegationChild({
+      connectionId: CHILD,
+      parentConnectionId: CHILD,
+      parentToolUseId: "work-task-9",
+      agentType: "claude_code",
+      hydrate,
+    })
+  }
+
+  beforeEach(() => {
+    // Desktop firehose path (the web attach protocol always opens with a
+    // snapshot, so the gap this covers is desktop-only).
+    h.eventStreamValue = null
+    vi.mocked(subscribe).mockClear()
+    h.acpGetSessionSnapshot.mockResolvedValue({
+      connection_id: CHILD,
+      event_seq: 7,
+    })
+    h.denormalizeSnapshot.mockReturnValue({
+      connectionId: CHILD,
+      status: "prompting",
+      sessionId: "sess-child",
+      modes: null,
+      configOptions: null,
+      availableCommands: null,
+      usage: null,
+      liveMessage: null,
+      pendingPermission: null,
+      pendingAskQuestion: null,
+      pendingUserMessage: null,
+      pendingPlanApproval: null,
+      promptCapabilities: null,
+      selectorsReady: false,
+      supportsFork: false,
+      configStale: false,
+      configStaleKind: null,
+      lastError: null,
+      eventSeq: 7,
+      activeDelegations: [],
+    })
+  })
+
+  it("hydrates the in-flight turn, then routes later firehose events", async () => {
+    await mountProvider()
+
+    await act(async () => {
+      attachChild(true)
+    })
+    await act(async () => {})
+
+    expect(h.acpGetSessionSnapshot).toHaveBeenCalledWith(CHILD)
+    // The load-bearing bit: "prompting" is what makes the read-only viewer
+    // render the live stream instead of a settled transcript.
+    expect(h.store!.getConnection(CHILD)?.status).toBe("prompting")
+    expect(h.store!.getConnection(CHILD)?.lastAppliedSeq).toBe(7)
+
+    // Reverse-map routing is installed AFTER hydration, so post-snapshot
+    // events still land (and pre-snapshot ones are deduped by seq).
+    const onEvent = vi.mocked(subscribe).mock.calls[0]![1] as (
+      envelope: EventEnvelope
+    ) => void
+    act(() => {
+      onEvent({
+        seq: 8,
+        connection_id: CHILD,
+        type: "content_delta",
+        text: "hi",
+      } as EventEnvelope)
+    })
+    expect(h.store!.getConnection(CHILD)?.lastAppliedSeq).toBe(8)
+  })
+
+  it("skips the snapshot for a spawn-time child attach", async () => {
+    await mountProvider()
+
+    await act(async () => {
+      attachChild(false)
+    })
+    await act(async () => {})
+
+    expect(h.acpGetSessionSnapshot).not.toHaveBeenCalled()
+    expect(h.store!.getConnection(CHILD)?.status).toBe("connected")
+  })
+
+  it("does not hydrate or route a child detached while the snapshot is in flight", async () => {
+    let resolveSnapshot: (v: unknown) => void = () => {}
+    h.acpGetSessionSnapshot.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveSnapshot = res
+        })
+    )
+    await mountProvider()
+
+    await act(async () => {
+      attachChild(true)
+    })
+    await act(async () => {
+      h.actions!.detachDelegationChild(CHILD)
+    })
+    await act(async () => {
+      resolveSnapshot({ connection_id: CHILD, event_seq: 7 })
+    })
+    await act(async () => {})
+
+    // The viewer is gone: no resurrected connection state, and the firehose
+    // must not be routing to a contextKey nobody is watching.
+    expect(h.store!.getConnection(CHILD)).toBeUndefined()
+    const onEvent = vi.mocked(subscribe).mock.calls[0]![1] as (
+      envelope: EventEnvelope
+    ) => void
+    act(() => {
+      onEvent({
+        seq: 8,
+        connection_id: CHILD,
+        type: "content_delta",
+        text: "hi",
+      } as EventEnvelope)
+    })
+    expect(h.store!.getConnection(CHILD)).toBeUndefined()
   })
 })
 

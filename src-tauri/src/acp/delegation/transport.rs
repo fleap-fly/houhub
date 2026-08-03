@@ -183,6 +183,24 @@ pub struct BrokerSessionRequest {
     pub max_messages: Option<u32>,
 }
 
+/// Report a progress milestone for the work task that owns the parent ACP
+/// connection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerTaskProgressRequest {
+    pub token: String,
+    pub message: String,
+}
+
+/// Report the final task verdict. The engine accepts `review`, `done`, or
+/// `failed` (unknown values are rejected), with an optional summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerTaskCompleteRequest {
+    pub token: String,
+    pub verdict: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
 /// Tagged top-level message dispatched by the listener. Adding new variants
 /// is the wire-stable way to grow the broker protocol without touching the
 /// frame layer.
@@ -197,6 +215,8 @@ pub enum BrokerMessage {
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
     SessionInfo(BrokerSessionRequest),
+    TaskProgress(BrokerTaskProgressRequest),
+    TaskComplete(BrokerTaskCompleteRequest),
 }
 
 /// The wrapped outcome the main process returns over the same socket.
@@ -344,6 +364,22 @@ pub async fn client_session_round_trip(
     req: &BrokerSessionRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::SessionInfo(req.clone())).await
+}
+
+/// Dispatch a work-task progress report.
+pub async fn client_task_progress_round_trip(
+    socket_path: &str,
+    req: &BrokerTaskProgressRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::TaskProgress(req.clone())).await
+}
+
+/// Dispatch a work-task completion report.
+pub async fn client_task_complete_round_trip(
+    socket_path: &str,
+    req: &BrokerTaskCompleteRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::TaskComplete(req.clone())).await
 }
 
 /// Total budget for `open()` retries on Windows named pipes. Has to be

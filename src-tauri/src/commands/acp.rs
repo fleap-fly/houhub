@@ -226,6 +226,25 @@ pub(crate) fn resolve_system_agent_binary(cmd: &str) -> Option<PathBuf> {
     cand.is_file().then_some(cand)
 }
 
+pub(crate) async fn resolve_vendor_cli(cmd: &str, extra_dirs: &[&str]) -> Option<PathBuf> {
+    if let Some(path) = resolve_npx_command(cmd).await {
+        return Some(path);
+    }
+    if let Some(path) = resolve_system_agent_binary(cmd) {
+        return Some(path);
+    }
+    let exe = if cfg!(windows) {
+        format!("{cmd}.exe")
+    } else {
+        cmd.to_string()
+    };
+    let home = home_dir_or_default();
+    extra_dirs.iter().find_map(|dir| {
+        let candidate = home.join(dir).join(&exe);
+        candidate.is_file().then_some(candidate)
+    })
+}
+
 /// Resolve the `uvx` (uv tool runner) executable used to launch Python ACP
 /// agents (e.g. Hermes). Checks PATH first (respecting a user's own `uv`),
 /// then houhub's managed uv cache, then the common install locations the
@@ -4257,6 +4276,13 @@ const KIMI_INTERFACE_TYPES: &[&str] = &[
     "vertexai",
 ];
 
+/// Input modalities that must remain enabled when a thinking capability is
+/// declared. Kimi treats a missing capabilities list as permissive, but a
+/// present list as a whitelist.
+const KIMI_BASE_CAPABILITIES: &[&str] = &["image_in", "video_in", "tool_use"];
+const KIMI_CAPABILITY_THINKING: &str = "thinking";
+const KIMI_CAPABILITY_ALWAYS_THINKING: &str = "always_thinking";
+
 fn kimi_code_config_toml_path() -> PathBuf {
     crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("config.toml")
 }
@@ -4293,6 +4319,9 @@ struct KimiManagedSpec {
     env: BTreeMap<String, String>,
     model: String,
     max_context_size: Option<i64>,
+    capabilities: Vec<String>,
+    support_efforts: Vec<String>,
+    default_effort: Option<String>,
 }
 
 /// Upsert (`Some`) or remove (`None`) the houhub-managed `[providers.houhub]` +
@@ -4375,6 +4404,34 @@ fn apply_kimi_managed_block(
                 .filter(|c| *c > 0)
                 .unwrap_or(KIMI_DEFAULT_MAX_CONTEXT_SIZE);
             model_table.insert("max_context_size".to_string(), toml::Value::Integer(ctx));
+            if !spec.capabilities.is_empty() {
+                model_table.insert(
+                    "capabilities".to_string(),
+                    toml::Value::Array(
+                        spec.capabilities
+                            .iter()
+                            .map(|value| toml::Value::String(value.clone()))
+                            .collect(),
+                    ),
+                );
+            }
+            if !spec.support_efforts.is_empty() {
+                model_table.insert(
+                    "support_efforts".to_string(),
+                    toml::Value::Array(
+                        spec.support_efforts
+                            .iter()
+                            .map(|value| toml::Value::String(value.clone()))
+                            .collect(),
+                    ),
+                );
+            }
+            if let Some(effort) = &spec.default_effort {
+                model_table.insert(
+                    "default_effort".to_string(),
+                    toml::Value::String(effort.clone()),
+                );
+            }
             models.insert(
                 KIMI_MANAGED_MODEL_ALIAS.to_string(),
                 toml::Value::Table(model_table),
@@ -4660,6 +4717,42 @@ fn project_kimi_managed_config(value: &toml::Value) -> serde_json::Map<String, s
                 serde_json::Value::Number(ctx.into()),
             );
         }
+        let string_array = |key: &str| -> Option<Vec<serde_json::Value>> {
+            Some(
+                model
+                    .get(key)?
+                    .as_array()?
+                    .iter()
+                    .filter_map(toml::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| serde_json::Value::String(value.to_string()))
+                    .collect(),
+            )
+        };
+        if let Some(capabilities) = string_array("capabilities") {
+            merged.insert(
+                "capabilities".to_string(),
+                serde_json::Value::Array(capabilities),
+            );
+        }
+        if let Some(efforts) = string_array("support_efforts") {
+            merged.insert(
+                "supportEfforts".to_string(),
+                serde_json::Value::Array(efforts),
+            );
+        }
+        if let Some(effort) = model
+            .get("default_effort")
+            .and_then(toml::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            merged.insert(
+                "defaultEffort".to_string(),
+                serde_json::Value::String(effort.to_string()),
+            );
+        }
     }
 
     let has_managed = merged.contains_key("interfaceType");
@@ -4722,6 +4815,10 @@ pub(crate) struct KimiCodeConfigUpdate {
     pub vertex_project: Option<String>,
     pub vertex_location: Option<String>,
     pub raw_config_toml: Option<String>,
+    pub reasoning_enabled: Option<bool>,
+    pub always_thinking: Option<bool>,
+    pub support_efforts: Option<Vec<String>>,
+    pub default_effort: Option<String>,
 }
 
 /// Validate + resolve a `native`-mode update into the managed block to write.
@@ -4802,6 +4899,43 @@ fn build_kimi_managed_spec(update: &KimiCodeConfigUpdate) -> Result<KimiManagedS
         }
     }
 
+    let mut capabilities = Vec::new();
+    let mut support_efforts = Vec::new();
+    let mut default_effort = None;
+    if update.reasoning_enabled.unwrap_or(false) {
+        capabilities.push(
+            if update.always_thinking.unwrap_or(false) {
+                KIMI_CAPABILITY_ALWAYS_THINKING
+            } else {
+                KIMI_CAPABILITY_THINKING
+            }
+            .to_string(),
+        );
+        capabilities.extend(KIMI_BASE_CAPABILITIES.iter().map(|value| value.to_string()));
+
+        for raw in update.support_efforts.iter().flatten() {
+            let effort = raw.trim();
+            if effort.is_empty() {
+                continue;
+            }
+            if effort.contains(['\n', '\r']) {
+                return Err(AcpError::protocol(
+                    "kimi thinking effort must not contain newlines",
+                ));
+            }
+            if !support_efforts.iter().any(|value| value == effort) {
+                support_efforts.push(effort.to_string());
+            }
+        }
+        default_effort = update
+            .default_effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .filter(|value| support_efforts.iter().any(|effort| effort == value))
+            .map(str::to_string);
+    }
+
     Ok(KimiManagedSpec {
         interface_type: interface_type.to_string(),
         base_url,
@@ -4809,6 +4943,9 @@ fn build_kimi_managed_spec(update: &KimiCodeConfigUpdate) -> Result<KimiManagedS
         env,
         model,
         max_context_size: update.max_context_size.filter(|c| *c > 0),
+        capabilities,
+        support_efforts,
+        default_effort,
     })
 }
 
@@ -8618,6 +8755,7 @@ pub(crate) async fn acp_get_agent_status_core(
             .map(|m| m.enabled)
             .unwrap_or_else(|| agent_setting_service::default_enabled(agent_type)),
         installed_version,
+        is_acp_adapter: registry::acp_adapter_relation(agent_type).is_some(),
     })
 }
 
@@ -8830,6 +8968,7 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
             description: meta.description.to_string(),
             available,
             distribution_type: dist_type.to_string(),
+            is_acp_adapter: registry::acp_adapter_relation(agent_type).is_some(),
             custom_source: agent_type
                 .custom_id()
                 .and_then(custom_registry::source_of)
@@ -9590,6 +9729,10 @@ pub async fn acp_update_kimi_code_config(
     vertex_project: Option<String>,
     vertex_location: Option<String>,
     raw_config_toml: Option<String>,
+    reasoning_enabled: Option<bool>,
+    always_thinking: Option<bool>,
+    support_efforts: Option<Vec<String>>,
+    default_effort: Option<String>,
     manager: State<'_, ConnectionManager>,
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
@@ -9612,6 +9755,10 @@ pub async fn acp_update_kimi_code_config(
             vertex_project,
             vertex_location,
             raw_config_toml,
+            reasoning_enabled,
+            always_thinking,
+            support_efforts,
+            default_effort,
         },
         &db,
         &manager,
@@ -10614,6 +10761,27 @@ pub(crate) async fn opencode_list_plugins_core() -> Result<PluginCheckSummary, A
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn opencode_list_plugins() -> Result<PluginCheckSummary, AcpError> {
     opencode_list_plugins_core().await
+}
+
+pub(crate) async fn opencode_provider_catalog_core(
+    data_dir: &Path,
+    force_refresh: bool,
+) -> Vec<crate::acp::opencode_catalog::CatalogProvider> {
+    crate::acp::opencode_catalog::provider_catalog(data_dir, force_refresh).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn opencode_provider_catalog(
+    force_refresh: Option<bool>,
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<crate::acp::opencode_catalog::CatalogProvider>, AcpError> {
+    let data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map(|p| crate::paths::resolve_effective_data_dir(&p))
+        .unwrap_or_else(|_| PathBuf::from("."));
+    Ok(opencode_provider_catalog_core(&data_dir, force_refresh.unwrap_or(false)).await)
 }
 
 pub(crate) async fn codex_bundled_catalog_core(force_refresh: bool) -> Vec<serde_json::Value> {
@@ -13530,6 +13698,9 @@ wire_api = "chat"
             env: BTreeMap::new(),
             model: "claude-opus-4-7".to_string(),
             max_context_size: Some(200_000),
+            capabilities: Vec::new(),
+            support_efforts: Vec::new(),
+            default_effort: None,
         };
         let mut doc = toml::Value::Table(toml::map::Map::new());
         // Pre-existing user content that must survive a managed-block write.
@@ -13597,6 +13768,9 @@ wire_api = "chat"
                 env: BTreeMap::new(),
                 model: "kimi-k2.7-code".to_string(),
                 max_context_size: ctx,
+                capabilities: Vec::new(),
+                support_efforts: Vec::new(),
+                default_effort: None,
             };
             let mut doc = toml::Value::Table(toml::map::Map::new());
             apply_kimi_managed_block(&mut doc, Some(&spec)).expect("write managed block");
@@ -13683,6 +13857,10 @@ model = "kimi-for-coding"
             vertex_project: None,
             vertex_location: None,
             raw_config_toml: None,
+            reasoning_enabled: None,
+            always_thinking: None,
+            support_efforts: None,
+            default_effort: None,
         };
         let spec = build_kimi_managed_spec(&update).expect("valid spec");
         // env auth → key lands in the provider env sub-table, NOT the inline field.
@@ -13703,6 +13881,10 @@ model = "kimi-for-coding"
             vertex_project: Some("my-proj".to_string()),
             vertex_location: Some("us-central1".to_string()),
             raw_config_toml: None,
+            reasoning_enabled: None,
+            always_thinking: None,
+            support_efforts: None,
+            default_effort: None,
         };
         let spec = build_kimi_managed_spec(&update).expect("valid vertex spec");
         assert!(spec.api_key.is_none());
@@ -13729,6 +13911,10 @@ model = "kimi-for-coding"
             vertex_project: None,
             vertex_location: None,
             raw_config_toml: None,
+            reasoning_enabled: None,
+            always_thinking: None,
+            support_efforts: None,
+            default_effort: None,
         };
         assert!(build_kimi_managed_spec(&base).is_err());
         let no_model = KimiCodeConfigUpdate {

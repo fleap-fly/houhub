@@ -313,6 +313,16 @@ pub enum GoalControlAction {
     Clear,
 }
 
+/// How the adapter disposed of an ACP `_session/steering` message.
+/// `Injected` and `StartedNewTurn` consume the text; `PromptRequired` leaves
+/// it host-owned so the caller can resubmit it as a normal prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SteerOutcome {
+    Injected,
+    PromptRequired,
+    StartedNewTurn,
+}
+
 /// Commands sent from Tauri command handlers to the ACP connection loop.
 pub enum ConnectionCommand {
     Prompt {
@@ -344,6 +354,13 @@ pub enum ConnectionCommand {
     Fork {
         reply:
             tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
+    },
+    /// Inject a live-feedback note into the running turn over ACP's
+    /// `_session/steering` extension. Persistence and broadcast are handled by
+    /// the manager after the protocol outcome is known.
+    Steer {
+        text: String,
+        reply: tokio::sync::oneshot::Sender<Result<SteerOutcome, AcpError>>,
     },
     Disconnect,
 }
@@ -1269,6 +1286,7 @@ pub async fn spawn_agent_connection(
                             message: e.to_string(),
                             agent_type: agent_type.to_string(),
                             code,
+                            details: None,
                             // The only genuinely terminal emit site: `run_connection`
                             // is unwinding and the next event is `Disconnected`.
                             // The lifecycle worker uses this flag to decide whether
@@ -1910,6 +1928,40 @@ fn build_grok_set_model_params(
     params
 }
 
+/// Send ACP's `_session/steering` extension to inject text into a running
+/// turn. The method is intentionally untyped because it is an ACP extension
+/// not present in the vendored schema.
+async fn send_steer_request(
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    text: &str,
+) -> Result<SteerOutcome, AcpError> {
+    let params = serde_json::json!({
+        "sessionId": session_id.0.as_ref(),
+        "prompt": [{ "type": "text", "text": text }],
+        "_meta": { "steering": { "idleBehavior": "promptRequired" } },
+    });
+    let request = UntypedMessage::new("_session/steering", params)
+        .map_err(|e| AcpError::protocol(format!("Failed to build steering request: {e}")))?;
+    let raw = cx
+        .send_request_to(Agent, request)
+        .block_task()
+        .await
+        .map_err(|e| AcpError::protocol(format!("Steering request failed: {e}")))?;
+    parse_steer_outcome(&raw)
+}
+
+fn parse_steer_outcome(raw: &serde_json::Value) -> Result<SteerOutcome, AcpError> {
+    match raw.get("outcome").and_then(serde_json::Value::as_str) {
+        Some("injected") => Ok(SteerOutcome::Injected),
+        Some("promptRequired") => Ok(SteerOutcome::PromptRequired),
+        Some("startedNewTurn") => Ok(SteerOutcome::StartedNewTurn),
+        other => Err(AcpError::protocol(format!(
+            "unexpected _session/steering outcome: {other:?}"
+        ))),
+    }
+}
+
 /// On reconnect, re-apply the user's last-picked Grok model AND reasoning effort
 /// (both saved per agent by the frontend and shipped back as preferred config
 /// values), reflecting each in its selector's `current_value`. Model is applied
@@ -2087,6 +2139,7 @@ async fn emit_grok_incompatible_agent_switch(
                 .to_string(),
             agent_type: AgentType::Grok.to_string(),
             code: Some(GROK_INCOMPATIBLE_AGENT_ERROR_CODE.to_string()),
+            details: None,
             // Recoverable: the conversation continues on its current model.
             terminal: false,
         },
@@ -3151,6 +3204,21 @@ async fn run_connection(
                 init_resp.agent_capabilities.load_session, supports_fork, supports_resume
             );
 
+            // Native live-feedback is enabled only when the adapter advertises
+            // the extension and the registry/runtime version policy proves its
+            // idle-race behavior. The result is latched on SessionState so all
+            // callers use the same capability decision.
+            let native_steering_available = synthesize_native_steering(
+                agent_type,
+                init_resp.meta.as_ref(),
+                init_resp.agent_info.as_ref(),
+            );
+            tracing::info!(
+                "[ACP][{}] native steering available={}",
+                agent_type,
+                native_steering_available
+            );
+
             // Whether this agent accepts MCP server entries over the ACP wire
             // (`session/new`'s `mcpServers`). OpenClaw rejects any server
             // entry and fails session creation, so it must receive NONE —
@@ -3222,6 +3290,7 @@ async fn run_connection(
                 // authoritative gate for submit + UI, fixed at launch.
                 s.feedback_tool_available = injected.feedback_available;
             }
+            state.write().await.native_steering_available = native_steering_available;
 
             // Emit fork support capability
             emit_with_state(
@@ -3615,6 +3684,7 @@ async fn run_connection(
                                     message: format!("Failed to load session, starting new: {e}"),
                                     agent_type: agent_type.to_string(),
                                     code: None,
+                                    details: None,
                                     // Recoverable: we fall through to `session/new`
                                     // below. Connection stays alive.
                                     terminal: false,
@@ -4100,6 +4170,7 @@ async fn handle_elicitation_request(
                     option_id: o.option_id.clone(),
                     name: o.label.clone(),
                     kind: o.kind.to_string(),
+                    meta: None,
                 })
                 .collect();
             perms.lock().await.insert(
@@ -4246,6 +4317,7 @@ async fn handle_permission_request(
                 PermissionOptionKind::RejectAlways => "reject_always".into(),
                 _ => "unknown".into(),
             },
+            meta: serde_json::to_value(&opt.meta).ok().and_then(|v| v.as_object().cloned()).map(|m| m.into_iter().collect()),
         })
         .collect();
 
@@ -5380,6 +5452,7 @@ fn turn_failure_error_event(reason_str: &str, agent_type: AgentType) -> Option<A
         message,
         agent_type: agent_type.to_string(),
         code: Some(code.to_string()),
+        details: None,
         // Non-terminal: this Error is paired with a `TurnComplete`
         // carrying the same stop reason. The connection stays alive and
         // the broker's pending entry is drained by `complete_call` with
@@ -5502,6 +5575,7 @@ async fn run_conversation_loop<'a>(
                             message: "Prompt must contain at least one content block".into(),
                             agent_type: agent_type.to_string(),
                             code: None,
+                            details: None,
                             // Recoverable: idle loop continues, awaiting the
                             // next user command. Connection stays alive.
                             terminal: false,
@@ -5844,6 +5918,7 @@ async fn run_conversation_loop<'a>(
                                                     message: format!("Failed to set mode: {e}"),
                                                     agent_type: agent_type.to_string(),
                                                     code: None,
+                                                    details: None,
                                                     // Recoverable: just a failed mode toggle.
                                                     terminal: false,
                                                 },
@@ -5876,6 +5951,7 @@ async fn run_conversation_loop<'a>(
                                                 message: format!("Failed to set config option: {e}"),
                                                 agent_type: agent_type.to_string(),
                                                 code: None,
+                                                details: None,
                                                 // Recoverable: just a failed config-option toggle.
                                                 terminal: false,
                                             },
@@ -5892,12 +5968,16 @@ async fn run_conversation_loop<'a>(
                                                 message: format!("Failed to control goal: {e}"),
                                                 agent_type: agent_type.to_string(),
                                                 code: None,
+                                                details: None,
                                                 // Recoverable: a failed pause/clear leaves the turn alive.
                                                 terminal: false,
                                             },
                                         )
                                         .await;
                                     }
+                                }
+                                Some(ConnectionCommand::Steer { text, reply }) => {
+                                    let _ = reply.send(send_steer_request(&cx, &sid, &text).await);
                                 }
                                 Some(ConnectionCommand::Cancel) => {
                                     // Send CancelNotification to agent to stop the current turn
@@ -6051,6 +6131,7 @@ async fn run_conversation_loop<'a>(
                             message: format!("Failed to set mode: {e}"),
                             agent_type: agent_type.to_string(),
                             code: None,
+                            details: None,
                             // Recoverable: idle SetMode failure leaves the
                             // connection alive — same rationale as the
                             // mid-prompt SetMode site above.
@@ -6082,6 +6163,7 @@ async fn run_conversation_loop<'a>(
                             message: format!("Failed to set config option: {e}"),
                             agent_type: agent_type.to_string(),
                             code: None,
+                            details: None,
                             // Recoverable: idle SetConfigOption failure leaves
                             // the connection alive.
                             terminal: false,
@@ -6101,6 +6183,7 @@ async fn run_conversation_loop<'a>(
                             message: format!("Failed to control goal: {e}"),
                             agent_type: agent_type.to_string(),
                             code: None,
+                            details: None,
                             // Recoverable: an idle pause/clear failure leaves the
                             // connection alive.
                             terminal: false,
@@ -6108,6 +6191,11 @@ async fn run_conversation_loop<'a>(
                     )
                     .await;
                 }
+            }
+            Some(ConnectionCommand::Steer { reply, .. }) => {
+                // No active prompt owns this command. Reply explicitly so a
+                // racing feedback submit can fall back to a normal prompt.
+                let _ = reply.send(Err(AcpError::NoActiveTurn));
             }
             Some(ConnectionCommand::Cancel) => {
                 let cx = session.connection();
@@ -6715,6 +6803,40 @@ fn codebuddy_meta_marks_subagent(
     meta.get("codebuddy.ai/subagentType")
         .and_then(|v| v.as_str())
         .is_some_and(|s| !s.is_empty())
+}
+
+fn init_advertises_steering(meta: Option<&serde_json::Map<String, serde_json::Value>>) -> bool {
+    meta.and_then(|m| m.get("steering"))
+        .and_then(|s| s.get("supported"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn version_at_least(version: &str, min: &str) -> bool {
+    let (Ok(actual), Ok(floor)) = (
+        semver::Version::parse(version.trim()),
+        semver::Version::parse(min),
+    ) else {
+        return false;
+    };
+    actual.cmp_precedence(&floor) != std::cmp::Ordering::Less
+}
+
+fn steering_version_ok(
+    agent_info: Option<&sacp::schema::Implementation>,
+    min: &str,
+) -> bool {
+    agent_info.is_some_and(|info| version_at_least(&info.version, min))
+}
+
+fn synthesize_native_steering(
+    agent_type: AgentType,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+    agent_info: Option<&sacp::schema::Implementation>,
+) -> bool {
+    init_advertises_steering(meta)
+        && registry::steering_prompt_required_min_version(agent_type)
+            .is_some_and(|min| steering_version_ok(agent_info, min))
 }
 
 /// True when a Codex live `tool_call` is a `subAgentActivity` mapping

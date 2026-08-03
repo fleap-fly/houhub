@@ -15,7 +15,10 @@ import { openUrl } from "@/lib/platform"
 import { cn } from "@/lib/utils"
 import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { useWorkbenchClientSuiteStore, useWorkbenchStore } from "@/workbench"
-import { connectWorkspace } from "@/workspace-resources/connection"
+import {
+  connectWorkspace,
+  type WorkspaceConnectionIdentity,
+} from "@/workspace-resources/connection"
 
 export function WorkspaceConnectionButton({
   showLabel = false,
@@ -42,9 +45,12 @@ export function WorkspaceConnectionButton({
   const openResources = useAuxPanelStore((state) => state.openTab)
   const [connecting, setConnecting] = useState(false)
 
-  const connected =
-    houflowSessionStatus === "signed_in" &&
-    workbenchSessionStatus === "signed_in"
+  const houflowConnected = houflowSessionStatus === "signed_in"
+  const workbenchConnected = workbenchSessionStatus === "signed_in"
+  const connected = houflowConnected || workbenchConnected
+  const connectionIdentity: WorkspaceConnectionIdentity = workbenchConnected
+    ? "project"
+    : "houflow"
   const busy =
     connecting ||
     houflowStatus === "loading" ||
@@ -57,25 +63,28 @@ export function WorkspaceConnectionButton({
   const handleConnect = useCallback(async () => {
     setConnecting(true)
     try {
-      await connectWorkspace({
-        isHouflowConnected: () =>
-          useHouflowDesktopStore.getState().session.status === "signed_in",
-        signInHouflow: () =>
-          useHouflowDesktopStore.getState().signInWithHouflow({
-            openAuthorizationUrl: openUrl,
-          }),
-        isWorkbenchConnected: () =>
-          useWorkbenchStore.getState().session.status === "signed_in",
-        signInWorkbench: () =>
-          useWorkbenchStore.getState().signIn({
-            openAuthorizationUrl: openUrl,
-          }),
-        activeProjectId: () =>
-          useWorkbenchStore.getState().session.activeProjectId,
-        refreshSuites: (projectId) =>
-          useWorkbenchClientSuiteStore.getState().refresh(projectId),
-        openResources: () => openResources("workspace_resources"),
-      })
+      await connectWorkspace(
+        {
+          isHouflowConnected: () =>
+            useHouflowDesktopStore.getState().session.status === "signed_in",
+          signInHouflow: () =>
+            useHouflowDesktopStore.getState().signInWithHouflow({
+              openAuthorizationUrl: openUrl,
+            }),
+          isWorkbenchConnected: () =>
+            useWorkbenchStore.getState().session.status === "signed_in",
+          signInWorkbench: () =>
+            useWorkbenchStore.getState().signIn({
+              openAuthorizationUrl: openUrl,
+            }),
+          activeProjectId: () =>
+            useWorkbenchStore.getState().session.activeProjectId,
+          refreshSuites: (projectId) =>
+            useWorkbenchClientSuiteStore.getState().refresh(projectId),
+          openResources: () => openResources("workspace_resources"),
+        },
+        connectionIdentity
+      )
     } catch (error) {
       toast.error(t("connectFailed"), {
         description: toErrorMessage(error),
@@ -83,7 +92,7 @@ export function WorkspaceConnectionButton({
     } finally {
       setConnecting(false)
     }
-  }, [openResources, t])
+  }, [connectionIdentity, openResources, t])
 
   const title = busy
     ? t("connecting")
