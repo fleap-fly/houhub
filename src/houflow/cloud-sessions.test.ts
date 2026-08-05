@@ -336,19 +336,14 @@ describe("Houflow cloud session adapters", () => {
     }
     mocks.sendConversation.mockResolvedValue(snapshot)
 
-    await sendHouflowConversationSessionMessage(
-      session(),
-      secret(),
-      snapshot,
-      {
-        message: "next",
-        modelSettings: {
-          modelProviderId: "default",
-          model: "openai/gpt-5.6-terra",
-          reasoningEffort: "max",
-        },
-      }
-    )
+    await sendHouflowConversationSessionMessage(session(), secret(), snapshot, {
+      message: "next",
+      modelSettings: {
+        modelProviderId: "default",
+        model: "openai/gpt-5.6-terra",
+        reasoningEffort: "max",
+      },
+    })
 
     expect(mocks.sendConversation).toHaveBeenCalledWith(
       snapshot,
@@ -518,6 +513,7 @@ function conversationSnapshot(): AgentHubConversationSessionSnapshot {
         completed_at: "2026-07-20T00:00:01.000Z",
       },
     ],
+    stream_cursor: null,
     turns_page: { loaded: true, has_more: false, next_cursor: null },
   }
 }

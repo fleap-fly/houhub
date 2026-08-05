@@ -11,6 +11,10 @@ import {
 } from "@/components/automations/automations-page"
 import { CloudSessionPage } from "@/components/houflow/cloud-session-page"
 import { TasksPage, TasksPageTitle } from "@/components/tasks/tasks-page"
+import {
+  TokenUsagePage,
+  TokenUsagePageTitle,
+} from "@/components/token-usage/token-usage-page"
 
 /**
  * Registry of full-page routes that take over the main content region. The
@@ -23,12 +27,14 @@ const WORKBENCH_ROUTES: Partial<Record<WorkbenchRouteId, ComponentType>> = {
   automations: AutomationsPage,
   cloud: CloudSessionPage,
   tasks: TasksPage,
+  tokenUsage: TokenUsagePage,
 }
 
 const WORKBENCH_ROUTE_STRIPS: Partial<Record<WorkbenchRouteId, ComponentType>> =
   {
     automations: AutomationsPageTitle,
     tasks: TasksPageTitle,
+    tokenUsage: TokenUsagePageTitle,
   }
 
 /**

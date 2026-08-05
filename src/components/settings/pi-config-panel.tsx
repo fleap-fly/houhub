@@ -203,7 +203,11 @@ export function PiConfigPanel({
 }: {
   agent: AcpAgentInfo
   saving: boolean
-  onSaveEnv: (env: Record<string, string>, enabled: boolean) => Promise<unknown>
+  onSaveEnv: (
+    env: Record<string, string>,
+    enabled: boolean,
+    modelProviderId?: number | null
+  ) => Promise<unknown>
   onSaved: () => Promise<void>
   modelProviders?: ModelProviderInfo[]
 }) {
@@ -227,15 +231,21 @@ export function PiConfigPanel({
   const [authProviders, setAuthProviders] = useState<string[]>([])
   const [savingCreds, setSavingCreds] = useState(false)
   const [loadingCreds, setLoadingCreds] = useState(true)
-  const [selectedModelProviderId, setSelectedModelProviderId] = useState("")
+  const [selectedModelProviderId, setSelectedModelProviderId] = useState(() =>
+    agent.model_provider_id == null ? "" : String(agent.model_provider_id)
+  )
 
   const isCustom = selectedProvider === PI_CUSTOM_SENTINEL
   const effectiveProvider = (isCustom ? customId : selectedProvider).trim()
 
   const houhubModelProviders = useMemo(
     () =>
-      modelProviders.filter((provider) => provider.agent_types.includes("pi")),
-    [modelProviders]
+      modelProviders.filter(
+        (provider) =>
+          provider.agent_types.includes("pi") ||
+          provider.id === agent.model_provider_id
+      ),
+    [agent.model_provider_id, modelProviders]
   )
 
   const selectedHouhubModelProvider = useMemo(
@@ -288,7 +298,9 @@ export function PiConfigPanel({
         } else {
           setSelectedProvider(dp)
         }
-        setSelectedModelProviderId("")
+        setSelectedModelProviderId(
+          agent.model_provider_id == null ? "" : String(agent.model_provider_id)
+        )
       })
       .catch((error) => {
         console.error("[Pi] load config failed", error)
@@ -299,7 +311,7 @@ export function PiConfigPanel({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [agent.model_provider_id])
 
   const handleSaveCreds = useCallback(async () => {
     const trimmedModel = model.trim()
@@ -331,6 +343,14 @@ export function PiConfigPanel({
             : [...prev, effectiveProvider].sort()
         )
       }
+      // Keep the ACP setting bound to the same provider the credentials were
+      // saved from. Selecting a built-in or an unrelated custom pi provider
+      // explicitly clears the HouHub binding.
+      await onSaveEnv(
+        agent.env,
+        agent.enabled,
+        selectedModelProviderId ? Number(selectedModelProviderId) : null
+      )
       if (isCustom) {
         // Reflect the just-saved custom provider so a reopen rehydrates it.
         setCustomProviders((prev) => {
@@ -362,7 +382,11 @@ export function PiConfigPanel({
     modelChoices,
     thinkingLevel,
     apiKey,
+    agent.enabled,
+    agent.env,
     onSaved,
+    onSaveEnv,
+    selectedModelProviderId,
     t,
   ])
 
@@ -397,6 +421,35 @@ export function PiConfigPanel({
       return provider.model.trim()
     }
   }, [])
+
+  // The native pi config can still contain an old built-in provider (usually
+  // `openai`) even when the agent is bound to a HouHub model provider. The DB
+  // binding is authoritative for an ACP agent, so hydrate the native form from
+  // it as soon as the provider list is available. This also makes the model
+  // picker use the configured provider catalog instead of pi's stale defaults.
+  useEffect(() => {
+    if (!selectedModelProviderId || !selectedHouhubModelProvider) return
+    const providerId =
+      selectedHouhubModelProvider.name.trim().toLowerCase() ===
+      "houflow gateway"
+        ? "houflow"
+        : `houhub-provider-${selectedHouhubModelProvider.id}`
+    if (selectedProvider === PI_CUSTOM_SENTINEL && customId === providerId) {
+      return
+    }
+    setSelectedProvider(PI_CUSTOM_SENTINEL)
+    setCustomId(providerId)
+    setCustomBaseUrl(selectedHouhubModelProvider.api_url)
+    setCustomApi("openai-completions")
+    setModel(providerDefaultModel(selectedHouhubModelProvider))
+    setApiKey(selectedHouhubModelProvider.api_key)
+  }, [
+    customId,
+    providerDefaultModel,
+    selectedHouhubModelProvider,
+    selectedModelProviderId,
+    selectedProvider,
+  ])
 
   const handleHouhubProviderChange = useCallback(
     (value: string) => {
@@ -568,7 +621,11 @@ export function PiConfigPanel({
       sessionDir
     )
     try {
-      await onSaveEnv(env, agent.enabled)
+      await onSaveEnv(
+        env,
+        agent.enabled,
+        selectedModelProviderId ? Number(selectedModelProviderId) : null
+      )
       toast.success(t("toasts.piRuntimeSaved"))
     } catch (error) {
       console.error("[Pi] save runtime failed", error)
@@ -582,6 +639,7 @@ export function PiConfigPanel({
     configDir,
     sessionDir,
     onSaveEnv,
+    selectedModelProviderId,
     t,
   ])
 
@@ -595,7 +653,11 @@ export function PiConfigPanel({
       if (next) delete env[PI_TRUST_WORKSPACE_ENV]
       else env[PI_TRUST_WORKSPACE_ENV] = "0"
       try {
-        await onSaveEnv(env, agent.enabled)
+        await onSaveEnv(
+          env,
+          agent.enabled,
+          selectedModelProviderId ? Number(selectedModelProviderId) : null
+        )
       } catch (error) {
         console.error("[Pi] save workspace trust failed", error)
         setTrustWorkspace(!next)
@@ -604,7 +666,7 @@ export function PiConfigPanel({
         setSavingTrust(false)
       }
     },
-    [agent.env, agent.enabled, onSaveEnv, t]
+    [agent.env, agent.enabled, onSaveEnv, selectedModelProviderId, t]
   )
 
   return (
@@ -929,7 +991,11 @@ export function PiConfigPanel({
             {t("pi.providerLabel")}
           </label>
           <Select
-            value={selectedProvider}
+            value={
+              selectedModelProviderId
+                ? `${PI_MODEL_PROVIDER_VALUE_PREFIX}${selectedModelProviderId}`
+                : selectedProvider
+            }
             onValueChange={(value) => {
               if (value === PI_MODEL_PROVIDER_SENTINEL) return
               handleProviderChange(value)

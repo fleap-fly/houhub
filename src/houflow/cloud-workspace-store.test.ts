@@ -134,6 +134,7 @@ function conversationSnapshot(
       },
     },
     turns,
+    stream_cursor: null,
     turns_page: { loaded: true, has_more: false, next_cursor: null },
   }
 }

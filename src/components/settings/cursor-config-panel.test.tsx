@@ -159,7 +159,7 @@ describe("CursorConfigPanel", () => {
     installed: true,
     is_authenticated: true,
     raw_status: "authenticated",
-    email: "itpkcn@gmail.com",
+    email: "user@example.com",
     membership: null,
     error: null,
     binary_path: "/cache/cursor-agent",

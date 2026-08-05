@@ -3323,8 +3323,8 @@ export function hasEffectiveGrokCredential(input: {
 }): boolean {
   return Boolean(
     input.providerApiKey?.trim() ||
-      input.envApiKey?.trim() ||
-      (input.customModelId?.trim() && input.customApiKey?.trim())
+    input.envApiKey?.trim() ||
+    (input.customModelId?.trim() && input.customApiKey?.trim())
   )
 }
 
@@ -9965,13 +9965,14 @@ supports_websockets = true`}
                 ) : selectedAgent.agent_type === "pi" ? (
                   <PiConfigPanel
                     agent={selectedAgent}
+                    modelProviders={modelProviders}
                     saving={Boolean(savingEnv[selectedAgent.agent_type])}
-                    onSaveEnv={(env, enabled) =>
+                    onSaveEnv={(env, enabled, modelProviderId) =>
                       persistEnv(
                         selectedAgent.agent_type,
                         enabled,
                         envMapToText(env),
-                        selectedAgent.model_provider_id
+                        modelProviderId ?? null
                       )
                     }
                     onSaved={refreshAgents}

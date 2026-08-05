@@ -58,7 +58,7 @@ export function resolveHouflowCloudModelSettings(input: {
       draft?.reasoningEffort,
       persisted?.reasoningEffort,
       target.metadata.reasoningEffort,
-      target.metadata.reasoning_effort,
+      target.metadata.reasoning_effort
     )
   )
   const supportedReasoningEfforts = cloudModelReasoningEfforts(model)
@@ -76,8 +76,9 @@ export function houflowCloudSessionConfigOptions(
   settings: HouflowCloudModelSettings | null,
   gateway: HouflowGatewayCatalog | null | undefined,
   labels: HouflowCloudConfigLabels,
-  _target: HouflowAgentTarget | null | undefined
+  target: HouflowAgentTarget | null | undefined
 ): SessionConfigOptionInfo[] {
+  void target
   if (!settings) return []
 
   const modelOptions = uniqueModels(gateway)

@@ -48,6 +48,15 @@ describe("conversation turn projection", () => {
             },
           },
           created_at: "2026-07-20T00:00:02.000Z",
+          kind: "agent_message",
+          text: "Done",
+          canonical_ref: {
+            session_id: "conversation_1",
+            event_id: "event_1",
+            run_id: null,
+            turn_id: "turn_1",
+            command_id: null,
+          },
         },
       ],
     })

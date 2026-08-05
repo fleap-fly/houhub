@@ -56,6 +56,15 @@ describe("cloud runtime log projection", () => {
                 level: "info",
                 payload: {},
                 created_at: "2026-07-20T00:00:00.000Z",
+                kind: "working",
+                text: "Dispatching",
+                canonical_ref: {
+                  session_id: "conversation",
+                  event_id: "started",
+                  run_id: null,
+                  turn_id: "turn",
+                  command_id: null,
+                },
               },
             ],
             stream_url: null,
@@ -64,6 +73,7 @@ describe("cloud runtime log projection", () => {
             completed_at: "2026-07-20T00:00:01.000Z",
           },
         ],
+        stream_cursor: null,
         turns_page: { loaded: true, has_more: false, next_cursor: null },
       })
     ).toMatchObject([
