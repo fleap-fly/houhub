@@ -62,7 +62,7 @@ fn opencode_cache_dir() -> Option<PathBuf> {
     xdg_cache_home().map(|d| d.join("opencode"))
 }
 
-fn xdg_config_home() -> Option<PathBuf> {
+pub(crate) fn xdg_config_home() -> Option<PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|h| h.join(".config")))

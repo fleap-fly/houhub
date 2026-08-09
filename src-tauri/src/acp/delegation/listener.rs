@@ -19,12 +19,16 @@ use crate::acp::delegation::broker::{DelegationBroker, StatusWait};
 use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
     BrokerCommitFeedbackRequest, BrokerFeedbackRequest, BrokerMessage, BrokerRequest,
-    BrokerResponse, BrokerSessionRequest, BrokerStatusRequest, BrokerTaskCompleteRequest,
+    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerResponse,
+    BrokerSessionRequest, BrokerStatusRequest, BrokerTaskCompleteRequest,
     BrokerTaskProgressRequest,
 };
 use crate::acp::delegation::types::{DelegationRequest, DelegationTaskReport, TaskStatus};
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
+use crate::acp::chat_authoring::{
+    AuthoringContext, AuthoringOutcome, ChatAuthoringAccess, NewAutomationSpec, NewWorkTaskSpec,
+};
 use crate::acp::session_info::{SessionInfo, SessionInfoAccess};
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
 use crate::models::AgentType;
@@ -98,6 +102,8 @@ pub struct DelegationListener {
     pub session_info: Arc<dyn SessionInfoAccess>,
     /// Records progress and completion reports for the owning work task.
     pub tasks: Arc<dyn WorkTaskToolAccess>,
+    /// Creates automations and board tasks requested by an agent in chat.
+    pub authoring: Arc<dyn ChatAuthoringAccess>,
 }
 
 impl DelegationListener {
@@ -118,6 +124,7 @@ impl DelegationListener {
             questions,
             session_info,
             Arc::new(StubTaskTools),
+            Arc::new(DisabledChatAuthoring),
         )
     }
 
@@ -130,6 +137,7 @@ impl DelegationListener {
         questions: Arc<dyn SessionQuestionAccess>,
         session_info: Arc<dyn SessionInfoAccess>,
         tasks: Arc<dyn WorkTaskToolAccess>,
+        authoring: Arc<dyn ChatAuthoringAccess>,
     ) -> Arc<Self> {
         Arc::new(Self {
             broker,
@@ -139,6 +147,7 @@ impl DelegationListener {
             questions,
             session_info,
             tasks,
+            authoring,
         })
     }
 
@@ -339,6 +348,12 @@ impl DelegationListener {
             BrokerMessage::TaskComplete(req) => {
                 task_ack_response(self.process_task_complete(req).await)?
             }
+            BrokerMessage::CreateAutomation(req) => {
+                authoring_response(self.process_create_automation(req).await)?
+            }
+            BrokerMessage::CreateWorkTask(req) => {
+                authoring_response(self.process_create_work_task(req).await)?
+            }
             BrokerMessage::Cancel(cancel) => {
                 self.process_cancel(cancel).await;
                 // Empty ack — the companion only uses this to detect the
@@ -536,6 +551,35 @@ impl DelegationListener {
             .await
     }
 
+    async fn authoring_context(&self, token: &str) -> Option<AuthoringContext> {
+        let entry = self.tokens.lookup(token).await?;
+        let conversation_id = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await;
+        Some(AuthoringContext {
+            conversation_id,
+            working_dir: entry.working_dir,
+        })
+    }
+
+    async fn process_create_automation(
+        &self,
+        req: BrokerCreateAutomationRequest,
+    ) -> AuthoringOutcome {
+        let Some(ctx) = self.authoring_context(&req.token).await else {
+            return AuthoringOutcome::rejected("automation", "invalid token");
+        };
+        self.authoring.create_automation(ctx, req.spec).await
+    }
+
+    async fn process_create_work_task(&self, req: BrokerCreateWorkTaskRequest) -> AuthoringOutcome {
+        let Some(ctx) = self.authoring_context(&req.token).await else {
+            return AuthoringOutcome::rejected("work_task", "invalid token");
+        };
+        self.authoring.create_work_task(ctx, req.spec).await
+    }
+
     async fn process(&self, req: BrokerRequest) -> DelegationTaskReport {
         // 1. Token + parent_connection_id consistency check. Treat both as
         //    "canceled" since the LLM can't usefully react to either —
@@ -601,6 +645,27 @@ impl DelegationListener {
 }
 
 struct StubTaskTools;
+
+struct DisabledChatAuthoring;
+
+#[async_trait]
+impl ChatAuthoringAccess for DisabledChatAuthoring {
+    async fn create_automation(
+        &self,
+        _ctx: AuthoringContext,
+        _spec: NewAutomationSpec,
+    ) -> AuthoringOutcome {
+        AuthoringOutcome::rejected("automation", "chat authoring is unavailable")
+    }
+
+    async fn create_work_task(
+        &self,
+        _ctx: AuthoringContext,
+        _spec: NewWorkTaskSpec,
+    ) -> AuthoringOutcome {
+        AuthoringOutcome::rejected("work_task", "chat authoring is unavailable")
+    }
+}
 
 #[async_trait]
 impl WorkTaskToolAccess for StubTaskTools {
@@ -687,6 +752,14 @@ fn session_response(info: SessionInfo) -> std::io::Result<BrokerResponse> {
 fn task_ack_response(ack: TaskReportAck) -> std::io::Result<BrokerResponse> {
     Ok(BrokerResponse {
         outcome: serde_json::to_value(&ack).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn authoring_response(outcome: AuthoringOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
         })?,
     })

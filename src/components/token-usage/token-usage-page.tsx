@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
 import {
   tokenUsageFacets,
   tokenUsageReport,
@@ -175,21 +176,11 @@ const WEEKDAY_KEYS = [
 
 type BreakdownDim = "folder" | "agent" | "model"
 
-/** Page title in the window-chrome strip — same metrics as the Tasks and
- *  Automations routes so all three open with one header rhythm. */
+/** Page title in the window-chrome strip — the shared breadcrumb header, same
+ *  as the Tasks and Automations routes. */
 export function TokenUsagePageTitle() {
   const t = useTranslations("TokenUsage")
-  return (
-    <div className="flex h-10 shrink-0 items-center gap-2 pl-4">
-      <h1 className="flex items-center gap-1.5 text-[0.8125rem] font-semibold leading-none">
-        <ChartNoAxesColumn
-          className="size-4 text-muted-foreground"
-          aria-hidden="true"
-        />
-        {t("title")}
-      </h1>
-    </div>
-  )
+  return <WorkbenchPageTitle title={t("title")} />
 }
 
 /** One cell of the connected stats strip under the hero. */
@@ -884,12 +875,10 @@ export function TokenUsagePage() {
               )}
             </div>
 
+            {/* Stale counts are sync bookkeeping, not persistent user-facing
+                status. Progress and actionable failures are surfaced while the
+                sync runs. */}
             <div className="ms-auto flex items-center gap-1.5">
-              {status && status.stale_conversations > 0 && !syncing && (
-                <span className="text-xs text-muted-foreground">
-                  {t("staleHint", { count: status.stale_conversations })}
-                </span>
-              )}
               {/* Every data action lives in one overflow menu; while a sync
                     runs the trigger itself spins, so the state stays visible
                     with the buttons folded away. Styled as a filled pill like

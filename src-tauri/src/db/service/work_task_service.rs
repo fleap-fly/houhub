@@ -9,8 +9,10 @@
 //! - Every transition writes its `work_task_event` row in the SAME transaction
 //!   (and the CAS UPDATE is the transaction's first statement, so SQLite takes
 //!   the write lock up front — see the busy-snapshot pitfall).
-//! - `done` is written only by `merge_landed` and never rolls back; a failed
-//!   worktree cleanup surfaces as `cleanup_state='failed'` on the done row.
+//! - `done` is written only by `merge_landed` (a landed merge) and
+//!   `complete_without_merge` (a reviewed task with nothing to land), and never
+//!   rolls back; a failed worktree cleanup surfaces as `cleanup_state='failed'`
+//!   on the done row.
 
 use chrono::Utc;
 use sea_orm::sea_query::Expr;
@@ -75,6 +77,7 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
             .as_deref()
             .and_then(|p| serde_json::from_str(p).ok()),
         archived_at: m.archived_at,
+        scheduled_at: m.scheduled_at,
         latest_progress: None,
         created_at: m.created_at,
         updated_at: m.updated_at,
@@ -234,6 +237,37 @@ pub async fn list_events(
     Ok(rows.into_iter().map(event_to_info).collect())
 }
 
+/// The task's most recent events of the given kinds, newest first.
+///
+/// Two departures from `list_events`, both required by anything reasoning about
+/// the latest state rather than rendering a timeline:
+/// - **newest first.** `list_events` orders ASCENDING before applying its
+///   limit, so past `limit` events it returns the task's OLDEST rows and stops
+///   seeing recent ones entirely.
+/// - **by id, not timestamp.** The log is append-only with an autoincrement
+///   key, so id IS insertion order; `created_at` comes from the wall clock,
+///   which can tie within a transaction and can step backwards under an NTP
+///   correction.
+///
+/// `kinds` narrows the query rather than the result: filtering after the fact
+/// would let a burst of one kind (an agent reporting progress, say) push the
+/// rows the caller cares about past the limit.
+pub async fn recent_events_of_kinds(
+    conn: &DatabaseConnection,
+    task_id: i32,
+    kinds: &[&str],
+    limit: u64,
+) -> Result<Vec<WorkTaskEventInfo>, DbError> {
+    let rows = work_task_event::Entity::find()
+        .filter(work_task_event::Column::TaskId.eq(task_id))
+        .filter(work_task_event::Column::Kind.is_in(kinds.iter().copied()))
+        .order_by_desc(work_task_event::Column::Id)
+        .limit(limit)
+        .all(conn)
+        .await?;
+    Ok(rows.into_iter().map(event_to_info).collect())
+}
+
 /// Raw rows in the given statuses. Deliberately does NOT join the folder: the
 /// reconcile sweep must also converge tasks whose folder was removed mid-run.
 pub async fn list_by_status(
@@ -249,6 +283,11 @@ pub async fn list_by_status(
 }
 
 /// Ids of all todo tasks of a folder, in board order (for "start all").
+///
+/// Tasks with a planned start are left out: "process all" is a bulk shortcut,
+/// and silently discarding a time the user picked for one particular task would
+/// start an agent earlier than they asked. That task's own start button (or a
+/// drag onto the In-progress column) still overrides the plan explicitly.
 pub async fn list_todo_ids(
     conn: &DatabaseConnection,
     folder_id: i32,
@@ -257,6 +296,7 @@ pub async fn list_todo_ids(
         .filter(work_task::Column::DeletedAt.is_null())
         .filter(work_task::Column::FolderId.eq(folder_id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
+        .filter(work_task::Column::ScheduledAt.is_null())
         .order_by_asc(work_task::Column::SortOrder)
         .order_by_asc(work_task::Column::Id)
         .all(conn)
@@ -432,6 +472,7 @@ pub async fn create(
         merge_commit: Set(None),
         preflight: Set(None),
         archived_at: Set(None),
+        scheduled_at: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
         started_at: Set(None),
@@ -480,9 +521,19 @@ pub async fn update(
     Ok(to_info(active.update(conn).await?))
 }
 
-/// Soft-delete. The command layer is responsible for cancelling an active run
-/// first (and refuses while merging).
-pub async fn soft_delete(conn: &DatabaseConnection, id: i32) -> Result<(), DbError> {
+/// Soft-delete, guarded on the status the caller validated.
+///
+/// The guard is not ceremony: three different arms can claim a `todo` task
+/// (the user, the folder's auto-processor, a planned start coming due), and a
+/// tombstone written over a generation that just started would strand it —
+/// its worktree and its agent process would outlive the row that knows about
+/// them, with nothing left to reap them. Returns `false` when the row moved on;
+/// the caller must then re-read, settle whatever claimed it, and try again.
+pub async fn soft_delete(
+    conn: &DatabaseConnection,
+    id: i32,
+    expected: WorkTaskStatus,
+) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
     let res = work_task::Entity::update_many()
@@ -490,14 +541,12 @@ pub async fn soft_delete(conn: &DatabaseConnection, id: i32) -> Result<(), DbErr
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::DeletedAt.is_null())
-        .filter(work_task::Column::Status.ne(WorkTaskStatus::Merging))
+        .filter(work_task::Column::Status.eq(expected))
         .exec(&txn)
         .await?;
     if res.rows_affected != 1 {
         txn.rollback().await?;
-        return Err(DbError::Validation(
-            "task not found or currently merging".into(),
-        ));
+        return Ok(false);
     }
     record_event(
         &txn,
@@ -508,7 +557,7 @@ pub async fn soft_delete(conn: &DatabaseConnection, id: i32) -> Result<(), DbErr
     )
     .await?;
     txn.commit().await?;
-    Ok(())
+    Ok(true)
 }
 
 // ── state machine (all CAS; event in the same transaction) ─────────────────
@@ -522,9 +571,61 @@ pub async fn claim_for_run(
     from: WorkTaskStatus,
     actor: &str,
 ) -> Result<Option<i32>, DbError> {
+    claim_inner(conn, id, from, actor, None, false).await
+}
+
+/// `claim_for_run` for a BULK start ("process all"), which must leave a planned
+/// task alone.
+///
+/// The caller's list query already filters planned tasks out, but a list is a
+/// snapshot: someone scheduling a task in the moment between the list and this
+/// claim would have their plan silently overridden and an agent started at once.
+/// So the exclusion rides the CAS too, and losing it simply means the task is
+/// skipped — exactly as if it had carried a plan when the list was taken.
+pub async fn claim_unplanned_for_run(
+    conn: &DatabaseConnection,
+    id: i32,
+    from: WorkTaskStatus,
+    actor: &str,
+) -> Result<Option<i32>, DbError> {
+    claim_inner(conn, id, from, actor, None, true).await
+}
+
+/// `claim_for_run` plus a `user_action` event written in the SAME transaction
+/// as the CAS.
+///
+/// Both halves of that atomicity matter for an instruction the user attaches to
+/// the claim (review feedback, a retry note):
+/// - recorded before the CAS, a claim that LOSES leaves an orphan instruction
+///   in the log for some later generation to pick up;
+/// - recorded after the CAS commits, the task is already `queued` and a pump
+///   running concurrently can claim and launch it before the instruction is
+///   readable — the generation would then run without it.
+pub async fn claim_for_run_with_action(
+    conn: &DatabaseConnection,
+    id: i32,
+    from: WorkTaskStatus,
+    actor: &str,
+    action: Option<serde_json::Value>,
+) -> Result<Option<i32>, DbError> {
+    claim_inner(conn, id, from, actor, action, false).await
+}
+
+/// Shared body of every user-driven claim. `only_unplanned` narrows the CAS to
+/// tasks without a planned start (see `claim_unplanned_for_run`); a targeted
+/// start leaves it off, because pressing Start on one particular task IS the
+/// instruction to override its plan.
+async fn claim_inner(
+    conn: &DatabaseConnection,
+    id: i32,
+    from: WorkTaskStatus,
+    actor: &str,
+    action: Option<serde_json::Value>,
+    only_unplanned: bool,
+) -> Result<Option<i32>, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
-    let res = work_task::Entity::update_many()
+    let mut update = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::Status,
             Expr::value(status_str(WorkTaskStatus::Queued)),
@@ -539,7 +640,14 @@ pub async fn claim_for_run(
         // verdict (result_summary stays visible until the next settle).
         .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
         // A user-driven claim supersedes any auto-remerge intent and stale
-        // preflight light, and resurrects an archived terminal task.
+        // preflight light, resurrects an archived terminal task, and consumes
+        // the planned start (the task is starting now — there is no later start
+        // left to plan, and a plan surviving into `canceled → todo` would fire
+        // a run the user never asked for).
+        .col_expr(
+            work_task::Column::ScheduledAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
         .col_expr(work_task::Column::PendingMerge, Expr::value(None::<String>))
         .col_expr(work_task::Column::Preflight, Expr::value(None::<String>))
         .col_expr(
@@ -550,9 +658,11 @@ pub async fn claim_for_run(
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(from))
-        .filter(work_task::Column::DeletedAt.is_null())
-        .exec(&txn)
-        .await?;
+        .filter(work_task::Column::DeletedAt.is_null());
+    if only_unplanned {
+        update = update.filter(work_task::Column::ScheduledAt.is_null());
+    }
+    let res = update.exec(&txn).await?;
     if res.rows_affected != 1 {
         txn.rollback().await?;
         return Ok(None);
@@ -562,6 +672,15 @@ pub async fn claim_for_run(
         .await?
         .map(|m| m.run_seq)
         .ok_or_else(|| DbError::NotFound(format!("work task {id}")))?;
+    // The instruction lands before the status change, so a newest-first scan
+    // that stops at the first user action never has to reason about ordering
+    // within this transaction.
+    if let Some(mut action) = action {
+        if let serde_json::Value::Object(map) = &mut action {
+            map.insert("run_seq".to_string(), serde_json::json!(run_seq));
+        }
+        record_event(&txn, id, "user_action", actor, Some(action)).await?;
+    }
     status_changed_event(&txn, id, actor, Some(from), WorkTaskStatus::Queued, None).await?;
     txn.commit().await?;
     Ok(Some(run_seq))
@@ -598,6 +717,11 @@ pub async fn reorder(
 /// budget here INCLUDES queued tasks (manual or auto), so the auto arm never
 /// piles up a queue beyond `max_concurrent`; the rest stay visible in todo.
 ///
+/// Tasks with a planned start are invisible here — that plan IS their schedule,
+/// and `claim_due_scheduled` owns it. The filter sits on the CAS as well as on
+/// the head lookup, so a plan set between the two still wins (the retry loop
+/// then simply picks the next head).
+///
 /// The CAS UPDATE is the transaction's first statement (write lock up front);
 /// the budget is then re-checked INSIDE the same transaction and the claim is
 /// rolled back when over — that in-transaction recheck is what makes the
@@ -616,6 +740,7 @@ pub async fn auto_claim_next(
             .filter(work_task::Column::DeletedAt.is_null())
             .filter(work_task::Column::FolderId.eq(folder_id))
             .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
+            .filter(work_task::Column::ScheduledAt.is_null())
             .inner_join(folder::Entity)
             .filter(folder::Column::DeletedAt.is_null())
             .order_by_asc(work_task::Column::SortOrder)
@@ -639,16 +764,22 @@ pub async fn auto_claim_next(
             )
             .col_expr(work_task::Column::FailureReason, Expr::value(None::<String>))
             .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
+            // Every claim invalidates the previous run's self-report — the
+            // settle path reads `verdict` as "this generation's", so a value
+            // carried in from an older run (review → cancel → requeue → todo)
+            // would decide an outcome it knows nothing about.
+            .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
             .col_expr(work_task::Column::FinishedAt, Expr::value(None::<chrono::DateTime<Utc>>))
             .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
             .filter(work_task::Column::Id.eq(head.id))
             .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
+            .filter(work_task::Column::ScheduledAt.is_null())
             .filter(work_task::Column::DeletedAt.is_null())
             .exec(&txn)
             .await?;
         if res.rows_affected != 1 {
-            // Someone moved the head (manual start, edit, delete) — retry with
-            // the fresh head.
+            // Someone moved the head (manual start, edit, delete, a plan) —
+            // retry with the fresh head.
             txn.rollback().await?;
             continue;
         }
@@ -684,9 +815,134 @@ pub async fn auto_claim_next(
     }
 }
 
+/// Plan (or, with `at = None`, un-plan) the start of a to-do task.
+///
+/// Only `todo` accepts a plan: every other status either has a run of its own
+/// already or is terminal, and `scheduled_at` is read nowhere else. Returns
+/// `false` when the CAS loses (wrong status / deleted), which the command layer
+/// turns into a readable refusal.
+pub async fn set_schedule(
+    conn: &DatabaseConnection,
+    id: i32,
+    at: Option<chrono::DateTime<Utc>>,
+) -> Result<bool, DbError> {
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let res = work_task::Entity::update_many()
+        .col_expr(work_task::Column::ScheduledAt, Expr::value(at))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(&txn)
+        .await?;
+    if res.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    let payload = match at {
+        Some(at) => serde_json::json!({ "action": "schedule", "scheduled_at": at }),
+        None => serde_json::json!({ "action": "unschedule" }),
+    };
+    record_event(&txn, id, "user_action", "user", Some(payload)).await?;
+    txn.commit().await?;
+    Ok(true)
+}
+
+/// Claim every to-do task whose planned start has arrived: todo → queued,
+/// `run_seq + 1`, plan consumed — the same transition the user's own start
+/// button performs. Returns the claimed `(task_id, folder_id)` pairs so the
+/// caller can nudge each folder's pump.
+///
+/// Deliberately NOT budget-aware, unlike `auto_claim_next`: a planned start is
+/// as explicit as pressing Start, so a busy folder must park the task in the
+/// queue (where the pump drains it as slots free) instead of dropping the plan
+/// on the floor. Clearing `scheduled_at` inside the CAS is what makes a plan
+/// fire exactly once — a second sweep, in this process or after a restart,
+/// no longer matches the row.
+pub async fn claim_due_scheduled(
+    conn: &DatabaseConnection,
+    now: chrono::DateTime<Utc>,
+) -> Result<Vec<(i32, i32)>, DbError> {
+    // Live folders only: a task of a removed folder is unschedulable, exactly
+    // as it is for the pump and the auto arm.
+    let due = work_task::Entity::find()
+        .filter(work_task::Column::DeletedAt.is_null())
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
+        .filter(work_task::Column::ScheduledAt.is_not_null())
+        .filter(work_task::Column::ScheduledAt.lte(now))
+        .inner_join(folder::Entity)
+        .filter(folder::Column::DeletedAt.is_null())
+        .order_by_asc(work_task::Column::ScheduledAt)
+        .order_by_asc(work_task::Column::SortOrder)
+        .order_by_asc(work_task::Column::Id)
+        .all(conn)
+        .await?;
+
+    let mut claimed = Vec::new();
+    for row in due {
+        let txn = conn.begin().await?;
+        let res = work_task::Entity::update_many()
+            .col_expr(
+                work_task::Column::Status,
+                Expr::value(status_str(WorkTaskStatus::Queued)),
+            )
+            .col_expr(
+                work_task::Column::RunSeq,
+                Expr::col(work_task::Column::RunSeq).add(1),
+            )
+            .col_expr(
+                work_task::Column::ScheduledAt,
+                Expr::value(None::<chrono::DateTime<Utc>>),
+            )
+            .col_expr(work_task::Column::FailureReason, Expr::value(None::<String>))
+            .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
+            // Same reason as every other claim: the settle path treats a
+            // present `verdict` as this generation's self-report.
+            .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
+            .col_expr(
+                work_task::Column::FinishedAt,
+                Expr::value(None::<chrono::DateTime<Utc>>),
+            )
+            .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+            .filter(work_task::Column::Id.eq(row.id))
+            .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
+            .filter(work_task::Column::ScheduledAt.is_not_null())
+            .filter(work_task::Column::ScheduledAt.lte(now))
+            .filter(work_task::Column::DeletedAt.is_null())
+            .exec(&txn)
+            .await?;
+        if res.rows_affected != 1 {
+            // Started by hand, re-planned, or deleted since the scan.
+            txn.rollback().await?;
+            continue;
+        }
+        status_changed_event(
+            &txn,
+            row.id,
+            "engine",
+            Some(WorkTaskStatus::Todo),
+            WorkTaskStatus::Queued,
+            Some(serde_json::json!({ "scheduled": true })),
+        )
+        .await?;
+        txn.commit().await?;
+        claimed.push((row.id, row.folder_id));
+    }
+    Ok(claimed)
+}
+
 /// canceled → todo ("requeue"): back to the board, worktree (if any) reused at
 /// the next start.
-pub async fn requeue_canceled(conn: &DatabaseConnection, id: i32) -> Result<bool, DbError> {
+/// canceled → todo, optionally carrying the note the user attached to the
+/// requeue. The note is written in the SAME transaction as the CAS: the moment
+/// this commits the task is schedulable, and an `auto_process` folder's pump
+/// can claim and launch it — a note written afterwards would lose that race.
+pub async fn requeue_canceled(
+    conn: &DatabaseConnection,
+    id: i32,
+    note: Option<&str>,
+) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
     let res = work_task::Entity::update_many()
@@ -711,6 +967,16 @@ pub async fn requeue_canceled(conn: &DatabaseConnection, id: i32) -> Result<bool
     if res.rows_affected != 1 {
         txn.rollback().await?;
         return Ok(false);
+    }
+    if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
+        record_event(
+            &txn,
+            id,
+            "user_action",
+            "user",
+            Some(serde_json::json!({ "action": "requeue", "note": note })),
+        )
+        .await?;
     }
     status_changed_event(
         &txn,
@@ -1179,8 +1445,9 @@ pub async fn begin_merge(
     Ok(Some(run_seq))
 }
 
-/// merging → done. The ONLY writer of `done`; never rolls back. Used both by
-/// the live merge path and by crash recovery back-filling a landed merge.
+/// merging → done. The merge path's writer of `done` (the other is
+/// [`complete_without_merge`]); never rolls back. Used both by the live merge
+/// path and by crash recovery back-filling a landed merge.
 pub async fn merge_landed(
     conn: &DatabaseConnection,
     id: i32,
@@ -1215,6 +1482,46 @@ pub async fn merge_landed(
         Some(WorkTaskStatus::Merging),
         WorkTaskStatus::Done,
         Some(serde_json::json!({ "merge_commit": merge_commit })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(true)
+}
+
+/// review → done for a task that produced nothing to land: the user accepted
+/// it outright instead of merging an empty change set. The second writer of
+/// `done` (see [`merge_landed`]) — `merge_commit` stays NULL, and the caller
+/// has already checked git truth, so the CAS is the whole guard.
+pub async fn complete_without_merge(conn: &DatabaseConnection, id: i32) -> Result<bool, DbError> {
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let res = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::Status,
+            Expr::value(status_str(WorkTaskStatus::Done)),
+        )
+        // A refused merge attempt leaves its reason on the row; the task is
+        // finishing on purpose now, so that banner must not follow it.
+        .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
+        .col_expr(work_task::Column::PendingMerge, Expr::value(None::<String>))
+        .col_expr(work_task::Column::FinishedAt, Expr::value(Some(now)))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(&txn)
+        .await?;
+    if res.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    status_changed_event(
+        &txn,
+        id,
+        "user",
+        Some(WorkTaskStatus::Review),
+        WorkTaskStatus::Done,
+        Some(serde_json::json!({ "reason": "completed without merging: no changes" })),
     )
     .await?;
     txn.commit().await?;
@@ -1363,7 +1670,19 @@ pub async fn set_archived(
 
 /// Any non-terminal state EXCEPT merging → canceled. Returns whether the CAS
 /// won (the engine tears the connection down only when it did).
-pub async fn cancel(conn: &DatabaseConnection, id: i32) -> Result<bool, DbError> {
+///
+/// `reason` is what the user typed when stopping the task; it rides the
+/// `status_changed` payload, where the drawer's timeline already renders it
+/// under the phase header. It is a record for the reader, NOT an instruction:
+/// `outstanding_instruction` takes instructions only from `user_action` events
+/// (it reads `status_changed` purely as the review barrier), so a reason can
+/// never be replayed into a later generation's prompt — a requeue carries its
+/// own note for that.
+pub async fn cancel(
+    conn: &DatabaseConnection,
+    id: i32,
+    reason: Option<&str>,
+) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
     let res = work_task::Entity::update_many()
@@ -1375,6 +1694,13 @@ pub async fn cancel(conn: &DatabaseConnection, id: i32) -> Result<bool, DbError>
         // A cancel mid-repair abandons the auto-remerge; a later requeue must
         // not re-fire a stale merge.
         .col_expr(work_task::Column::PendingMerge, Expr::value(None::<String>))
+        // Same reasoning for a planned start: stopping a task drops its plan,
+        // so a requeue days later cannot resurrect a time nobody remembers
+        // setting and launch an agent unattended.
+        .col_expr(
+            work_task::Column::ScheduledAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
         .col_expr(work_task::Column::FinishedAt, Expr::value(Some(now)))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
@@ -1394,7 +1720,11 @@ pub async fn cancel(conn: &DatabaseConnection, id: i32) -> Result<bool, DbError>
         txn.rollback().await?;
         return Ok(false);
     }
-    status_changed_event(&txn, id, "user", None, WorkTaskStatus::Canceled, None).await?;
+    let extra = reason
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(|r| serde_json::json!({ "reason": r }));
+    status_changed_event(&txn, id, "user", None, WorkTaskStatus::Canceled, extra).await?;
     txn.commit().await?;
     Ok(true)
 }
@@ -1766,7 +2096,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(begin_setup(&db.conn, canceled.id, seq).await.unwrap());
-        assert!(cancel(&db.conn, canceled.id).await.unwrap());
+        assert!(cancel(&db.conn, canceled.id, None).await.unwrap());
         assert_eq!(
             get(&db.conn, canceled.id).await.unwrap().status,
             WorkTaskStatus::Canceled
@@ -1870,6 +2200,167 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn schedule_is_todo_only_and_fires_exactly_once() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-schedule").await;
+        let due = create(&db.conn, draft(folder_id, "due")).await.unwrap();
+        let later = create(&db.conn, draft(folder_id, "later")).await.unwrap();
+
+        let now = Utc::now();
+        assert!(set_schedule(&db.conn, due.id, Some(now - chrono::Duration::minutes(1)))
+            .await
+            .unwrap());
+        assert!(set_schedule(&db.conn, later.id, Some(now + chrono::Duration::hours(2)))
+            .await
+            .unwrap());
+        assert!(get(&db.conn, due.id).await.unwrap().scheduled_at.is_some());
+
+        // Only what is due is claimed, and the plan is consumed by the claim.
+        let claimed = claim_due_scheduled(&db.conn, now).await.unwrap();
+        assert_eq!(claimed, vec![(due.id, folder_id)]);
+        let row = get(&db.conn, due.id).await.unwrap();
+        assert_eq!(row.status, WorkTaskStatus::Queued);
+        assert_eq!(row.run_seq, 1);
+        assert!(row.scheduled_at.is_none());
+        assert_eq!(
+            get(&db.conn, later.id).await.unwrap().status,
+            WorkTaskStatus::Todo
+        );
+        // Exactly once: a second sweep (or a restart's catch-up pass) finds
+        // nothing, because the row no longer carries a plan.
+        assert!(claim_due_scheduled(&db.conn, now).await.unwrap().is_empty());
+
+        // Planning is a to-do-only affair — the queued task above refuses.
+        assert!(!set_schedule(&db.conn, due.id, Some(now)).await.unwrap());
+
+        // Clearing puts the task back under manual/auto control.
+        assert!(set_schedule(&db.conn, later.id, None).await.unwrap());
+        assert!(get(&db.conn, later.id).await.unwrap().scheduled_at.is_none());
+        let events = list_events(&db.conn, later.id, 50).await.unwrap();
+        let actions: Vec<&str> = events
+            .iter()
+            .filter(|e| e.kind == "user_action")
+            .filter_map(|e| e.payload.as_ref()?.get("action")?.as_str())
+            .collect();
+        assert_eq!(actions, vec!["schedule", "unschedule"]);
+    }
+
+    /// A plan must not outlive the task's stay in `todo`: cancel drops it, so
+    /// a requeue weeks later cannot launch an agent at a time nobody remembers
+    /// setting. And a claim — from any arm — invalidates the previous run's
+    /// self-reported verdict, which the settle path reads as this generation's.
+    #[tokio::test]
+    async fn a_claim_or_a_cancel_consumes_the_plan_and_the_stale_verdict() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-schedule-stale").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        // Run once and let the agent report, then abandon it back to the board.
+        let seq = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(start_running(&db.conn, t.id, seq, 1, "c1").await.unwrap());
+        assert!(set_verdict(&db.conn, t.id, seq, "blocked", Some("gave up"))
+            .await
+            .unwrap());
+        assert!(cancel(&db.conn, t.id, None).await.unwrap());
+        assert!(requeue_canceled(&db.conn, t.id, None).await.unwrap());
+        assert_eq!(
+            get_model(&db.conn, t.id).await.unwrap().verdict.as_deref(),
+            Some("blocked"),
+            "requeue keeps the old report visible — the claim is what clears it"
+        );
+
+        // Plan it, then stop it: the plan goes with the cancel, and requeuing
+        // must not bring it back.
+        let now = Utc::now();
+        assert!(set_schedule(&db.conn, t.id, Some(now + chrono::Duration::hours(1)))
+            .await
+            .unwrap());
+        assert!(cancel(&db.conn, t.id, None).await.unwrap());
+        assert!(get_model(&db.conn, t.id).await.unwrap().scheduled_at.is_none());
+        assert!(requeue_canceled(&db.conn, t.id, None).await.unwrap());
+        assert!(get_model(&db.conn, t.id).await.unwrap().scheduled_at.is_none());
+
+        // A due plan claims the task and clears the stale verdict with it.
+        assert!(set_schedule(&db.conn, t.id, Some(now - chrono::Duration::minutes(1)))
+            .await
+            .unwrap());
+        assert_eq!(
+            claim_due_scheduled(&db.conn, now).await.unwrap(),
+            vec![(t.id, folder_id)]
+        );
+        assert_eq!(get_model(&db.conn, t.id).await.unwrap().verdict, None);
+
+        // The auto-process arm holds the same invariant.
+        assert!(cancel(&db.conn, t.id, None).await.unwrap());
+        assert!(requeue_canceled(&db.conn, t.id, None).await.unwrap());
+        let seq = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(start_running(&db.conn, t.id, seq, 1, "c2").await.unwrap());
+        assert!(set_verdict(&db.conn, t.id, seq, "blocked", None).await.unwrap());
+        assert!(cancel(&db.conn, t.id, None).await.unwrap());
+        assert!(requeue_canceled(&db.conn, t.id, None).await.unwrap());
+        assert_eq!(
+            auto_claim_next(&db.conn, folder_id, 0).await.unwrap(),
+            Some(t.id)
+        );
+        assert_eq!(get_model(&db.conn, t.id).await.unwrap().verdict, None);
+    }
+
+    #[tokio::test]
+    async fn a_planned_task_is_skipped_by_bulk_starts_and_freed_by_an_explicit_one() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-schedule-bulk").await;
+        let planned = create(&db.conn, draft(folder_id, "planned")).await.unwrap();
+        let plain = create(&db.conn, draft(folder_id, "plain")).await.unwrap();
+        assert!(
+            set_schedule(&db.conn, planned.id, Some(Utc::now() + chrono::Duration::hours(3)))
+                .await
+                .unwrap()
+        );
+
+        // "Start all" and the auto-process arm both leave the plan alone —
+        // `planned` is the board head, so this also proves the head lookup
+        // skips it rather than stopping there.
+        assert_eq!(list_todo_ids(&db.conn, folder_id).await.unwrap(), vec![plain.id]);
+        assert_eq!(
+            auto_claim_next(&db.conn, folder_id, 0).await.unwrap(),
+            Some(plain.id)
+        );
+        assert_eq!(auto_claim_next(&db.conn, folder_id, 0).await.unwrap(), None);
+        assert_eq!(
+            get(&db.conn, planned.id).await.unwrap().status,
+            WorkTaskStatus::Todo
+        );
+
+        // "Start all" claims through the unplanned-only CAS, so a plan set
+        // between its list query and its claim is still honoured — the list is
+        // only a snapshot, and a bulk button must not override an individual
+        // plan just because it read the row a moment earlier.
+        assert_eq!(
+            claim_unplanned_for_run(&db.conn, planned.id, WorkTaskStatus::Todo, "user")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            get(&db.conn, planned.id).await.unwrap().status,
+            WorkTaskStatus::Todo
+        );
+
+        // The task's own start button overrides the plan and consumes it.
+        assert!(claim_for_run(&db.conn, planned.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .is_some());
+        assert!(get(&db.conn, planned.id).await.unwrap().scheduled_at.is_none());
+    }
+
+    #[tokio::test]
     async fn agent_verdict_is_generation_guarded_and_cleared_on_claim() {
         let db = fresh_in_memory_db().await;
         let folder_id = seed_folder(&db, "/tmp/wt-verdict").await;
@@ -1918,7 +2409,7 @@ mod tests {
 
         // User cancels; a late TurnComplete for the old generation must be a
         // zero-side-effect no-op (the cancel-late-TurnComplete race).
-        assert!(cancel(&db.conn, t.id).await.unwrap());
+        assert!(cancel(&db.conn, t.id, None).await.unwrap());
         assert!(!settle_review(&db.conn, t.id, seq, None, None).await.unwrap());
         assert!(!flip_awaiting(&db.conn, t.id, seq, true).await.unwrap());
         assert!(!fail(
@@ -1937,12 +2428,51 @@ mod tests {
         );
 
         // Requeue resurrects it; the next claim bumps the generation.
-        assert!(requeue_canceled(&db.conn, t.id).await.unwrap());
+        assert!(requeue_canceled(&db.conn, t.id, None).await.unwrap());
         let seq2 = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
             .await
             .unwrap()
             .unwrap();
         assert_eq!(seq2, seq + 1);
+    }
+
+    /// The reason the user gave when stopping a task rides the `canceled`
+    /// status event, which is what the drawer's timeline renders under the
+    /// phase header. Blank input must leave the payload alone — an empty
+    /// `reason` key would render as a stray empty line.
+    #[tokio::test]
+    async fn a_cancel_reason_rides_the_status_event() {
+        async fn cancel_reason(conn: &DatabaseConnection, id: i32) -> Option<String> {
+            list_events(conn, id, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|e| {
+                    e.kind == "status_changed"
+                        && e.payload.as_ref().and_then(|p| p.get("to")).and_then(|v| v.as_str())
+                            == Some("canceled")
+                })
+                .and_then(|e| e.payload)
+                .and_then(|p| p.get("reason").and_then(|v| v.as_str()).map(str::to_string))
+        }
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-cancel-reason").await;
+
+        let told = create(&db.conn, draft(folder_id, "told")).await.unwrap();
+        assert!(cancel(&db.conn, told.id, Some("  wrong approach  ")).await.unwrap());
+        assert_eq!(
+            cancel_reason(&db.conn, told.id).await.as_deref(),
+            Some("wrong approach")
+        );
+
+        let blank = create(&db.conn, draft(folder_id, "blank")).await.unwrap();
+        assert!(cancel(&db.conn, blank.id, Some("   ")).await.unwrap());
+        assert_eq!(cancel_reason(&db.conn, blank.id).await, None);
+
+        let silent = create(&db.conn, draft(folder_id, "silent")).await.unwrap();
+        assert!(cancel(&db.conn, silent.id, None).await.unwrap());
+        assert_eq!(cancel_reason(&db.conn, silent.id).await, None);
     }
 
     #[tokio::test]
@@ -1976,7 +2506,7 @@ mod tests {
         // Double begin loses (already merging) — merge idempotency.
         assert!(begin_merge(&db.conn, t.id, &state).await.unwrap().is_none());
         // Cancel is refused while merging.
-        assert!(!cancel(&db.conn, t.id).await.unwrap());
+        assert!(!cancel(&db.conn, t.id, None).await.unwrap());
 
         assert!(merge_landed(&db.conn, t.id, "def456").await.unwrap());
         // A second landing (event vs recovery race) is a no-op.
@@ -2029,6 +2559,63 @@ mod tests {
         assert_eq!(got.last_error.as_deref(), Some("conflict"));
         let events = list_events(&db.conn, t.id, 100).await.unwrap();
         assert!(events.iter().any(|e| e.kind == "merge_conflict"));
+    }
+
+    /// A task that changed nothing finishes without a merge commit — from
+    /// review only, and once.
+    #[tokio::test]
+    async fn complete_without_merge_lands_done_from_review_only() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-complete").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        // A todo task is not up for acceptance.
+        assert!(!complete_without_merge(&db.conn, t.id).await.unwrap());
+
+        to_review(&db, t.id).await;
+        // A refused merge leaves its banner on the review row; finishing the
+        // task on purpose must not carry that error into Done.
+        let state = WorkTaskMergeState {
+            pre_merge_head: "abc".into(),
+            message: "m".into(),
+            strategy: "squash".into(),
+            delete_worktree: false,
+            auto_message: false,
+        };
+        assert!(begin_merge(&db.conn, t.id, &state).await.unwrap().is_some());
+        assert!(merge_back_to_review(&db.conn, t.id, Some("nope".into()), None)
+            .await
+            .unwrap());
+        assert_eq!(
+            get(&db.conn, t.id).await.unwrap().last_error.as_deref(),
+            Some("nope")
+        );
+
+        assert!(complete_without_merge(&db.conn, t.id).await.unwrap());
+        let got = get(&db.conn, t.id).await.unwrap();
+        assert_eq!(got.status, WorkTaskStatus::Done);
+        // Nothing was merged, so nothing points at a merge commit.
+        assert!(got.merge_commit.is_none());
+        assert!(got.finished_at.is_some());
+        assert!(got.last_error.is_none());
+
+        // Terminal: a second acceptance and a late merge settle are no-ops.
+        assert!(!complete_without_merge(&db.conn, t.id).await.unwrap());
+        assert!(!merge_landed(&db.conn, t.id, "abc").await.unwrap());
+        assert_eq!(
+            get(&db.conn, t.id).await.unwrap().status,
+            WorkTaskStatus::Done
+        );
+
+        let events = list_events(&db.conn, t.id, 100).await.unwrap();
+        let settle = events
+            .iter()
+            .rfind(|e| e.kind == "status_changed")
+            .expect("status change");
+        assert_eq!(
+            settle.payload.as_ref().and_then(|p| p.get("to")).and_then(|v| v.as_str()),
+            Some("done")
+        );
     }
 
     #[tokio::test]
@@ -2183,11 +2770,20 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let folder_id = seed_folder(&db, "/tmp/wt-del").await;
         let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
-        soft_delete(&db.conn, t.id).await.unwrap();
+
+        // The guard is the point: a tombstone must not land on a row that was
+        // claimed since the caller looked at it, or the run it just started
+        // would outlive the row (worktree and agent process included).
+        assert!(!soft_delete(&db.conn, t.id, WorkTaskStatus::Queued)
+            .await
+            .unwrap());
+        assert_eq!(get(&db.conn, t.id).await.unwrap().status, WorkTaskStatus::Todo);
+
+        assert!(soft_delete(&db.conn, t.id, WorkTaskStatus::Todo).await.unwrap());
         assert!(get(&db.conn, t.id).await.is_err());
         assert!(list(&db.conn, Some(folder_id)).await.unwrap().is_empty());
-        // Double delete errors cleanly.
-        assert!(soft_delete(&db.conn, t.id).await.is_err());
+        // A second delete is a clean no-op rather than a second tombstone.
+        assert!(!soft_delete(&db.conn, t.id, WorkTaskStatus::Todo).await.unwrap());
     }
 
     /// Drive a claimed (queued) task all the way to running, the way a launch
@@ -2294,9 +2890,9 @@ mod tests {
         assert!(get(&db.conn, t.id).await.unwrap().archived_at.is_none());
 
         // …and so does requeueing an archived canceled task.
-        assert!(cancel(&db.conn, t.id).await.unwrap());
+        assert!(cancel(&db.conn, t.id, None).await.unwrap());
         assert!(set_archived(&db.conn, t.id, true).await.unwrap());
-        assert!(requeue_canceled(&db.conn, t.id).await.unwrap());
+        assert!(requeue_canceled(&db.conn, t.id, None).await.unwrap());
         let row = get(&db.conn, t.id).await.unwrap();
         assert_eq!(row.status, WorkTaskStatus::Todo);
         assert!(row.archived_at.is_none());

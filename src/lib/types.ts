@@ -416,10 +416,14 @@ export const CONVERSATION_CHANGED_EVENT = "conversation://changed"
 /** Payload for the global `folder://changed` side-channel. A folder created or
  *  updated headlessly — e.g. the automation engine minting a per-run worktree —
  *  reaches every client's workspace list so a conversation produced inside it can
- *  be grouped/rendered in the sidebar. Mirrors the Rust `FolderChange` enum
- *  (serde `tag = "kind"`). Distinct from `folder://open-in-workspace`, whose
- *  listener also opens + focuses a tab. */
-export type FolderChange = { kind: "upsert"; folder: FolderDetail }
+ *  be grouped/rendered in the sidebar. `deleted` is its mirror image: a folder
+ *  row that is gone for good (a work task's worktree, once removed from disk) is
+ *  dropped from the list without waiting for a full refetch. Mirrors the Rust
+ *  `FolderChange` enum (serde `tag = "kind"`). Distinct from
+ *  `folder://open-in-workspace`, whose listener also opens + focuses a tab. */
+export type FolderChange =
+  | { kind: "upsert"; folder: FolderDetail }
+  | { kind: "deleted"; id: number }
 
 export const FOLDER_CHANGED_EVENT = "folder://changed"
 
@@ -1288,6 +1292,8 @@ export interface WorkTask {
   merge_commit: string | null
   preflight: WorkTaskPreflight | null
   archived_at: string | null
+  /** Planned start of a to-do task; null when it should be started manually. */
+  scheduled_at: string | null
   latest_progress?: string | null
   created_at: string
   updated_at: string
@@ -1484,7 +1490,11 @@ export interface TokenUsageSyncResult {
   scanned: number
   synced: number
   skipped: number
+  /** Real faults — retried next pass. The only counter that warrants a toast. */
   failed: number
+  /** Transcripts that are gone for good: facts kept, stamp settled, never
+   *  retried. Deliberately silent — the reader cannot act on it. */
+  lost: number
   turns_written: number
   tokens_written: number
   pruned_conversations: number

@@ -33,6 +33,13 @@ const ACP_AGENTS_UPDATED_EVENT: &str = "app://acp-agents-updated";
 const NPM_PREFIX_TIMEOUT: Duration = Duration::from_millis(1500);
 const PI_CODING_AGENT_PACKAGE: &str = "@earendil-works/pi-coding-agent";
 
+/// Backend-only markers carried in the per-agent runtime env. They let the
+/// connection layer keep Pi's model selector scoped to the model provider
+/// selected in HouHub, while the native Pi process still receives its normal
+/// provider/model configuration.
+pub(crate) const PI_BOUND_PROVIDER_ENV: &str = "HOUHUB_PI_BOUND_PROVIDER";
+pub(crate) const PI_BOUND_MODEL_ENV: &str = "HOUHUB_PI_BOUND_MODEL";
+
 static NPM_GLOBAL_PREFIX_CACHE: tokio::sync::OnceCell<PathBuf> = tokio::sync::OnceCell::const_new();
 
 #[derive(Serialize, Clone)]
@@ -2315,16 +2322,74 @@ fn pi_agent_dir_for_env(runtime_env: &BTreeMap<String, String>) -> PathBuf {
         .unwrap_or_else(pi_agent_dir)
 }
 
-fn pi_settings_json_path() -> PathBuf {
-    pi_agent_dir().join("settings.json")
+fn pi_settings_json_path_for_dir(dir: &Path) -> PathBuf {
+    dir.join("settings.json")
 }
 
-fn pi_auth_json_path() -> PathBuf {
-    pi_agent_dir().join("auth.json")
+fn pi_auth_json_path_for_dir(dir: &Path) -> PathBuf {
+    dir.join("auth.json")
 }
 
-fn pi_models_json_path() -> PathBuf {
-    pi_agent_dir().join("models.json")
+/// Header codex reads to decide whether a provider authenticates through the
+/// "actor authorization" path. Mirrors `OPENAI_ACTOR_AUTHORIZATION_HEADER` in
+/// codex's `model-provider-info` crate.
+const CODEX_ACTOR_AUTHORIZATION_HEADER: &str = "x-openai-actor-authorization";
+
+/// Mirrors the header half of codex's
+/// `ModelProviderInfo::uses_openai_actor_authorization`. A
+/// `[model_providers.x.http_headers]` sub-table and an inline
+/// `http_headers = { .. }` both parse to `Value::Table`, so one lookup covers
+/// every spelling.
+fn codex_provider_uses_actor_authorization(
+    provider_table: &toml::map::Map<String, toml::Value>,
+) -> bool {
+    provider_table
+        .get("http_headers")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|headers| {
+            headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case(CODEX_ACTOR_AUTHORIZATION_HEADER)
+                    && value.as_str().is_some_and(|value| !value.trim().is_empty())
+            })
+        })
+}
+
+/// Supply HouHub's `requires_openai_auth` default without clobbering the user.
+///
+/// Codex defaults the field to `false` and only reads credentials from
+/// `auth.json` when it is `true`, so `true` is correct for a provider HouHub
+/// provisioned itself (key in auth.json, no `env_key`) — and wrong for one the
+/// user configured. Worse, codex's `uses_openai_actor_authorization()` requires
+/// `!requires_openai_auth`, so forcing `true` silently disables that auth path.
+/// Write the default only when the field is absent, and never over a provider
+/// that opted into actor authorization.
+fn ensure_codex_provider_auth_default(provider_table: &mut toml::map::Map<String, toml::Value>) {
+    if provider_table.contains_key("requires_openai_auth")
+        || codex_provider_uses_actor_authorization(provider_table)
+    {
+        return;
+    }
+    provider_table.insert(
+        "requires_openai_auth".to_string(),
+        toml::Value::Boolean(true),
+    );
+}
+
+/// OpenCode reads config from `$XDG_CONFIG_HOME/opencode` (falling back to
+/// `~/.config/opencode`) and credentials from `$XDG_DATA_HOME/opencode`
+/// (falling back to `~/.local/share/opencode`) on every platform. HouHub must
+/// write where OpenCode reads, so these reuse the same XDG resolution as
+/// `opencode_plugins` (config) and `parsers::opencode` (data) — otherwise a
+/// user with XDG dirs set would get credentials written where OpenCode never
+/// looks, and HouHub's own plugin/connect paths would diverge.
+fn opencode_config_dir() -> PathBuf {
+    crate::acp::opencode_plugins::xdg_config_home()
+        .unwrap_or_else(|| home_dir_or_default().join(".config"))
+        .join("opencode")
+}
+
+fn pi_models_json_path_for_dir(dir: &Path) -> PathBuf {
+    dir.join("models.json")
 }
 
 fn read_json_object_or_empty(path: &Path) -> serde_json::Map<String, serde_json::Value> {
@@ -2391,6 +2456,11 @@ pub struct PiCommandValidation {
 }
 
 fn update_pi_config_files(update: PiConfigUpdate) -> Result<(), AcpError> {
+    let dir = pi_agent_dir();
+    update_pi_config_files_at(update, &dir)
+}
+
+fn update_pi_config_files_at(update: PiConfigUpdate, pi_dir: &Path) -> Result<(), AcpError> {
     let provider = update.provider.trim();
     if provider.is_empty() {
         return Err(AcpError::protocol("pi provider is required"));
@@ -2410,7 +2480,10 @@ fn update_pi_config_files(update: PiConfigUpdate) -> Result<(), AcpError> {
         ));
     }
 
-    let mut settings = read_json_object_or_empty(&pi_settings_json_path());
+    let settings_path = pi_settings_json_path_for_dir(pi_dir);
+    let auth_path = pi_auth_json_path_for_dir(pi_dir);
+    let models_path = pi_models_json_path_for_dir(pi_dir);
+    let mut settings = read_json_object_or_empty(&settings_path);
     settings.insert(
         "defaultProvider".to_string(),
         serde_json::Value::String(provider.to_string()),
@@ -2430,7 +2503,7 @@ fn update_pi_config_files(update: PiConfigUpdate) -> Result<(), AcpError> {
             serde_json::Value::String(level.to_string()),
         );
     }
-    write_json_object_pretty(&pi_settings_json_path(), &settings)?;
+    write_json_object_pretty(&settings_path, &settings)?;
 
     if let Some(key) = update
         .api_key
@@ -2438,7 +2511,7 @@ fn update_pi_config_files(update: PiConfigUpdate) -> Result<(), AcpError> {
         .map(str::trim)
         .filter(|key| !key.is_empty())
     {
-        let mut auth = read_json_object_or_empty(&pi_auth_json_path());
+        let mut auth = read_json_object_or_empty(&auth_path);
         auth.insert(
             provider.to_string(),
             serde_json::json!({
@@ -2446,7 +2519,7 @@ fn update_pi_config_files(update: PiConfigUpdate) -> Result<(), AcpError> {
                 "key": key,
             }),
         );
-        write_json_object_pretty(&pi_auth_json_path(), &auth)?;
+        write_json_object_pretty(&auth_path, &auth)?;
     }
 
     if let Some(base_url) = update
@@ -2461,7 +2534,7 @@ fn update_pi_config_files(update: PiConfigUpdate) -> Result<(), AcpError> {
             .map(str::trim)
             .filter(|api| !api.is_empty())
             .unwrap_or("openai-completions");
-        let mut document = read_json_object_or_empty(&pi_models_json_path());
+        let mut document = read_json_object_or_empty(&models_path);
         let mut providers = match document.remove("providers") {
             Some(serde_json::Value::Object(map)) => map,
             _ => serde_json::Map::new(),
@@ -2488,7 +2561,7 @@ fn update_pi_config_files(update: PiConfigUpdate) -> Result<(), AcpError> {
             "providers".to_string(),
             serde_json::Value::Object(providers),
         );
-        write_json_object_pretty(&pi_models_json_path(), &document)?;
+        write_json_object_pretty(&models_path, &document)?;
     }
 
     Ok(())
@@ -2507,26 +2580,57 @@ pub(crate) async fn acp_update_pi_config_core(
     agent_setting_service::ensure_defaults(&db.conn, &[default])
         .await
         .map_err(|err| AcpError::protocol(err.to_string()))?;
-    update_pi_config_files(update)?;
+    let runtime_env = agent_setting_service::get_by_agent_type(&db.conn, AgentType::Pi)
+        .await
+        .map_err(|err| AcpError::protocol(err.to_string()))?
+        .and_then(|setting| {
+            setting
+                .env_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(raw).ok())
+        })
+        .unwrap_or_default();
+    if runtime_env.is_empty() {
+        update_pi_config_files(update)?;
+    } else {
+        let pi_dir = pi_agent_dir_for_env(&runtime_env);
+        update_pi_config_files_at(update, &pi_dir)?;
+    }
     emit_acp_agents_updated(emitter, "config_updated", Some(AgentType::Pi));
     Ok(())
 }
 
-pub(crate) fn load_pi_config_core() -> PiConfigProjection {
-    let settings = read_json_object_or_empty(&pi_settings_json_path());
+pub(crate) async fn load_pi_config_core_for_db(
+    db: &AppDatabase,
+) -> Result<PiConfigProjection, AcpError> {
+    let runtime_env = agent_setting_service::get_by_agent_type(&db.conn, AgentType::Pi)
+        .await
+        .map_err(|err| AcpError::protocol(err.to_string()))?
+        .and_then(|setting| {
+            setting
+                .env_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(raw).ok())
+        })
+        .unwrap_or_default();
+    Ok(load_pi_config_core_at(&pi_agent_dir_for_env(&runtime_env)))
+}
+
+fn load_pi_config_core_at(pi_dir: &Path) -> PiConfigProjection {
+    let settings = read_json_object_or_empty(&pi_settings_json_path_for_dir(pi_dir));
     let string_key = |key: &str| {
         settings
             .get(key)
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
     };
-    let mut auth_providers: Vec<String> = read_json_object_or_empty(&pi_auth_json_path())
+    let mut auth_providers: Vec<String> = read_json_object_or_empty(&pi_auth_json_path_for_dir(pi_dir))
         .keys()
         .cloned()
         .collect();
     auth_providers.sort();
     let mut custom_providers: Vec<PiCustomProvider> =
-        read_json_object_or_empty(&pi_models_json_path())
+        read_json_object_or_empty(&pi_models_json_path_for_dir(pi_dir))
             .get("providers")
             .and_then(serde_json::Value::as_object)
             .map(|providers| {
@@ -2785,17 +2889,11 @@ fn ensure_codex_home_env(agent_type: AgentType, runtime_env: &mut BTreeMap<Strin
 }
 
 fn opencode_primary_config_path() -> PathBuf {
-    home_dir_or_default()
-        .join(".config")
-        .join("opencode")
-        .join("opencode.json")
+    opencode_config_dir().join("opencode.json")
 }
 
 fn opencode_legacy_config_path() -> PathBuf {
-    home_dir_or_default()
-        .join(".config")
-        .join("opencode")
-        .join("config.json")
+    opencode_config_dir().join("config.json")
 }
 
 fn resolve_opencode_config_path() -> PathBuf {
@@ -2813,11 +2911,7 @@ fn resolve_opencode_config_path() -> PathBuf {
 }
 
 fn opencode_auth_json_path() -> PathBuf {
-    home_dir_or_default()
-        .join(".local")
-        .join("share")
-        .join("opencode")
-        .join("auth.json")
+    crate::parsers::opencode::resolve_opencode_base_dir().join("auth.json")
 }
 
 fn load_opencode_auth_json_raw() -> Option<String> {
@@ -7597,7 +7691,10 @@ async fn sync_pi_model_provider_config(
         runtime_env.insert("OPENAI_API_KEY".to_string(), provider.api_key.clone());
     }
     runtime_env.insert("OPENAI_MODEL".to_string(), model.clone());
-    update_pi_config_files(PiConfigUpdate {
+    runtime_env.insert(PI_BOUND_PROVIDER_ENV.to_string(), provider_key.clone());
+    runtime_env.insert(PI_BOUND_MODEL_ENV.to_string(), model.clone());
+    let pi_dir = pi_agent_dir_for_env(runtime_env);
+    update_pi_config_files_at(PiConfigUpdate {
         provider: provider_key,
         model,
         models: Some(parse_provider_models_json(&provider.models_json)),
@@ -7605,7 +7702,7 @@ async fn sync_pi_model_provider_config(
         api_key: Some(provider.api_key),
         custom_base_url: Some(provider.api_url),
         custom_api: Some("openai-completions".to_string()),
-    })
+    }, &pi_dir)
 }
 
 /// Claude Code provider-model JSON keys → ANTHROPIC_*_MODEL env var names.
@@ -7849,10 +7946,7 @@ fn cascade_update_agent_config(
                     "wire_api".to_string(),
                     toml::Value::String("responses".to_string()),
                 );
-                provider_table.insert(
-                    "requires_openai_auth".to_string(),
-                    toml::Value::Boolean(true),
-                );
+                ensure_codex_provider_auth_default(provider_table);
             }
             match codex_model {
                 CodexModelAction::Set(model) => {
@@ -8148,10 +8242,11 @@ pub(crate) fn fingerprint_config(
         hasher.update(native.as_bytes());
     }
     if agent_type == AgentType::Pi {
+        let pi_dir = pi_agent_dir_for_env(runtime_env);
         for path in [
-            pi_settings_json_path(),
-            pi_auth_json_path(),
-            pi_models_json_path(),
+            pi_settings_json_path_for_dir(&pi_dir),
+            pi_auth_json_path_for_dir(&pi_dir),
+            pi_models_json_path_for_dir(&pi_dir),
         ] {
             hasher.update(path.to_string_lossy().as_bytes());
             hasher.update([0u8]);
@@ -9252,6 +9347,13 @@ async fn acp_update_agent_env_core_with_enabled_update(
     // treats provider.model as authoritative runtime model data; other agents
     // keep their model in their own engine-specific config.
     let mut merged_env = env;
+    if agent_type == AgentType::Pi {
+        // The settings panel sends the previous env map back when changing a
+        // binding. Remove HouHub's internal selector markers first so clearing
+        // the provider cannot leave a stale selector scope behind.
+        merged_env.remove(PI_BOUND_PROVIDER_ENV);
+        merged_env.remove(PI_BOUND_MODEL_ENV);
+    }
     let mut codex_bound_model: Option<Option<String>> = None;
     // When a Claude provider is bound, capture the inputs to also rewrite the
     // on-disk config.env below. Claude's model fields live in config.env, which
@@ -9316,8 +9418,11 @@ async fn acp_update_agent_env_core_with_enabled_update(
         if agent_type == AgentType::Pi {
             let model = resolve_pi_provider_model(&provider, &merged_env)?;
             merged_env.insert("OPENAI_MODEL".to_string(), model.clone());
+            let provider_key = pi_provider_id(&provider);
+            merged_env.insert(PI_BOUND_PROVIDER_ENV.to_string(), provider_key.clone());
+            merged_env.insert(PI_BOUND_MODEL_ENV.to_string(), model.clone());
             pi_config_update = Some(PiConfigUpdate {
-                provider: pi_provider_id(&provider),
+                provider: provider_key,
                 model,
                 models: Some(parse_provider_models_json(&provider.models_json)),
                 thinking_level: None,
@@ -9355,7 +9460,8 @@ async fn acp_update_agent_env_core_with_enabled_update(
         }
     }
     if let Some(update) = pi_config_update {
-        update_pi_config_files(update)?;
+        let pi_dir = pi_agent_dir_for_env(&merged_env);
+        update_pi_config_files_at(update, &pi_dir)?;
     }
     if let Some(model) = codex_bound_model {
         apply_codex_catalog_and_model(model.as_deref())?;
@@ -9812,8 +9918,10 @@ pub async fn acp_update_pi_config(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_load_pi_config() -> Result<PiConfigProjection, AcpError> {
-    Ok(load_pi_config_core())
+pub async fn acp_load_pi_config(
+    db: State<'_, AppDatabase>,
+) -> Result<PiConfigProjection, AcpError> {
+    load_pi_config_core_for_db(&db).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -11350,6 +11458,39 @@ mod tests {
     }
 
     #[test]
+    fn pi_config_update_uses_explicit_runtime_agent_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pi_home = tmp.path().join("custom-pi-agent");
+        let runtime_env = BTreeMap::from([(
+            "PI_CODING_AGENT_DIR".to_string(),
+            pi_home.display().to_string(),
+        )]);
+
+        update_pi_config_files_at(
+            PiConfigUpdate {
+                provider: "houhub-provider-7".to_string(),
+                model: "gpt-5.6-terra".to_string(),
+                models: Some(vec!["gpt-5.6-terra".to_string()]),
+                thinking_level: Some("max".to_string()),
+                api_key: Some("sk-test".to_string()),
+                custom_base_url: Some("https://gateway.example/v1".to_string()),
+                custom_api: Some("openai-completions".to_string()),
+            },
+            &pi_agent_dir_for_env(&runtime_env),
+        )
+        .expect("write custom pi config");
+
+        let settings: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(pi_home.join("settings.json")).expect("read settings"),
+        )
+        .expect("settings json");
+        assert_eq!(settings["defaultProvider"], "houhub-provider-7");
+        assert_eq!(settings["defaultThinkingLevel"], "max");
+        assert!(pi_home.join("auth.json").is_file());
+        assert!(pi_home.join("models.json").is_file());
+    }
+
+    #[test]
     fn resolve_pi_provider_model_ignores_structured_provider_bundle() {
         let provider = crate::db::entities::model_provider::Model {
             id: 7,
@@ -11677,22 +11818,32 @@ wire_api = "chat"
         env.insert("OPENAI_BASE_URL".to_string(), "https://a".to_string());
         env.insert("OPENAI_API_KEY".to_string(), "k1".to_string());
 
-        // Same inputs → same fingerprint (the native-config read is identical
-        // across all calls in this test, so only the env varies).
-        let fp1 = fingerprint_config(agent, &env);
-        assert_eq!(fp1, fingerprint_config(agent, &env));
+        // `fingerprint_config` folds in the on-disk native config, so this test
+        // must pin CODEX_HOME the way the Grok/Cursor fingerprint tests below
+        // pin theirs. Reading the developer's real ~/.codex would make the
+        // "same inputs → same fingerprint" assertions depend on whether another
+        // test happened to be inside its own `temp_env` CODEX_HOME scope at the
+        // time — temp_env mutates the process environment, and only tests that
+        // take its lock are serialized against each other.
+        let dir = tempfile::tempdir().expect("tempdir");
+        temp_env::with_var("CODEX_HOME", Some(dir.path()), || {
+            // Same inputs → same fingerprint (the native-config read is
+            // identical across all calls in this test, so only the env varies).
+            let fp1 = fingerprint_config(agent, &env);
+            assert_eq!(fp1, fingerprint_config(agent, &env));
 
-        // Changing a real config value changes the fingerprint.
-        let mut env_changed = env.clone();
-        env_changed.insert("OPENAI_API_KEY".to_string(), "k2".to_string());
-        assert_ne!(fp1, fingerprint_config(agent, &env_changed));
+            // Changing a real config value changes the fingerprint.
+            let mut env_changed = env.clone();
+            env_changed.insert("OPENAI_API_KEY".to_string(), "k2".to_string());
+            assert_ne!(fp1, fingerprint_config(agent, &env_changed));
 
-        // The per-launch volatile key is excluded — adding it must NOT change
-        // the fingerprint (otherwise OpenClaw would look stale once a real
-        // session id is assigned and the reset flag drops).
-        let mut env_volatile = env.clone();
-        env_volatile.insert("OPENCLAW_RESET_SESSION".to_string(), "1".to_string());
-        assert_eq!(fp1, fingerprint_config(agent, &env_volatile));
+            // The per-launch volatile key is excluded — adding it must NOT
+            // change the fingerprint (otherwise OpenClaw would look stale once a
+            // real session id is assigned and the reset flag drops).
+            let mut env_volatile = env.clone();
+            env_volatile.insert("OPENCLAW_RESET_SESSION".to_string(), "1".to_string());
+            assert_eq!(fp1, fingerprint_config(agent, &env_volatile));
+        });
     }
 
     #[test]
@@ -11721,6 +11872,216 @@ wire_api = "chat"
             assert_ne!(
                 low_fp, high_fp,
                 "changing default_reasoning_effort must change the fingerprint"
+            );
+        });
+    }
+
+    /// Parse a provider table out of a TOML fragment so the auth-default tests
+    /// read like the config.toml a user would actually write.
+    fn provider_table_of(raw: &str) -> toml::map::Map<String, toml::Value> {
+        raw.parse::<toml::Value>()
+            .expect("fragment must parse")
+            .get("model_providers")
+            .and_then(toml::Value::as_table)
+            .and_then(|providers| providers.get("houhub"))
+            .and_then(toml::Value::as_table)
+            .cloned()
+            .expect("fragment must define model_providers.houhub")
+    }
+
+    fn auth_flag_of(table: &toml::map::Map<String, toml::Value>) -> Option<bool> {
+        table.get("requires_openai_auth").and_then(toml::Value::as_bool)
+    }
+
+    #[test]
+    fn codex_auth_default_is_supplied_only_when_absent() {
+        // HouHub provisions its provider with the key in auth.json and no
+        // `env_key`, so a provider WE create needs requires_openai_auth = true.
+        let mut fresh = provider_table_of("[model_providers.houhub]\nbase_url = \"https://x/v1\"\n");
+        ensure_codex_provider_auth_default(&mut fresh);
+        assert_eq!(auth_flag_of(&fresh), Some(true));
+
+        // An explicit false is the user's call and must survive every path —
+        // this is the regression the whole change exists for.
+        let mut explicit_false = provider_table_of(
+            "[model_providers.houhub]\nbase_url = \"https://x/v1\"\nrequires_openai_auth = false\n",
+        );
+        ensure_codex_provider_auth_default(&mut explicit_false);
+        assert_eq!(auth_flag_of(&explicit_false), Some(false));
+
+        // An explicit true is left alone rather than rewritten.
+        let mut explicit_true = provider_table_of(
+            "[model_providers.houhub]\nrequires_openai_auth = true\n",
+        );
+        ensure_codex_provider_auth_default(&mut explicit_true);
+        assert_eq!(auth_flag_of(&explicit_true), Some(true));
+    }
+
+    #[test]
+    fn codex_auth_default_yields_to_actor_authorization() {
+        // codex's uses_openai_actor_authorization() is
+        // `!requires_openai_auth && <non-empty x-openai-actor-authorization>`,
+        // so writing the default here would silently disable that auth path.
+        let mut header_present = provider_table_of(
+            "[model_providers.houhub]\nbase_url = \"https://x/v1\"\n\n\
+             [model_providers.houhub.http_headers]\n\
+             x-openai-actor-authorization = \"local-image-extension\"\n",
+        );
+        ensure_codex_provider_auth_default(&mut header_present);
+        assert_eq!(auth_flag_of(&header_present), None);
+
+        // Header matching is case-insensitive, mirroring eq_ignore_ascii_case.
+        let mut mixed_case = provider_table_of(
+            "[model_providers.houhub.http_headers]\n\
+             X-OpenAI-Actor-Authorization = \"local-image-extension\"\n",
+        );
+        ensure_codex_provider_auth_default(&mut mixed_case);
+        assert_eq!(auth_flag_of(&mixed_case), None);
+
+        // An inline table is the same table to the parser.
+        let mut inline = provider_table_of(
+            "[model_providers.houhub]\n\
+             http_headers = { \"x-openai-actor-authorization\" = \"local-image-extension\" }\n",
+        );
+        ensure_codex_provider_auth_default(&mut inline);
+        assert_eq!(auth_flag_of(&inline), None);
+
+        // An empty header value does not enable the path upstream
+        // (`!value.trim().is_empty()`), so the default still applies.
+        let mut empty_value = provider_table_of(
+            "[model_providers.houhub.http_headers]\nx-openai-actor-authorization = \"  \"\n",
+        );
+        ensure_codex_provider_auth_default(&mut empty_value);
+        assert_eq!(auth_flag_of(&empty_value), Some(true));
+
+        // A header plus an explicit true is a contradictory config, but it is
+        // the user's: never rewrite or remove it.
+        let mut header_and_true = provider_table_of(
+            "[model_providers.houhub]\nrequires_openai_auth = true\n\n\
+             [model_providers.houhub.http_headers]\n\
+             x-openai-actor-authorization = \"local-image-extension\"\n",
+        );
+        ensure_codex_provider_auth_default(&mut header_and_true);
+        assert_eq!(auth_flag_of(&header_and_true), Some(true));
+
+        // A quoted key containing dots is ONE literal key, not an http_headers
+        // sub-table, so it must not suppress the default.
+        let mut literal_dotted_key = provider_table_of(
+            "[model_providers.houhub]\n\
+             \"http_headers.x-openai-actor-authorization\" = \"local-image-extension\"\n",
+        );
+        ensure_codex_provider_auth_default(&mut literal_dotted_key);
+        assert_eq!(auth_flag_of(&literal_dotted_key), Some(true));
+    }
+
+    #[test]
+    fn codex_cascade_preserves_explicit_auth_flag_and_headers() {
+        // Repro path 2 from issue #406: editing a bound model provider's URL /
+        // key / model cascades into ~/.codex/config.toml, which used to
+        // overwrite requires_openai_auth on the way through.
+        let dir = tempfile::tempdir().expect("tempdir");
+        temp_env::with_var("CODEX_HOME", Some(dir.path()), || {
+            let config_path = dir.path().join("config.toml");
+            std::fs::write(
+                &config_path,
+                "model_provider = \"houhub\"\n\n\
+                 [model_providers.houhub]\n\
+                 base_url = \"https://old.example/v1\"\n\
+                 name = \"houhub\"\n\
+                 wire_api = \"responses\"\n\
+                 requires_openai_auth = false\n\n\
+                 [model_providers.houhub.http_headers]\n\
+                 x-openai-actor-authorization = \"local-image-extension\"\n",
+            )
+            .expect("seed config.toml");
+
+            cascade_update_agent_config(
+                AgentType::Codex,
+                "https://new.example/v1",
+                "sk-test",
+                &BTreeMap::new(),
+                &CodexModelAction::Set("gpt-5-codex".to_string()),
+                None,
+            )
+            .expect("cascade must succeed");
+
+            let written = std::fs::read_to_string(&config_path).expect("read back");
+            let table = provider_table_of(&written);
+            assert_eq!(
+                auth_flag_of(&table),
+                Some(false),
+                "an explicit requires_openai_auth = false must survive the cascade"
+            );
+            assert!(
+                codex_provider_uses_actor_authorization(&table),
+                "the actor-authorization header must survive the cascade"
+            );
+            assert_eq!(
+                table.get("base_url").and_then(toml::Value::as_str),
+                Some("https://new.example/v1"),
+                "the cascade must still apply the new base_url"
+            );
+        });
+    }
+
+    #[test]
+    fn codex_cascade_seeds_auth_flag_for_a_fresh_provider() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        temp_env::with_var("CODEX_HOME", Some(dir.path()), || {
+            cascade_update_agent_config(
+                AgentType::Codex,
+                "https://new.example/v1",
+                "sk-test",
+                &BTreeMap::new(),
+                &CodexModelAction::NoOp,
+                None,
+            )
+            .expect("cascade must succeed");
+
+            let written =
+                std::fs::read_to_string(dir.path().join("config.toml")).expect("read back");
+            assert_eq!(
+                auth_flag_of(&provider_table_of(&written)),
+                Some(true),
+                "a provider HouHub creates still gets the default"
+            );
+        });
+    }
+
+    #[test]
+    fn codex_cascade_leaves_a_non_houhub_provider_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        temp_env::with_var("CODEX_HOME", Some(dir.path()), || {
+            let config_path = dir.path().join("config.toml");
+            std::fs::write(
+                &config_path,
+                "model_provider = \"custom\"\n\n\
+                 [model_providers.custom]\n\
+                 base_url = \"https://old.example/v1\"\n",
+            )
+            .expect("seed config.toml");
+
+            cascade_update_agent_config(
+                AgentType::Codex,
+                "https://new.example/v1",
+                "sk-test",
+                &BTreeMap::new(),
+                &CodexModelAction::NoOp,
+                None,
+            )
+            .expect("cascade must succeed");
+
+            let written = std::fs::read_to_string(&config_path).expect("read back");
+            let parsed = written.parse::<toml::Value>().expect("must parse");
+            let custom = parsed
+                .get("model_providers")
+                .and_then(toml::Value::as_table)
+                .and_then(|providers| providers.get("custom"))
+                .and_then(toml::Value::as_table)
+                .expect("custom provider must survive");
+            assert!(
+                !custom.contains_key("requires_openai_auth"),
+                "only the HouHub provider is HouHub-managed"
             );
         });
     }

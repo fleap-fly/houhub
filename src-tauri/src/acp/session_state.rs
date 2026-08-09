@@ -306,6 +306,11 @@ pub struct SessionState {
     pub modes: Option<SessionModeStateInfo>,
     pub current_mode: Option<String>,
     pub config_options: Option<Vec<SessionConfigOptionInfo>>,
+    /// HouHub's optional Pi provider binding. These are backend-only launch
+    /// facts used to keep the Pi model selector and persisted preferences
+    /// aligned with the provider selected in Agent Settings.
+    pub(crate) pi_bound_provider: Option<String>,
+    pub(crate) pi_bound_model: Option<String>,
     /// Grok only: per-model reasoning-effort specs, parsed from the top-level
     /// `models` of the session-establishment response (guaranteed on
     /// `session/new`; opportunistic on resume/fork). Grok never re-sends this on
@@ -484,6 +489,8 @@ impl SessionState {
             modes: None,
             current_mode: None,
             config_options: None,
+            pi_bound_provider: None,
+            pi_bound_model: None,
             grok_effort_specs: None,
             prompt_capabilities: None,
             fork_supported: false,

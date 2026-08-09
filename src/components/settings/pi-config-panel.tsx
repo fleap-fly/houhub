@@ -78,6 +78,7 @@ const PI_THINKING_LEVELS = [
   "medium",
   "high",
   "xhigh",
+  "max",
 ] as const
 
 /**

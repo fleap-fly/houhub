@@ -868,9 +868,13 @@ pub async fn acp_update_pi_config(
     Ok(Json(()))
 }
 
-pub async fn acp_load_pi_config() -> Result<Json<acp_commands::PiConfigProjection>, AppCommandError>
-{
-    Ok(Json(acp_commands::load_pi_config_core()))
+pub async fn acp_load_pi_config(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<acp_commands::PiConfigProjection>, AppCommandError> {
+    acp_commands::load_pi_config_core_for_db(&state.db)
+        .await
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
 }
 
 #[derive(Deserialize)]

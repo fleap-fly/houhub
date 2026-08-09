@@ -28,6 +28,10 @@ const workspaceLayoutSource = readFileSync(
   resolve(process.cwd(), "src/app/workspace/layout.tsx"),
   "utf8"
 )
+const globalsCssSource = readFileSync(
+  resolve(process.cwd(), "src/app/globals.css"),
+  "utf8"
+)
 const tabBarSource = readFileSync(
   resolve(process.cwd(), "src/components/tabs/tab-bar.tsx"),
   "utf8"
@@ -64,6 +68,60 @@ describe("ConversationDetailPanel new conversation layout", () => {
     // The welcome composer is taller (min-h-30) than the compact default kept by
     // active/historical conversations.
     expect(welcomeBranch).toContain("tall")
+  })
+
+  it("snaps the hidden keep-alive tab so `transition-all` descendants don't ghost", () => {
+    // Inactive tabs stay mounted and hide with `visibility: hidden` (`invisible`).
+    // In Tailwind v4 `transition-all` transitions `visibility` too, so welcome
+    // controls (agent pills, quick-action tabs, composer buttons) would linger
+    // 150–300ms as ghosts over the newly-active conversation. The wrapper must
+    // carry `conversation-tab-hidden` next to `invisible`, and globals.css must
+    // drop transitions for that subtree so visibility snaps. Both halves are
+    // required — assert they stay coupled.
+    expect(source).toContain(
+      '"conversation-tab-hidden absolute inset-0 invisible pointer-events-none"'
+    )
+    expect(globalsCssSource).toContain(".conversation-tab-hidden *")
+    const rule = globalsCssSource.slice(
+      globalsCssSource.indexOf(".conversation-tab-hidden,"),
+      globalsCssSource.indexOf(".conversation-tab-hidden,") + 200
+    )
+    expect(rule).toContain("transition-property: none !important")
+  })
+
+  // Regression: with a workspace background image on, every covering surface is
+  // TRANSPARENT rather than opaque, so a hidden-but-mounted subtree that still
+  // paints is visible straight through it. `visibility` inherits, but a
+  // descendant can opt back in — Monaco's DiffEditorWidget writes an inline
+  // `visibility: visible` on its two panes — so an open git-diff file tab showed
+  // through the full-page routes (task board / automations / token usage) and
+  // through the conversation overlay in conversation-only mode, while a plain
+  // file tab (no inline visibility) hid correctly.
+  it("re-hides Monaco's diff panes inside a hidden keep-alive subtree", () => {
+    const selector = ".conversation-tab-hidden .monaco-diff-editor > .editor"
+    expect(globalsCssSource).toContain(selector)
+    const rule = globalsCssSource.slice(
+      globalsCssSource.indexOf(selector),
+      globalsCssSource.indexOf(selector) + 120
+    )
+    // Only `!important` outranks Monaco's inline declaration.
+    expect(rule).toContain("visibility: hidden !important")
+  })
+
+  it("marks every hidden keep-alive subtree with the hardening class", () => {
+    // Under a full-page workbench route (desktop + mobile shells).
+    expect(workspaceLayoutSource).toContain(
+      '!isConversations && "conversation-tab-hidden invisible"'
+    )
+    // The FILE column under the conversation overlay — this is the one that
+    // hosts git-diff tabs.
+    expect(workspaceLayoutSource).toContain(
+      'mode === "conversation" && "conversation-tab-hidden invisible"'
+    )
+    // The conversation column under the files-maximized overlay.
+    expect(workspaceLayoutSource).toContain(
+      'filesMaximized && "conversation-tab-hidden invisible"'
+    )
   })
 
   it("does not render a decorative welcome backdrop", () => {

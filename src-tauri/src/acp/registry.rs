@@ -229,8 +229,46 @@ pub fn acp_adapter_relation(agent_type: AgentType) -> Option<AcpAdapterRelation>
 const ACP_ADAPTER_DOCS_URL: &str =
     "https://docs.houshanai.com/guide/supported-agents#acp-adapters";
 
-pub fn steering_prompt_required_min_version(_agent_type: AgentType) -> Option<&'static str> {
-    None
+/// Minimum adapter version whose `_session/steering` honors the
+/// `_meta.steering.idleBehavior = "promptRequired"` opt-in — one of the three
+/// gates for HouHub's native live-feedback push channel (synthesized into
+/// `SessionState.native_steering_available` at initialize; see
+/// `connection.rs::init_advertises_steering`).
+///
+/// `None` means "never steer natively" even when the adapter advertises
+/// `_meta.steering.supported`: an adapter that ignores the opt-in falls back
+/// to `startedNewTurn` on the turn-end race — a detached turn no host request
+/// owns, which HouHub's turn-scoped runtime must never trigger. codex-acp
+/// 1.1.9 ships `_session/steering` but not `promptRequired` (verified against
+/// the published tarball), so it stays `None` until a release implements the
+/// opt-in — then this is a one-line flip plus tests.
+///
+/// Honoring the opt-in is necessary but not sufficient: the ACTIVE path must
+/// also keep the owning `session/prompt` in flight across the steered work
+/// (see the per-arm rationale below).
+///
+/// The static policy alone is NOT enough — launch prefers a PATH-resolved,
+/// user-installed adapter over the pinned npx package (see
+/// `commands::acp::acp_get_agent_status_core`, "Launch already prefers the
+/// PATH resolution"), so the synthesis must ALSO prove the running binary's
+/// `agent_info.version` meets this minimum.
+pub fn steering_prompt_required_min_version(agent_type: AgentType) -> Option<&'static str> {
+    match agent_type {
+        // 0.64.0 (#919) added the `promptRequired` opt-in, but the ACTIVE path
+        // stayed unsound until 0.65.0 (#958): steering is delivered at priority
+        // `now`, which makes the CLI ABORT the running cycle, and that cycle's
+        // ordinary result settled the owning `session/prompt` as a clean
+        // `end_turn` while the steered work was still going — the continuation
+        // then streamed with no turn in flight (#934, reported and reproduced
+        // from the upstream adapter). 0.65.0 records a steered turn's results instead of
+        // settling on them and settles at the SDK `idle` spanning both cycles,
+        // so the floor is the FIRST release carrying that fix, not the one that
+        // introduced the opt-in. Every 0.64.x — including 0.64.2, which only
+        // reverted an unrelated ExitPlanMode change — still carries the bug and
+        // is held to the pull channel by the runtime version gate.
+        AgentType::ClaudeCode => Some("0.65.0"),
+        _ => None,
+    }
 }
 
 pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
@@ -249,12 +287,54 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             supports_mcp: true,
             name: "Claude Code",
             description: "ACP wrapper for Anthropic's Claude",
-            // 0.63.0 enables the `subagent-transcript` capability advertised
-            // by `build_client_capabilities`, which routes live Claude child
-            // output into the launching Agent capsule.
+            // 0.63.0 (claude-agent-sdk 0.3.220) adds the opt-in
+            // `clientCapabilities._meta["subagent-transcript"]` capability
+            // (#881): when advertised (see `build_client_capabilities`),
+            // subagent text/thought chunks stream with update-level
+            // `_meta.claudeCode.parentToolUseId` instead of being filtered;
+            // HouHub routes them into the live Agent capsule. Independent of
+            // the capability, every tool_call now carries
+            // `_meta.claudeCode.subagent: true` on Agent/Task launches and
+            // `_meta.claudeCode.title` (the Bash `description` input) on
+            // normal AND eager-permission tool calls. 0.63.0 also fixes
+            // phantom `tool_progress` heartbeat entries under never-announced
+            // ids (#916), Bash terminal metas keyed off an empty id (#917),
+            // and `permission_denied` resolving unannounced tool calls
+            // (#923). Fast mode's config option now folds the SDK's
+            // `fast_mode_disabled_reason` into its description (#921).
+            // 0.64.0 carries the SAME claude-agent-sdk (0.3.220) and ACP SDK
+            // (1.3.0), so Claude Code's own behavior is unchanged. It adds an
+            // opt-in host-owned steering fallback (#919): a `_session/steering`
+            // request may carry `_meta.steering.idleBehavior = "promptRequired"`,
+            // and when the turn it meant to steer already settled the adapter
+            // returns `{outcome:"promptRequired", reason:"noRunningTurn"}`
+            // WITHOUT consuming the content, so the host resubmits it through a
+            // normal `session/prompt` it owns. 0.64.0 also marks the
+            // per-question
+            // free-text "Other" elicitation field with the deliberately
+            // un-namespaced `_meta._askUserQuestionCustomAnswer` (#929, omitted
+            // from the release notes) — see `question::is_custom_answer_property`.
+            // 0.64.1 (#930, likewise absent from its notes) adopts the
+            // option-level `_meta.permission = {version, changes[]}` contract
+            // codex already speaks, so Claude permission cards now spell out
+            // what each button grants; its `lifetime` is what
+            // `parsePermissionOptionChanges` reads for the duration, since
+            // Claude — unlike codex — never states it in the description.
+            // 0.65.0 (#958) completes the steering contract the opt-in started:
+            // a steered turn's results now only RECORD their outcome and the
+            // turn settles at the SDK `idle` spanning both the interrupted and
+            // the steered cycle, so the owning prompt stays in flight until the
+            // steered work is actually done. That is the fix for #934, which
+            // had forced HouHub's native push channel off; it is back on for
+            // Claude alone via `steering_prompt_required_min_version` (see
+            // `manager::submit_feedback` for the two channels). Its other
+            // releases carry nothing else for HouHub: 0.64.2 reverted #938's
+            // ExitPlanMode `plan_update` experiment outright, and 0.65.0's
+            // remaining commits are devDependency bumps — the runtime deps and
+            // the Node floor still match 0.64.0's.
             distribution: AgentDistribution::Npx {
-                version: "0.64.1",
-                package: "@agentclientprotocol/claude-agent-acp@0.64.1",
+                version: "0.65.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.65.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -343,8 +423,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "Cline",
             description: "Autonomous coding agent CLI",
             distribution: AgentDistribution::Npx {
-                version: "3.0.49",
-                package: "cline@3.0.49",
+                version: "3.0.50",
+                package: "cline@3.0.50",
                 cmd: "cline",
                 args: &["--acp"],
                 env: &[],
@@ -357,39 +437,39 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "OpenCode",
             description: "The open source coding agent",
             distribution: AgentDistribution::Binary {
-                version: "1.18.11",
+                version: "1.18.14",
                 cmd: "opencode",
                 args: &["acp"],
                 env: &[],
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.11/opencode-darwin-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.14/opencode-darwin-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.11/opencode-darwin-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.14/opencode-darwin-x64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.11/opencode-linux-arm64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.14/opencode-linux-arm64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.11/opencode-linux-x64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.14/opencode-linux-x64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.11/opencode-windows-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.14/opencode-windows-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.11/opencode-windows-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.14/opencode-windows-x64.zip",
                         sha256: None,
                     },
                 ],
@@ -438,8 +518,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "Kimi Code",
             description: "Moonshot AI's official CLI coding assistant (ACP)",
             distribution: AgentDistribution::Npx {
-                version: "0.31.1",
-                package: "@moonshot-ai/kimi-code@0.31.1",
+                version: "0.33.0",
+                package: "@moonshot-ai/kimi-code@0.33.0",
                 cmd: "kimi",
                 args: &["acp"],
                 env: &[],
@@ -682,11 +762,37 @@ mod tests {
     }
 
     #[test]
+    fn steering_prompt_required_min_version_gates_claude_only() {
+        // The native-steering policy bit: only an adapter that honors the
+        // `promptRequired` opt-in AND keeps the owning prompt in flight across
+        // a steered turn gets a minimum version. The floor is the release that
+        // fixed the latter (claude-agent-acp 0.65.0 / #958), NOT the one that
+        // introduced the opt-in — every 0.64.x settles the prompt early (#934).
+        // Everyone else stays None and rides the MCP pull channel; codex-acp
+        // 1.1.9 ships steering without the opt-in at all. Flipping an agent on
+        // here without the runtime `agent_info.version` proof is not enough by
+        // design.
+        assert_eq!(
+            steering_prompt_required_min_version(AgentType::ClaudeCode),
+            Some("0.65.0")
+        );
+        assert_eq!(steering_prompt_required_min_version(AgentType::Codex), None);
+        for agent in [
+            AgentType::Gemini,
+            AgentType::OpenClaw,
+            AgentType::Grok,
+            AgentType::Custom("acme"),
+        ] {
+            assert_eq!(steering_prompt_required_min_version(agent), None);
+        }
+    }
+
+    #[test]
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.64.1",
-            "@agentclientprotocol/claude-agent-acp@0.64.1",
+            "0.65.0",
+            "@agentclientprotocol/claude-agent-acp@0.65.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -703,8 +809,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Cline,
-            "3.0.49",
-            "cline@3.0.49",
+            "3.0.50",
+            "cline@3.0.50",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -715,8 +821,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::KimiCode,
-            "0.31.1",
-            "@moonshot-ai/kimi-code@0.31.1",
+            "0.33.0",
+            "@moonshot-ai/kimi-code@0.33.0",
             Some("22.19.0"),
         );
         assert_npx_version(
@@ -732,7 +838,7 @@ mod tests {
             "@xai-official/grok@0.2.118",
             Some("20.0.0"),
         );
-        assert_binary_version(AgentType::OpenCode, "1.18.11", "/releases/download/v1.18.11/");
+        assert_binary_version(AgentType::OpenCode, "1.18.14", "/releases/download/v1.18.14/");
         assert_uvx_version(
             AgentType::Hermes,
             "0.19.0",

@@ -1,3 +1,4 @@
+import { parseTimestamp } from "@/components/conversations/sidebar-conversation-grouping"
 import type { WorkTask, WorkTaskStatus } from "@/lib/types"
 
 /** The four board columns (DB statuses are exact; the UI aggregates them). */
@@ -9,6 +10,25 @@ export const BOARD_COLUMN_IDS: BoardColumnId[] = [
   "attention",
   "done",
 ]
+
+/**
+ * The exact statuses behind each column, written out as a table.
+ * `columnForStatus` stays the single source of truth for the mapping; this is
+ * its spec copy, and board-columns.test.ts asserts the two agree and that every
+ * `WorkTaskStatus` appears here exactly once — which is what makes adding a
+ * status without filing it in a column a test failure rather than a silent
+ * disappearance from the board.
+ */
+export const STATUSES_BY_COLUMN: Record<BoardColumnId, WorkTaskStatus[]> = {
+  todo: ["todo", "queued"],
+  inProgress: ["preparing", "running"],
+  attention: ["awaiting_input", "review", "merging", "failed"],
+  done: ["done", "canceled"],
+}
+
+/** Every status, column order — the flattened spec table (see above). */
+export const ALL_WORK_TASK_STATUSES: WorkTaskStatus[] =
+  BOARD_COLUMN_IDS.flatMap((col) => STATUSES_BY_COLUMN[col])
 
 /**
  * DB status → board column. `canceled` lives in the Done column but is hidden
@@ -40,10 +60,17 @@ export function columnForStatus(status: WorkTaskStatus): BoardColumnId {
 }
 
 /**
- * Bucket tasks into the four columns, preserving list order (backend returns
- * board order: sort_order, id). Canceled tasks are dropped unless
+ * Bucket tasks into the four columns. Canceled tasks are dropped unless
  * `showCanceled`, archived ones unless `showArchived` (archived is always
- * terminal); done tasks sort before canceled within the Done column.
+ * terminal).
+ *
+ * Every column reads freshest-first: `updated_at` descending, so whatever just
+ * moved sits at the top of its column. The sort is stable and the backend hands
+ * rows over in board order (sort_order, id), so equal timestamps keep that
+ * order — which is exactly what preserves a pending-column drag: `reorder`
+ * stamps the whole column with one `updated_at`, the rows tie, and the fallback
+ * is their freshly written sort_order. sort_order still drives the launch queue
+ * (`next_queued` / "start all"); it just no longer drives the display.
  */
 export function groupTasksByColumn(
   tasks: WorkTask[],
@@ -61,12 +88,41 @@ export function groupTasksByColumn(
     if (task.archived_at != null && !showArchived) continue
     grouped[columnForStatus(task.status)].push(task)
   }
-  grouped.done.sort((a, b) => {
-    const aCanceled = a.status === "canceled" ? 1 : 0
-    const bCanceled = b.status === "canceled" ? 1 : 0
-    if (aCanceled !== bCanceled) return aCanceled - bCanceled
-    // Freshest completion first within each group.
-    return (b.finished_at ?? "").localeCompare(a.finished_at ?? "")
-  })
+  for (const column of BOARD_COLUMN_IDS) {
+    grouped[column].sort(byFreshest)
+  }
   return grouped
+}
+
+/** Freshest-first, the order every board column and the list view read in. */
+function byFreshest(a: WorkTask, b: WorkTask): number {
+  return parseTimestamp(b.updated_at) - parseTimestamp(a.updated_at)
+}
+
+/**
+ * The list view's rows: one flat, freshest-first sequence instead of four
+ * columns. `group` is the list-only status filter — a whole board COLUMN rather
+ * than individual statuses (`null` = every status, which is the default), so
+ * the list narrows by the same four buckets the board sorts into and the two
+ * views can't describe the same tasks with different words.
+ *
+ * The visibility toggles apply exactly as they do on the board: `showCanceled`
+ * and `showArchived` are one pair of controls shared by both views. (They have
+ * to be: a column-wide filter cannot single out `canceled`, which lives inside
+ * the Done column.)
+ */
+export function filterTasksForList(
+  tasks: WorkTask[],
+  group: BoardColumnId | null,
+  showCanceled: boolean,
+  showArchived: boolean
+): WorkTask[] {
+  return tasks
+    .filter(
+      (task) =>
+        (task.status !== "canceled" || showCanceled) &&
+        (task.archived_at == null || showArchived) &&
+        (group == null || columnForStatus(task.status) === group)
+    )
+    .sort(byFreshest)
 }

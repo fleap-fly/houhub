@@ -59,7 +59,8 @@ mod tauri_app {
     use crate::commands::{
         acp as acp_commands, app_update as app_update_commands,
         automation as automation_commands, background as background_commands, backup,
-        chat_channel as chat_channel_commands, conversations,
+        chat_authoring as chat_authoring_commands, chat_channel as chat_channel_commands,
+        conversations,
         custom_skills as custom_skills_commands, delegation as delegation_commands,
         experts as experts_commands, feedback as feedback_commands, file_io, folder_commands,
         folder_links, folders, houflow as houflow_commands, logging as logging_commands, mcp as mcp_commands,
@@ -520,6 +521,7 @@ mod tauri_app {
                         feedback_config,
                         question_config,
                         session_info_config,
+                        chat_authoring_config,
                     ) = crate::app_state::build_delegation_stack(
                         &cm_state,
                         db_conn.clone(),
@@ -530,6 +532,7 @@ mod tauri_app {
                     app.manage(feedback_config.clone());
                     app.manage(question_config.clone());
                     app.manage(session_info_config.clone());
+                    app.manage(chat_authoring_config.clone());
                     app.manage(crate::commands::delegation::DelegationSocketPath(
                         socket_path.clone(),
                     ));
@@ -541,6 +544,7 @@ mod tauri_app {
                     let feedback_for_init = feedback_config.clone();
                     let question_for_init = question_config.clone();
                     let session_info_for_init = session_info_config.clone();
+                    let chat_authoring_for_init = chat_authoring_config.clone();
                     tauri::async_runtime::block_on(async move {
                         delegation_commands::apply_persisted_config(
                             &db_for_init,
@@ -560,6 +564,11 @@ mod tauri_app {
                         crate::commands::session_info::apply_persisted_session_info_config(
                             &db_for_init,
                             &session_info_for_init,
+                        )
+                        .await;
+                        crate::commands::chat_authoring::apply_persisted_chat_authoring_config(
+                            &db_for_init,
+                            &chat_authoring_for_init,
                         )
                         .await;
                     });
@@ -591,6 +600,17 @@ mod tauri_app {
                             ),
                         ),
                         std::sync::Arc::new(crate::work_task::EngineWorkTaskTools),
+                        std::sync::Arc::new(
+                            crate::commands::chat_authoring::DbChatAuthoring::new(
+                                std::sync::Arc::new(db::AppDatabase {
+                                    conn: db_conn.clone(),
+                                }),
+                                crate::web::event_bridge::EventEmitter::Tauri(
+                                    app.handle().clone(),
+                                ),
+                                chat_authoring_config.clone(),
+                            ),
+                        ),
                     );
                     tauri::async_runtime::spawn(async move {
                         if let Err(e) = listener.run(socket_path).await {
@@ -1107,6 +1127,8 @@ mod tauri_app {
                 question_commands::set_question_settings,
                 session_info_commands::get_session_info_settings,
                 session_info_commands::set_session_info_settings,
+                chat_authoring_commands::get_chat_authoring_settings,
+                chat_authoring_commands::set_chat_authoring_settings,
                 version_control::detect_git,
                 version_control::test_git_path,
                 version_control::get_git_settings,
@@ -1255,9 +1277,11 @@ mod tauri_app {
                 work_task_commands::work_task_start_all,
                 work_task_commands::work_task_retry,
                 work_task_commands::work_task_requeue,
+                work_task_commands::work_task_schedule,
                 work_task_commands::work_task_return,
                 work_task_commands::work_task_cancel,
                 work_task_commands::work_task_merge,
+                work_task_commands::work_task_complete,
                 work_task_commands::work_task_archive,
                 work_task_commands::work_task_cleanup,
                 work_task_commands::work_task_diff,

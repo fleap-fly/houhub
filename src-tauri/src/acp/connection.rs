@@ -34,6 +34,7 @@ use crate::acp::error::AcpError;
 use crate::acp::file_system_runtime::{FileSystemRuntime, FileSystemRuntimeError, FsAccessPolicy};
 use crate::acp::registry::{self, AgentDistribution};
 use crate::acp::session_state::SessionState;
+use crate::acp::stderr_tail::{summarize_parser_error, StderrTail, TailScope};
 use crate::acp::terminal_runtime::{TerminalRuntime, TerminalRuntimeError};
 use crate::acp::types::{
     AcpEvent, AvailableCommandInfo, ConnectionInfo, ConnectionStatus, GrokEffortSpec,
@@ -65,6 +66,15 @@ fn merge_agent_env(
     }
 
     for (key, value) in runtime_env {
+        if matches!(
+            key.as_str(),
+            crate::commands::acp::PI_BOUND_PROVIDER_ENV
+                | crate::commands::acp::PI_BOUND_MODEL_ENV
+        ) {
+            // These markers are for HouHub's selector projection only; never
+            // expose them to Pi or to an agent-spawned child process.
+            continue;
+        }
         merged.insert(key.clone(), value.clone());
     }
 
@@ -695,10 +705,50 @@ async fn record_hydrated_update(
     }
 }
 
+/// Keep agent stderr available for diagnostics even when normal logging is
+/// disabled. ACP stdout/stdin may contain user content, so only stderr is
+/// retained in the bounded connection-scoped ring buffer.
+fn agent_debug_callback(
+    agent_name: String,
+    stderr_tail: Arc<StderrTail>,
+    stdio_debug_enabled: bool,
+) -> impl Fn(&str, sacp_tokio::LineDirection) + Send + Sync + 'static {
+    move |line, dir| {
+        let (tag, enabled) = match dir {
+            sacp_tokio::LineDirection::Stderr => {
+                stderr_tail.push(line);
+                ("stderr", true)
+            }
+            sacp_tokio::LineDirection::Stdout => ("stdout", stdio_debug_enabled),
+            sacp_tokio::LineDirection::Stdin => ("stdin", stdio_debug_enabled),
+        };
+        if !enabled {
+            return;
+        }
+        const MAX: usize = 256;
+        if line.len() > MAX {
+            let head = line
+                .char_indices()
+                .take_while(|(i, _)| *i < MAX)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(MAX);
+            tracing::debug!(
+                "[ACP][{agent_name}][{tag}] {}... <truncated {} bytes>",
+                &line[..head],
+                line.len() - head
+            );
+        } else {
+            tracing::debug!("[ACP][{agent_name}][{tag}] {line}");
+        }
+    }
+}
+
 async fn build_agent(
     agent_type: AgentType,
     runtime_env: &BTreeMap<String, String>,
     working_dir: Option<&str>,
+    stderr_tail: &Arc<StderrTail>,
 ) -> Result<AcpAgent, AcpError> {
     // A conversation can outlive the custom-agent definition it was started
     // with (the user deleted it in settings). `get_agent_meta` cannot report
@@ -802,13 +852,13 @@ async fn build_agent(
             }
             let refs: Vec<&str> = parts.iter().map(|s| s.as_str()).collect();
             let agent_name = meta.name.to_string();
+            let tail = Arc::clone(stderr_tail);
             AcpAgent::from_args(&refs)
                 .map(|a| {
-                    a.with_debug(move |line, dir| {
-                        if dir == sacp_tokio::LineDirection::Stderr {
-                            tracing::debug!("[ACP][{agent_name}][stderr] {line}");
-                        }
-                    })
+                    // Keep the historical Npx policy: only stderr is logged;
+                    // stdin/stdout remain opt-in because they carry prompts and
+                    // tool payloads.
+                    a.with_debug(agent_debug_callback(agent_name, tail, false))
                 })
                 .map_err(|e| AcpError::SpawnFailed(e.to_string()))
         }
@@ -963,34 +1013,10 @@ async fn build_agent(
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false);
             let agent_name = meta.name.to_string();
+            let tail = Arc::clone(stderr_tail);
             Ok(
                 AcpAgent::new(sacp::schema::McpServer::Stdio(server)).with_debug(
-                    move |line, dir| {
-                        let (tag, enabled) = match dir {
-                            sacp_tokio::LineDirection::Stderr => ("stderr", true),
-                            sacp_tokio::LineDirection::Stdout => ("stdout", stdio_debug_enabled),
-                            sacp_tokio::LineDirection::Stdin => ("stdin", stdio_debug_enabled),
-                        };
-                        if !enabled {
-                            return;
-                        }
-                        const MAX: usize = 256;
-                        if line.len() > MAX {
-                            let head = line
-                                .char_indices()
-                                .take_while(|(i, _)| *i < MAX)
-                                .last()
-                                .map(|(i, c)| i + c.len_utf8())
-                                .unwrap_or(MAX);
-                            tracing::debug!(
-                                "[ACP][{agent_name}][{tag}] {}... <truncated {} bytes>",
-                                &line[..head],
-                                line.len() - head
-                            );
-                        } else {
-                            tracing::debug!("[ACP][{agent_name}][{tag}] {line}");
-                        }
-                    },
+                    agent_debug_callback(agent_name, tail, stdio_debug_enabled),
                 ),
             )
         }
@@ -1051,13 +1077,10 @@ async fn build_agent(
             }
             let refs: Vec<&str> = parts.iter().map(|s| s.as_str()).collect();
             let agent_name = meta.name.to_string();
+            let tail = Arc::clone(stderr_tail);
             AcpAgent::from_args(&refs)
                 .map(|a| {
-                    a.with_debug(move |line, dir| {
-                        if dir == sacp_tokio::LineDirection::Stderr {
-                            tracing::debug!("[ACP][{agent_name}][stderr] {line}");
-                        }
-                    })
+                    a.with_debug(agent_debug_callback(agent_name, tail, false))
                 })
                 .map_err(|e| AcpError::SpawnFailed(e.to_string()))
         }
@@ -1116,6 +1139,16 @@ pub async fn spawn_agent_connection(
         owner_window_label.clone(),
         None, // folder_id 由后续 prompt handler 在首次 send 时绑定 (Phase 2)
     );
+    if agent_type == AgentType::Pi {
+        initial_state.pi_bound_provider = runtime_env
+            .get(crate::commands::acp::PI_BOUND_PROVIDER_ENV)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        initial_state.pi_bound_model = runtime_env
+            .get(crate::commands::acp::PI_BOUND_MODEL_ENV)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    }
 
     // Install the SessionStarted dedup signal BEFORE wrapping into Arc so the
     // first event (StatusChanged{Connecting} below) doesn't race with the
@@ -1148,7 +1181,16 @@ pub async fn spawn_agent_connection(
     // backstop when the connection driver thread is torn down by process exit
     // before `ChildGuard::drop` can run. 0 = not spawned yet / unknown.
     let child_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let agent = build_agent(agent_type, &runtime_env, working_dir.as_deref())
+    // Connection-scoped stderr evidence used when an agent ends a turn without
+    // producing parseable output. The callback is installed before spawning so
+    // startup failures are retained as recent context too.
+    let stderr_tail = Arc::new(StderrTail::new());
+    let agent = build_agent(
+        agent_type,
+        &runtime_env,
+        working_dir.as_deref(),
+        &stderr_tail,
+    )
         .await?
         .on_spawn({
             let child_pid = Arc::clone(&child_pid);
@@ -1250,6 +1292,7 @@ pub async fn spawn_agent_connection(
                     preferred_config_values,
                     delegation_injection,
                     fs_policy,
+                    stderr_tail,
                 )
                 .await;
 
@@ -1510,6 +1553,88 @@ fn map_session_config_options(
         .collect()
 }
 
+fn pi_bound_model_value(provider: &str, model: &str) -> String {
+    let provider = provider.trim();
+    let model = model.trim();
+    if model.starts_with(&format!("{provider}/")) {
+        model.to_string()
+    } else {
+        format!("{provider}/{model}")
+    }
+}
+
+fn pi_model_belongs_to_provider(value: &str, provider: &str) -> bool {
+    let prefix = format!("{}/", provider.trim());
+    value.trim().starts_with(&prefix) && value.trim().len() > prefix.len()
+}
+
+/// Keep the wire-facing Pi model selector scoped to the HouHub-bound provider.
+/// Pi intentionally advertises every authenticated provider, so filtering only
+/// in the React picker would leave snapshots and reconnect preferences able to
+/// select an old provider. This projection is applied on every emission.
+fn filter_pi_bound_model_options(
+    options: &mut [SessionConfigOptionInfo],
+    provider: Option<&str>,
+    model: Option<&str>,
+) {
+    let Some(provider) = provider.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let desired = model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| pi_bound_model_value(provider, value));
+
+    for option in options {
+        if option.id != "model" && option.category.as_deref() != Some("model") {
+            continue;
+        }
+        let SessionConfigKindInfo::Select(select) = &mut option.kind;
+        select
+            .options
+            .retain(|item| pi_model_belongs_to_provider(&item.value, provider));
+        for group in &mut select.groups {
+            group
+                .options
+                .retain(|item| pi_model_belongs_to_provider(&item.value, provider));
+        }
+        select.groups.retain(|group| !group.options.is_empty());
+
+        // A provider catalog can arrive a tick after the initial selector
+        // event. Keep a stable, usable value instead of exposing another
+        // provider while that catalog is settling.
+        if select.options.is_empty() {
+            if let Some(value) = desired.clone() {
+                let label = value
+                    .split_once('/')
+                    .map(|(_, model)| model)
+                    .unwrap_or(value.as_str())
+                    .to_string();
+                select.options.push(SessionConfigSelectOptionInfo {
+                    value: value.clone(),
+                    name: label,
+                    description: None,
+                });
+                select.groups.clear();
+            }
+        }
+
+        let current_is_bound = select
+            .options
+            .iter()
+            .any(|item| item.value == select.current_value);
+        if !current_is_bound {
+            if let Some(value) = desired.as_deref().filter(|value| {
+                select.options.iter().any(|item| item.value == *value)
+            }) {
+                select.current_value = value.to_string();
+            } else if let Some(first) = select.options.first() {
+                select.current_value = first.value.clone();
+            }
+        }
+    }
+}
+
 /// Codex-acp sometimes omits the "mode" (approval preset) config option when
 /// the loaded sandbox policy does not exactly match one of the three built-in
 /// presets (commonly because `writable_roots` was injected during config
@@ -1565,6 +1690,16 @@ async fn emit_session_config_options_values(
     let mut mapped = map_session_config_options(&config_options);
     if agent_type == AgentType::Codex {
         ensure_codex_mode_option(&mut mapped);
+    }
+    if agent_type == AgentType::Pi {
+        let (provider, model) = {
+            let session = state.read().await;
+            (
+                session.pi_bound_provider.clone(),
+                session.pi_bound_model.clone(),
+            )
+        };
+        filter_pi_bound_model_options(&mut mapped, provider.as_deref(), model.as_deref());
     }
     emit_with_state(
         state,
@@ -1928,19 +2063,20 @@ fn build_grok_set_model_params(
     params
 }
 
-/// Send ACP's `_session/steering` extension to inject text into a running
-/// turn. The method is intentionally untyped because it is an ACP extension
-/// not present in the vendored schema.
+/// Send `_session/steering` (the ACP steering extension) to inject a message
+/// into the RUNNING turn. Untyped like `session/resume` — an extension method
+/// the schema has no typed request for. Always opts into the 0.64.0
+/// `promptRequired` idle contract; HouHub only enables native steering for
+/// adapters proven to honor it AND to keep the owning prompt in flight across
+/// the steered work (claude-agent-acp 0.65.0 / #958 — see
+/// [`synthesize_native_steering`] and `registry::steering_prompt_required_min_version`),
+/// but the caller still handles every outcome in case the proof was wrong.
 async fn send_steer_request(
     cx: &ConnectionTo<Agent>,
     session_id: &SessionId,
     text: &str,
 ) -> Result<SteerOutcome, AcpError> {
-    let params = serde_json::json!({
-        "sessionId": session_id.0.as_ref(),
-        "prompt": [{ "type": "text", "text": text }],
-        "_meta": { "steering": { "idleBehavior": "promptRequired" } },
-    });
+    let params = build_steer_params(session_id.0.as_ref(), text);
     let request = UntypedMessage::new("_session/steering", params)
         .map_err(|e| AcpError::protocol(format!("Failed to build steering request: {e}")))?;
     let raw = cx
@@ -1949,6 +2085,17 @@ async fn send_steer_request(
         .await
         .map_err(|e| AcpError::protocol(format!("Steering request failed: {e}")))?;
     parse_steer_outcome(&raw)
+}
+
+/// Build the `_session/steering` params. The prompt is a single text block;
+/// `promptRequired` keeps a turn-end race host-owned so the caller can resend
+/// the text through a normal prompt when the adapter did not consume it.
+fn build_steer_params(session_id: &str, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "sessionId": session_id,
+        "prompt": [{ "type": "text", "text": text }],
+        "_meta": { "steering": { "idleBehavior": "promptRequired" } },
+    })
 }
 
 fn parse_steer_outcome(raw: &serde_json::Value) -> Result<SteerOutcome, AcpError> {
@@ -2186,13 +2333,69 @@ async fn apply_and_emit_session_config_options(
         // No x.ai/sessionConfig (unexpected): fall through to the standard path,
         // which for Grok emits an empty list (no selectors) — same as before.
     }
+    let mut effective_preferences = preferred_config_values.clone();
+    let mut initial_config_options = initial_config_options;
+    if agent_type == AgentType::Pi {
+        let (provider, model) = {
+            let session_state = state.read().await;
+            (
+                session_state.pi_bound_provider.clone(),
+                session_state.pi_bound_model.clone(),
+            )
+        };
+        if let (Some(provider), Some(model)) = (provider.as_deref(), model.as_deref()) {
+            let mapped_initial = map_session_config_options(&initial_config_options);
+            let offered_models = mapped_initial
+                .iter()
+                .find(|option| option.id == "model")
+                .map(|option| match &option.kind {
+                    SessionConfigKindInfo::Select(select) => select
+                        .options
+                        .iter()
+                        .map(|item| item.value.clone())
+                        .collect::<HashSet<_>>(),
+                })
+                .unwrap_or_default();
+            let saved_model = effective_preferences
+                .get("model")
+                .filter(|value| {
+                    pi_model_belongs_to_provider(value, provider)
+                        && offered_models.contains(value.as_str())
+                });
+            if saved_model.is_none() {
+                effective_preferences.remove("model");
+                let desired = pi_bound_model_value(provider, model);
+                let current = mapped_initial
+                    .into_iter()
+                    .find(|option| option.id == "model")
+                    .and_then(|option| match option.kind {
+                        SessionConfigKindInfo::Select(select) => Some(select.current_value),
+                    });
+                if current.as_deref() != Some(desired.as_str()) {
+                    match set_session_config_option_inner(
+                        cx,
+                        session.session_id(),
+                        "model".to_string(),
+                        desired,
+                    )
+                    .await
+                    {
+                        Ok(updated) => initial_config_options = updated,
+                        Err(error) => tracing::warn!(
+                            "[ACP][Pi] failed to activate bound model on connect: {error}"
+                        ),
+                    }
+                }
+            }
+        }
+    }
     let updated = apply_preferred_session_options(
         cx,
         session,
         state,
         emitter,
         preferred_mode_id,
-        preferred_config_values,
+        &effective_preferences,
         initial_config_options,
     )
     .await;
@@ -2506,6 +2709,10 @@ pub struct DelegationInjection {
     /// is on, and the companion's `--features` lists `sessions` to expose the
     /// `get_session_info` tool. No teardown handle (the lookup is stateless).
     pub sessions: crate::acp::session_info::SessionInfoRuntimeConfig,
+    /// Hot-swappable chat-authoring flags. These write automation/task state,
+    /// so they are checked both when the companion is injected and again by
+    /// the listener at call time.
+    pub authoring: crate::acp::chat_authoring::ChatAuthoringRuntimeConfig,
     /// Question registry handle for the teardown cascade. The `run_connection`
     /// cleanup guard calls `cancel_questions_by_parent` through this so a pending
     /// `ask_user_question` is reclaimed synchronously on disconnect, mirroring
@@ -2602,31 +2809,47 @@ fn is_executable_file(path: &Path) -> bool {
 /// delegate tool silently. Skipping leaves the agent fully functional minus
 /// `delegate_to_agent`, which is the right degradation when houhub-mcp didn't
 /// make it into the install.
-/// The `--features` value for a companion launch given the four feature flags,
-/// or `None` when none is enabled (the companion isn't injected at all).
-/// Pulled out as a pure function so the inject/skip decision is unit-testable
-/// without a real binary on disk or a live broker.
-fn companion_features_arg(
-    delegation_enabled: bool,
-    feedback_enabled: bool,
-    ask_enabled: bool,
-    sessions_enabled: bool,
-) -> Option<String> {
-    if !delegation_enabled && !feedback_enabled && !ask_enabled && !sessions_enabled {
-        return None;
-    }
+/// Which tool groups a companion launch should expose. Keeping these as a
+/// named struct avoids silently swapping adjacent booleans as new groups are
+/// added.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CompanionFeatureFlags {
+    delegation: bool,
+    feedback: bool,
+    ask: bool,
+    sessions: bool,
+    /// Per-spawn task-engine reporting tools.
+    tasks: bool,
+    /// Chat-authoring write tools, each controlled independently in settings.
+    automations: bool,
+    taskboard: bool,
+}
+
+fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     let mut features: Vec<&str> = Vec::new();
-    if delegation_enabled {
+    if flags.delegation {
         features.push("delegation");
     }
-    if feedback_enabled {
+    if flags.feedback {
         features.push("feedback");
     }
-    if ask_enabled {
+    if flags.ask {
         features.push("ask");
     }
-    if sessions_enabled {
+    if flags.sessions {
         features.push("sessions");
+    }
+    if flags.tasks {
+        features.push("tasks");
+    }
+    if flags.automations {
+        features.push("automations");
+    }
+    if flags.taskboard {
+        features.push("taskboard");
+    }
+    if features.is_empty() {
+        return None;
     }
     Some(features.join(","))
 }
@@ -2644,22 +2867,25 @@ async fn inject_houhub_mcp(
     injection: &DelegationInjection,
     parent_connection_id: &str,
     working_dir: &Path,
+    tasks_enabled: bool,
 ) -> Option<CompanionInjection> {
     // houhub-mcp carries BOTH the delegation tools and the live-feedback tool.
     // Inject it when EITHER feature is enabled; the `--features` arg tells the
     // companion which tool groups to expose so a disabled feature's tools never
     // surface to the LLM. (Historically this was gated on delegation alone.)
-    let delegation_enabled = injection.broker.config_snapshot().await.enabled;
     let feedback_enabled = injection.feedback.is_enabled().await;
-    let ask_enabled = injection.ask.is_enabled().await;
-    let sessions_enabled = injection.sessions.is_enabled().await;
+    let authoring = injection.authoring.snapshot().await;
+    let flags = CompanionFeatureFlags {
+        delegation: injection.broker.config_snapshot().await.enabled,
+        feedback: feedback_enabled,
+        ask: injection.ask.is_enabled().await,
+        sessions: injection.sessions.is_enabled().await,
+        tasks: tasks_enabled,
+        automations: authoring.automations_enabled,
+        taskboard: authoring.work_tasks_enabled,
+    };
     // `None` (no feature enabled) short-circuits the whole injection.
-    let features_arg = companion_features_arg(
-        delegation_enabled,
-        feedback_enabled,
-        ask_enabled,
-        sessions_enabled,
-    )?;
+    let features_arg = companion_features_arg(flags)?;
     let Some(binary_path) = locate_houhub_mcp_binary() else {
         tracing::warn!(
             "[delegation][WARN] houhub-mcp companion binary not found (checked HOUHUB_MCP_BIN, \
@@ -2694,7 +2920,7 @@ async fn inject_houhub_mcp(
         // (any platform).
         "--parent-pid".to_string(),
         std::process::id().to_string(),
-        // Tool groups to expose this launch (delegation / feedback / ask / sessions).
+        // Tool groups to expose this launch.
         "--features".to_string(),
         features_arg,
     ];
@@ -2873,6 +3099,8 @@ async fn run_connection(
     preferred_config_values: BTreeMap<String, String>,
     delegation_injection: Option<DelegationInjection>,
     fs_policy: FsAccessPolicy,
+    // Connection-scoped agent stderr buffer shared with the debug callback.
+    stderr_tail: Arc<StderrTail>,
 ) -> Result<(), AcpError> {
     let pending_perms: PendingPermissions = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
     // `terminal_base_env` already filtered to just the credential helper
@@ -2945,6 +3173,7 @@ async fn run_connection(
                         &emitter_inner,
                         &perms,
                         &perm_cwd,
+                        agent_type,
                         req,
                         responder,
                     )
@@ -3276,7 +3505,10 @@ async fn run_connection(
             // for agents that don't accept MCP over the wire.
             let delegate_injection = if agent_supports_mcp && agent_delivers_wire_mcp(agent_type) {
                 if let Some(inj) = delegation_injection.as_ref() {
-                    inject_houhub_mcp(&mut mcp_servers, inj, &conn_id, &cwd).await
+                    // Work-task launches need their progress/completion tools
+                    // even when the user's regular delegation toggles are off.
+                    let tasks_enabled = state.read().await.owner_window_label == "work_task";
+                    inject_houhub_mcp(&mut mcp_servers, inj, &conn_id, &cwd, tasks_enabled).await
                 } else {
                     None
                 }
@@ -3382,6 +3614,7 @@ async fn run_connection(
                                 supports_fork,
                                 &prompt_ledger,
                                 delegation_injection.as_ref(),
+                                &stderr_tail,
                             )
                             .await;
                             terminal_runtime.release_all_for_session(&sid).await;
@@ -3399,6 +3632,7 @@ async fn run_connection(
                                 &cwd_string,
                                 &prompt_ledger,
                                 delegation_injection.as_ref(),
+                                &stderr_tail,
                             )
                             .await;
                         }
@@ -3531,7 +3765,7 @@ async fn run_connection(
                                     })
                                     .await
                                     .otherwise(async |dispatch| {
-                                        maybe_emit_claude_sdk_ext_notification(&st, &h, dispatch).await;
+                                        maybe_emit_ext_notification(&st, &h, agent_type, dispatch).await;
                                         Ok(())
                                     })
                                     .await;
@@ -3579,6 +3813,7 @@ async fn run_connection(
                             supports_fork,
                             &prompt_ledger,
                             delegation_injection.as_ref(),
+                            &stderr_tail,
                         )
                         .await;
                         terminal_runtime.release_all_for_session(&sid).await;
@@ -3596,6 +3831,7 @@ async fn run_connection(
                             &cwd_string,
                             &prompt_ledger,
                             delegation_injection.as_ref(),
+                            &stderr_tail,
                         )
                         .await
                     }
@@ -3754,6 +3990,7 @@ async fn run_connection(
                             supports_fork,
                             &prompt_ledger,
                             delegation_injection.as_ref(),
+                            &stderr_tail,
                         )
                         .await;
                         terminal_runtime
@@ -3773,6 +4010,7 @@ async fn run_connection(
                             &cwd_string,
                             &prompt_ledger,
                             delegation_injection.as_ref(),
+                            &stderr_tail,
                         )
                         .await
                     }
@@ -3833,6 +4071,7 @@ async fn run_connection(
                     supports_fork,
                     &prompt_ledger,
                     delegation_injection.as_ref(),
+                    &stderr_tail,
                 )
                 .await;
                 terminal_runtime.release_all_for_session(&sid).await;
@@ -3850,6 +4089,7 @@ async fn run_connection(
                     &cwd_string,
                     &prompt_ledger,
                     delegation_injection.as_ref(),
+                    &stderr_tail,
                 )
                 .await
             }
@@ -4299,10 +4539,37 @@ async fn handle_permission_request(
     emitter: &EventEmitter,
     perms: &PendingPermissions,
     cwd: &str,
+    agent_type: AgentType,
     req: RequestPermissionRequest,
     responder: Responder<RequestPermissionResponse>,
 ) {
     let request_id = uuid::Uuid::new_v4().to_string();
+
+    // Codex plan review requests do not announce their tool call; the later
+    // `tool_call_update` would otherwise create an untitled orphan card. Seed
+    // the card from the permission request so the update has a stable target.
+    if is_codex_plan_review(agent_type, req.meta.as_ref()) {
+        emit_with_state(
+            state,
+            emitter,
+            AcpEvent::ToolCall {
+                tool_call_id: req.tool_call.tool_call_id.to_string(),
+                title: req.tool_call.fields.title.clone().unwrap_or_default(),
+                kind: "switch_mode".to_string(),
+                status: "pending".to_string(),
+                content: None,
+                raw_input: None,
+                raw_output: None,
+                locations: None,
+                meta: req
+                    .meta
+                    .as_ref()
+                    .map(|m| serde_json::Value::Object(m.clone())),
+                images: None,
+            },
+        )
+        .await;
+    }
 
     let options: Vec<PermissionOptionInfo> = req
         .options
@@ -4317,7 +4584,10 @@ async fn handle_permission_request(
                 PermissionOptionKind::RejectAlways => "reject_always".into(),
                 _ => "unknown".into(),
             },
-            meta: serde_json::to_value(&opt.meta).ok().and_then(|v| v.as_object().cloned()).map(|m| m.into_iter().collect()),
+            meta: opt
+                .meta
+                .as_ref()
+                .map(|m| serde_json::Value::Object(m.clone())),
         })
         .collect();
 
@@ -5215,6 +5485,9 @@ async fn handle_fork_or_exit(
     // run_conversation_loop call has the same delegation cascade
     // capability as the original.
     delegation_injection: Option<&DelegationInjection>,
+    // The same connection-scoped stderr ring buffer survives fork
+    // transitions, so diagnostics retain the agent process context.
+    stderr_tail: &Arc<StderrTail>,
 ) -> Result<(), sacp::Error> {
     let fork_info = match loop_result {
         Ok(Some(info)) => info,
@@ -5300,6 +5573,7 @@ async fn handle_fork_or_exit(
         true, // fork already succeeded on this process
         prompt_ledger,
         delegation_injection,
+        stderr_tail,
     )
     .await;
     terminal_runtime.release_all_for_session(&new_sid).await;
@@ -5319,6 +5593,7 @@ async fn handle_fork_or_exit(
         cwd_string,
         prompt_ledger,
         delegation_injection,
+        stderr_tail,
     ))
     .await
 }
@@ -5412,6 +5687,218 @@ fn is_agent_output_update(update: &SessionUpdate) -> bool {
     )
 }
 
+/// Handle one typed `session/update` during an active turn. Keeping the body in
+/// an infallible helper makes the `MatchDispatch` error attributable to ACP
+/// decoding/schema drift rather than to downstream UI handling.
+#[allow(clippy::too_many_arguments)]
+async fn handle_turn_notification(
+    notif: SessionNotification,
+    agent_type: AgentType,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    terminal_runtime: &TerminalRuntime,
+    session_id: &SessionId,
+    cwd: Option<&str>,
+    tracked_terminal_tool_calls: &mut HashMap<String, TrackedTerminalToolCall>,
+    raw_output_cache: &mut ToolCallOutputCache,
+    cb_state: &mut CodeBuddyLiveState,
+    probe: &mut TurnOutputProbe,
+) {
+    let should_poll_now = track_terminal_tool_calls(&notif.update, tracked_terminal_tool_calls);
+    probe.note_update(&notif.update);
+    record_transcript_update(agent_type, &session_id.0, &notif.update);
+    emit_conversation_update(
+        state,
+        emitter,
+        agent_type,
+        notif.update,
+        cwd,
+        raw_output_cache,
+        cb_state,
+    )
+    .await;
+    if should_poll_now {
+        poll_tracked_terminal_tool_calls(
+            terminal_runtime,
+            session_id,
+            state,
+            emitter,
+            tracked_terminal_tool_calls,
+        )
+        .await;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DropSite {
+    Decode,
+    Dispatch,
+}
+
+impl DropSite {
+    fn label(self) -> &'static str {
+        match self {
+            DropSite::Decode => "decode",
+            DropSite::Dispatch => "dispatch",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct TurnOutputProbe {
+    saw_agent_output: bool,
+    saw_metadata_update: bool,
+    dropped_decode: u32,
+    dropped_dispatch: u32,
+    first_drop: Option<(DropSite, String)>,
+    stderr_mark: u64,
+}
+
+impl TurnOutputProbe {
+    fn new(stderr_mark: u64) -> Self {
+        Self {
+            stderr_mark,
+            ..Default::default()
+        }
+    }
+
+    fn note_update(&mut self, update: &SessionUpdate) {
+        if is_agent_output_update(update) {
+            self.saw_agent_output = true;
+        } else {
+            self.saw_metadata_update = true;
+        }
+    }
+
+    fn note_dropped(&mut self, site: DropSite, error: &impl std::fmt::Display) {
+        match site {
+            DropSite::Decode => self.dropped_decode += 1,
+            DropSite::Dispatch => self.dropped_dispatch += 1,
+        }
+        if self.first_drop.is_none() {
+            self.first_drop = Some((site, summarize_parser_error(&error.to_string())));
+        }
+    }
+
+    fn dropped_total(&self) -> u32 {
+        self.dropped_decode + self.dropped_dispatch
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmptyTurnCause {
+    ProtocolMismatch,
+    MetadataOnly,
+    NoOutput,
+}
+
+impl EmptyTurnCause {
+    fn code(self) -> &'static str {
+        match self {
+            EmptyTurnCause::NoOutput => "turn_failed_empty",
+            EmptyTurnCause::ProtocolMismatch => "turn_failed_empty_protocol",
+            EmptyTurnCause::MetadataOnly => "turn_failed_empty_metadata",
+        }
+    }
+
+    fn message(self, agent_type: AgentType) -> String {
+        match self {
+            EmptyTurnCause::NoOutput => {
+                format!("{agent_type} ended the turn without producing any response.")
+            }
+            EmptyTurnCause::ProtocolMismatch => format!(
+                "{agent_type} produced output that HouHub could not parse — the agent version may not match the protocol."
+            ),
+            EmptyTurnCause::MetadataOnly => {
+                format!("{agent_type} sent only status updates this turn and no reply.")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EmptyTurnReport {
+    cause: EmptyTurnCause,
+    details: Option<String>,
+}
+
+fn diagnose_empty_turn(probe: &TurnOutputProbe) -> EmptyTurnCause {
+    if probe.dropped_total() > 0 {
+        EmptyTurnCause::ProtocolMismatch
+    } else if probe.saw_metadata_update {
+        EmptyTurnCause::MetadataOnly
+    } else {
+        EmptyTurnCause::NoOutput
+    }
+}
+
+const EMPTY_TURN_STDERR_LINES: usize = 12;
+const EMPTY_TURN_STDERR_BYTES: usize = 900;
+const MAX_DETAILS_BYTES: usize = 1200;
+
+fn build_empty_turn_details(
+    probe: &TurnOutputProbe,
+    stderr_tail: &StderrTail,
+) -> Option<String> {
+    let mut sections = Vec::new();
+    if probe.dropped_total() > 0 {
+        let mut line = format!(
+            "dropped {} update(s) ({} decode, {} dispatch)",
+            probe.dropped_total(),
+            probe.dropped_decode,
+            probe.dropped_dispatch
+        );
+        if let Some((site, summary)) = &probe.first_drop {
+            line.push_str(&format!("; first ({}): {summary}", site.label()));
+        }
+        sections.push(line);
+    }
+    let tail = stderr_tail.tail_since(
+        probe.stderr_mark,
+        EMPTY_TURN_STDERR_LINES,
+        EMPTY_TURN_STDERR_BYTES,
+    );
+    if !tail.is_empty() {
+        let scope = match tail.scope {
+            TailScope::ThisTurn => "this turn",
+            TailScope::Recent => "recent",
+        };
+        let mut block = format!("stderr ({scope}, last {} lines):", tail.lines.len());
+        for line in &tail.lines {
+            block.push_str("\n  ");
+            block.push_str(line);
+        }
+        sections.push(block);
+    }
+    if sections.is_empty() {
+        return None;
+    }
+    let joined = sections.join("\n");
+    if joined.len() <= MAX_DETAILS_BYTES {
+        return Some(joined);
+    }
+    let end = joined
+        .char_indices()
+        .take_while(|(i, c)| i + c.len_utf8() <= MAX_DETAILS_BYTES)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    Some(format!("{}…", &joined[..end]))
+}
+
+fn finish_turn_reason<'a>(
+    probe: &TurnOutputProbe,
+    raw_reason: &'a str,
+    stderr_tail: &StderrTail,
+) -> (&'a str, Option<EmptyTurnReport>) {
+    if raw_reason != "end_turn" || probe.saw_agent_output {
+        return (raw_reason, None);
+    }
+    let cause = diagnose_empty_turn(probe);
+    let details = build_empty_turn_details(probe, stderr_tail);
+    ("empty", Some(EmptyTurnReport { cause, details }))
+}
+
 /// Build an `AcpEvent::Error` for a non-success stop reason so the user gets a
 /// toast instead of a silent transition to `PendingReview`. Returns `None` for
 /// `end_turn` (success) and `cancelled` (already user-driven).
@@ -5421,38 +5908,47 @@ fn is_agent_output_update(update: &SessionUpdate) -> bool {
 /// <https://shashikantjagtap.net/openclaw-acp-what-coding-agent-users-need-to-know-about-protocol-gaps/>.
 /// `empty` is a synthesized reason emitted by `run_conversation_loop` when
 /// the agent reports `EndTurn` without producing any agent output.
-fn turn_failure_error_event(reason_str: &str, agent_type: AgentType) -> Option<AcpEvent> {
-    let (code, message) = match reason_str {
+fn turn_failure_error_event(
+    reason_str: &str,
+    agent_type: AgentType,
+    empty: Option<&EmptyTurnReport>,
+) -> Option<AcpEvent> {
+    let (code, message, details) = match reason_str {
         "refusal" => (
             "turn_failed_refusal",
             format!("{agent_type} refused to continue this turn."),
+            None,
         ),
         "max_tokens" => (
             "turn_failed_max_tokens",
             format!("{agent_type} reached the maximum token limit for this turn."),
+            None,
         ),
         "max_turn_requests" => (
             "turn_failed_max_turn_requests",
             format!("{agent_type} reached the maximum number of allowed requests for this turn."),
+            None,
         ),
         "unknown" => (
             "turn_failed_unknown",
             format!("{agent_type} ended the turn with an unrecognized stop reason."),
+            None,
         ),
-        "empty" => (
-            "turn_failed_empty",
-            format!(
-                "{agent_type} ended the turn without producing any response. \
-                 Please check the agent's configuration."
-            ),
-        ),
+        "empty" => {
+            let cause = empty.map(|report| report.cause).unwrap_or(EmptyTurnCause::NoOutput);
+            (
+                cause.code(),
+                cause.message(agent_type),
+                empty.and_then(|report| report.details.clone()),
+            )
+        }
         _ => return None,
     };
     Some(AcpEvent::Error {
         message,
         agent_type: agent_type.to_string(),
         code: Some(code.to_string()),
-        details: None,
+        details,
         // Non-terminal: this Error is paired with a `TurnComplete`
         // carrying the same stop reason. The connection stays alive and
         // the broker's pending entry is drained by `complete_call` with
@@ -5482,6 +5978,8 @@ async fn run_conversation_loop<'a>(
     // delegations on parent prompt cancel / non-success TurnComplete.
     // `None` for test paths that don't wire delegation.
     delegation_injection: Option<&DelegationInjection>,
+    // Connection-scoped stderr evidence used for silent-turn diagnosis.
+    stderr_tail: &Arc<StderrTail>,
 ) -> Result<Option<ForkExitInfo>, sacp::Error> {
     // Session-scoped cache for diffing cumulative `raw_output` snapshots
     // into incremental deltas. Shared across the idle loop and the active
@@ -5521,7 +6019,7 @@ async fn run_conversation_loop<'a>(
                                 )
                                 .await
                                 .otherwise(async |dispatch| {
-                                    maybe_emit_claude_sdk_ext_notification(&st, &h, dispatch).await;
+                                    maybe_emit_ext_notification(&st, &h, agent_type, dispatch).await;
                                     Ok(())
                                 })
                                 .await;
@@ -5634,6 +6132,9 @@ async fn run_conversation_loop<'a>(
                 record_prompt(agent_type, &sid.0, &prompt_blocks).await;
                 let turn_started_at_ms = crate::acp_transcript::now_epoch_ms();
                 let prompt_request = PromptRequest::new(sid.clone(), prompt_blocks);
+                // Mark before dispatch: credential/model failures can print to
+                // stderr immediately after the request is written.
+                let stderr_mark = stderr_tail.mark();
                 // Use Box::pin (heap) instead of tokio::pin! (stack) so the
                 // future can be moved into a background task on cancel.
                 let mut prompt_response = Box::pin(
@@ -5649,13 +6150,10 @@ async fn run_conversation_loop<'a>(
                 terminal_poll_interval
                     .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 let mut disconnect_requested = false;
-                // Tracks whether the agent produced any real output during
-                // this turn (text reply, thinking chunk, or tool call). When
-                // an agent reports `EndTurn` with this still false, we treat
-                // it as a silent failure and synthesize an `"empty"` stop
-                // reason so the user gets an error toast instead of a
-                // confusing `PendingReview` on a blank conversation.
-                let mut turn_had_agent_output = false;
+                // Tracks real output, metadata-only updates, parser drops and
+                // the stderr position for this turn. An `EndTurn` with no real
+                // output is diagnosed instead of silently becoming reviewable.
+                let mut probe = TurnOutputProbe::new(stderr_mark);
                 // A CodeBuddy native sub-agent's full lifecycle (Agent tool call
                 // open → completed) happens within one turn, so reset the
                 // suppression window at each turn start. This bounds the tracking
@@ -5675,6 +6173,7 @@ async fn run_conversation_loop<'a>(
                             let update = match update {
                                 Ok(u) => u,
                                 Err(e) => {
+                                    probe.note_dropped(DropSite::Decode, &e);
                                     tracing::warn!("[ACP] Ignoring unrecognized session update: {e}");
                                     continue;
                                 }
@@ -5687,44 +6186,41 @@ async fn run_conversation_loop<'a>(
                                     let session_id = sid.clone();
                                     let cwd_opt = Some(cwd);
                                     let dispatch = fix_usage_update_nulls(dispatch);
+                                    if grok_ext_notification_is_turn_output(&dispatch, agent_type) {
+                                        // Grok compaction results arrive through
+                                        // an extension method instead of the
+                                        // typed update channel, but are still
+                                        // genuine turn output.
+                                        probe.saw_agent_output = true;
+                                    }
                                     if let Err(e) = MatchDispatch::new(dispatch)
                                         .if_notification(
                                             async |notif: SessionNotification| {
-                                                let should_poll_now = track_terminal_tool_calls(
-                                                    &notif.update,
-                                                    &mut tracked_terminal_tool_calls,
-                                                );
-                                                if is_agent_output_update(&notif.update) {
-                                                    turn_had_agent_output = true;
-                                                }
-                                                // Custom agents have no store
-                                                // of their own to parse later.
-                                                record_transcript_update(
+                                                handle_turn_notification(
+                                                    notif,
                                                     agent_type,
-                                                    &session_id.0,
-                                                    &notif.update,
-                                                );
-                                                emit_conversation_update(&st, &h, agent_type, notif.update, cwd_opt, &mut raw_output_cache, &mut cb_state).await;
-                                                if should_poll_now {
-                                                    poll_tracked_terminal_tool_calls(
-                                                        runtime.as_ref(),
-                                                        &session_id,
-                                                        &st,
-                                                        &h,
-                                                        &mut tracked_terminal_tool_calls,
-                                                    )
-                                                    .await;
-                                                }
+                                                    &st,
+                                                    &h,
+                                                    runtime.as_ref(),
+                                                    &session_id,
+                                                    cwd_opt,
+                                                    &mut tracked_terminal_tool_calls,
+                                                    &mut raw_output_cache,
+                                                    &mut cb_state,
+                                                    &mut probe,
+                                                )
+                                                .await;
                                                 Ok(())
                                             },
                                         )
                                         .await
                                         .otherwise(async |dispatch| {
-                                            maybe_emit_claude_sdk_ext_notification(&st, &h, dispatch).await;
+                                            maybe_emit_ext_notification(&st, &h, agent_type, dispatch).await;
                                             Ok(())
                                         })
                                         .await
                                     {
+                                        probe.note_dropped(DropSite::Dispatch, &e);
                                         tracing::warn!("[ACP] Ignoring dispatch parse error: {e}");
                                     }
                                 }
@@ -5740,15 +6236,14 @@ async fn run_conversation_loop<'a>(
                                         .await;
                                     }
                                     let raw_reason_str = stop_reason_to_str(reason);
-                                    let reason_str = if raw_reason_str == "end_turn"
-                                        && !turn_had_agent_output
-                                    {
-                                        "empty"
-                                    } else {
-                                        raw_reason_str
-                                    };
+                                    let (reason_str, empty_report) =
+                                        finish_turn_reason(&probe, raw_reason_str, stderr_tail);
                                     if let Some(err_event) =
-                                        turn_failure_error_event(reason_str, agent_type)
+                                        turn_failure_error_event(
+                                            reason_str,
+                                            agent_type,
+                                            empty_report.as_ref(),
+                                        )
                                     {
                                         emit_with_state(state, emitter, err_event).await;
                                     }
@@ -5816,15 +6311,14 @@ async fn run_conversation_loop<'a>(
                                 .await;
                             }
                             let raw_reason_str = stop_reason_to_str(reason);
-                            let reason_str = if raw_reason_str == "end_turn"
-                                && !turn_had_agent_output
-                            {
-                                "empty"
-                            } else {
-                                raw_reason_str
-                            };
+                            let (reason_str, empty_report) =
+                                finish_turn_reason(&probe, raw_reason_str, stderr_tail);
                             if let Some(err_event) =
-                                turn_failure_error_event(reason_str, agent_type)
+                                turn_failure_error_event(
+                                    reason_str,
+                                    agent_type,
+                                    empty_report.as_ref(),
+                                )
                             {
                                 emit_with_state(state, emitter, err_event).await;
                             }
@@ -5977,7 +6471,44 @@ async fn run_conversation_loop<'a>(
                                     }
                                 }
                                 Some(ConnectionCommand::Steer { text, reply }) => {
-                                    let _ = reply.send(send_steer_request(&cx, &sid, &text).await);
+                                    // Protocol round-trip only — the manager's
+                                    // cancellation-shielded task records the
+                                    // note + broadcasts `FeedbackSubmitted`
+                                    // once this outcome arrives (Fork's
+                                    // protocol/persistence split). Awaiting
+                                    // inline matches SetMode/SetConfigOption:
+                                    // sacp pumps I/O on its own task, so the
+                                    // round-trip only defers other queued
+                                    // commands, not session updates. A dead
+                                    // receiver is fine — the reply is then
+                                    // moot (teardown), nothing to unwind.
+                                    let outcome = send_steer_request(&cx, &sid, &text).await;
+                                    // A steered message still lands in the
+                                    // agent's OWN transcript as a user record,
+                                    // which `group_into_turns` reads as the
+                                    // start of a turn. Fingerprint it so the
+                                    // background watcher classifies that turn
+                                    // as wire-rendered foreground: the owning
+                                    // prompt stays in flight across the steered
+                                    // work (claude-agent-acp #958), so all of
+                                    // it already streams into the live turn —
+                                    // surfacing it as overlay activity too
+                                    // renders it twice and reorders the
+                                    // transcript as the upserts land.
+                                    //
+                                    // `Injected` ONLY: `PromptRequired` leaves
+                                    // the content unconsumed (the caller
+                                    // resends it as a real prompt, which
+                                    // fingerprints itself, and a stale entry
+                                    // would swallow a same-text out-of-turn
+                                    // refire for the whole ledger TTL), and a
+                                    // `StartedNewTurn` genuinely runs detached
+                                    // — the overlay is the only place its work
+                                    // can surface at all.
+                                    if matches!(outcome, Ok(SteerOutcome::Injected)) {
+                                        prompt_ledger.record_text(&text);
+                                    }
+                                    let _ = reply.send(outcome);
                                 }
                                 Some(ConnectionCommand::Cancel) => {
                                     // Send CancelNotification to agent to stop the current turn
@@ -6089,6 +6620,20 @@ async fn run_conversation_loop<'a>(
                                     }
                                     disconnect_requested = true;
                                     break;
+                                }
+                                Some(ConnectionCommand::Prompt { .. }) => {
+                                    // Tripwire, not a user-facing case. The
+                                    // `turn_in_flight` gate in `send_prompt_inner`
+                                    // rejects a second prompt BEFORE it is ever
+                                    // enqueued, so a `Prompt` reaching this mid-turn
+                                    // command handler means an ungated sender slipped
+                                    // past the gate (a broken invariant) — surface it
+                                    // at `warn` instead of letting the `_ => {}` below
+                                    // swallow it silently.
+                                    tracing::warn!(
+                                        connection_id = %conn_id,
+                                        "[ACP] in-turn Prompt DROPPED — the turn_in_flight gate should have rejected this"
+                                    );
                                 }
                                 _ => {}
                             }
@@ -6862,6 +7407,23 @@ fn is_codex_subagent_activity(
         .is_some()
 }
 
+/// True when a Codex permission request is the plan-mode review gate. Codex
+/// sends `_meta.codex.kind = "plan_review"` on the request but does not emit a
+/// preceding `tool_call`; the subsequent update must therefore be seeded by
+/// [`handle_permission_request`].
+fn is_codex_plan_review(
+    agent_type: AgentType,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> bool {
+    if agent_type != AgentType::Codex {
+        return false;
+    }
+    meta.and_then(|m| m.get("codex"))
+        .and_then(|codex| codex.get("kind"))
+        .and_then(serde_json::Value::as_str)
+        == Some("plan_review")
+}
+
 /// Extract a retryable-turn-error indicator from a Codex `session_info_update`'s
 /// `_meta` (codex-acp #289, v1.1.3+). codex ships a transient, auto-retried
 /// error as `_meta.codex.error = {message, codexErrorInfo, additionalDetails,
@@ -7222,8 +7784,12 @@ fn is_claude_api_retry_message(message: &serde_json::Value) -> bool {
     matches!(message_type, Some("system")) && matches!(message_subtype, Some("api_retry"))
 }
 
+/// The JSON-RPC method claude-agent-acp uses to mirror raw SDK messages. Named
+/// so `is_known_ext_method` and the mapper can't drift apart.
+const CLAUDE_SDK_EXT_METHOD: &str = "_claude/sdkMessage";
+
 fn map_claude_sdk_ext_notification(notification: &UntypedMessage) -> Option<AcpEvent> {
-    if notification.method() != "_claude/sdkMessage" {
+    if notification.method() != CLAUDE_SDK_EXT_METHOD {
         return None;
     }
 
@@ -7237,17 +7803,177 @@ fn map_claude_sdk_ext_notification(notification: &UntypedMessage) -> Option<AcpE
     })
 }
 
-async fn maybe_emit_claude_sdk_ext_notification(
+/// The JSON-RPC methods grok uses for its private, namespaced session updates.
+/// Both share the standard `session/update` envelope (`params.update.
+/// sessionUpdate` + fields, verified live against grok 0.2.111) but carry
+/// variants the typed ACP pipeline can't deserialize, so HouHub drops them.
+const GROK_EXT_UPDATE_METHODS: [&str; 2] =
+    ["_x.ai/session_notification", "_x.ai/session/update"];
+
+/// A stable id for a synthetic event derived from a grok ext notification —
+/// grok stamps `params._meta.eventId`; fall back to a fresh uuid.
+fn grok_ext_event_id(params: &serde_json::Value) -> String {
+    params
+        .get("_meta")
+        .and_then(|m| m.get("eventId"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("grok-ext-{}", uuid::Uuid::new_v4().simple()))
+}
+
+/// Map grok's private context-compaction ext notifications into `AcpEvent`s.
+///
+/// grok reports `/compact` (and auto-compaction) results on
+/// `_x.ai/session_notification` / `_x.ai/session/update` rather than as normal
+/// `agent_message_chunk`s. Those methods never match the typed `session/update`
+/// pipeline, so without this the whole turn is blank and `/compact` looks like
+/// it failed. Only grok emits these, so gate on the agent. Turn-level failures
+/// are intentionally NOT handled here — the `session/prompt` response path
+/// (`turn_failure_error_event`) already surfaces those, and duplicating them
+/// would double-report.
+fn map_grok_ext_notification(
+    notification: &UntypedMessage,
+    agent_type: AgentType,
+) -> Option<AcpEvent> {
+    if !matches!(agent_type, AgentType::Grok) {
+        return None;
+    }
+    if !GROK_EXT_UPDATE_METHODS.contains(&notification.method()) {
+        return None;
+    }
+    let params = notification.params();
+    let update = params.get("update")?;
+    match update.get("sessionUpdate").and_then(|v| v.as_str())? {
+        // grok always emits `completed` (even a no-op where before == after).
+        // Render the shared context-compaction card (recognized frontend-side by
+        // `_meta.contextCompaction`, same as codex) carrying the token delta.
+        "auto_compact_completed" => {
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                "contextCompaction".to_string(),
+                serde_json::Value::Bool(true),
+            );
+            if let Some(before) = update.get("tokens_before").and_then(|v| v.as_u64()) {
+                meta.insert("tokensBefore".to_string(), before.into());
+            }
+            if let Some(after) = update.get("tokens_after").and_then(|v| v.as_u64()) {
+                meta.insert("tokensAfter".to_string(), after.into());
+            }
+            Some(AcpEvent::ToolCall {
+                tool_call_id: grok_ext_event_id(params),
+                title: "Context compaction".to_string(),
+                kind: "other".to_string(),
+                status: "completed".to_string(),
+                content: None,
+                raw_input: None,
+                raw_output: None,
+                locations: None,
+                meta: Some(serde_json::Value::Object(meta)),
+                images: None,
+            })
+        }
+        // Compaction itself blew up (e.g. the summarizer model call failed) while
+        // the turn still ended cleanly — surface a non-terminal error so the
+        // result isn't a silent blank.
+        "auto_compact_failed" => Some(AcpEvent::Error {
+            message: format!(
+                "Context compaction failed{}",
+                update
+                    .get("reason")
+                    .or_else(|| update.get("message"))
+                    .and_then(|v| v.as_str())
+                    .map(|d| format!(": {d}"))
+                    .unwrap_or_default()
+            ),
+            agent_type: agent_type.to_string(),
+            code: None,
+            details: None,
+            terminal: false,
+        }),
+        _ => None,
+    }
+}
+
+/// Whether a dispatch is a grok ext notification that
+/// `map_grok_ext_notification` renders as visible turn output (a compaction card
+/// or a compaction error). The active-turn loop consults this BEFORE the typed
+/// pipeline to mark the turn as non-empty: a `/compact` turn emits only these
+/// ext notifications and no standard `agent_message_chunk`, so without this its
+/// `end_turn` is reclassified as `"empty"` and re-surfaced as a spurious error —
+/// the exact symptom this change removes. Reuses `map_grok_ext_notification` so
+/// the handled-variant set can never drift from what actually emits.
+fn grok_ext_notification_is_turn_output(dispatch: &Dispatch, agent_type: AgentType) -> bool {
+    match dispatch {
+        Dispatch::Notification(notification) => {
+            map_grok_ext_notification(notification, agent_type).is_some()
+        }
+        _ => false,
+    }
+}
+
+/// Whether HouHub has a mapper for this ext-notification method.
+///
+/// Used ONLY to keep the unrecognized-method log quiet about methods we do know
+/// and merely declined to map this time. That distinction is the whole point:
+/// `_claude/sdkMessage` arrives for every SDK message and only maps when the
+/// payload is an API retry, so logging every unmapped one would put a line on a
+/// per-message hot path — the shape that once grew a server's log file to 217GB.
+///
+/// Forgetting to list a newly-mapped method here fails in the SAFE direction —
+/// its unmapped payloads just get logged (noise, still visible). The dangerous
+/// direction is the reverse: listing a method no mapper claims would silence
+/// exactly the gap this log exists to expose.
+fn is_known_ext_method(method: &str) -> bool {
+    method == CLAUDE_SDK_EXT_METHOD || GROK_EXT_UPDATE_METHODS.contains(&method)
+}
+
+/// Last stop for a dispatch the typed `session/update` pipeline didn't claim.
+///
+/// Every exit here DROPS the message, which is the pre-existing behavior and
+/// stays that way — the change is that a drop is no longer invisible. All lines
+/// are `debug!`: an agent is free to speak methods HouHub doesn't implement, and
+/// a per-message `warn!` on a chatty agent is how log storms start.
+async fn maybe_emit_ext_notification(
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
+    agent_type: AgentType,
     dispatch: Dispatch,
 ) {
-    let Dispatch::Notification(notification) = dispatch else {
-        return;
+    let notification = match dispatch {
+        Dispatch::Notification(notification) => notification,
+        // An agent calling a client method HouHub doesn't implement. The
+        // responder is dropped without a reply (as before), so the agent's
+        // request goes unanswered — worth seeing when triaging a stalled turn.
+        Dispatch::Request(request, _responder) => {
+            tracing::debug!(
+                method = %request.method(),
+                "[ACP] dropping unhandled agent request (no reply will be sent)"
+            );
+            return;
+        }
+        // A response is normally consumed by the caller waiting on it, so one
+        // surfacing here is unexpected rather than routine. (It still carries a
+        // `ResponseRouter`, so "unroutable" would overstate it — the point is
+        // only that nothing on this path wants it.)
+        Dispatch::Response(..) => {
+            tracing::debug!("[ACP] dropping unexpected response dispatch");
+            return;
+        }
     };
 
-    if let Some(event) = map_claude_sdk_ext_notification(&notification) {
+    if let Some(event) = map_claude_sdk_ext_notification(&notification)
+        .or_else(|| map_grok_ext_notification(&notification, agent_type))
+    {
         emit_with_state(state, emitter, event).await;
+    } else if !is_known_ext_method(notification.method()) {
+        // The gap #409's second point was reaching for: an agent emitting an ext
+        // method HouHub has never heard of was previously indistinguishable from
+        // an agent saying nothing at all.
+        tracing::debug!(
+            method = %notification.method(),
+            agent = %agent_type,
+            "[ACP] ignoring unrecognized ext notification"
+        );
     }
 }
 
@@ -7883,6 +8609,25 @@ mod tests {
     }
 
     #[test]
+    fn codex_plan_review_detection_is_agent_and_kind_gated() {
+        let review = meta_map(serde_json::json!({
+            "codex": { "kind": "plan_review", "planItemId": "item-1" }
+        }));
+        assert!(is_codex_plan_review(AgentType::Codex, Some(&review)));
+        assert!(!is_codex_plan_review(AgentType::ClaudeCode, Some(&review)));
+        assert!(!is_codex_plan_review(AgentType::Codex, None));
+
+        let other_kind = meta_map(serde_json::json!({
+            "codex": { "kind": "permission" }
+        }));
+        assert!(!is_codex_plan_review(AgentType::Codex, Some(&other_kind)));
+        let sibling = meta_map(serde_json::json!({
+            "codex": { "planItemId": "item-1" }
+        }));
+        assert!(!is_codex_plan_review(AgentType::Codex, Some(&sibling)));
+    }
+
+    #[test]
     fn config_option_state_command_suppressed_only_for_codex_set_config_action() {
         // codex-acp #293: `/plan` is a config-option state toggle (rendered as the
         // `collaboration_mode` selector), not an invokable slash command.
@@ -7943,6 +8688,133 @@ mod tests {
             serde_json::from_value::<GoalControlAction>(serde_json::json!("clear")).unwrap(),
             GoalControlAction::Clear
         );
+    }
+
+    // --- native steering: capability synthesis + wire helpers -------------
+    // (reuses the shared `meta_map` test helper defined above)
+
+    #[test]
+    fn init_advertises_steering_reads_the_top_level_meta_flag() {
+        let on = meta_map(serde_json::json!({"steering": {"supported": true}}));
+        assert!(init_advertises_steering(Some(&on)));
+
+        let off = meta_map(serde_json::json!({"steering": {"supported": false}}));
+        assert!(!init_advertises_steering(Some(&off)));
+
+        // Wrong nesting (e.g. another convention's namespace) must not count.
+        let nested = meta_map(
+            serde_json::json!({"symposium": {"steering": {"supported": true}}}),
+        );
+        assert!(!init_advertises_steering(Some(&nested)));
+
+        // Non-bool / absent → false.
+        let stringly = meta_map(serde_json::json!({"steering": {"supported": "true"}}));
+        assert!(!init_advertises_steering(Some(&stringly)));
+        assert!(!init_advertises_steering(None));
+    }
+
+    #[test]
+    fn version_at_least_is_strict_semver_and_fails_closed() {
+        assert!(version_at_least("0.64.0", "0.64.0"));
+        assert!(version_at_least("0.64.1", "0.64.0"));
+        assert!(version_at_least("0.65.0", "0.64.0"));
+        assert!(version_at_least("1.0.0", "0.64.0"));
+        // SemVer precedence: a prerelease of the FLOOR release precedes it —
+        // it may predate the commit that shipped the promptRequired
+        // guarantee, so it must not open the native channel…
+        assert!(!version_at_least("0.64.0-rc1", "0.64.0"));
+        // …while a prerelease whose numeric core is above the floor is fine.
+        assert!(version_at_least("0.64.1-beta.2", "0.64.0"));
+        // Build metadata is precedence-ignored per spec.
+        assert!(version_at_least("0.64.0+sha.deadbeef", "0.64.0"));
+        // Below the floor.
+        assert!(!version_at_least("0.63.9", "0.64.0"));
+        assert!(!version_at_least("0.9.9", "0.64.0"));
+        // Fail closed on anything semver can't parse.
+        assert!(!version_at_least("", "0.64.0"));
+        assert!(!version_at_least("beta", "0.64.0"));
+        assert!(!version_at_least("v0.64.0", "0.64.0"));
+        assert!(!version_at_least("0.64", "0.64.0"));
+        assert!(!version_at_least("0..1", "0.64.0"));
+        assert!(!version_at_least("0.64.1abc", "0.64.0"));
+    }
+
+    #[test]
+    fn synthesize_native_steering_requires_all_three_gates() {
+        use sacp::schema::Implementation;
+        let advertised = meta_map(serde_json::json!({"steering": {"supported": true}}));
+        let proven = Implementation::new("claude-agent-acp", "0.65.0");
+        let stale = Implementation::new("claude-agent-acp", "0.64.1");
+
+        // All three gates → native.
+        assert!(synthesize_native_steering(
+            AgentType::ClaudeCode,
+            Some(&advertised),
+            Some(&proven)
+        ));
+        // Registry policy gate: codex advertises steering but has no
+        // promptRequired minimum — never native, whatever it reports.
+        assert!(!synthesize_native_steering(
+            AgentType::Codex,
+            Some(&advertised),
+            Some(&proven)
+        ));
+        // Runtime proof gate: 0.64.1 advertises steering identically but still
+        // settles the owning prompt on a mid-generation `injected` (#934, fixed
+        // in 0.65.0 by #958). Launch prefers a PATH-resolved install over the
+        // pinned package, so this arm is what keeps such a user on the pull
+        // channel — as does a missing `agent_info`.
+        assert!(!synthesize_native_steering(
+            AgentType::ClaudeCode,
+            Some(&advertised),
+            Some(&stale)
+        ));
+        assert!(!synthesize_native_steering(
+            AgentType::ClaudeCode,
+            Some(&advertised),
+            None
+        ));
+        // Advertisement gate.
+        assert!(!synthesize_native_steering(
+            AgentType::ClaudeCode,
+            None,
+            Some(&proven)
+        ));
+    }
+
+    #[test]
+    fn build_steer_params_shape_carries_the_prompt_required_opt_in() {
+        let params = build_steer_params("sess-1", "use the staging db");
+        assert_eq!(params["sessionId"], "sess-1");
+        assert_eq!(params["prompt"][0]["type"], "text");
+        assert_eq!(params["prompt"][0]["text"], "use the staging db");
+        // The opt-in is what keeps the idle race host-owned — its absence
+        // would regress to detached `startedNewTurn` turns.
+        assert_eq!(params["_meta"]["steering"]["idleBehavior"], "promptRequired");
+    }
+
+    #[test]
+    fn parse_steer_outcome_maps_the_wire_strings_and_rejects_unknowns() {
+        assert_eq!(
+            parse_steer_outcome(&serde_json::json!({"outcome": "injected"})).unwrap(),
+            SteerOutcome::Injected
+        );
+        assert_eq!(
+            parse_steer_outcome(
+                &serde_json::json!({"outcome": "promptRequired", "reason": "noRunningTurn"})
+            )
+            .unwrap(),
+            SteerOutcome::PromptRequired
+        );
+        assert_eq!(
+            parse_steer_outcome(&serde_json::json!({"outcome": "startedNewTurn"})).unwrap(),
+            SteerOutcome::StartedNewTurn
+        );
+        // Unknown or missing outcome is a protocol error, not a silent
+        // success — the caller must know whether the content was consumed.
+        assert!(parse_steer_outcome(&serde_json::json!({"outcome": "queued"})).is_err());
+        assert!(parse_steer_outcome(&serde_json::json!({})).is_err());
+        assert!(parse_steer_outcome(&serde_json::json!({"outcome": 1})).is_err());
     }
 
     #[test]
@@ -8481,6 +9353,21 @@ mod tests {
     }
 
     #[test]
+    fn is_known_ext_method_covers_every_mapped_method() {
+        // The anti-log-storm invariant: `_claude/sdkMessage` arrives for EVERY
+        // SDK message but only maps when it is an API retry, so it must be
+        // recognized here — otherwise each unmapped one logs a line on a
+        // per-message hot path.
+        assert!(is_known_ext_method(CLAUDE_SDK_EXT_METHOD));
+        for method in GROK_EXT_UPDATE_METHODS {
+            assert!(is_known_ext_method(method), "{method} must be known");
+        }
+        // A method no mapper claims is exactly what the log is for.
+        assert!(!is_known_ext_method("_vendor/somethingNew"));
+        assert!(!is_known_ext_method("session/update"));
+    }
+
+    #[test]
     fn map_claude_sdk_ext_notification_rejects_non_api_retry() {
         let non_retry = UntypedMessage::new(
             "_claude/sdkMessage",
@@ -8505,6 +9392,297 @@ mod tests {
         let missing_fields =
             UntypedMessage::new("_claude/sdkMessage", serde_json::json!({"sessionId": 1})).unwrap();
         assert!(map_claude_sdk_ext_notification(&missing_fields).is_none());
+    }
+
+    /// The exact `_x.ai/session_notification` envelope captured from grok 0.2.111
+    /// running `/compact` — `auto_compact_completed` under `params.update`, with
+    /// the token delta and an `_meta.eventId`.
+    #[test]
+    fn map_grok_ext_notification_maps_auto_compact_completed() {
+        let raw = UntypedMessage::new(
+            "_x.ai/session_notification",
+            serde_json::json!({
+                "sessionId": "019f9475-c67f-7390-9ee5-a09d29986a6c",
+                "update": {
+                    "sessionUpdate": "auto_compact_completed",
+                    "tokens_before": 45389,
+                    "tokens_after": 16486,
+                    "summary_preview": null
+                },
+                "_meta": {
+                    "eventId": "019f9475-c67f-7390-9ee5-a09d29986a6c-4",
+                    "agentTimestampMs": 1784902203750u64
+                }
+            }),
+        )
+        .unwrap();
+
+        let event = map_grok_ext_notification(&raw, AgentType::Grok)
+            .expect("auto_compact_completed should map to a compaction card");
+        match event {
+            AcpEvent::ToolCall {
+                tool_call_id,
+                status,
+                meta,
+                ..
+            } => {
+                assert_eq!(tool_call_id, "019f9475-c67f-7390-9ee5-a09d29986a6c-4");
+                assert_eq!(status, "completed");
+                let meta = meta.expect("compaction card needs meta");
+                assert_eq!(meta.get("contextCompaction").and_then(|v| v.as_bool()), Some(true));
+                assert_eq!(meta.get("tokensBefore").and_then(|v| v.as_u64()), Some(45389));
+                assert_eq!(meta.get("tokensAfter").and_then(|v| v.as_u64()), Some(16486));
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    /// The same variant may arrive on the sibling `_x.ai/session/update` method.
+    #[test]
+    fn map_grok_ext_notification_handles_session_update_method() {
+        let raw = UntypedMessage::new(
+            "_x.ai/session/update",
+            serde_json::json!({
+                "sessionId": "s",
+                "update": { "sessionUpdate": "auto_compact_completed", "tokens_before": 100, "tokens_after": 100 }
+            }),
+        )
+        .unwrap();
+        // No `_meta.eventId` → a generated id, but it must still map.
+        assert!(matches!(
+            map_grok_ext_notification(&raw, AgentType::Grok),
+            Some(AcpEvent::ToolCall { .. })
+        ));
+    }
+
+    #[test]
+    fn map_grok_ext_notification_auto_compact_failed_surfaces_error() {
+        let raw = UntypedMessage::new(
+            "_x.ai/session_notification",
+            serde_json::json!({
+                "sessionId": "s",
+                "update": { "sessionUpdate": "auto_compact_failed", "reason": "API error (status 503)" }
+            }),
+        )
+        .unwrap();
+        match map_grok_ext_notification(&raw, AgentType::Grok) {
+            Some(AcpEvent::Error { message, terminal, .. }) => {
+                assert!(message.contains("503"), "error should carry the reason; got: {message}");
+                assert!(!terminal, "compaction failure must not kill the connection");
+            }
+            other => panic!("expected non-terminal Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_grok_ext_notification_is_grok_gated_and_scoped() {
+        let compact = serde_json::json!({
+            "sessionId": "s",
+            "update": { "sessionUpdate": "auto_compact_completed", "tokens_before": 1, "tokens_after": 1 }
+        });
+        // Non-grok agent: ignored even for the same payload.
+        let raw = UntypedMessage::new("_x.ai/session_notification", compact.clone()).unwrap();
+        assert!(map_grok_ext_notification(&raw, AgentType::Codex).is_none());
+
+        // Turn-level state is intentionally left to the prompt-response path.
+        let turn = UntypedMessage::new(
+            "_x.ai/session_notification",
+            serde_json::json!({
+                "sessionId": "s",
+                "update": { "sessionUpdate": "turn_completed", "stop_reason": "error", "agent_result": "boom" }
+            }),
+        )
+        .unwrap();
+        assert!(map_grok_ext_notification(&turn, AgentType::Grok).is_none());
+
+        // Unrelated method: ignored.
+        let other = UntypedMessage::new("session/update", compact).unwrap();
+        assert!(map_grok_ext_notification(&other, AgentType::Grok).is_none());
+    }
+
+    /// The turn-loop consults this to keep a compaction-only `/compact` turn
+    /// from being reclassified as `"empty"` (which re-surfaces a spurious error).
+    /// It must count exactly the compaction outcomes that emit a card/error.
+    #[test]
+    fn grok_ext_notification_is_turn_output_marks_compaction_outcomes() {
+        let notif = |variant: &str| {
+            Dispatch::Notification(
+                UntypedMessage::new(
+                    "_x.ai/session_notification",
+                    serde_json::json!({
+                        "sessionId": "s",
+                        "update": {
+                            "sessionUpdate": variant,
+                            "tokens_before": 9, "tokens_after": 8, "reason": "x"
+                        }
+                    }),
+                )
+                .unwrap(),
+            )
+        };
+        // Both compaction outcomes are visible turn output.
+        assert!(grok_ext_notification_is_turn_output(&notif("auto_compact_completed"), AgentType::Grok));
+        assert!(grok_ext_notification_is_turn_output(&notif("auto_compact_failed"), AgentType::Grok));
+        // turn_completed is deliberately left to the prompt-response path — it is
+        // NOT counted here (otherwise a genuinely empty turn would be masked).
+        assert!(!grok_ext_notification_is_turn_output(&notif("turn_completed"), AgentType::Grok));
+        // Never fires for a non-grok agent.
+        assert!(!grok_ext_notification_is_turn_output(
+            &notif("auto_compact_completed"),
+            AgentType::Codex
+        ));
+    }
+
+    // ---- empty-turn diagnosis ----
+
+    fn drop_err(msg: &str) -> String {
+        msg.to_string()
+    }
+
+    #[test]
+    fn note_update_splits_agent_output_from_metadata() {
+        use sacp::schema::{ContentChunk, Plan};
+
+        let mut probe = TurnOutputProbe::new(0);
+        probe.note_update(&SessionUpdate::Plan(Plan::new(Vec::new())));
+        assert!(!probe.saw_agent_output, "Plan is not agent output");
+        assert!(probe.saw_metadata_update);
+
+        probe.note_update(&SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            "hi".into(),
+        )));
+        assert!(probe.saw_agent_output);
+    }
+
+    /// The classifier's whole purpose is to separate "we went blind" from
+    /// "nothing came" — a `Plan`-only turn must not read as agent output.
+    #[test]
+    fn diagnose_empty_turn_covers_three_causes_and_priority() {
+        let mut none = TurnOutputProbe::new(0);
+        assert_eq!(diagnose_empty_turn(&none), EmptyTurnCause::NoOutput);
+
+        none.saw_metadata_update = true;
+        assert_eq!(diagnose_empty_turn(&none), EmptyTurnCause::MetadataOnly);
+
+        // Dropped updates outrank metadata: not being able to read the output
+        // is the stronger signal and points somewhere else entirely.
+        none.note_dropped(DropSite::Decode, &drop_err("boom"));
+        assert_eq!(diagnose_empty_turn(&none), EmptyTurnCause::ProtocolMismatch);
+
+        let mut dispatch_only = TurnOutputProbe::new(0);
+        dispatch_only.note_dropped(DropSite::Dispatch, &drop_err("boom"));
+        assert_eq!(
+            diagnose_empty_turn(&dispatch_only),
+            EmptyTurnCause::ProtocolMismatch
+        );
+    }
+
+    #[test]
+    fn note_dropped_counts_each_site_separately_and_keeps_the_first() {
+        let mut probe = TurnOutputProbe::new(0);
+        probe.note_dropped(DropSite::Dispatch, &drop_err("missing field `sessionUpdate`"));
+        probe.note_dropped(DropSite::Decode, &drop_err("missing field `update`"));
+        probe.note_dropped(DropSite::Decode, &drop_err("missing field `content`"));
+
+        assert_eq!(probe.dropped_decode, 2);
+        assert_eq!(probe.dropped_dispatch, 1);
+        assert_eq!(probe.dropped_total(), 3);
+        let (site, summary) = probe.first_drop.as_ref().expect("first drop recorded");
+        assert_eq!(*site, DropSite::Dispatch, "first wins, not last");
+        assert_eq!(summary, "missing field `sessionUpdate`");
+    }
+
+    /// Drop reasons reach the UI, so they must be redacted at capture time —
+    /// a parser error inlines the value it choked on, and that value came off
+    /// the `session/update` channel.
+    #[test]
+    fn note_dropped_redacts_the_captured_error() {
+        const SECRET: &str = "sk-live-abcdefghijklmnop";
+        let mut probe = TurnOutputProbe::new(0);
+        probe.note_dropped(
+            DropSite::Dispatch,
+            &drop_err(&format!(
+                r#"invalid type: string "{SECRET}", expected u64 at line 1 column 40"#
+            )),
+        );
+        let (_, summary) = probe.first_drop.as_ref().unwrap();
+        assert!(!summary.contains(SECRET), "leaked: {summary}");
+        assert_eq!(summary, "invalid type, expected u64 at line 1 column 40");
+    }
+
+    #[test]
+    fn finish_turn_reason_passes_through_non_empty_reasons() {
+        let tail = StderrTail::new();
+        let mut probe = TurnOutputProbe::new(0);
+        probe.saw_agent_output = true;
+
+        for reason in ["end_turn", "cancelled", "refusal", "max_tokens", "unknown"] {
+            let (out, report) = finish_turn_reason(&probe, reason, &tail);
+            assert_eq!(out, reason);
+            assert!(report.is_none());
+        }
+
+        // Without agent output, only `end_turn` is rewritten.
+        let silent = TurnOutputProbe::new(0);
+        assert_eq!(finish_turn_reason(&silent, "cancelled", &tail).0, "cancelled");
+        assert_eq!(finish_turn_reason(&silent, "end_turn", &tail).0, "empty");
+    }
+
+    /// Guards the two-exit refactor: the helper only computes, so calling it
+    /// twice (as the two exits each do) is identical and side-effect free.
+    #[test]
+    fn finish_turn_reason_is_pure() {
+        let tail = StderrTail::new();
+        tail.push("boom");
+        let probe = TurnOutputProbe::new(0);
+
+        let (first_reason, first) = finish_turn_reason(&probe, "end_turn", &tail);
+        let (second_reason, second) = finish_turn_reason(&probe, "end_turn", &tail);
+        assert_eq!(first_reason, second_reason);
+        assert_eq!(
+            first.as_ref().map(|r| r.cause),
+            second.as_ref().map(|r| r.cause)
+        );
+        assert_eq!(
+            first.as_ref().and_then(|r| r.details.clone()),
+            second.as_ref().and_then(|r| r.details.clone())
+        );
+    }
+
+    #[test]
+    fn empty_turn_details_quote_stderr_scoped_to_the_turn() {
+        let tail = StderrTail::new();
+        tail.push("older line from a previous turn");
+        let probe = TurnOutputProbe::new(tail.mark());
+        tail.push("Error: 401 Unauthorized");
+
+        let details = build_empty_turn_details(&probe, &tail).expect("details");
+        assert!(details.contains("stderr (this turn"), "{details}");
+        assert!(details.contains("Error: 401 Unauthorized"));
+        assert!(!details.contains("older line"));
+    }
+
+    #[test]
+    fn empty_turn_details_fall_back_to_recent_stderr() {
+        let tail = StderrTail::new();
+        tail.push("connect-time failure");
+        let probe = TurnOutputProbe::new(tail.mark());
+
+        let details = build_empty_turn_details(&probe, &tail).expect("details");
+        assert!(details.contains("stderr (recent"), "{details}");
+        assert!(details.contains("connect-time failure"));
+    }
+
+    #[test]
+    fn empty_turn_details_report_drop_counts() {
+        let tail = StderrTail::new();
+        let mut probe = TurnOutputProbe::new(0);
+        probe.note_dropped(DropSite::Decode, &drop_err("trailing characters"));
+        probe.note_dropped(DropSite::Dispatch, &drop_err("EOF while parsing a value"));
+
+        let details = build_empty_turn_details(&probe, &tail).expect("details");
+        assert!(details.contains("dropped 2 update(s) (1 decode, 1 dispatch)"), "{details}");
+        assert!(details.contains("first (decode): trailing characters"), "{details}");
     }
 
     #[test]
@@ -8568,6 +9746,118 @@ mod tests {
         );
         assert_eq!(current_model_id_from_opts(&[select("m", "model", "")]), None);
         assert_eq!(current_model_id_from_opts(&[]), None);
+    }
+
+    #[test]
+    fn pi_bound_model_projection_drops_stale_openai_options() {
+        let mut options = vec![
+            SessionConfigOptionInfo {
+                id: "model".to_string(),
+                name: "Model".to_string(),
+                description: None,
+                category: Some("model".to_string()),
+                kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+                    current_value: "openai/gpt-4".to_string(),
+                    options: vec![
+                        SessionConfigSelectOptionInfo {
+                            value: "openai/gpt-4".to_string(),
+                            name: "GPT-4".to_string(),
+                            description: None,
+                        },
+                        SessionConfigSelectOptionInfo {
+                            value: "houflow/gpt-5.6-terra".to_string(),
+                            name: "GPT-5.6 Terra".to_string(),
+                            description: None,
+                        },
+                    ],
+                    groups: Vec::new(),
+                }),
+            },
+            SessionConfigOptionInfo {
+                id: "thought_level".to_string(),
+                name: "Thinking".to_string(),
+                description: None,
+                category: Some("thought_level".to_string()),
+                kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+                    current_value: "medium".to_string(),
+                    options: vec![],
+                    groups: vec![],
+                }),
+            },
+        ];
+
+        filter_pi_bound_model_options(
+            &mut options,
+            Some("houflow"),
+            Some("gpt-5.6-terra"),
+        );
+
+        let SessionConfigKindInfo::Select(model) = &options[0].kind;
+        assert_eq!(model.current_value, "houflow/gpt-5.6-terra");
+        assert_eq!(model.options.len(), 1);
+        assert_eq!(model.options[0].value, "houflow/gpt-5.6-terra");
+        let SessionConfigKindInfo::Select(thinking) = &options[1].kind;
+        assert_eq!(thinking.current_value, "medium");
+    }
+
+    #[test]
+    fn pi_bound_model_projection_synthesizes_catalog_gap_without_leaking_provider() {
+        let mut options = vec![SessionConfigOptionInfo {
+            id: "model".to_string(),
+            name: "Model".to_string(),
+            description: None,
+            category: Some("model".to_string()),
+            kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+                current_value: "openai/gpt-4".to_string(),
+                options: vec![SessionConfigSelectOptionInfo {
+                    value: "openai/gpt-4".to_string(),
+                    name: "GPT-4".to_string(),
+                    description: None,
+                }],
+                groups: vec![],
+            }),
+        }];
+
+        filter_pi_bound_model_options(&mut options, Some("houflow"), Some("gpt-5"));
+
+        let SessionConfigKindInfo::Select(model) = &options[0].kind;
+        assert_eq!(model.current_value, "houflow/gpt-5");
+        assert_eq!(model.options[0].value, "houflow/gpt-5");
+    }
+
+    #[test]
+    fn pi_bound_model_projection_preserves_same_provider_selection() {
+        let mut options = vec![SessionConfigOptionInfo {
+            id: "model".to_string(),
+            name: "Model".to_string(),
+            description: None,
+            category: Some("model".to_string()),
+            kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+                current_value: "houflow/gpt-5-mini".to_string(),
+                options: vec![
+                    SessionConfigSelectOptionInfo {
+                        value: "houflow/gpt-5.6-terra".to_string(),
+                        name: "Terra".to_string(),
+                        description: None,
+                    },
+                    SessionConfigSelectOptionInfo {
+                        value: "houflow/gpt-5-mini".to_string(),
+                        name: "Mini".to_string(),
+                        description: None,
+                    },
+                ],
+                groups: vec![],
+            }),
+        }];
+
+        filter_pi_bound_model_options(
+            &mut options,
+            Some("houflow"),
+            Some("gpt-5.6-terra"),
+        );
+
+        let SessionConfigKindInfo::Select(model) = &options[0].kind;
+        assert_eq!(model.current_value, "houflow/gpt-5-mini");
     }
 
     #[test]
@@ -10511,6 +11801,7 @@ mod tests {
             feedback: crate::acp::feedback::FeedbackRuntimeConfig::new(),
             ask: crate::acp::question::QuestionRuntimeConfig::new(),
             sessions: crate::acp::session_info::SessionInfoRuntimeConfig::new(),
+            authoring: crate::acp::chat_authoring::ChatAuthoringRuntimeConfig::new(),
             questions: Arc::new(NoQuestions)
                 as Arc<dyn crate::acp::question::SessionQuestionAccess>,
             plan_approvals: Arc::new(NoPlanApprovals)
@@ -10523,6 +11814,7 @@ mod tests {
             &injection,
             "parent-conn",
             std::path::Path::new("/tmp"),
+            false,
         )
         .await;
 
@@ -10610,32 +11902,73 @@ mod tests {
     #[test]
     fn companion_features_arg_inject_skip_decision() {
         // All off → no companion at all.
-        assert_eq!(companion_features_arg(false, false, false, false), None);
+        assert_eq!(companion_features_arg(CompanionFeatureFlags::default()), None);
         // Delegation only.
         assert_eq!(
-            companion_features_arg(true, false, false, false),
+            companion_features_arg(CompanionFeatureFlags {
+                delegation: true,
+                ..Default::default()
+            }),
             Some("delegation".to_string())
         );
         // Feedback only — the decoupling: companion injected for feedback even
         // when delegation is off.
         assert_eq!(
-            companion_features_arg(false, true, false, false),
+            companion_features_arg(CompanionFeatureFlags {
+                feedback: true,
+                ..Default::default()
+            }),
             Some("feedback".to_string())
         );
         // Ask only — likewise injects the companion on its own.
         assert_eq!(
-            companion_features_arg(false, false, true, false),
+            companion_features_arg(CompanionFeatureFlags {
+                ask: true,
+                ..Default::default()
+            }),
             Some("ask".to_string())
         );
         // Sessions only — likewise injects the companion on its own.
         assert_eq!(
-            companion_features_arg(false, false, false, true),
+            companion_features_arg(CompanionFeatureFlags {
+                sessions: true,
+                ..Default::default()
+            }),
             Some("sessions".to_string())
+        );
+        assert_eq!(
+            companion_features_arg(CompanionFeatureFlags {
+                tasks: true,
+                ..Default::default()
+            }),
+            Some("tasks".to_string())
+        );
+        assert_eq!(
+            companion_features_arg(CompanionFeatureFlags {
+                automations: true,
+                ..Default::default()
+            }),
+            Some("automations".to_string())
+        );
+        assert_eq!(
+            companion_features_arg(CompanionFeatureFlags {
+                taskboard: true,
+                ..Default::default()
+            }),
+            Some("taskboard".to_string())
         );
         // All on → comma-joined, in declaration order.
         assert_eq!(
-            companion_features_arg(true, true, true, true),
-            Some("delegation,feedback,ask,sessions".to_string())
+            companion_features_arg(CompanionFeatureFlags {
+                delegation: true,
+                feedback: true,
+                ask: true,
+                sessions: true,
+                tasks: true,
+                automations: true,
+                taskboard: true,
+            }),
+            Some("delegation,feedback,ask,sessions,tasks,automations,taskboard".to_string())
         );
     }
 }

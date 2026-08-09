@@ -9,6 +9,7 @@ import {
   AutomationsPage,
   AutomationsPageTitle,
 } from "@/components/automations/automations-page"
+import { TasksChromeActions } from "@/components/tasks/tasks-chrome-actions"
 import { CloudSessionPage } from "@/components/houflow/cloud-session-page"
 import { TasksPage, TasksPageTitle } from "@/components/tasks/tasks-page"
 import {
@@ -37,6 +38,17 @@ const WORKBENCH_ROUTE_STRIPS: Partial<Record<WorkbenchRouteId, ComponentType>> =
     tokenUsage: TokenUsagePageTitle,
   }
 
+export interface WorkbenchChromeActionsProps {
+  buttonClassName: string
+  iconClassName: string
+}
+
+const WORKBENCH_ROUTE_CHROME_ACTIONS: Partial<
+  Record<WorkbenchRouteId, ComponentType<WorkbenchChromeActionsProps>>
+> = {
+  tasks: TasksChromeActions,
+}
+
 /**
  * Renders the active non-conversation route page, or nothing when the
  * conversation workspace is active. WorkspaceContent overlays this on top of the
@@ -52,6 +64,14 @@ export function WorkbenchRouteStrip() {
   const { routeId } = useWorkbenchRoute()
   const Strip = WORKBENCH_ROUTE_STRIPS[routeId]
   return Strip ? <Strip /> : null
+}
+
+export function WorkbenchRouteChromeActions(
+  props: WorkbenchChromeActionsProps
+) {
+  const { routeId } = useWorkbenchRoute()
+  const Actions = WORKBENCH_ROUTE_CHROME_ACTIONS[routeId]
+  return Actions ? <Actions {...props} /> : null
 }
 
 export function useHasWorkbenchRouteStrip(): boolean {

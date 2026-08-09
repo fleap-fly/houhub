@@ -2550,7 +2550,7 @@ dependencies = [
 
 [[package]]
 name = "houhub"
-version = "0.23.2"
+version = "0.23.3"
 dependencies = [
  "aes-gcm",
  "agent-client-protocol-schema",
@@ -2571,6 +2571,7 @@ dependencies = [
  "futures",
  "futures-lite",
  "futures-util",
+ "iana-time-zone",
  "if-addrs",
  "ignore",
  "image",

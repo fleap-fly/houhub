@@ -17,6 +17,8 @@ const eslintConfig = defineConfig([
     "src-tauri/target/**",
     "src-tauri/experts/**",
     "public/vs/**",
+    // External upstream source snapshots are review inputs, not product code.
+    ".upstream/**",
   ]),
   eslintConfigPrettier,
   eslintPluginPrettierRecommended,
