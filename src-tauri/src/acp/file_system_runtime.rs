@@ -48,13 +48,23 @@ pub(crate) const FS_EXTRA_ROOTS_ENV: &str = "HOUHUB_ACP_FS_EXTRA_ROOTS";
 /// serve.
 ///
 /// An EMPTY root list means "unrestricted" for that direction — not "deny
-/// everything". Reads default to unrestricted because the gate buys no safety:
-/// houhub also advertises `terminal(true)`, so an agent that is refused a read
-/// simply `cat`s the file through a shell instead (empirically what grok does —
-/// it fell back to `run_terminal_command` with a `cat > … << 'PLAN_EOF'`
-/// heredoc, re-sending the whole payload as a shell command). Writes keep a
-/// root list mirroring the agents' own sandbox model (grok's `workspace`
-/// profile: CWD + its own home + temp dirs).
+/// everything". Reads default to unrestricted because the gate buys no safety
+/// AS LONG AS houhub also advertises `terminal(true)`: an agent refused a read
+/// simply `cat`s the file through the shell houhub runs for it (empirically what
+/// grok does — it fell back to `run_terminal_command` with a
+/// `cat > … << 'PLAN_EOF'` heredoc, re-sending the whole payload as a shell
+/// command). Writes keep a root list mirroring the agents' own sandbox model
+/// (grok's `workspace` profile: CWD + its own home + temp dirs).
+///
+/// That "buys no safety" reasoning is conditional, and the condition is
+/// [`crate::acp::host_tools_policy::HostToolsPolicy`] — do not read it as "a
+/// read gate can never work". Under `HOUHUB_ACP_HOST_TOOLS=agent` houhub hosts
+/// NEITHER channel, and the `cat` fallback stops working: measured against grok
+/// 1.0.0 with a kernel `deny`, the read failed `EPERM` and so did every
+/// `run_terminal_command` and `grep` retry, because they were children of the
+/// agent's own sandboxed process. The escape hatch is houhub's terminal, not
+/// some inherent property of shells.
+///
 /// NOTE: deliberately NOT `Default` — an all-empty policy means "unrestricted",
 /// so a derived `Default` would let `..Default::default()` or a stray
 /// `FsAccessPolicy::default()` silently open up writes. Construct through the
@@ -139,6 +149,14 @@ impl FsAccessPolicy {
         }
     }
 
+    /// Whether the READ direction is gated at all — i.e. `strict`, the only
+    /// policy that sets read roots. Read by the connection log to catch the
+    /// combination that promises more than it delivers: a confined fs channel
+    /// next to an advertised `terminal`, which an agent simply walks around.
+    pub fn confines_reads(&self) -> bool {
+        !self.read_roots.is_empty()
+    }
+
     /// One-line summary for the connection log.
     pub fn describe(&self) -> String {
         fn render(roots: &[PathBuf]) -> String {
@@ -175,10 +193,13 @@ fn raw_env_value(runtime_env: &BTreeMap<String, String>, key: &str) -> Option<Os
 /// Read a knob from the agent's `runtime_env` first, then houhub's process env,
 /// trimmed — for values compared as keywords, never as paths.
 ///
-/// Mirrors `PI_ACP_TRUST_WORKSPACE` (`commands::acp`): a houhub-only key that
-/// rides along in the per-agent `env_json`, so it is configurable per agent
+/// Mirrors `HOUHUB_ACP_HOST_TOOLS` (`acp::host_tools_policy`): a houhub-only key
+/// that rides along in the per-agent `env_json`, so it is configurable per agent
 /// from the existing settings UI without a new surface.
-fn env_value(runtime_env: &BTreeMap<String, String>, key: &str) -> Option<String> {
+///
+/// `pub(crate)` so [`crate::acp::host_tools_policy`] resolves its own knob with
+/// exactly this precedence — one notion of "a houhub launch knob" across both.
+pub(crate) fn env_value(runtime_env: &BTreeMap<String, String>, key: &str) -> Option<String> {
     runtime_env
         .get(key)
         .map(|raw| raw.trim().to_string())
@@ -519,6 +540,25 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
             trims: false,
             default_rel: &[".openclaw"],
         }],
+        // DeepSeek Harness mirrors pi's two-root shape: the harness home
+        // (`DSH_HOME`, default `~/.dsh`) and the session-log root, which
+        // relocates independently via `DEEPSEEK_ACP_SESSIONS_ROOT` (else
+        // `$DSH_HOME/sessions`) — see `resolve_deepseek_sessions_root_from`.
+        AgentType::DeepSeek => &[
+            RootSlot {
+                candidates: &[("DSH_HOME", "")],
+                trims: false,
+                default_rel: &[".dsh"],
+            },
+            RootSlot {
+                candidates: &[
+                    ("DEEPSEEK_ACP_SESSIONS_ROOT", ""),
+                    ("DSH_HOME", "sessions"),
+                ],
+                trims: false,
+                default_rel: &[".dsh", "sessions"],
+            },
+        ],
         // pi's agent home and its session store relocate INDEPENDENTLY, so both
         // are genuine roots rather than alternatives. The sessions slot mirrors
         // `resolve_pi_sessions_dir_from`: the session override wins, else
@@ -1644,8 +1684,14 @@ mod tests {
     fn home_relative_defaults_follow_the_childs_home() {
         let houhub_home = dirs::home_dir().expect("home dir");
         let isolated = PathBuf::from("/tmp/houhub-isolated-home");
-        let runtime_env =
-            BTreeMap::from([("HOME".to_string(), isolated.to_string_lossy().to_string())]);
+        let runtime_env = BTreeMap::from([
+            ("HOME".to_string(), isolated.to_string_lossy().to_string()),
+            // Explicitly remove the relocatable agent override so a developer
+            // shell's CODEX_HOME/GROK_HOME/etc. cannot change this test's child.
+            ("CODEX_HOME".to_string(), String::new()),
+            ("GROK_HOME".to_string(), String::new()),
+            ("CLAUDE_CONFIG_DIR".to_string(), String::new()),
+        ]);
 
         for (agent_type, rel) in [
             (AgentType::Codex, ".codex"),
@@ -1835,7 +1881,7 @@ mod tests {
     fn root_slots_match_parser_resolvers() {
         use crate::parsers;
 
-        let expected: [(AgentType, PathBuf); 11] = [
+        let expected: [(AgentType, PathBuf); 12] = [
             (AgentType::Grok, parsers::grok::resolve_grok_home_dir()),
             (
                 AgentType::ClaudeCode,
@@ -1868,6 +1914,10 @@ mod tests {
             ),
             (AgentType::Cline, parsers::cline::cline_data_dir()),
             (AgentType::Pi, parsers::pi::resolve_pi_sessions_dir()),
+            (
+                AgentType::DeepSeek,
+                parsers::deepseek::resolve_deepseek_sessions_root(),
+            ),
         ];
 
         for (agent_type, resolver_root) in expected {
@@ -1953,7 +2003,7 @@ mod tests {
         }
     }
 
-    const ALL_AGENT_TYPES: [AgentType; 12] = [
+    const ALL_AGENT_TYPES: [AgentType; 13] = [
         AgentType::ClaudeCode,
         AgentType::Codex,
         AgentType::OpenCode,
@@ -1966,6 +2016,7 @@ mod tests {
         AgentType::Pi,
         AgentType::Grok,
         AgentType::Cursor,
+        AgentType::DeepSeek,
     ];
 
     #[test]

@@ -8,14 +8,15 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::acp::delegation::types::{BlockedKind, BlockedOn};
 use crate::acp::event_stream::{ConnectionEventStream, RecentEventsBuffer};
 use crate::acp::feedback::{FeedbackItem, FeedbackStatus};
 use crate::acp::plan_approval::PendingPlanApprovalState;
 use crate::acp::question::PendingQuestionState;
 use crate::acp::types::{
     AcpEvent, AvailableCommandInfo, ConfigStaleKind, ConnectionStatus, EventEnvelope,
-    GrokEffortSpec, PromptCapabilitiesInfo, SessionConfigOptionInfo, SessionModeStateInfo,
-    ToolCallImageInfo,
+    GrokEffortSpec, PromptCapabilitiesInfo, SessionConfigOptionInfo, SessionFailureRecord,
+    SessionModeStateInfo, ToolCallImageInfo,
 };
 use crate::models::agent::AgentType;
 use crate::models::message::MessageRole;
@@ -154,6 +155,11 @@ pub struct PendingPermissionState {
     pub tool_call: serde_json::Value,
     pub options: Vec<crate::acp::types::PermissionOptionInfo>,
     pub created_at: DateTime<Utc>,
+    /// Requests queued behind this card, kept live by `PermissionQueueDepth` so
+    /// a client attaching mid-turn sees the same "N more waiting" hint as one
+    /// that was live for the original event.
+    #[serde(default)]
+    pub queued: u32,
 }
 
 /// 上下文 / 模型用量。
@@ -397,6 +403,67 @@ pub struct SessionState {
     /// opt-in), rerouting subsequent notes to the MCP pull path.
     pub native_steering_available: bool,
 
+    /// Which `session_info_update` meta key carries goal snapshots for this
+    /// connection: `true` ⇒ the provider-neutral `_meta.goal` (adapter
+    /// advertised the goal extension at initialize — claude-agent-acp 0.66+,
+    /// codex-acp 1.2+, which dropped the legacy key in the same release),
+    /// `false` ⇒ the legacy `_meta.codex.goal`. Pinned ONCE at initialize
+    /// (`connection.rs::init_advertises_goal`) so a transitional adapter
+    /// double-publishing a goal transition through both namespaces — even
+    /// across separate updates — can never render two goal cards.
+    /// Backend-internal routing only: not part of the client snapshot.
+    pub neutral_goal_channel: bool,
+
+    /// Goal-control request method for this connection. Defaults to codex's
+    /// legacy bespoke `_codex/session/goal_control`; overwritten at
+    /// initialize when the adapter advertises the provider-neutral goal
+    /// extension's `controlMethod` (`_session/goal`, claude 0.66+/codex
+    /// 1.2+). Both take the same `{sessionId, action}` params, so
+    /// `send_goal_control` just uses whatever is stored here.
+    /// Backend-internal: not part of the client snapshot.
+    pub goal_control_method: String,
+
+    /// The goal-control action vocabulary this connection's adapter offers —
+    /// the advertised `_meta.goal.actions` when the neutral extension is
+    /// present (claude: ["set","clear"] — NO pause; codex 1.2+: all four),
+    /// else the legacy default ["pause","clear"] so an older codex keeps
+    /// today's affordances. Carried on the snapshot: the goal card gates its
+    /// Pause/Clear buttons on this list, so a claude session never offers a
+    /// pause the adapter would reject.
+    ///
+    /// Whether the adapter's last goal snapshot left a run OPEN — i.e. the goal
+    /// is `active` and driving work. Mirrored from the live goal state in
+    /// `emit_conversation_update`; backend-internal, not on the client
+    /// snapshot. Read by `ConnectionManager::goal_control` as the one thing
+    /// that justifies following a pause/clear with an interrupt: an active goal
+    /// means whatever is running is the goal's own work, whereas a PAUSED goal
+    /// drives nothing, so clearing it must not abort a turn the user started
+    /// themselves.
+    pub goal_active: bool,
+
+    /// `None` means NOT YET KNOWN — the initialize response hasn't been
+    /// applied. That state is real and observable: `spawn_agent` returns (and
+    /// the frontend learns the connection id, then fetches this snapshot) while
+    /// `initialize` is still in flight. Defaulting to the legacy pair at
+    /// CONSTRUCTION would hand that early reader a plausible-looking
+    /// `["pause","clear"]` it latches forever — which is exactly how a claude
+    /// session ended up offering a Pause its adapter answers with
+    /// `Invalid params: goal action must be "set" or "clear"`. The legacy
+    /// fallback is therefore decided at INITIALIZE (see `connection.rs`), not
+    /// here, so "unknown" and "legacy" stay distinguishable on the wire.
+    pub goal_actions: Option<Vec<String>>,
+
+    /// AIR typed session failures projected by `id` (see
+    /// [`SessionFailureRecord`] for the wire contract). Entries are RETAINED
+    /// for the connection's lifetime — resolved ones included — both because
+    /// the protocol keeps resolved records as history and because each entry
+    /// doubles as the per-id revision watermark: dropping an entry would let
+    /// a delayed lower-revision upsert resurrect it. Carried on
+    /// `to_snapshot()` (whole table, watermarks included) so a client
+    /// attaching mid-session applies the same monotonic merge against
+    /// subsequent live events. BTreeMap for a deterministic snapshot order.
+    pub session_failures: BTreeMap<String, SessionFailureRecord>,
+
     /// Concatenated text content of the just-completed turn's assistant
     /// message. Captured at TurnComplete (just before live_message is
     /// cleared) so the lifecycle subscriber can surface it as the
@@ -506,6 +573,11 @@ impl SessionState {
             delegation_token: None,
             feedback_tool_available: false,
             native_steering_available: false,
+            neutral_goal_channel: false,
+            goal_control_method: crate::acp::codex_goal::LEGACY_GOAL_CONTROL_METHOD.to_string(),
+            goal_actions: None,
+            goal_active: false,
+            session_failures: BTreeMap::new(),
             last_assistant_text: None,
             pending_user_message: None,
             pending_user_message_started_at: None,
@@ -725,6 +797,7 @@ impl SessionState {
                 request_id,
                 tool_call,
                 options,
+                queued,
             } => {
                 let tc_id = extract_tool_call_id(tool_call);
                 self.pending_permission = Some(PendingPermissionState {
@@ -733,7 +806,16 @@ impl SessionState {
                     tool_call: tool_call.clone(),
                     options: options.clone(),
                     created_at: Utc::now(),
+                    queued: *queued,
                 });
+            }
+            AcpEvent::PermissionQueueDepth { depth } => {
+                // Depth-only update: the visible card is unchanged, so touch
+                // nothing else. A no-op when no card is up (a late depth event
+                // after a drain must not resurrect one).
+                if let Some(pending) = self.pending_permission.as_mut() {
+                    pending.queued = *depth;
+                }
             }
             AcpEvent::PermissionResolved { request_id } => {
                 // Drop the snapshot's pending_permission iff the resolved
@@ -811,6 +893,27 @@ impl SessionState {
                 // other than a normal end-of-turn means this turn's content
                 // may never have reached the wire.
                 self.last_turn_ended_abnormally = stop_reason != "end_turn";
+                // AIR retry warnings resolve at the CLEAN turn boundary —
+                // adapters never publish resolution (see
+                // `SessionFailureRecord`), and a warning that ESCALATED
+                // instead was already overwritten by a higher-revision
+                // severity-"error" upsert on the same id before this event
+                // (a turn's terminal failure rides the prompt RESPONSE
+                // `_meta` and the loop emits it first — see
+                // `response_session_failure`), so this only settles genuinely
+                // recovered retry incidents. Every OTHER stop reason
+                // (cancelled / empty / refusal / …) ended a turn that did NOT
+                // recover: settling there painted a still-dead connection as
+                // a recovered warning (2026-08-15 field report), so those
+                // leave the warnings active — the `UserMessage` arm's
+                // settle-all still sweeps them at the next prompt.
+                if stop_reason == "end_turn" {
+                    for failure in self.session_failures.values_mut() {
+                        if failure.severity == "warning" {
+                            failure.resolved = true;
+                        }
+                    }
+                }
                 // Snapshot the just-finished turn's FINAL assistant text — what
                 // `get_delegation_status` returns as the child result. We take
                 // the Text blocks that follow the LAST tool call (the agent's
@@ -916,6 +1019,15 @@ impl SessionState {
                 // queued prompt sent instead of answering) must not leave a dead
                 // approval in the snapshot for a mid-turn attach to render.
                 self.pending_plan_approval = None;
+                // Starting a prompt past an active AIR failure acknowledges it
+                // — settle EVERYTHING, mirroring the frontend reducer's
+                // prompt-start settle so a client hydrating mid-turn doesn't
+                // resurrect an error the owner already acted on. Entries stay
+                // in the table as revision watermarks; a failure that is
+                // still real re-arms via a higher revision on the same id.
+                for failure in self.session_failures.values_mut() {
+                    failure.resolved = true;
+                }
             }
             AcpEvent::ConversationLinked {
                 conversation_id,
@@ -1034,7 +1146,26 @@ impl SessionState {
                 self.background_outstanding = *outstanding;
                 self.background_activity_at = Some(Utc::now());
             }
+            AcpEvent::SessionFailure { record } => {
+                // Monotonic per-id merge — the SAME rule the frontend reducer
+                // applies, so a replayed/out-of-order upsert (claude re-sends
+                // still-active failures on session/load) is dropped
+                // identically on every consumer. Equal revisions are rejected
+                // too: an upsert is only ever re-delivered verbatim, never
+                // legitimately revised in place. A fresh (higher-revision)
+                // upsert re-arms `resolved = false` — id reuse is how codex
+                // escalates a retry warning into the turn's terminal error.
+                let accept = self
+                    .session_failures
+                    .get(&record.id)
+                    .is_none_or(|existing| record.revision > existing.revision);
+                if accept {
+                    self.session_failures
+                        .insert(record.id.clone(), record.clone());
+                }
+            }
             AcpEvent::ClaudeSdkMessage { .. }
+            | AcpEvent::ConfigOptionRejected { .. }
             | AcpEvent::SessionLoadFailed { .. }
             | AcpEvent::TurnRetrying { .. }
             | AcpEvent::UserPromptSent { .. } => {
@@ -1042,6 +1173,8 @@ impl SessionState {
                 // UserPromptSent 是纯通知事件，仅供 chat-channel 推送消费。
                 // TurnRetrying 与 Claude 的 api_retry 一样是前端瞬态提示（重试横幅），
                 // 不进快照——回合边界会清除它。
+                // ConfigOptionRejected 是对一次交互的提示（选择器被降级/拒绝），
+                // 权威值已由紧随其后的 SessionConfigOptions 落进快照。
             }
         }
         self.last_activity_at = Utc::now();
@@ -1163,6 +1296,67 @@ impl SessionState {
             ));
         }
 
+        None
+    }
+
+    /// The prompt this session is parked on, if any — a permission, an
+    /// `ask_user_question`, or a plan approval. `None` means nothing is waiting
+    /// on the user.
+    ///
+    /// Sibling of [`Self::latest_live_reply`] and read on the same
+    /// `get_delegation_status` path: for a delegation child, "blocked on the
+    /// user" and "working" are indistinguishable from the outside, and only the
+    /// former means the parent's poll should stop waiting (#447). Precedence
+    /// matches the frontend's: at most one of these surfaces at a time in
+    /// practice, and permission is the one agents raise most.
+    ///
+    /// `title` is a one-line label for whatever needs deciding, capped at
+    /// `max_chars`; it can be `None` when the prompt carries no usable text.
+    pub fn blocking_prompt(&self, max_chars: usize) -> Option<BlockedOn> {
+        if let Some(p) = self.pending_permission.as_ref() {
+            // Every producer serializes the ACP `ToolCall` (or mirrors its
+            // shape), so `title` is the one field reliably present. Absent /
+            // blank degrades to `None` rather than inventing a label.
+            let title = p
+                .tool_call
+                .get("title")
+                .and_then(|v| v.as_str())
+                .and_then(last_nonempty_line)
+                .map(|l| truncate_one_line(l, max_chars));
+            return Some(BlockedOn {
+                kind: BlockedKind::Permission,
+                request_id: p.request_id.clone(),
+                title,
+            });
+        }
+        if let Some(q) = self.pending_question.as_ref() {
+            let title = q
+                .questions
+                .first()
+                .map(|first| first.question.as_str())
+                .and_then(last_nonempty_line)
+                .map(|l| truncate_one_line(l, max_chars));
+            return Some(BlockedOn {
+                kind: BlockedKind::Question,
+                request_id: q.question_id.clone(),
+                title,
+            });
+        }
+        if let Some(a) = self.pending_plan_approval.as_ref() {
+            // The plan's FIRST line is its heading; the last line would be
+            // whatever the plan trails off with, which reads as nonsense here.
+            let title = a
+                .plan_markdown
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .map(|l| truncate_one_line(l, max_chars));
+            return Some(BlockedOn {
+                kind: BlockedKind::PlanApproval,
+                request_id: a.approval_id.clone(),
+                title,
+            });
+        }
         None
     }
 
@@ -1346,6 +1540,8 @@ impl SessionState {
             config_stale: self.config_stale,
             config_stale_kind: self.config_stale_kind,
             last_error: self.last_error.clone(),
+            session_failures: self.session_failures.values().cloned().collect(),
+            goal_actions: self.goal_actions.clone(),
             event_seq: self.event_seq,
         }
     }
@@ -1446,6 +1642,26 @@ pub struct LiveSessionSnapshot {
     /// no error has occurred so older clients and common snapshots stay small.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<SessionLastError>,
+    /// AIR typed session failure table (resolved entries and revision
+    /// watermarks included — see `SessionState.session_failures`). A client
+    /// attaching mid-session seeds its reducer from this and keeps applying
+    /// the same monotonic merge to live events. Omitted while empty (the
+    /// common case) to keep the wire shape byte-identical pre-feature.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_failures: Vec<SessionFailureRecord>,
+    /// Goal-control action vocabulary the goal card gates its buttons on
+    /// (see `SessionState.goal_actions`): the advertised list for neutral-goal
+    /// adapters, the legacy ["pause","clear"] pair for the rest.
+    ///
+    /// Three-valued on purpose, and ALWAYS serialized (no `skip_serializing_if`)
+    /// so the client can tell the middle case apart:
+    /// * a list — the vocabulary is known, gate the buttons on it;
+    /// * `null` — this connection hasn't finished `initialize`, so nothing is
+    ///   known yet; the client stays fail-closed (no buttons) and re-reads;
+    /// * ABSENT — a server too old to have the field at all, which the client
+    ///   maps to the legacy pair.
+    #[serde(default)]
+    pub goal_actions: Option<Vec<String>>,
     pub event_seq: u64,
 }
 
@@ -1580,6 +1796,141 @@ mod tests {
         });
         assert!(s.pending_plan_approval.is_none());
         assert!(s.to_snapshot().pending_plan_approval.is_none());
+    }
+
+    #[test]
+    fn session_failure_upserts_merge_monotonically_and_settle_at_turn_end() {
+        fn failure(id: &str, revision: u64, severity: &str, title: &str) -> AcpEvent {
+            AcpEvent::SessionFailure {
+                record: SessionFailureRecord {
+                    id: id.into(),
+                    revision,
+                    category: "limit".into(),
+                    severity: severity.into(),
+                    title: title.into(),
+                    details: None,
+                    actions: vec!["retry".into()],
+                    resolved: false,
+                },
+            }
+        }
+        let mut s = fresh_state();
+
+        // Upsert then revise in place: one entry, latest revision wins.
+        s.apply_event(&failure("t1:error", 1, "warning", "retrying"));
+        s.apply_event(&failure("t1:error", 2, "warning", "still retrying"));
+        assert_eq!(s.session_failures.len(), 1);
+        assert_eq!(s.session_failures["t1:error"].revision, 2);
+        assert_eq!(s.session_failures["t1:error"].title, "still retrying");
+
+        // Stale and equal-revision replays are rejected (claude re-publishes
+        // still-active failures on session/load — must not thrash state).
+        s.apply_event(&failure("t1:error", 1, "warning", "stale"));
+        s.apply_event(&failure("t1:error", 2, "warning", "replay"));
+        assert_eq!(s.session_failures["t1:error"].title, "still retrying");
+
+        // Turn boundary settles warnings — errors stay active (codex keeps
+        // terminal records active deliberately).
+        s.apply_event(&failure("s:notice", 1, "error", "auth expired"));
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "sid".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "codex".into(),
+        });
+        assert!(s.session_failures["t1:error"].resolved);
+        assert!(!s.session_failures["s:notice"].resolved);
+
+        // Escalation via id reuse: a HIGHER-revision upsert re-arms the entry
+        // (resolved resets) — how codex turns a retry warning into the turn's
+        // terminal error.
+        s.apply_event(&failure("t1:error", 3, "error", "gave up"));
+        let escalated = &s.session_failures["t1:error"];
+        assert!(!escalated.resolved);
+        assert_eq!(escalated.severity, "error");
+
+        // Starting a NEW prompt settles EVERYTHING — errors included — so a
+        // client hydrating mid-turn can't resurrect a failure the owner
+        // already acted past (mirrors the frontend reducer's prompt-start
+        // settle). Watermarks survive: the stale rev-2 replay stays rejected,
+        // and only a genuinely newer revision re-arms the record.
+        s.apply_event(&AcpEvent::UserMessage {
+            message_id: "m1".into(),
+            blocks: vec![],
+        });
+        assert!(s.session_failures.values().all(|f| f.resolved));
+        s.apply_event(&failure("t1:error", 2, "error", "stale replay"));
+        assert!(s.session_failures["t1:error"].resolved);
+        assert_eq!(s.session_failures["t1:error"].title, "gave up");
+        s.apply_event(&failure("t1:error", 4, "error", "it recurred"));
+        assert!(!s.session_failures["t1:error"].resolved);
+
+        // The snapshot carries the WHOLE table — resolved entries and their
+        // revision watermarks included — so an attaching client can keep
+        // rejecting stale upserts.
+        let snap = s.to_snapshot();
+        assert_eq!(snap.session_failures.len(), 2);
+        let json = serde_json::to_value(&snap).unwrap();
+        let failures = json.get("session_failures").unwrap().as_array().unwrap();
+        assert!(failures.iter().any(|f| {
+            f.get("id").and_then(|v| v.as_str()) == Some("t1:error")
+                && f.get("revision").and_then(|v| v.as_u64()) == Some(4)
+        }));
+    }
+
+    #[test]
+    fn session_failure_warnings_survive_non_clean_turn_ends() {
+        fn failure(id: &str, revision: u64, severity: &str, title: &str) -> AcpEvent {
+            AcpEvent::SessionFailure {
+                record: SessionFailureRecord {
+                    id: id.into(),
+                    revision,
+                    category: "connection".into(),
+                    severity: severity.into(),
+                    title: title.into(),
+                    details: None,
+                    actions: vec!["new_session".into()],
+                    resolved: false,
+                },
+            }
+        }
+        fn turn_complete(stop_reason: &str) -> AcpEvent {
+            AcpEvent::TurnComplete {
+                session_id: "sid".into(),
+                stop_reason: stop_reason.into(),
+                agent_type: "claude_code".into(),
+            }
+        }
+        let mut s = fresh_state();
+        s.apply_event(&failure("t1:error", 5, "warning", "Reconnecting, attempt 5 of 5."));
+
+        // A cancelled/failed/empty exit is NOT recovery — the incident (e.g.
+        // reconnect attempts with the network still down) must stay active
+        // instead of collapsing into a "recovered" row (2026-08-15 field
+        // report: the banner claimed recovery while offline).
+        for reason in ["cancelled", "empty", "refusal", "unknown"] {
+            s.apply_event(&turn_complete(reason));
+            assert!(
+                !s.session_failures["t1:error"].resolved,
+                "stop_reason={reason} must not settle warnings"
+            );
+        }
+
+        // The terminal escalation rides the prompt RESPONSE and the loop
+        // applies it BEFORE `TurnComplete` (see `response_session_failure`):
+        // the same id flips to severity "error", so even the adapters'
+        // disguised clean `end_turn` carrying it cannot settle the incident.
+        s.apply_event(&failure("t1:error", 6, "error", "The connection was lost."));
+        s.apply_event(&turn_complete("end_turn"));
+        let escalated = &s.session_failures["t1:error"];
+        assert!(!escalated.resolved);
+        assert_eq!(escalated.severity, "error");
+        assert_eq!(escalated.revision, 6);
+
+        // A clean end still settles a genuine warning — and only the warning.
+        s.apply_event(&failure("w2", 1, "warning", "transient notice"));
+        s.apply_event(&turn_complete("end_turn"));
+        assert!(s.session_failures["w2"].resolved);
+        assert!(!s.session_failures["t1:error"].resolved);
     }
 
     #[test]
@@ -2454,6 +2805,7 @@ mod tests {
             request_id: "p-1".into(),
             tool_call: serde_json::json!({"toolCallId": "tc-1", "title": "danger"}),
             options: vec![],
+            queued: 0,
         });
         assert!(s.live_message.is_some());
         assert!(s.pending_permission.is_some());
@@ -2802,6 +3154,7 @@ mod tests {
             request_id: "p-1".into(),
             tool_call: serde_json::json!({"toolCallId": "tc-1"}),
             options: vec![],
+            queued: 0,
         });
         assert!(s.pending_permission.is_some());
 
@@ -2815,6 +3168,33 @@ mod tests {
     }
 
     #[test]
+    fn permission_queue_depth_updates_the_visible_card_only() {
+        // A request arriving behind the visible card publishes no
+        // `PermissionRequest` of its own, so the depth-only event is what keeps
+        // the card's "N more waiting" hint from going stale — including for a
+        // client that attaches mid-turn and hydrates from this snapshot.
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::PermissionRequest {
+            request_id: "p-1".into(),
+            tool_call: serde_json::json!({"toolCallId": "tc-1"}),
+            options: vec![],
+            queued: 0,
+        });
+        s.apply_event(&AcpEvent::PermissionQueueDepth { depth: 2 });
+        let p = s.pending_permission.as_ref().expect("card still up");
+        assert_eq!(p.queued, 2);
+        assert_eq!(p.request_id, "p-1", "depth must not change which card is up");
+    }
+
+    #[test]
+    fn permission_queue_depth_without_a_card_is_a_noop() {
+        // A depth event that lands after a drain must not resurrect a card.
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::PermissionQueueDepth { depth: 3 });
+        assert!(s.pending_permission.is_none());
+    }
+
+    #[test]
     fn permission_resolved_stale_request_is_noop() {
         // A late `PermissionResolved` for an already-replaced request must
         // not wipe out the *new* outstanding permission — id mismatch is
@@ -2825,6 +3205,7 @@ mod tests {
             request_id: "p-2".into(),
             tool_call: serde_json::json!({"toolCallId": "tc-2"}),
             options: vec![],
+            queued: 0,
         });
 
         s.apply_event(&AcpEvent::PermissionResolved {
@@ -2856,6 +3237,7 @@ mod tests {
             request_id: "p-1".into(),
             tool_call: raw_tool_call.clone(),
             options: vec![],
+            queued: 0,
         });
         let p = s.pending_permission.as_ref().expect("permission set");
         assert_eq!(p.request_id, "p-1");

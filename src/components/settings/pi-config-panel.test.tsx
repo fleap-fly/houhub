@@ -3,11 +3,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
-import {
-  acpLoadPiConfig,
-  acpUpdatePiConfig,
-  acpValidatePiCommand,
-} from "@/lib/api"
+import { loadPiConfig, acpUpdatePiConfig, acpValidatePiCommand } from "@/lib/api"
 import type { AcpAgentInfo, ModelProviderInfo } from "@/lib/types"
 import { PiConfigPanel } from "./pi-config-panel"
 
@@ -16,7 +12,7 @@ vi.mock("@/lib/api", () => ({
   acpUninstallPiBinary: vi.fn(),
   acpUpdatePiConfig: vi.fn(),
   acpValidatePiCommand: vi.fn(),
-  acpLoadPiConfig: vi.fn(),
+  loadPiConfig: vi.fn(),
 }))
 
 vi.mock("@/hooks/use-agent-install-stream", () => ({
@@ -58,7 +54,7 @@ const agent = {
 describe("PiConfigPanel model provider binding", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(acpLoadPiConfig).mockResolvedValue({
+    vi.mocked(loadPiConfig).mockResolvedValue({
       // Simulate stale native Pi state from before the ACP provider binding.
       defaultProvider: "openai",
       defaultModel: "gpt-4",

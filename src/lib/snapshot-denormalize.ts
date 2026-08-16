@@ -10,6 +10,7 @@ import type {
   PendingQuestionState,
   PromptCapabilitiesInfo,
   SessionConfigOptionInfo,
+  SessionFailureRecord,
   SessionModeStateInfo,
   SessionUsageUpdateInfo,
   ToolCallState,
@@ -68,6 +69,13 @@ export interface SnapshotPatch {
   configStaleKind: ConfigStaleKind | null
   /** Launched-but-unresolved background tasks carried by the snapshot. */
   backgroundOutstanding: number
+  /** AIR typed session failure table carried by the snapshot — resolved
+   *  entries and their revision watermarks included. MERGED into the in-memory
+   *  table by the monotonic per-id rule (`mergeSessionFailures`) on BOTH
+   *  hydrate branches: merging is idempotent and can only add or upgrade
+   *  records, never clobber a fresher live one. `[]` when the server omitted
+   *  the field. */
+  sessionFailures: SessionFailureRecord[]
   /** Latest ACP runtime error carried by the snapshot. `null` means none. */
   lastError: string | null
   /** Diagnostic evidence attached to `lastError` (agent stderr tail, unparsed
@@ -120,6 +128,9 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
           // after a refresh.
           tool_call: wire.pending_permission.tool_call,
           options: wire.pending_permission.options,
+          // So a client attaching mid-turn sees the same "N more waiting" hint
+          // as one that was live for the original event.
+          queued: wire.pending_permission.queued,
         }
       : null,
     // The snapshot shape already matches PendingQuestionState; pass through.
@@ -138,6 +149,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     configStale: wire.config_stale ?? false,
     configStaleKind: wire.config_stale_kind ?? null,
     backgroundOutstanding: wire.background_outstanding ?? 0,
+    sessionFailures: wire.session_failures ?? [],
     lastError,
     lastErrorDetails,
     eventSeq: wire.event_seq,

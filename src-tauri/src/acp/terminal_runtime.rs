@@ -10,7 +10,7 @@ use sacp::schema::{
     TerminalOutputResponse, WaitForTerminalExitRequest, WaitForTerminalExitResponse,
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::sync::{watch, Mutex, Notify};
+use tokio::sync::{watch, Mutex, Notify, RwLock};
 use tokio::task::JoinHandle;
 
 type TerminalMap = HashMap<String, Arc<TerminalInstance>>;
@@ -407,6 +407,27 @@ pub struct TerminalRuntime {
     /// process cwd (often "/" on desktop, the dev crate dir in development).
     /// `None` leaves the process cwd inherited (legacy behavior).
     default_cwd: Option<PathBuf>,
+    default_shell: TerminalShellRuntimeConfig,
+}
+
+/// Shared, hot-swappable default shell for ACP terminal requests.
+#[derive(Clone, Default)]
+pub struct TerminalShellRuntimeConfig {
+    inner: Arc<RwLock<Option<String>>>,
+}
+
+impl TerminalShellRuntimeConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub async fn snapshot(&self) -> Option<String> {
+        self.inner.read().await.clone()
+    }
+
+    pub async fn set(&self, default_shell: Option<String>) {
+        *self.inner.write().await = default_shell;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -428,6 +449,7 @@ impl TerminalRuntime {
             terminals: Mutex::new(HashMap::new()),
             base_env,
             default_cwd: None,
+            default_shell: TerminalShellRuntimeConfig::new(),
         }
     }
 
@@ -435,6 +457,11 @@ impl TerminalRuntime {
     /// does not specify its own `cwd`. Chainable after `with_base_env`.
     pub fn with_default_cwd(mut self, default_cwd: Option<PathBuf>) -> Self {
         self.default_cwd = default_cwd;
+        self
+    }
+
+    pub fn with_default_shell_config(mut self, default_shell: TerminalShellRuntimeConfig) -> Self {
+        self.default_shell = default_shell;
         self
     }
 
@@ -532,6 +559,11 @@ impl TerminalRuntime {
         direct.args(&request.args);
         self.configure_command(&mut direct, &request);
 
+        let fallback_shell = self
+            .default_shell
+            .snapshot()
+            .await
+            .unwrap_or_else(default_platform_shell);
         let spawned = crate::process::spawn_retrying_exec_busy(|| direct.spawn()).await;
         let mut child = match spawned {
             Ok(child) => child,
@@ -543,7 +575,7 @@ impl TerminalRuntime {
                     && request.args.is_empty()
                     && request.command.contains(char::is_whitespace) =>
             {
-                let mut shell = shell_wrapped_command(&request.command);
+                let mut shell = shell_wrapped_command(&fallback_shell, &request.command);
                 self.configure_command(&mut shell, &request);
                 shell.spawn().map_err(|err| {
                     TerminalRuntimeError::Internal(format!(
@@ -783,22 +815,30 @@ where
     }
 }
 
-/// Wrap a full shell command line so it executes through the platform shell.
-/// Used when an agent passes an entire command line in `command` with empty
-/// `args` (see `create_terminal`); the shell preserves the `&&`, pipes,
-/// `$VAR`, and globs the agent's line relies on. Reuses `tokio_command` so the
-/// shell still inherits HouHub's UTF-8 env and Windows program normalization.
 #[cfg(not(windows))]
-fn shell_wrapped_command(line: &str) -> tokio::process::Command {
-    let mut command = crate::process::tokio_command("/bin/sh");
+fn default_platform_shell() -> String {
+    "/bin/sh".to_string()
+}
+
+#[cfg(windows)]
+fn default_platform_shell() -> String {
+    std::env::var("COMSPEC")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "cmd.exe".to_string())
+}
+
+/// Wrap a full shell command line so it executes through the selected shell.
+#[cfg(not(windows))]
+fn shell_wrapped_command(shell: &str, line: &str) -> tokio::process::Command {
+    let mut command = crate::process::tokio_command(shell);
     command.arg("-c").arg(line);
     command
 }
 
 #[cfg(windows)]
-fn shell_wrapped_command(line: &str) -> tokio::process::Command {
-    let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
-    let mut command = crate::process::tokio_command(comspec);
+fn shell_wrapped_command(shell: &str, line: &str) -> tokio::process::Command {
+    let mut command = crate::process::tokio_command(shell);
     command.arg("/C").arg(line);
     command
 }

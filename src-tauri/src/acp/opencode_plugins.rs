@@ -64,12 +64,14 @@ fn opencode_cache_dir() -> Option<PathBuf> {
 
 pub(crate) fn xdg_config_home() -> Option<PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
 }
 
 fn xdg_cache_home() -> Option<PathBuf> {
     std::env::var_os("XDG_CACHE_HOME")
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|h| h.join(".cache")))
 }

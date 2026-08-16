@@ -1,7 +1,8 @@
 import { memo, useMemo, useState, type ReactNode } from "react"
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
-import type { AgentToolCall } from "@/lib/types"
+import type { AgentToolCall, AgentType } from "@/lib/types"
 import { tryParseJson, extractJsonField } from "./content-parts-renderer"
+import { SubagentSessionDialog } from "./subagent-session-dialog"
 import { shortAgentId } from "@/lib/collab-tool"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Shimmer } from "@/components/ai-elements/shimmer"
@@ -11,7 +12,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/instant-collapsible"
 import { cn } from "@/lib/utils"
-import { ChevronRightIcon, Clock3, Loader2 } from "lucide-react"
+import { ChevronRightIcon, Clock3, Loader2, MessagesSquare } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { AgentCapsule } from "./agent-capsule"
 import {
@@ -115,6 +116,77 @@ function parseTaskOutcomeEnvelope(
  *  so the count stays small in practice; this is a backstop). */
 const AGENT_TRANSCRIPT_RENDER_TAIL = 20
 
+interface GrokSubagentProgress {
+  durationMs: number | null
+  turnCount: number | null
+  toolCallCount: number | null
+  contextUsagePct: number | null
+}
+
+/**
+ * Grok's live sub-agent progress, forwarded by the backend as
+ * `meta.grokSubagentProgress` on the launching Agent tool call
+ * (`connection.rs::map_grok_subagent_notification`, from grok 0.2.11x's
+ * `subagent_progress` ext notification). Grok never streams a child's chunks
+ * or tool calls over ACP, so this ticker is the only live signal of what the
+ * child is doing. `null` for any other meta shape.
+ */
+function parseGrokSubagentProgress(
+  meta: Record<string, unknown> | null | undefined
+): GrokSubagentProgress | null {
+  if (!meta || typeof meta !== "object") return null
+  const raw = (meta as Record<string, unknown>).grokSubagentProgress
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null
+  const obj = raw as Record<string, unknown>
+  const num = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? v : null
+  const progress: GrokSubagentProgress = {
+    durationMs: num(obj.durationMs),
+    turnCount: num(obj.turnCount),
+    toolCallCount: num(obj.toolCallCount),
+    contextUsagePct: num(obj.contextUsagePct),
+  }
+  return progress.durationMs != null ||
+    progress.turnCount != null ||
+    progress.toolCallCount != null ||
+    progress.contextUsagePct != null
+    ? progress
+    : null
+}
+
+/**
+ * The child's own session, when the sub-agent ran as a standalone session on
+ * disk. Grok is the case that has one: it runs every `spawn_subagent` child as
+ * a full session that streams its transcript to disk, and forwards none of it
+ * over ACP — so opening that session is the ONLY way to watch the child work.
+ *
+ * Live it arrives as `meta.grokSubagentSession.childSessionId`
+ * (`connection.rs::grok_subagent_meta`, re-sent on every progress tick because
+ * meta is replaced wholesale); in history it comes off the parsed
+ * `agent_stats.child_session_id` (`parsers/grok.rs::subagent_stats`). `null`
+ * for every other agent.
+ *
+ * The agent type is pinned to grok because those two are the only producers,
+ * and a grok parent's child is itself a grok session — the card has no
+ * conversation-level agent type of its own to read. If another agent ever
+ * populates `child_session_id`, this is the line to revisit.
+ */
+function parseChildSessionId(
+  meta: Record<string, unknown> | null | undefined,
+  statsChildSessionId: string | null | undefined
+): { sessionId: string; agentType: AgentType } | null {
+  const raw = meta?.grokSubagentSession
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const live = (raw as Record<string, unknown>).childSessionId
+    if (typeof live === "string" && live.length > 0) {
+      return { sessionId: live, agentType: "grok" }
+    }
+  }
+  return statsChildSessionId && statsChildSessionId.length > 0
+    ? { sessionId: statsChildSessionId, agentType: "grok" }
+    : null
+}
+
 // ── main component ────────────────────────────────────────────────────
 
 export const AgentToolCallPart = memo(function AgentToolCallPart({
@@ -214,6 +286,14 @@ export const AgentToolCallPart = memo(function AgentToolCallPart({
     [parsed, part.input]
   )
 
+  // codex 0.147's native team-of-agents marks its capsules as LAUNCH-only
+  // (`CODEX_SUBAGENT_LAUNCH_KEY`, written by both the live path and the rollout
+  // parser). The card settles when codex acknowledges the spawn, which is not
+  // when the child finishes — codex forwards no further progress, and an
+  // asynchronous child can still be working long after. Say so, rather than let
+  // a green "completed" claim the sub-agent is done.
+  const isLaunchOnly = parsed?.__houhubCodexSubagentLaunch === true
+
   // codex spawn capsules carry the sub-agent's UUID (`agent_id`); show it in the
   // pill so the execution capsule reads uniformly with the live/wait collab
   // capsules. Other agents (e.g. Claude Task) have no `agent_id` → no badge.
@@ -266,6 +346,47 @@ export const AgentToolCallPart = memo(function AgentToolCallPart({
     () => adaptToolCalls(agentStats?.tool_calls ?? [], part.toolCallId),
     [agentStats?.tool_calls, part.toolCallId]
   )
+
+  // Grok live sub-agent ticker — the only live signal of the child's work
+  // (grok forwards no child chunks/tool calls). Shown while the child runs:
+  // in-turn for a blocking spawn, alongside the "running in background" state
+  // for a background one. Frozen values disappear with those states.
+  const grokProgress = useMemo(
+    () => parseGrokSubagentProgress(part.meta),
+    [part.meta]
+  )
+
+  // The child's own session, when it has one (grok). Available live — from the
+  // spawn notification's meta — as well as in history, so a blocking child can
+  // be watched while it works instead of only after it reports back.
+  const childSession = useMemo(
+    () => parseChildSessionId(part.meta, agentStats?.child_session_id),
+    [part.meta, agentStats?.child_session_id]
+  )
+  const [sessionOpen, setSessionOpen] = useState(false)
+  const grokProgressLine = useMemo(() => {
+    if (!grokProgress) return null
+    const pieces: string[] = []
+    if (grokProgress.toolCallCount != null) {
+      pieces.push(
+        t("agentProgressTools", { count: grokProgress.toolCallCount })
+      )
+    }
+    if (grokProgress.turnCount != null) {
+      pieces.push(t("agentProgressTurns", { count: grokProgress.turnCount }))
+    }
+    if (grokProgress.durationMs != null) {
+      pieces.push(formatDuration(grokProgress.durationMs))
+    }
+    if (grokProgress.contextUsagePct != null) {
+      pieces.push(
+        t("agentProgressContext", {
+          pct: Math.round(grokProgress.contextUsagePct),
+        })
+      )
+    }
+    return pieces.length > 0 ? pieces.join(" · ") : null
+  }, [grokProgress, t])
 
   const durationSuffix = useMemo(() => {
     if (agentStats?.total_duration_ms) {
@@ -374,6 +495,50 @@ export const AgentToolCallPart = memo(function AgentToolCallPart({
               : t("agentRunning")}
           </Shimmer>
         </div>
+      )}
+
+      {/* codex native sub-agent: the card is the LAUNCH, not the run. Shown
+          once it settles, where "completed" would otherwise read as "the
+          sub-agent finished". */}
+      {isLaunchOnly && !isRunning && (
+        <div className="text-xs text-muted-foreground">
+          {t("agentCodexLaunchOnly")}
+        </div>
+      )}
+
+      {/* Grok live sub-agent ticker (`subagent_progress`) — only while the
+          child is still running; the settled card renders stats/result. */}
+      {(isRunning || isLiveBackgroundLaunch) && grokProgressLine && (
+        <div className="text-xs text-muted-foreground">{grokProgressLine}</div>
+      )}
+
+      {/* The child ran as a session of its own (grok): offer to open its
+          transcript. Shown while it runs too — grok forwards nothing of the
+          child over ACP, so this is the only way to watch it work. */}
+      {childSession && (
+        <>
+          <button
+            type="button"
+            onClick={() => setSessionOpen(true)}
+            className="flex w-fit items-center gap-1.5 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+          >
+            <MessagesSquare aria-hidden className="size-3.5 shrink-0" />
+            {t("agentSessionAction")}
+          </button>
+          {sessionOpen && (
+            <SubagentSessionDialog
+              open={sessionOpen}
+              onOpenChange={setSessionOpen}
+              sessionId={childSession.sessionId}
+              agentType={childSession.agentType}
+              subagentType={subagentType}
+              description={description}
+              // Keep re-reading the child's transcript from disk while its
+              // launch call is unsettled or the background child is still out.
+              live={isRunning || isLiveBackgroundLaunch}
+            />
+          )}
+        </>
       )}
 
       {/* Error output */}

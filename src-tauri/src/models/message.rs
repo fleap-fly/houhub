@@ -50,6 +50,11 @@ pub struct AgentExecutionStats {
     /// Tool calls extracted from the subagent's own JSONL transcript.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub tool_calls: Vec<AgentToolCall>,
+    /// The child's own session id when a sub-agent runs as a standalone
+    /// session on disk (Grok's native sub-agents). The history UI can open it
+    /// directly even though the child is hidden from the sidebar.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_session_id: Option<String>,
 }
 
 /// Image payload shared by content blocks and ACP wire events.
@@ -103,6 +108,10 @@ pub enum ContentBlock {
         tool_use_id: Option<String>,
         tool_name: String,
         input_preview: Option<String>,
+        /// Agent-reported lifecycle status when the transcript provides one.
+        /// `None` means the parser has no affirmative status to report.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
         /// ACP extensibility metadata associated with the tool call. The
         /// `delegate_to_agent` lifecycle writes
         /// `meta["houhub.delegation"] = { status, child_connection_id,

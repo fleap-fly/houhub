@@ -12,6 +12,7 @@ use crate::parsers::acp_native::AcpNativeParser;
 use crate::parsers::cline::ClineParser;
 use crate::parsers::codebuddy::CodeBuddyParser;
 use crate::parsers::codex::CodexParser;
+use crate::parsers::deepseek::DeepSeekParser;
 use crate::parsers::cursor::CursorParser;
 use crate::parsers::gemini::GeminiParser;
 use crate::parsers::grok::GrokParser;
@@ -181,6 +182,7 @@ fn list_conversations_sync(
         (AgentType::Pi, Box::new(PiParser::new())),
         (AgentType::Grok, Box::new(GrokParser::new())),
         (AgentType::Cursor, Box::new(CursorParser::new())),
+        (AgentType::DeepSeek, Box::new(DeepSeekParser::new())),
     ];
 
     for (at, parser) in &parsers {
@@ -290,6 +292,9 @@ pub async fn get_conversation(
             AgentType::Pi => Box::new(PiParser::new()),
             AgentType::Grok => Box::new(GrokParser::new()),
             AgentType::Cursor => Box::new(CursorParser::new()),
+            AgentType::DeepSeek => Box::new(DeepSeekParser::new()),
+            // Custom ACP agents have no native store to reverse-engineer;
+            // their history is houhub's own ACP transcript.
             AgentType::Custom(_) => Box::new(AcpNativeParser::new(agent_type)),
         };
 
@@ -944,32 +949,38 @@ pub async fn get_folder_conversation_core(
 
     let (mut turns, session_stats, resolved_ext_id, parsed_title, parsed_model, transcript_watermark) =
         if let Some(ref ext_id) = summary.external_id {
-            let at = summary.agent_type;
-            let eid = ext_id.clone();
-            let db_created_at = summary.created_at;
-            let folder_path_for_fallback = {
-                let folder = folder_service::get_folder_by_id(conn, summary.folder_id)
-                    .await
-                    .ok()
-                    .flatten();
-                folder.map(|f| f.path)
+        let at = summary.agent_type;
+        let eid = ext_id.clone();
+        let db_created_at = summary.created_at;
+        // Prefer the recorded origin cwd (set when a removed task worktree's
+        // conversations were re-parented) over the current folder's path — the
+        // session file still carries the ORIGINAL cwd, so matching on the new
+        // parent folder would never find it.
+        let folder_path_for_fallback = match summary.origin_cwd.clone() {
+            Some(cwd) => Some(cwd),
+            None => folder_service::get_folder_by_id(conn, summary.folder_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|f| f.path),
+        };
+        tokio::task::spawn_blocking(move || -> Result<_, AppCommandError> {
+            let parser: Box<dyn AgentParser> = match at {
+                AgentType::ClaudeCode => Box::new(ClaudeParser::new()),
+                AgentType::Codex => Box::new(CodexParser::new()),
+                AgentType::OpenCode => Box::new(OpenCodeParser::new()),
+                AgentType::Gemini => Box::new(GeminiParser::new()),
+                AgentType::OpenClaw => Box::new(OpenClawParser::new()),
+                AgentType::Cline => Box::new(ClineParser::new()),
+                AgentType::Hermes => Box::new(HermesParser::new()),
+                AgentType::CodeBuddy => Box::new(CodeBuddyParser::new()),
+                AgentType::KimiCode => Box::new(KimiCodeParser::new()),
+                AgentType::Pi => Box::new(PiParser::new()),
+                AgentType::Grok => Box::new(GrokParser::new()),
+                AgentType::Cursor => Box::new(CursorParser::new()),
+                AgentType::DeepSeek => Box::new(DeepSeekParser::new()),
+                AgentType::Custom(_) => Box::new(AcpNativeParser::new(at)),
             };
-            tokio::task::spawn_blocking(move || -> Result<_, AppCommandError> {
-                let parser: Box<dyn AgentParser> = match at {
-                    AgentType::ClaudeCode => Box::new(ClaudeParser::new()),
-                    AgentType::Codex => Box::new(CodexParser::new()),
-                    AgentType::OpenCode => Box::new(OpenCodeParser::new()),
-                    AgentType::Gemini => Box::new(GeminiParser::new()),
-                    AgentType::OpenClaw => Box::new(OpenClawParser::new()),
-                    AgentType::Cline => Box::new(ClineParser::new()),
-                    AgentType::Hermes => Box::new(HermesParser::new()),
-                    AgentType::CodeBuddy => Box::new(CodeBuddyParser::new()),
-                    AgentType::KimiCode => Box::new(KimiCodeParser::new()),
-                    AgentType::Pi => Box::new(PiParser::new()),
-                    AgentType::Grok => Box::new(GrokParser::new()),
-                    AgentType::Cursor => Box::new(CursorParser::new()),
-                    AgentType::Custom(_) => Box::new(AcpNativeParser::new(at)),
-                };
                 match parser.get_conversation(&eid) {
                     Ok(d) => Ok((
                         d.turns,
@@ -2025,6 +2036,7 @@ mod tests {
                 tool_use_id: tool_use_id.map(String::from),
                 tool_name: tool_name.into(),
                 input_preview: None,
+                status: None,
                 meta: None,
             }],
             timestamp: chrono::Utc::now(),
@@ -2489,6 +2501,7 @@ mod tests {
                 tool_use_id: Some("tu-1".into()),
                 tool_name: "delegate_to_agent".into(),
                 input_preview: None,
+                status: None,
                 meta: Some(pre_existing.clone()),
             }],
             timestamp: chrono::Utc::now(),

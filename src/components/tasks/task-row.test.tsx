@@ -56,6 +56,7 @@ function renderRow(
     onRequeue: noop,
     onViewSession: noop,
     onMerge: noop,
+    onUnqueueMerge: noop,
     onComplete: noop,
     onArchive: noop,
     onEdit: noop,
@@ -156,5 +157,46 @@ describe("TaskRow", () => {
 
     renderRow(task({ status: "running", latest_progress: "installing deps" }))
     expect(screen.getByText("installing deps")).toBeTruthy()
+  })
+
+  it("marks the row with the agent the task runs under", () => {
+    const { unmount } = renderRow(task({ agent_type: "codex" }))
+    expect(screen.getByTitle("Codex")).toBeInTheDocument()
+    unmount()
+
+    // A payload that never passed through the list's resolution still has the
+    // task's own override to go on.
+    renderRow(
+      task({
+        agent_type: null,
+        config: {
+          prompt_blocks: [],
+          display_text: "",
+          agent_type: "gemini",
+          config_values: {},
+        },
+      })
+    )
+    expect(screen.getByTitle("Gemini CLI")).toBeInTheDocument()
+  })
+
+  it("badges a deleted worktree, but not a task that never had one", () => {
+    const { unmount } = renderRow(
+      task({ status: "done", worktree_folder_id: null })
+    )
+    expect(screen.getByText("Worktree removed")).toBeInTheDocument()
+    unmount()
+
+    renderRow(
+      task({
+        status: "todo",
+        files_changed: null,
+        worktree_folder_id: null,
+        work_branch: null,
+        base_branch: null,
+        base_sha: null,
+      })
+    )
+    expect(screen.queryByText("Worktree removed")).toBeNull()
   })
 })

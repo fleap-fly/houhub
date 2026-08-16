@@ -470,6 +470,7 @@ export async function acpInstallUvTool(taskId: string): Promise<void> {
   )
 }
 
+/** Install the global Pi CLI used by the pi-acp adapter. */
 export async function acpInstallPiBinary(taskId: string): Promise<void> {
   return getTransport().call(
     "acp_install_pi_binary",
@@ -478,55 +479,9 @@ export async function acpInstallPiBinary(taskId: string): Promise<void> {
   )
 }
 
+/** Remove the global Pi CLI installed by HouHub. */
 export async function acpUninstallPiBinary(taskId: string): Promise<void> {
   return getTransport().call("acp_uninstall_pi_binary", { taskId })
-}
-
-export interface PiConfigProjection {
-  defaultProvider: string | null
-  defaultModel: string | null
-  defaultThinkingLevel: string | null
-  authProviders: string[]
-  customProviders: Array<{
-    id: string
-    baseUrl: string
-    api: string
-    models: string[]
-  }>
-}
-
-export interface PiConfigUpdate {
-  provider: string
-  model: string
-  models?: string[] | null
-  thinkingLevel?: string | null
-  apiKey?: string | null
-  customBaseUrl?: string | null
-  customApi?: string | null
-}
-
-export async function acpUpdatePiConfig(update: PiConfigUpdate): Promise<void> {
-  return getTransport().call("acp_update_pi_config", {
-    provider: update.provider,
-    model: update.model,
-    models: update.models ?? null,
-    thinkingLevel: update.thinkingLevel ?? null,
-    apiKey: update.apiKey ?? null,
-    customBaseUrl: update.customBaseUrl ?? null,
-    customApi: update.customApi ?? null,
-  })
-}
-
-export async function acpLoadPiConfig(): Promise<PiConfigProjection> {
-  return getTransport().call("acp_load_pi_config", {})
-}
-
-export async function acpValidatePiCommand(command: string): Promise<{
-  found: boolean
-  resolvedPath: string | null
-  version: string | null
-}> {
-  return getTransport().call("acp_validate_pi_command", { command })
 }
 
 export async function acpDetectAgentLocalVersion(
@@ -750,11 +705,166 @@ export async function acpFetchKimiModels(params: {
   })
 }
 
+/** Fetch model ids from an OpenAI-compatible endpoint for the model-provider UI. */
 export async function fetchOpenAiCompatibleModels(params: {
   baseUrl: string
   apiKey: string
 }): Promise<string[]> {
-  return acpFetchKimiModels(params)
+  return getTransport().call("acp_fetch_kimi_models", {
+    baseUrl: params.baseUrl,
+    apiKey: params.apiKey,
+  })
+}
+
+/**
+ * Apply a structured Pi config update. Merge-writes pi's native
+ * `~/.pi/agent/settings.json` (`defaultProvider` / `defaultModel` /
+ * `defaultThinkingLevel`) and, when an API key is supplied,
+ * `~/.pi/agent/auth.json` (`{ "<provider>": { "type": "api_key", "key": ... } }`),
+ * preserving every other key in both files.
+ */
+export async function acpUpdatePiConfig(params: {
+  provider: string
+  model: string
+  thinkingLevel?: string
+  apiKey?: string
+  /** Custom/self-hosted provider endpoint. When set, `provider` is written to
+   * `models.json` (with `customApi` as the wire protocol). Omit for built-ins. */
+  customBaseUrl?: string
+  customApi?: string
+  /** Reasoning declaration for `model` inside the custom provider — pi refuses every
+   * thinking level for a model that doesn't declare one. Omit to leave whatever the
+   * entry already says untouched (built-in providers carry pi's own declaration). */
+  modelReasoning?: {
+    reasoning: boolean
+    thinkingLevelMap: Record<string, string | null>
+  }
+}): Promise<void> {
+  return getTransport().call("acp_update_pi_config", {
+    provider: params.provider,
+    model: params.model,
+    thinkingLevel: params.thinkingLevel ?? null,
+    apiKey: params.apiKey ?? null,
+    customBaseUrl: params.customBaseUrl ?? null,
+    customApi: params.customApi ?? null,
+    modelReasoning: params.modelReasoning ?? null,
+  })
+}
+
+/**
+ * Read pi's current native config for the settings panel: the three
+ * `settings.json` model keys plus the provider names present in `auth.json`
+ * (sorted). Missing files surface as `null` / an empty list.
+ */
+export async function loadPiConfig(): Promise<{
+  defaultProvider: string | null
+  defaultModel: string | null
+  defaultThinkingLevel: string | null
+  authProviders: string[]
+  /** Custom/self-hosted providers defined in `models.json`, sorted by id. Used
+   * to rehydrate the custom-provider form and detect a custom `defaultProvider`. */
+  customProviders: {
+    id: string
+    baseUrl: string
+    api: string
+    /** Models the provider defines, sorted by id. `reasoning: null` means the
+     * entry never declared one — distinct from an explicit `false`. */
+    models: {
+      id: string
+      reasoning: boolean | null
+      thinkingLevelMap: Record<string, string | null>
+    }[]
+  }[]
+}> {
+  return getTransport().call("acp_load_pi_config", {})
+}
+
+/**
+ * Validate a user-supplied custom pi binary (BYO-pi): resolve it (path or
+ * `PATH`) and best-effort read its `--version`. A not-found binary returns
+ * `{ found: false, resolvedPath: null, version: null }` (not an error).
+ */
+export async function acpValidatePiCommand(command: string): Promise<{
+  found: boolean
+  resolvedPath: string | null
+  version: string | null
+}> {
+  return getTransport().call("acp_validate_pi_command", { command })
+}
+
+/** One repo-shipped pi resource that only loads once the workspace is trusted. */
+export type PiProjectResource = {
+  path: string
+  /** Display kind, e.g. `.pi/extensions`, `.agents/skills`. */
+  kind: string
+  /**
+   * True when loading it means running repo-controlled code at pi startup
+   * (`.pi/extensions` modules, `.pi/settings.json` project packages) rather than
+   * just feeding pi repo-controlled text.
+   */
+  executesCode: boolean
+}
+
+export type PiProjectTrustState = {
+  workspace: string
+  resources: PiProjectResource[]
+  /** `null` ⇒ nobody has decided, so pi leaves the resources unloaded. */
+  decision: boolean | null
+  /** Deciding directory — may be an ancestor of `workspace`. */
+  decidedAt: string | null
+  trustFile: string
+  /**
+   * Whether the user has confirmed this folder's grant in houhub. A trusted but
+   * unacknowledged folder is one an older build auto-trusted without asking, so
+   * the backend refuses to launch pi there until it is answered.
+   */
+  acknowledged: boolean
+}
+
+/**
+ * Which repo-shipped pi resources a workspace ships, and whether any trust
+ * decision already covers it. Read-only.
+ */
+export async function acpPiProjectTrustState(
+  workspace: string
+): Promise<PiProjectTrustState> {
+  return getTransport().call("acp_pi_project_trust_state", { workspace })
+}
+
+/**
+ * Record (`true`/`false`) or clear (`null`) a project-trust decision in pi's
+ * `trust.json`. The only path that writes trust — call it from an explicit user
+ * action, never automatically: a `true` here lets the repo's `.pi/extensions`
+ * execute at pi startup, is inherited by every subdirectory, and also applies to
+ * the user's standalone `pi` CLI.
+ */
+export async function acpPiSetProjectTrust(
+  workspace: string,
+  trusted: boolean | null
+): Promise<void> {
+  return getTransport().call("acp_pi_set_project_trust", { workspace, trusted })
+}
+
+/** One decision recorded in pi's `trust.json`. */
+export type PiTrustEntry = {
+  path: string
+  trusted: boolean
+}
+
+/**
+ * Record that the user reviewed an existing grant and chose to keep it, which
+ * clears the launch gate for that folder. Leaves pi's `trust.json` alone — the
+ * grant itself isn't changing, only houhub's record that it was confirmed.
+ */
+export async function acpPiAcknowledgeProjectTrust(
+  workspace: string
+): Promise<void> {
+  return getTransport().call("acp_pi_acknowledge_project_trust", { workspace })
+}
+
+/** Every decision in pi's `trust.json`, for review and revocation. */
+export async function acpPiListTrustEntries(): Promise<PiTrustEntry[]> {
+  return getTransport().call("acp_pi_list_trust_entries", {})
 }
 
 /**
@@ -2913,16 +3023,26 @@ export async function workTaskCancel(
   return getTransport().call("work_task_cancel", { id, reason: reason ?? null })
 }
 
+/** Dispatch the agent-driven merge (`message: null` = the agent writes the
+ *  commit message itself); the outcome rides `task://changed` events.
+ *  Resolves `true` when the merge was QUEUED behind another landing of the same
+ *  project instead of started — merges are serial per project, so a second
+ *  acceptance takes a place in line rather than failing. */
 export async function workTaskMerge(
   id: number,
   message: string | null,
   deleteWorktree: boolean
-): Promise<void> {
+): Promise<boolean> {
   return getTransport().call("work_task_merge", {
     id,
     message,
     deleteWorktree,
   })
+}
+
+/** Withdraw a merge waiting in the project's queue; the task stays in review. */
+export async function workTaskMergeUnqueue(id: number): Promise<void> {
+  return getTransport().call("work_task_merge_unqueue", { id })
 }
 
 /** Finish a reviewed task that has nothing to merge (review → done), taking

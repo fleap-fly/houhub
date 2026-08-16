@@ -142,8 +142,9 @@ async function fetchGitHubReleaseText(url) {
 function forbiddenNeedles() {
   const join = (...parts) => parts.join("")
   return [
-    join("co", "deg"),
-    join("Co", "deG"),
+    // Match the standalone upstream product name without flagging legitimate
+    // identifiers such as `OpenCodeGlobal`.
+    /(^|[^a-z0-9])codeg(?=$|[^a-z0-9])/i,
     join("xin", "taofei"),
     join("fei", "tao"),
     join("cursor", "agent"),
@@ -192,9 +193,14 @@ function checkBrandHygiene() {
     const text = buffer.toString("utf8")
     const lower = text.toLowerCase()
     for (const needle of needles) {
-      const found = lower.indexOf(needle.toLowerCase())
-      if (found !== -1) {
-        const line = text.slice(0, found).split(/\r?\n/).length
+      const match = needle instanceof RegExp
+        ? needle.exec(text)
+        : (() => {
+            const found = lower.indexOf(needle.toLowerCase())
+            return found === -1 ? null : { index: found }
+          })()
+      if (match) {
+        const line = text.slice(0, match.index).split(/\r?\n/).length
         hits.push(`${file}:${line} contains forbidden upstream/contact marker`)
       }
     }

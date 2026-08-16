@@ -490,6 +490,7 @@ impl OpenCodeParser {
                             tool_use_id: call_id.clone(),
                             tool_name: "Agent".to_string(),
                             input_preview: Some(agent_input.to_string()),
+                            status: None,
                             meta: None,
                         });
 
@@ -532,6 +533,7 @@ impl OpenCodeParser {
                             lines_removed: None,
                             other_tool_count: None,
                             tool_calls,
+                            child_session_id: None,
                         });
 
                         let has_error_field = state.and_then(|s| s.get("error")).is_some();
@@ -549,6 +551,7 @@ impl OpenCodeParser {
                             tool_use_id: call_id.clone(),
                             tool_name: raw_tool_name.to_string(),
                             input_preview,
+                            status: None,
                             meta: None,
                         });
 

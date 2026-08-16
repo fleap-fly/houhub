@@ -27,11 +27,11 @@ use crate::db::entities::{folder, work_task, work_task_event, work_task_settings
 use crate::db::error::DbError;
 use crate::models::{
     WorkTaskConfig, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
-    WorkTaskMergeState,
+    WorkTaskMergeState, WorkTaskQueuedMerge,
 };
 
-// `WorkTaskPendingMerge` / `WorkTaskPreflight` are referenced via `crate::models::`
-// in their fns to keep this import list stable.
+// `WorkTaskPreflight` is referenced via `crate::models::` in its fns to keep
+// this import list stable.
 
 pub fn status_str(s: WorkTaskStatus) -> &'static str {
     match s {
@@ -48,6 +48,13 @@ pub fn status_str(s: WorkTaskStatus) -> &'static str {
     }
 }
 
+/// Decode the parked merge intent of a row. Tolerant on purpose: the column
+/// once held a different (long-dead) shape, and an undecodable value means
+/// "nothing queued" rather than an error the board would have to render.
+pub fn queued_merge(pending_merge: Option<&str>) -> Option<WorkTaskQueuedMerge> {
+    pending_merge.and_then(|s| serde_json::from_str::<WorkTaskQueuedMerge>(s).ok())
+}
+
 fn to_info(m: work_task::Model) -> WorkTaskInfo {
     WorkTaskInfo {
         id: m.id,
@@ -60,6 +67,8 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
         run_seq: m.run_seq,
         sort_order: m.sort_order,
         worktree_folder_id: m.worktree_folder_id,
+        worktree_missing: false, // stamped by the command layer (needs disk + folder rows)
+        agent_type: None,        // stamped by the command layer (needs folder settings)
         conversation_id: m.conversation_id,
         connection_id: m.connection_id,
         base_branch: m.base_branch,
@@ -76,6 +85,7 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
             .preflight
             .as_deref()
             .and_then(|p| serde_json::from_str(p).ok()),
+        merge_queued: queued_merge(m.pending_merge.as_deref()),
         archived_at: m.archived_at,
         scheduled_at: m.scheduled_at,
         latest_progress: None,
@@ -942,6 +952,7 @@ pub async fn requeue_canceled(
     conn: &DatabaseConnection,
     id: i32,
     note: Option<&str>,
+    blocks: &[serde_json::Value],
 ) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
@@ -968,13 +979,18 @@ pub async fn requeue_canceled(
         txn.rollback().await?;
         return Ok(false);
     }
-    if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
+    let note = note.map(str::trim).filter(|n| !n.is_empty());
+    if note.is_some() || !blocks.is_empty() {
         record_event(
             &txn,
             id,
             "user_action",
             "user",
-            Some(serde_json::json!({ "action": "requeue", "note": note })),
+            Some(serde_json::json!({
+                "action": "requeue",
+                "note": note.unwrap_or_default(),
+                "blocks": blocks,
+            })),
         )
         .await?;
     }
@@ -1386,12 +1402,15 @@ pub async fn begin_merge(
     conn: &DatabaseConnection,
     id: i32,
     state: &WorkTaskMergeState,
+    expect_run_seq: i32,
+    auto: bool,
+    expect_pending_merge: Option<&str>,
 ) -> Result<Option<i32>, DbError> {
     let state_json = serde_json::to_string(state)
         .map_err(|e| DbError::Validation(format!("merge state not serializable: {e}")))?;
     let now = Utc::now();
     let txn = conn.begin().await?;
-    let res = work_task::Entity::update_many()
+    let mut update = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::Status,
             Expr::value(status_str(WorkTaskStatus::Merging)),
@@ -1406,12 +1425,39 @@ pub async fn begin_merge(
         .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
         .col_expr(work_task::Column::MergeState, Expr::value(Some(state_json)))
         .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
+        // The queued intent (if any) is being spent right here — whether this
+        // dispatch came from the pump draining the queue or from a click that
+        // found the slot free.
+        .col_expr(work_task::Column::PendingMerge, Expr::value(None::<String>))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
-        .filter(work_task::Column::DeletedAt.is_null())
-        .exec(&txn)
-        .await?;
+        // Bind the dispatch to the exact review generation the caller
+        // validated: a merge_task that sat out the folder lock while the row
+        // moved on (another dispatch bounced, a requeue) must miss, not merge
+        // a generation nobody looked at.
+        .filter(work_task::Column::RunSeq.eq(expect_run_seq))
+        .filter(work_task::Column::DeletedAt.is_null());
+    if auto {
+        // last_error is the "waits for a human" latch of the no-auto-retry
+        // invariant: an unattended dispatch never clears it — only a user's
+        // does (the manual path right below this filter).
+        update = update.filter(work_task::Column::LastError.is_null());
+        // A merge the user parked is theirs to land, with the commit message
+        // and worktree choice THEY picked; the unattended dispatch carries
+        // neither and would clear the intent on its way past. This is the
+        // authoritative gate — the sweep's own eligibility check reads a
+        // snapshot taken before the folder lock, so a merge queued while it
+        // worked would otherwise slip through here.
+        update = update.filter(work_task::Column::PendingMerge.is_null());
+    }
+    // A dispatch OF a queued merge also binds to that exact intent: run_seq
+    // alone cannot tell "the merge the pump picked up" from "the one the user
+    // withdrew or edited a moment later", and both leave the generation alone.
+    if let Some(expected) = expect_pending_merge {
+        update = update.filter(work_task::Column::PendingMerge.eq(expected));
+    }
+    let res = update.exec(&txn).await?;
     if res.rows_affected != 1 {
         txn.rollback().await?;
         return Ok(None);
@@ -1421,28 +1467,164 @@ pub async fn begin_merge(
         .await?
         .map(|m| m.run_seq)
         .ok_or_else(|| DbError::NotFound(format!("work task {id}")))?;
+    let actor = if auto { "auto" } else { "user" };
     record_event(
         &txn,
         id,
         "merge_attempt",
-        "user",
+        actor,
         Some(serde_json::json!({
             "strategy": state.strategy,
             "pre_merge_head": state.pre_merge_head,
+            "auto": auto,
         })),
     )
     .await?;
     status_changed_event(
         &txn,
         id,
-        "user",
+        actor,
         Some(WorkTaskStatus::Review),
         WorkTaskStatus::Merging,
-        None,
+        auto.then(|| serde_json::json!({ "reason": "started by auto-merge" })),
     )
     .await?;
     txn.commit().await?;
     Ok(Some(run_seq))
+}
+
+/// Attach a generation-guarded error banner to a task that remains in review.
+pub async fn set_review_error(
+    conn: &DatabaseConnection,
+    id: i32,
+    run_seq: i32,
+    error: &str,
+) -> Result<bool, DbError> {
+    let result = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::LastError,
+            Expr::value(Some(error.to_string())),
+        )
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
+        .filter(work_task::Column::RunSeq.eq(run_seq))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(result.rows_affected == 1)
+}
+
+/// Park a merge on a reviewed task because the folder's merge slot is busy —
+/// the review→merging CAS's patient twin, and the only writer of
+/// `pending_merge`. Same generation binding as [`begin_merge`] (review +
+/// `expect_run_seq`), so an intent can never land on a row that moved on while
+/// the caller waited for the folder lock.
+///
+/// Clears `last_error` like a manual dispatch does: the user re-asking for this
+/// merge IS the human intervention the banner was waiting for, and leaving it
+/// on would make the queued row look like it had already failed.
+///
+/// `expect_pending_merge` is the pump's re-queue guard: `Some(json)` demands
+/// that the row still hold exactly that intent, so a re-park cannot resurrect
+/// a withdrawn merge or overwrite an edit the user made while the pump was
+/// working. A click passes `None` — the user's latest word always wins.
+pub async fn queue_merge(
+    conn: &DatabaseConnection,
+    id: i32,
+    intent: &WorkTaskQueuedMerge,
+    expect_run_seq: i32,
+    expect_pending_merge: Option<&str>,
+) -> Result<bool, DbError> {
+    let intent_json = serde_json::to_string(intent)
+        .map_err(|e| DbError::Validation(format!("merge intent not serializable: {e}")))?;
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let mut update = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::PendingMerge,
+            Expr::value(Some(intent_json)),
+        )
+        .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
+        .filter(work_task::Column::RunSeq.eq(expect_run_seq))
+        .filter(work_task::Column::DeletedAt.is_null());
+    if let Some(expected) = expect_pending_merge {
+        update = update.filter(work_task::Column::PendingMerge.eq(expected));
+    }
+    let res = update.exec(&txn).await?;
+    if res.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    record_event(
+        &txn,
+        id,
+        "merge_queued",
+        "user",
+        Some(serde_json::json!({
+            "auto_message": intent.message.is_none(),
+            "delete_worktree": intent.delete_worktree,
+        })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(true)
+}
+
+/// The user withdrew a queued merge (still in review, nothing dispatched yet).
+/// CAS-guarded on "actually queued" so a withdrawal that races the pump's
+/// dispatch reports the miss instead of silently pretending.
+pub async fn unqueue_merge(conn: &DatabaseConnection, id: i32) -> Result<bool, DbError> {
+    let txn = conn.begin().await?;
+    let res = work_task::Entity::update_many()
+        .col_expr(work_task::Column::PendingMerge, Expr::value(None::<String>))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
+        .filter(work_task::Column::PendingMerge.is_not_null())
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(&txn)
+        .await?;
+    if res.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    record_event(
+        &txn,
+        id,
+        "user_action",
+        "user",
+        Some(serde_json::json!({ "action": "unqueue_merge" })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(true)
+}
+
+/// Drop a queued intent without a timeline entry — the engine's cleanup when a
+/// queued dispatch turns out to be impossible (the reason lands on the row as
+/// the error banner instead, which is what the user needs to read).
+///
+/// CAS'd on the exact intent being refused: by the time a dispatch fails, the
+/// user may have withdrawn that merge or queued a different one, and neither
+/// deserves to be swept up by the refusal of an older request. `false` = the
+/// row moved on, so the caller must not banner it either.
+pub async fn clear_queued_merge(
+    conn: &DatabaseConnection,
+    id: i32,
+    expect_pending_merge: &str,
+) -> Result<bool, DbError> {
+    let res = work_task::Entity::update_many()
+        .col_expr(work_task::Column::PendingMerge, Expr::value(None::<String>))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::PendingMerge.eq(expect_pending_merge))
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
 }
 
 /// merging → done. The merge path's writer of `done` (the other is
@@ -1773,6 +1955,55 @@ pub async fn clear_worktree(conn: &DatabaseConnection, id: i32) -> Result<(), Db
         .exec(conn)
         .await?;
     Ok(())
+}
+
+const WORKTREE_BUSY_STATUSES: &[WorkTaskStatus] = &[
+    WorkTaskStatus::Queued,
+    WorkTaskStatus::Preparing,
+    WorkTaskStatus::Running,
+    WorkTaskStatus::AwaitingInput,
+    WorkTaskStatus::Merging,
+];
+
+/// Return titles of tasks actively using a worktree. Callers must refuse a
+/// destructive worktree removal while any of these statuses is present.
+pub async fn tasks_blocking_worktree_removal(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+) -> Result<Vec<String>, DbError> {
+    let rows = work_task::Entity::find()
+        .filter(work_task::Column::DeletedAt.is_null())
+        .filter(work_task::Column::WorktreeFolderId.eq(folder_id))
+        .filter(work_task::Column::Status.is_in(WORKTREE_BUSY_STATUSES.iter().copied()))
+        .all(conn)
+        .await?;
+    Ok(rows.into_iter().map(|row| row.title).collect())
+}
+
+/// Detach every task pointing at a worktree folder that has just been removed.
+/// Returns the affected ids so callers can refresh those task cards.
+pub async fn clear_worktree_by_folder(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+) -> Result<Vec<i32>, DbError> {
+    let ids: Vec<i32> = work_task::Entity::find()
+        .filter(work_task::Column::WorktreeFolderId.eq(folder_id))
+        .all(conn)
+        .await?
+        .into_iter()
+        .map(|row| row.id)
+        .collect();
+    if ids.is_empty() {
+        return Ok(ids);
+    }
+    work_task::Entity::update_many()
+        .col_expr(work_task::Column::WorktreeFolderId, Expr::value(None::<i32>))
+        .col_expr(work_task::Column::CleanupState, Expr::value(None::<String>))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::WorktreeFolderId.eq(folder_id))
+        .exec(conn)
+        .await?;
+    Ok(ids)
 }
 
 /// Boot recovery: a fresh process has no live connections, so every
@@ -2265,7 +2496,7 @@ mod tests {
             .await
             .unwrap());
         assert!(cancel(&db.conn, t.id, None).await.unwrap());
-        assert!(requeue_canceled(&db.conn, t.id, None).await.unwrap());
+        assert!(requeue_canceled(&db.conn, t.id, None, &[]).await.unwrap());
         assert_eq!(
             get_model(&db.conn, t.id).await.unwrap().verdict.as_deref(),
             Some("blocked"),
@@ -2280,7 +2511,7 @@ mod tests {
             .unwrap());
         assert!(cancel(&db.conn, t.id, None).await.unwrap());
         assert!(get_model(&db.conn, t.id).await.unwrap().scheduled_at.is_none());
-        assert!(requeue_canceled(&db.conn, t.id, None).await.unwrap());
+        assert!(requeue_canceled(&db.conn, t.id, None, &[]).await.unwrap());
         assert!(get_model(&db.conn, t.id).await.unwrap().scheduled_at.is_none());
 
         // A due plan claims the task and clears the stale verdict with it.
@@ -2295,7 +2526,7 @@ mod tests {
 
         // The auto-process arm holds the same invariant.
         assert!(cancel(&db.conn, t.id, None).await.unwrap());
-        assert!(requeue_canceled(&db.conn, t.id, None).await.unwrap());
+        assert!(requeue_canceled(&db.conn, t.id, None, &[]).await.unwrap());
         let seq = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
             .await
             .unwrap()
@@ -2303,7 +2534,7 @@ mod tests {
         assert!(start_running(&db.conn, t.id, seq, 1, "c2").await.unwrap());
         assert!(set_verdict(&db.conn, t.id, seq, "blocked", None).await.unwrap());
         assert!(cancel(&db.conn, t.id, None).await.unwrap());
-        assert!(requeue_canceled(&db.conn, t.id, None).await.unwrap());
+        assert!(requeue_canceled(&db.conn, t.id, None, &[]).await.unwrap());
         assert_eq!(
             auto_claim_next(&db.conn, folder_id, 0).await.unwrap(),
             Some(t.id)
@@ -2428,7 +2659,7 @@ mod tests {
         );
 
         // Requeue resurrects it; the next claim bumps the generation.
-        assert!(requeue_canceled(&db.conn, t.id, None).await.unwrap());
+        assert!(requeue_canceled(&db.conn, t.id, None, &[]).await.unwrap());
         let seq2 = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
             .await
             .unwrap()
@@ -2498,13 +2729,19 @@ mod tests {
         };
         // The merge is a fresh agent generation: begin bumps run_seq and
         // clears the run-scoped fields.
-        let merge_seq = begin_merge(&db.conn, t.id, &state).await.unwrap().unwrap();
+        let merge_seq = begin_merge(&db.conn, t.id, &state, seq, false, None)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(merge_seq, seq + 1);
         let row = get_model(&db.conn, t.id).await.unwrap();
         assert!(row.connection_id.is_none());
         assert!(row.verdict.is_none());
         // Double begin loses (already merging) — merge idempotency.
-        assert!(begin_merge(&db.conn, t.id, &state).await.unwrap().is_none());
+        assert!(begin_merge(&db.conn, t.id, &state, seq, false, None)
+            .await
+            .unwrap()
+            .is_none());
         // Cancel is refused while merging.
         assert!(!cancel(&db.conn, t.id, None).await.unwrap());
 
@@ -2545,7 +2782,10 @@ mod tests {
             delete_worktree: false,
             auto_message: false,
         };
-        assert!(begin_merge(&db.conn, t.id, &state).await.unwrap().is_some());
+        assert!(begin_merge(&db.conn, t.id, &state, seq, false, None)
+            .await
+            .unwrap()
+            .is_some());
         assert!(merge_back_to_review(
             &db.conn,
             t.id,
@@ -2561,6 +2801,500 @@ mod tests {
         assert!(events.iter().any(|e| e.kind == "merge_conflict"));
     }
 
+    /// The auto-merge bookkeeping: a refused dispatch leaves its banner on the
+    /// review row (generation-guarded, and the stop that keeps auto-merge from
+    /// retrying a hopeless dispatch forever), and a dispatched auto merge
+    /// records "auto" as the actor who pulled the trigger.
+    #[tokio::test]
+    async fn auto_merge_marks_actor_and_banners_refused_dispatches() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-auto").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        // Not in review yet — nothing to banner.
+        assert!(!set_review_error(&db.conn, t.id, 0, "early").await.unwrap());
+
+        let seq = to_review(&db, t.id).await;
+        // Stale generation writes nothing; the current one lands on the row.
+        assert!(!set_review_error(&db.conn, t.id, seq + 1, "stale").await.unwrap());
+        assert!(set_review_error(&db.conn, t.id, seq, "wrong branch").await.unwrap());
+        assert_eq!(
+            get(&db.conn, t.id).await.unwrap().last_error.as_deref(),
+            Some("wrong branch")
+        );
+
+        let state = WorkTaskMergeState {
+            pre_merge_head: "abc".into(),
+            message: String::new(),
+            strategy: "squash".into(),
+            delete_worktree: true,
+            auto_message: true,
+        };
+        // An unattended dispatch never clears a banner — the failed row waits
+        // for a human (the no-auto-retry latch) …
+        assert!(begin_merge(&db.conn, t.id, &state, seq, true, None)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            get(&db.conn, t.id).await.unwrap().last_error.as_deref(),
+            Some("wrong branch")
+        );
+        // … while a user dispatch is exactly that human: retry allowed, and
+        // the fresh merge starts with a fresh slate.
+        assert!(begin_merge(&db.conn, t.id, &state, seq, false, None)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(get(&db.conn, t.id).await.unwrap().last_error.is_none());
+
+        // Back in clean review for the unattended path proper.
+        assert!(merge_back_to_review(&db.conn, t.id, None, None).await.unwrap());
+        assert!(begin_merge(&db.conn, t.id, &state, seq + 1, true, None)
+            .await
+            .unwrap()
+            .is_some());
+        // The timeline knows the engine, not the user, started this one.
+        let events = list_events(&db.conn, t.id, 100).await.unwrap();
+        let auto_attempt = events
+            .iter()
+            .find(|e| e.kind == "merge_attempt" && e.actor == "auto")
+            .expect("auto merge attempt event");
+        assert_eq!(
+            auto_attempt
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("auto"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert!(events.iter().any(|e| {
+            e.kind == "status_changed"
+                && e.payload.as_ref().and_then(|p| p.get("to")).and_then(|v| v.as_str())
+                    == Some("merging")
+                && e.payload
+                    .as_ref()
+                    .and_then(|p| p.get("reason"))
+                    .and_then(|v| v.as_str())
+                    == Some("started by auto-merge")
+        }));
+        // A banner cannot land on a row that already left review.
+        assert!(!set_review_error(&db.conn, t.id, seq, "late").await.unwrap());
+    }
+
+    /// The lock-wait race of the no-auto-retry invariant: two unattended
+    /// sweeps pick the same review generation, the first dispatch fails after
+    /// bumping it, and the second — queued on the folder lock with the
+    /// pre-failure snapshot — must not redispatch. Its stale generation
+    /// misses the CAS, and even a fresh re-listing is stopped by the banner;
+    /// only a user dispatch reopens the row.
+    #[tokio::test]
+    async fn auto_merge_never_retries_a_failed_generation() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-auto-retry").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let seq = to_review(&db, t.id).await;
+        let state = WorkTaskMergeState {
+            pre_merge_head: "abc".into(),
+            message: String::new(),
+            strategy: "squash".into(),
+            delete_worktree: true,
+            auto_message: true,
+        };
+
+        // Sweep A dispatches generation `seq` and its launch fails: back to
+        // review with the banner on, generation now `seq + 1`.
+        assert!(begin_merge(&db.conn, t.id, &state, seq, true, None)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(
+            merge_back_to_review(&db.conn, t.id, Some("launch failed".into()), None)
+                .await
+                .unwrap()
+        );
+
+        // Sweep B, dispatched against the pre-failure snapshot: stale
+        // generation, CAS miss.
+        assert!(begin_merge(&db.conn, t.id, &state, seq, true, None)
+            .await
+            .unwrap()
+            .is_none());
+        // A later sweep re-lists and sees the current generation — the banner
+        // still blocks any unattended dispatch.
+        assert!(begin_merge(&db.conn, t.id, &state, seq + 1, true, None)
+            .await
+            .unwrap()
+            .is_none());
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        assert_eq!(row.status, WorkTaskStatus::Review);
+        assert_eq!(row.last_error.as_deref(), Some("launch failed"));
+        // Exactly one merge attempt made the timeline.
+        let events = list_events(&db.conn, t.id, 100).await.unwrap();
+        assert_eq!(
+            events.iter().filter(|e| e.kind == "merge_attempt").count(),
+            1
+        );
+
+        // The human path stays open: a user dispatch on the current
+        // generation retries and clears the banner.
+        assert!(begin_merge(&db.conn, t.id, &state, seq + 1, false, None)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(get(&db.conn, t.id).await.unwrap().last_error.is_none());
+    }
+
+    /// The merge queue's row-level contract: an intent only lands on the exact
+    /// review generation the caller validated, it survives on the row until
+    /// something spends it, and a dispatch (from the pump or from a click that
+    /// found the slot free) consumes it.
+    #[tokio::test]
+    async fn a_queued_merge_is_generation_bound_and_spent_by_the_dispatch() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-merge-queue").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        let intent = WorkTaskQueuedMerge {
+            message: Some("feat: land it".into()),
+            delete_worktree: true,
+            queued_at: Utc::now(),
+        };
+        // Not in review yet — nothing to queue on.
+        assert!(!queue_merge(&db.conn, t.id, &intent, 0, None).await.unwrap());
+
+        let seq = to_review(&db, t.id).await;
+        // A banner from an earlier refusal is what the user is answering by
+        // clicking merge again; queuing clears it.
+        assert!(set_review_error(&db.conn, t.id, seq, "wrong branch").await.unwrap());
+        // A stale generation misses, the current one lands.
+        assert!(!queue_merge(&db.conn, t.id, &intent, seq + 1, None).await.unwrap());
+        assert!(queue_merge(&db.conn, t.id, &intent, seq, None).await.unwrap());
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        assert!(row.last_error.is_none());
+        assert_eq!(row.status, WorkTaskStatus::Review);
+        let parked = queued_merge(row.pending_merge.as_deref()).expect("intent parked");
+        assert_eq!(parked.message.as_deref(), Some("feat: land it"));
+        assert!(parked.delete_worktree);
+        let on_wire = get(&db.conn, t.id).await.unwrap().merge_queued.expect("on the wire");
+        assert_eq!(on_wire.queued_at, parked.queued_at);
+        // The options ride along, so reopening the dialog can show what is
+        // parked instead of quietly replacing it with the defaults.
+        assert_eq!(on_wire.message.as_deref(), Some("feat: land it"));
+        assert!(on_wire.delete_worktree);
+
+        // Re-queuing with new options is an edit of the same place in line —
+        // the engine passes the original instant back in.
+        let edited = WorkTaskQueuedMerge {
+            message: None,
+            delete_worktree: false,
+            queued_at: parked.queued_at,
+        };
+        assert!(queue_merge(&db.conn, t.id, &edited, seq, None).await.unwrap());
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        let parked = queued_merge(row.pending_merge.as_deref()).unwrap();
+        assert_eq!(parked.queued_at, edited.queued_at);
+        assert!(parked.message.is_none());
+
+        // The dispatch spends it: the row must not carry an intent the pump
+        // could dispatch a second time.
+        let state = WorkTaskMergeState {
+            pre_merge_head: "abc".into(),
+            message: String::new(),
+            strategy: "squash".into(),
+            delete_worktree: false,
+            auto_message: true,
+        };
+        assert!(begin_merge(&db.conn, t.id, &state, seq, false, None)
+            .await
+            .unwrap()
+            .is_some());
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        assert_eq!(row.status, WorkTaskStatus::Merging);
+        assert!(row.pending_merge.is_none());
+        assert!(get(&db.conn, t.id).await.unwrap().merge_queued.is_none());
+        assert_eq!(
+            list_events(&db.conn, t.id, 100)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|e| e.kind == "merge_queued")
+                .count(),
+            2
+        );
+    }
+
+    /// The pump scans the queue, then spends real time on it — a worktree
+    /// stat, the folder git lock, three git subprocesses — before the CAS that
+    /// spends the intent. A user can withdraw or edit the merge anywhere in
+    /// that window WITHOUT moving `run_seq`, so the intent itself is the token:
+    /// every write the pump makes demands the column still equal what it
+    /// scanned. Without this, a withdrawn merge still landed on the base
+    /// branch, and a refusal could delete an edit made a moment earlier.
+    #[tokio::test]
+    async fn a_queued_dispatch_loses_to_a_withdrawal_or_an_edit_under_it() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-merge-queue-race").await;
+        let state = WorkTaskMergeState {
+            pre_merge_head: "abc".into(),
+            message: String::new(),
+            strategy: "squash".into(),
+            delete_worktree: true,
+            auto_message: true,
+        };
+        let intent = |secs: i64| WorkTaskQueuedMerge {
+            message: Some(format!("feat: land it {secs}")),
+            delete_worktree: true,
+            queued_at: chrono::DateTime::from_timestamp(1_800_000_000 + secs, 0)
+                .expect("valid instant"),
+        };
+        /// What the pump scanned: the row's raw column value.
+        async fn scanned(db: &crate::db::AppDatabase, id: i32) -> String {
+            get_model(&db.conn, id)
+                .await
+                .unwrap()
+                .pending_merge
+                .expect("intent parked")
+        }
+
+        // Withdrawn under the pump: the dispatch must miss, and the task must
+        // stay in review rather than land a merge nobody wants anymore.
+        let withdrawn = create(&db.conn, draft(folder_id, "withdrawn")).await.unwrap();
+        let seq = to_review(&db, withdrawn.id).await;
+        assert!(queue_merge(&db.conn, withdrawn.id, &intent(1), seq, None)
+            .await
+            .unwrap());
+        let claim = scanned(&db, withdrawn.id).await;
+        assert!(unqueue_merge(&db.conn, withdrawn.id).await.unwrap());
+        assert!(
+            begin_merge(&db.conn, withdrawn.id, &state, seq, false, Some(&claim))
+                .await
+                .unwrap()
+                .is_none(),
+            "a withdrawn merge must not dispatch"
+        );
+        assert_eq!(
+            get_model(&db.conn, withdrawn.id).await.unwrap().status,
+            WorkTaskStatus::Review
+        );
+
+        // Edited under the pump: same miss, and the edit survives untouched —
+        // the next pump picks it up.
+        let edited = create(&db.conn, draft(folder_id, "edited")).await.unwrap();
+        let seq = to_review(&db, edited.id).await;
+        assert!(queue_merge(&db.conn, edited.id, &intent(1), seq, None)
+            .await
+            .unwrap());
+        let claim = scanned(&db, edited.id).await;
+        assert!(queue_merge(&db.conn, edited.id, &intent(2), seq, None)
+            .await
+            .unwrap());
+        assert!(
+            begin_merge(&db.conn, edited.id, &state, seq, false, Some(&claim))
+                .await
+                .unwrap()
+                .is_none(),
+            "the superseded intent must not dispatch"
+        );
+        // A re-park of the stale intent (the slot got taken first) must not
+        // revert the edit either …
+        assert!(
+            !queue_merge(&db.conn, edited.id, &intent(1), seq, Some(&claim))
+                .await
+                .unwrap(),
+            "the pump must not re-park an intent the user replaced"
+        );
+        // … and the refusal path must not sweep up the newer request.
+        assert!(!clear_queued_merge(&db.conn, edited.id, &claim).await.unwrap());
+        let parked = queued_merge(
+            get_model(&db.conn, edited.id)
+                .await
+                .unwrap()
+                .pending_merge
+                .as_deref(),
+        )
+        .expect("the edit survives");
+        assert_eq!(parked.message.as_deref(), Some("feat: land it 2"));
+
+        // The auto sweep decides its eligibility from a snapshot taken before
+        // the folder lock, so the CAS has to hold the line: a merge queued
+        // while the sweep worked must not be landed — and silently cleared —
+        // with the unattended defaults.
+        let raced = create(&db.conn, draft(folder_id, "raced")).await.unwrap();
+        let seq = to_review(&db, raced.id).await;
+        assert!(queue_merge(&db.conn, raced.id, &intent(4), seq, None)
+            .await
+            .unwrap());
+        assert!(
+            begin_merge(&db.conn, raced.id, &state, seq, true, None)
+                .await
+                .unwrap()
+                .is_none(),
+            "an unattended dispatch must not take a row the user queued"
+        );
+        let row = get_model(&db.conn, raced.id).await.unwrap();
+        assert_eq!(row.status, WorkTaskStatus::Review);
+        assert!(row.pending_merge.is_some(), "the user's intent survives");
+        // The queue's own dispatch still lands it, with the user's options.
+        let claim = scanned(&db, raced.id).await;
+        assert!(
+            begin_merge(&db.conn, raced.id, &state, seq, false, Some(&claim))
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        // The uncontested path still works: the intent the pump scanned is the
+        // one on the row, so it dispatches.
+        let clean = create(&db.conn, draft(folder_id, "clean")).await.unwrap();
+        let seq = to_review(&db, clean.id).await;
+        assert!(queue_merge(&db.conn, clean.id, &intent(3), seq, None)
+            .await
+            .unwrap());
+        let claim = scanned(&db, clean.id).await;
+        assert!(begin_merge(&db.conn, clean.id, &state, seq, false, Some(&claim))
+            .await
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            get_model(&db.conn, clean.id).await.unwrap().status,
+            WorkTaskStatus::Merging
+        );
+    }
+
+    /// Withdrawing a queued merge: only from review, only when something is
+    /// actually queued (so a withdrawal that lost the race to the pump reports
+    /// the miss), and the engine's silent variant leaves no timeline entry.
+    #[tokio::test]
+    async fn unqueue_merge_is_guarded_and_the_silent_clear_is_not() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-merge-unqueue").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let seq = to_review(&db, t.id).await;
+
+        // Nothing queued yet.
+        assert!(!unqueue_merge(&db.conn, t.id).await.unwrap());
+
+        let intent = WorkTaskQueuedMerge {
+            message: None,
+            delete_worktree: true,
+            queued_at: Utc::now(),
+        };
+        assert!(queue_merge(&db.conn, t.id, &intent, seq, None).await.unwrap());
+        assert!(unqueue_merge(&db.conn, t.id).await.unwrap());
+        assert!(get_model(&db.conn, t.id)
+            .await
+            .unwrap()
+            .pending_merge
+            .is_none());
+        // Twice is a miss, not a second withdrawal.
+        assert!(!unqueue_merge(&db.conn, t.id).await.unwrap());
+        assert_eq!(
+            list_events(&db.conn, t.id, 100)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|e| e.kind == "user_action"
+                    && e.payload
+                        .as_ref()
+                        .and_then(|p| p.get("action"))
+                        .and_then(|v| v.as_str())
+                        == Some("unqueue_merge"))
+                .count(),
+            1
+        );
+
+        // The engine's refusal path clears without a timeline entry — the
+        // reason it writes on the row is what the user reads — and only when
+        // the row still holds the exact intent being refused.
+        assert!(queue_merge(&db.conn, t.id, &intent, seq, None).await.unwrap());
+        let parked = get_model(&db.conn, t.id)
+            .await
+            .unwrap()
+            .pending_merge
+            .expect("intent parked");
+        assert!(!clear_queued_merge(&db.conn, t.id, "{\"stale\":true}")
+            .await
+            .unwrap());
+        assert!(get_model(&db.conn, t.id)
+            .await
+            .unwrap()
+            .pending_merge
+            .is_some());
+        assert!(clear_queued_merge(&db.conn, t.id, &parked).await.unwrap());
+        assert!(get_model(&db.conn, t.id)
+            .await
+            .unwrap()
+            .pending_merge
+            .is_none());
+        assert_eq!(
+            list_events(&db.conn, t.id, 100)
+                .await
+                .unwrap()
+                .iter()
+                .filter(|e| e.kind == "user_action"
+                    && e.payload
+                        .as_ref()
+                        .and_then(|p| p.get("action"))
+                        .and_then(|v| v.as_str())
+                        == Some("unqueue_merge"))
+                .count(),
+            1
+        );
+    }
+
+    /// A task that leaves review by any door drops its place in the merge
+    /// queue with it — a follow-up, a stop, or an outright completion must not
+    /// leave an intent the pump would later dispatch.
+    #[tokio::test]
+    async fn leaving_review_drops_the_queued_merge() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-merge-queue-exit").await;
+        let intent = WorkTaskQueuedMerge {
+            message: None,
+            delete_worktree: true,
+            queued_at: Utc::now(),
+        };
+
+        // Follow-up (claim for a new run).
+        let followed = create(&db.conn, draft(folder_id, "followed")).await.unwrap();
+        let seq = to_review(&db, followed.id).await;
+        assert!(queue_merge(&db.conn, followed.id, &intent, seq, None).await.unwrap());
+        assert!(claim_for_run(&db.conn, followed.id, WorkTaskStatus::Review, "user")
+            .await
+            .unwrap()
+            .is_some());
+        assert!(get_model(&db.conn, followed.id)
+            .await
+            .unwrap()
+            .pending_merge
+            .is_none());
+
+        // Stopped.
+        let stopped = create(&db.conn, draft(folder_id, "stopped")).await.unwrap();
+        let seq = to_review(&db, stopped.id).await;
+        assert!(queue_merge(&db.conn, stopped.id, &intent, seq, None).await.unwrap());
+        assert!(cancel(&db.conn, stopped.id, None).await.unwrap());
+        assert!(get_model(&db.conn, stopped.id)
+            .await
+            .unwrap()
+            .pending_merge
+            .is_none());
+
+        // Accepted with nothing to land.
+        let finished = create(&db.conn, draft(folder_id, "finished")).await.unwrap();
+        let seq = to_review(&db, finished.id).await;
+        assert!(queue_merge(&db.conn, finished.id, &intent, seq, None).await.unwrap());
+        assert!(complete_without_merge(&db.conn, finished.id)
+            .await
+            .unwrap());
+        assert!(get_model(&db.conn, finished.id)
+            .await
+            .unwrap()
+            .pending_merge
+            .is_none());
+    }
+
     /// A task that changed nothing finishes without a merge commit — from
     /// review only, and once.
     #[tokio::test]
@@ -2572,7 +3306,7 @@ mod tests {
         // A todo task is not up for acceptance.
         assert!(!complete_without_merge(&db.conn, t.id).await.unwrap());
 
-        to_review(&db, t.id).await;
+        let seq = to_review(&db, t.id).await;
         // A refused merge leaves its banner on the review row; finishing the
         // task on purpose must not carry that error into Done.
         let state = WorkTaskMergeState {
@@ -2582,7 +3316,10 @@ mod tests {
             delete_worktree: false,
             auto_message: false,
         };
-        assert!(begin_merge(&db.conn, t.id, &state).await.unwrap().is_some());
+        assert!(begin_merge(&db.conn, t.id, &state, seq, false, None)
+            .await
+            .unwrap()
+            .is_some());
         assert!(merge_back_to_review(&db.conn, t.id, Some("nope".into()), None)
             .await
             .unwrap());
@@ -2652,6 +3389,9 @@ mod tests {
                 delete_worktree: false,
                 auto_message: false,
             },
+            seq,
+            false,
+            None,
         )
         .await
         .unwrap();
@@ -2892,7 +3632,7 @@ mod tests {
         // …and so does requeueing an archived canceled task.
         assert!(cancel(&db.conn, t.id, None).await.unwrap());
         assert!(set_archived(&db.conn, t.id, true).await.unwrap());
-        assert!(requeue_canceled(&db.conn, t.id, None).await.unwrap());
+        assert!(requeue_canceled(&db.conn, t.id, None, &[]).await.unwrap());
         let row = get(&db.conn, t.id).await.unwrap();
         assert_eq!(row.status, WorkTaskStatus::Todo);
         assert!(row.archived_at.is_none());

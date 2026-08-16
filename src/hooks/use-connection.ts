@@ -22,6 +22,7 @@ import type {
   PromptCapabilitiesInfo,
   QuestionAnswer,
   SessionConfigOptionInfo,
+  SessionFailureRecord,
   SessionModeStateInfo,
   PromptInputBlock,
 } from "@/lib/types"
@@ -31,6 +32,9 @@ const DEFAULT_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
   audio: false,
   embedded_context: false,
 }
+
+/** Stable empty table so the no-failures common case never re-renders. */
+const EMPTY_SESSION_FAILURES: SessionFailureRecord[] = []
 
 export interface UseConnectionReturn {
   connectionId: string | null
@@ -67,6 +71,9 @@ export interface UseConnectionReturn {
   pendingAskQuestion: PendingQuestionState | null
   pendingPlanApproval: PendingPlanApprovalState | null
   claudeApiRetry: ClaudeApiRetryState | null
+  /** AIR typed session failure table (active + resolved; see
+   *  `lib/session-failures.ts`). `[]` when the connection has none. */
+  sessionFailures: SessionFailureRecord[]
   error: string | null
   loadError: string | null
   /** True when the running session is on stale (launch-time) config after a
@@ -155,6 +162,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   const pendingAskQuestion = connection?.pendingAskQuestion ?? null
   const pendingPlanApproval = connection?.pendingPlanApproval ?? null
   const claudeApiRetry = connection?.claudeApiRetry ?? null
+  const sessionFailures = connection?.sessionFailures ?? EMPTY_SESSION_FAILURES
   const error = connection?.error ?? null
   const loadError = connection?.loadError ?? null
   const configStale = connection?.configStale ?? false
@@ -182,10 +190,12 @@ export function useConnection(contextKey: string): UseConnectionReturn {
     [actions, contextKey]
   )
 
-  const disconnect = useCallback(
-    () => actions.disconnect(contextKey),
-    [actions, contextKey]
-  )
+  // Drops `actions.disconnect`'s teardown-confirmed flag: this hook's callers
+  // are closing a surface, and only a caller that reports a restart back to the
+  // user (see `reapplyConfig`) has anything to do with that answer.
+  const disconnect = useCallback(async () => {
+    await actions.disconnect(contextKey)
+  }, [actions, contextKey])
 
   const sendPrompt = useCallback(
     (
@@ -259,6 +269,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       pendingAskQuestion,
       pendingPlanApproval,
       claudeApiRetry,
+      sessionFailures,
       error,
       loadError,
       configStale,
@@ -299,6 +310,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       pendingAskQuestion,
       pendingPlanApproval,
       claudeApiRetry,
+      sessionFailures,
       error,
       loadError,
       configStale,

@@ -279,9 +279,13 @@ function isEmptyTurnItem(item: ThreadRenderItem): boolean {
 }
 
 /**
- * Hoist a compaction-only assistant turn into its own timeline item. Keeping it
- * outside the assistant merge run makes the context boundary visible between
- * replies instead of nesting it inside the preceding tool group.
+ * When a resolved group's ONLY meaningful content is a single context-compaction
+ * tool-call part, return that part's `_meta` (so the caller can hoist it to a
+ * standalone `"compaction"` divider item); otherwise `null`. Empty text parts are
+ * ignored so a bare compaction turn still qualifies. Scoped to assistant groups
+ * with no user resources/images. A compaction part always carries a truthy
+ * `_meta` (`contextCompaction` as the boolean marker or the 1.3.0+ versioned
+ * object), so a non-null return is unambiguous.
  */
 function compactionOnlyMeta(
   group: ResolvedMessageGroup

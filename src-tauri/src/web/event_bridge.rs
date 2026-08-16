@@ -344,6 +344,9 @@ pub const WORK_TASK_CHANGED_EVENT: &str = "task://changed";
 pub enum WorkTaskChange {
     Upsert { id: i32 },
     Deleted { id: i32 },
+    /// Something the folder's tasks INHERIT changed: its task settings, or the
+    /// folder's own default agent (the layer below them). Either can change
+    /// what an inheriting task runs — and reports — without touching a row.
     Settings { folder_id: i32 },
     Refresh,
 }

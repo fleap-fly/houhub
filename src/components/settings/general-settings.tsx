@@ -6,8 +6,10 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { SettingsSection } from "@/components/shared/settings-section"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Switch } from "@/components/ui/switch"
 import {
   Select,
   SelectContent,
@@ -31,10 +33,7 @@ import { relaunchApp } from "@/lib/updater"
 import { toErrorMessage } from "@/lib/app-error"
 import { NotificationSoundSettingsSection } from "@/components/settings/notification-sound-settings"
 import { DelegationSettingsSection } from "@/components/settings/delegation-settings"
-import { SessionFeedbackSettingsSection } from "@/components/settings/session-feedback-settings"
-import { AskQuestionSettingsSection } from "@/components/settings/ask-question-settings"
-import { SessionInfoSettingsSection } from "@/components/settings/session-info-settings"
-import { ChatAuthoringSettingsSection } from "@/components/settings/chat-authoring-settings"
+import { AgentToolsSettingsSection } from "@/components/settings/agent-tools-settings"
 
 const TERMINAL_SHELL_OPTION_SYSTEM = "system"
 const TERMINAL_SHELL_OPTION_CUSTOM = "custom"
@@ -264,26 +263,36 @@ export function GeneralSettings() {
           </div>
         )}
 
-        <section className="rounded-xl border bg-card p-4 space-y-4">
-          <div className="flex items-center gap-2">
-            <SquareTerminal className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">{t("terminalTitle")}</h2>
-          </div>
-
-          <p className="text-xs text-muted-foreground leading-5">
-            {t("terminalDescription")}
-          </p>
-
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground">
-              {t("defaultTerminalShell")}
-            </label>
-            <Select
-              value={selectedShellId}
-              onValueChange={onShellSelectChange}
-              disabled={savingTerminal || !availableShells}
-            >
-              <SelectTrigger className="w-full sm:w-64">
+        {/* The section is the picker: heading, purpose and control on one line,
+            with what the shell currently resolves to under them. A card holding
+            a single row would only say the heading back one line lower. */}
+        <SettingsSection
+          icon={SquareTerminal}
+          title={t("terminalTitle")}
+          description={
+            <>
+              {t("terminalDescription")}
+              {availableShells ? (
+                <span className="mt-1 block">
+                  {t("terminalCurrentShell", {
+                    path: availableShells.resolved_shell,
+                  })}
+                </span>
+              ) : null}
+            </>
+          }
+          htmlFor="terminal-default-shell"
+          control={
+            <>
+              <Select
+                value={selectedShellId}
+                onValueChange={onShellSelectChange}
+                disabled={savingTerminal || !availableShells}
+              >
+              <SelectTrigger
+                id="terminal-default-shell"
+                className="w-full sm:w-64"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent align="start">
@@ -300,86 +309,73 @@ export function GeneralSettings() {
                   </SelectItem>
                 ))}
               </SelectContent>
-            </Select>
-            {availableShells && (
-              <p className="text-[11px] text-muted-foreground">
-                {t("terminalCurrentShell", {
-                  path: availableShells.resolved_shell,
-                })}
-              </p>
-            )}
-
-            {selectedShellId === TERMINAL_SHELL_OPTION_CUSTOM && (
-              <div className="space-y-2 pt-2">
-                <label className="text-xs font-medium text-muted-foreground">
-                  {t("terminalShellCustomPath")}
-                </label>
-                <div className="flex gap-2">
-                  <Input
-                    value={customShellPath}
-                    onChange={(event) => {
-                      setCustomShellPath(event.target.value)
-                      setCustomPathExists(null)
-                    }}
-                    placeholder={t("terminalShellCustomPlaceholder")}
-                    disabled={savingTerminal}
-                    className="flex-1"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={onCustomPathSave}
-                    disabled={savingTerminal || !customShellPath.trim()}
-                  >
-                    {t("terminalShellCustomSave")}
-                  </Button>
-                </div>
-                {customPathExists === false && customShellPath.trim() && (
-                  <p className="text-[11px] text-amber-500">
-                    {t("terminalShellNotFoundWarning")}
+              </Select>
+              {selectedShellId === TERMINAL_SHELL_OPTION_CUSTOM && (
+                <div className="space-y-2 pt-2">
+                  <label className="text-xs font-medium text-muted-foreground">
+                    {t("terminalShellCustomPath")}
+                  </label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={customShellPath}
+                      onChange={(event) => {
+                        setCustomShellPath(event.target.value)
+                        setCustomPathExists(null)
+                      }}
+                      placeholder={t("terminalShellCustomPlaceholder")}
+                      disabled={savingTerminal}
+                      className="flex-1"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={onCustomPathSave}
+                      disabled={savingTerminal || !customShellPath.trim()}
+                    >
+                      {t("terminalShellCustomSave")}
+                    </Button>
+                  </div>
+                  {customPathExists === false && customShellPath.trim() && (
+                    <p className="text-[11px] text-amber-500">
+                      {t("terminalShellNotFoundWarning")}
+                    </p>
+                  )}
+                  <p className="text-[11px] text-muted-foreground">
+                    {t("terminalShellCustomHint")}
                   </p>
-                )}
-                <p className="text-[11px] text-muted-foreground">
-                  {t("terminalShellCustomHint")}
-                </p>
-              </div>
-            )}
-          </div>
-        </section>
+                </div>
+              )}
+            </>
+          }
+        />
 
         {renderingSectionVisible && (
-          <section className="rounded-xl border bg-card p-4 space-y-4">
-            <div className="flex items-center gap-2">
-              <MonitorCog className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">{t("renderingTitle")}</h2>
-            </div>
-
-            <p className="text-xs text-muted-foreground leading-5">
-              {t("renderingDescription")}
-            </p>
-
-            <label className="inline-flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
+          <SettingsSection
+            icon={MonitorCog}
+            title={t("disableHardwareAcceleration")}
+            description={t("renderingDescription")}
+            htmlFor="disable-hardware-acceleration"
+            control={
+              <Switch
+                id="disable-hardware-acceleration"
                 checked={disableHwAccel}
                 disabled={savingRendering}
-                onChange={(event) => {
-                  const next = event.target.checked
+                onCheckedChange={(next) => {
                   const prev = disableHwAccel
                   setDisableHwAccel(next)
-                  saveRenderingSettings(next, prev)
+                  void saveRenderingSettings(next, prev)
                 }}
               />
-              {t("disableHardwareAcceleration")}
-            </label>
-
+            }
+          >
             {renderingDirty && (
               <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2 text-xs">
                 <span className="text-muted-foreground">
                   {t("restartRequired")}
                 </span>
                 <Button
+                  type="button"
                   size="sm"
-                  onClick={restartNow}
+                  onClick={() => void restartNow()}
                   disabled={savingRendering}
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
@@ -387,20 +383,14 @@ export function GeneralSettings() {
                 </Button>
               </div>
             )}
-          </section>
+          </SettingsSection>
         )}
 
         <NotificationSoundSettingsSection />
 
         <DelegationSettingsSection />
 
-        <SessionFeedbackSettingsSection />
-
-        <AskQuestionSettingsSection />
-
-        <SessionInfoSettingsSection />
-
-        <ChatAuthoringSettingsSection />
+        <AgentToolsSettingsSection />
       </div>
     </ScrollArea>
   )

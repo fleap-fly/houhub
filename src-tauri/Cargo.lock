@@ -2550,7 +2550,7 @@ dependencies = [
 
 [[package]]
 name = "houhub"
-version = "0.23.3"
+version = "0.25.0"
 dependencies = [
  "aes-gcm",
  "agent-client-protocol-schema",
@@ -2628,6 +2628,7 @@ dependencies = [
  "which 7.0.3",
  "windows-sys 0.59.0",
  "zip 2.4.2",
+ "zstd",
 ]
 
 [[package]]

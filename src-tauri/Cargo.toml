@@ -1,6 +1,6 @@
 [package]
 name = "houhub"
-version = "0.23.3"
+version = "0.25.0"
 description = "Agent Code Generation App"
 authors = ["fleap.fly"]
 edition = "2021"
@@ -80,6 +80,10 @@ futures-lite = "2"
 reqwest = { version = "0.12", features = ["stream", "json", "multipart"] }
 flate2 = "1"
 bzip2 = "0.5"
+# DeepSeek Harness session logs (`~/.dsh/sessions/**/session.jsonl.zstd`) are a
+# sequence of complete Zstandard frames appended per write batch; the parser
+# only decodes (`zstd::stream::decode_all` walks concatenated frames to EOF).
+zstd = "0.13"
 tar = "0.4"
 zip = "2"
 regex = "1"
@@ -102,7 +106,7 @@ toml_edit = "0.19"
 serde_yaml = "0.9"
 notify = "6"
 base64 = "0.22"
-agent-client-protocol-schema = { version = "0.11", features = ["unstable_session_usage", "unstable_session_fork", "unstable_session_resume", "unstable_elicitation"] }
+agent-client-protocol-schema = { version = "0.11", features = ["unstable_session_usage", "unstable_session_fork", "unstable_session_resume", "unstable_elicitation", "unstable_boolean_config"] }
 kill_tree = { version = "0.2", features = ["tokio"] }
 fs2 = "0.4"
 which = "7"

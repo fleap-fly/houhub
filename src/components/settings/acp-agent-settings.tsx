@@ -133,6 +133,7 @@ import {
   OpenCodeConnectDialog,
   OpenCodeCustomProviderDialog,
 } from "@/components/settings/opencode-connect-dialog"
+import { OpenCodePermissionsSection } from "@/components/settings/opencode-permissions-section"
 import { AgentDiagnosticsDialog } from "@/components/settings/agent-diagnostics-dialog"
 import {
   buildConnectedModelOptions,
@@ -150,6 +151,10 @@ import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
 import { OpencodePluginsModal } from "./opencode-plugins-modal"
 import { CodeBuddyConfigPanel } from "./codebuddy-config-panel"
 import { CursorConfigPanel } from "./cursor-config-panel"
+import {
+  DEEPSEEK_PANEL_ENV_KEYS,
+  DeepSeekConfigPanel,
+} from "./deepseek-config-panel"
 import { KimiCodeConfigPanel } from "./kimi-code-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
 
@@ -365,6 +370,19 @@ function summarizeChecks(checks: UiCheckItem[]): CheckStatus | "unchecked" {
   return "pass"
 }
 
+/**
+ * Per-agent `env_json` knob deciding WHICH SIDE of the ACP connection reads
+ * files and runs commands (`HostToolsPolicy`, Rust side). houhub advertises
+ * `fs.readTextFile` / `terminal` by default, and an agent that sees them stops
+ * using its own backends and delegates — so the work happens in HOUHUB's
+ * process, outside any OS sandbox the agent applies to itself. Set to
+ * {@link HOST_TOOLS_AGENT} and houhub advertises neither, so the agent does its
+ * own I/O and its own sandbox covers it again (#436). Absent ⇒ houhub hosts.
+ */
+const HOST_TOOLS_ENV = "HOUHUB_ACP_HOST_TOOLS"
+const HOST_TOOLS_AGENT = "agent"
+const HOST_TOOLS_DEFAULT = "default"
+
 function envMapToText(env: Record<string, string>): string {
   return Object.entries(env)
     .map(([key, value]) => `${key}=${value}`)
@@ -386,20 +404,139 @@ function parseEnvText(envText: string): Record<string, string> {
   return map
 }
 
+/**
+ * Fold the DeepSeek panel's own env keys, as they are actually persisted, into
+ * an existing draft. Everything else in the draft — other keys, and any
+ * unsaved edit to them — is left exactly as it was.
+ *
+ * Returns the draft unchanged when nothing moved, so this never invalidates a
+ * memo or restarts a render for a no-op refresh.
+ */
+export function rebaseDeepSeekDraft(
+  draft: AgentDraft,
+  agent: AcpAgentInfo
+): AgentDraft {
+  // Decide on the VALUES, before rewriting anything, so an unrelated refresh
+  // leaves the draft object (and its text) untouched.
+  //
+  // Mirrors `patchEnvText`'s own rule exactly: an empty persisted value means
+  // DELETE the key, so `KEY=` present in the draft while the agent has no such
+  // key IS a difference — the enable switch persists the draft wholesale, and
+  // an empty `DEEPSEEK_BASE_URL` is not "use the default", it is an empty
+  // endpoint.
+  const current = parseEnvText(draft.envText)
+  const patch: Record<string, string | undefined> = {}
+  let moved = false
+  for (const key of DEEPSEEK_PANEL_ENV_KEYS) {
+    patch[key] = agent.env[key]
+    const next = (agent.env[key] ?? "").trim()
+    const present = key in current
+    if (next ? current[key] !== next : present) moved = true
+  }
+  if (!moved) return draft
+  const envText = patchEnvText(draft.envText, patch)
+  if (envText === draft.envText) return draft
+  const keys = importantEnvKeysByAgent("deepseek")
+  const merged = parseEnvText(envText)
+  return {
+    ...draft,
+    envText,
+    apiBaseUrl: findEnvValue(merged, keys.apiBaseUrl),
+    apiKey: findEnvValue(merged, keys.apiKey),
+    model: findEnvValue(merged, keys.model),
+  }
+}
+
+/**
+ * Set (or, for an empty value, delete) exactly the given keys in a raw env
+ * draft, leaving every other LINE byte-identical.
+ *
+ * Textual on purpose. The obvious implementation — parse to a map, patch,
+ * serialize — rewrites the whole textarea, and the parser only understands
+ * `KEY=VALUE`: a comment, a blank line, and a half-typed `NEW_PROXY` all
+ * vanish. These patches run on refresh and on save completion, so that would
+ * silently delete what the user is still typing in the raw editor next to the
+ * structured panel that triggered the save.
+ *
+ * A key appearing on several lines collapses to one (its patched value), which
+ * matches how `parseEnvText` reads the draft afterwards.
+ */
 function patchEnvText(
   envText: string,
   patch: Record<string, string | undefined>
 ): string {
-  const envMap = parseEnvText(envText)
-  for (const [key, value] of Object.entries(patch)) {
-    const trimmed = value?.trim() ?? ""
-    if (!trimmed) {
-      delete envMap[key]
-    } else {
-      envMap[key] = trimmed
+  // `key in patch` would also answer yes for `constructor`, `toString` and the
+  // rest of Object.prototype — all of them legal env var names — and then read
+  // a function where a string was expected. Own properties only.
+  const owns = (key: string) => Object.prototype.hasOwnProperty.call(patch, key)
+  const pending = new Set(
+    Object.keys(patch).filter((key) => (patch[key]?.trim() ?? "") !== "")
+  )
+  const lines = envText === "" ? [] : envText.split(/\r?\n/)
+  const kept: string[] = []
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    const idx = line.startsWith("#") ? -1 : line.indexOf("=")
+    const key = idx > 0 ? line.slice(0, idx).trim() : ""
+    if (!key || !owns(key)) {
+      kept.push(rawLine)
+      continue
     }
+    const value = patch[key]?.trim() ?? ""
+    // Empty ⇒ the key is being removed; a duplicate line for a key already
+    // emitted goes too, so the result reads back as the value just written.
+    if (!value || !pending.delete(key)) continue
+    kept.push(`${key}=${value}`)
   }
-  return envMapToText(envMap)
+  if (pending.size > 0) {
+    // A key with no line yet goes after the last real one, not after the blank
+    // line the user may be about to type into.
+    let end = kept.length
+    while (end > 0 && kept[end - 1].trim() === "") end -= 1
+    const tail = kept.splice(end)
+    for (const key of pending) kept.push(`${key}=${patch[key]?.trim() ?? ""}`)
+    kept.push(...tail)
+  }
+  return kept.join("\n")
+}
+
+/**
+ * Whether this agent's env draft hands the ACP fs/terminal channels back to the
+ * agent — see {@link HOST_TOOLS_ENV}. Anything other than the exact sentinel
+ * (including a hand-typed `default`) reads as off, matching the Rust resolver,
+ * which fails OPEN on an unrecognized value rather than silently withholding.
+ *
+ * Reads the per-agent layer ONLY. When the key is absent and an operator has
+ * exported `HOUHUB_ACP_HOST_TOOLS=agent` in houhub's own environment, the switch
+ * renders off while the next connection actually withholds the channels — the
+ * display understates how restricted the agent is. Showing that inherited state
+ * would need the backend to report its resolved process-env value; until then
+ * the error is in the safe direction, and {@link setHostToolsAgentMode} makes
+ * the per-agent value authoritative the moment the user touches the switch.
+ */
+export function hostToolsAgentModeEnabled(envText: string): boolean {
+  return parseEnvText(envText)[HOST_TOOLS_ENV] === HOST_TOOLS_AGENT
+}
+
+/**
+ * Flip the knob in an env draft, always writing an EXPLICIT value — including
+ * `default` for off, rather than deleting the key.
+ *
+ * Deleting would be tidier but wrong: the backend resolves this knob as
+ * `env_json` first, then houhub's own process env. An operator who exported
+ * `HOUHUB_ACP_HOST_TOOLS=agent` process-wide makes "absent" mean `agent`, so a
+ * toggle that cleared the key on OFF could not turn the mode off at all — the
+ * switch would read false while the next connection still withheld the
+ * channels. Writing the value the user actually chose makes the per-agent
+ * setting authoritative in both directions.
+ */
+export function setHostToolsAgentMode(
+  envText: string,
+  enabled: boolean
+): string {
+  return patchEnvText(envText, {
+    [HOST_TOOLS_ENV]: enabled ? HOST_TOOLS_AGENT : HOST_TOOLS_DEFAULT,
+  })
 }
 
 interface ImportantEnvKeys {
@@ -602,6 +739,19 @@ function importantEnvKeysByAgent(agentType: AgentType): ImportantEnvKeys {
       // "configured" for a key the agent never uses.
       apiKey: ["XAI_API_KEY"],
       model: ["GROK_DEFAULT_MODEL", "MODEL"],
+    }
+  }
+  if (agentType === "deepseek") {
+    // The endpoint knob is DEEPSEEK_BASE_URL (read per request by the
+    // `llm-deepseek` adapter through the launch-environment snapshot, which
+    // falls back to `process.env`). DEEPSEEK_ACP_PROVIDER is NOT it — that's
+    // the provider ROUTE id, so binding a model provider to it would write a
+    // URL into a registry key. Mirrors the backend `agent_env_keys(DeepSeek)`;
+    // generic OPENAI_*/API_KEY aliases are NOT read.
+    return {
+      apiBaseUrl: ["DEEPSEEK_BASE_URL"],
+      apiKey: ["DEEPSEEK_API_KEY"],
+      model: ["DEEPSEEK_ACP_MODEL"],
     }
   }
   return {
@@ -4035,6 +4185,18 @@ export function AcpAgentSettings() {
         for (const agent of next) {
           if (!updated[agent.agent_type]) {
             updated[agent.agent_type] = buildAgentDraft(agent)
+            continue
+          }
+          // An EXISTING draft is deliberately kept (it may hold in-progress
+          // edits) — but for the keys a structured panel owns, keeping it is
+          // what loses data: the enable switch persists `draft.envText`
+          // wholesale, so a draft still holding this window's pre-refresh
+          // values would restore them over whatever another window (or
+          // another surface here) just saved. Rebase only those keys; every
+          // other key, and every unsaved edit to them, is untouched.
+          const existing = updated[agent.agent_type]
+          if (agent.agent_type === "deepseek" && existing) {
+            updated[agent.agent_type] = rebaseDeepSeekDraft(existing, agent)
           }
         }
         return updated
@@ -4253,7 +4415,11 @@ export function AcpAgentSettings() {
       agentType: AgentType,
       enabled: boolean,
       envText: string,
-      modelProviderId?: number | null
+      modelProviderId?: number | null,
+      /** The keys a STRUCTURED panel owns, when the env came from one rather
+       * than from `draft.envText`. `undefined` for a key deletes it. See the
+       * draft sync below. */
+      draftEnvPatch?: Record<string, string | undefined>
     ) => {
       const parsedEnv = parseEnvText(envText)
       setSavingEnv((prev) => ({ ...prev, [agentType]: true }))
@@ -4275,6 +4441,41 @@ export function AcpAgentSettings() {
               : agent
           )
         )
+        // A structured panel writes env the raw editor never sees, and the
+        // agents refetch deliberately preserves existing drafts (to protect
+        // in-progress edits). The enable switch persists `draft.envText`
+        // WHOLESALE, so a draft left holding pre-save text silently undoes the
+        // save the moment the user flips it. Fold the panel's keys into the
+        // draft — in the same commit as `setAgents`, so no await window exists
+        // in which the switch could fire with the old text, and no refetch
+        // failure can leave it stale.
+        //
+        // A PATCH, not a wholesale replace: the textarea stays editable while
+        // the panel's request is in flight, so overwriting the draft with the
+        // panel's own map would erase whatever was typed in the meantime.
+        if (draftEnvPatch) {
+          const keys = importantEnvKeysByAgent(agentType)
+          setDrafts((prev) => {
+            const current = prev[agentType]
+            if (!current) return prev
+            const envText = patchEnvText(current.envText, draftEnvPatch)
+            const mergedEnv = parseEnvText(envText)
+            return {
+              ...prev,
+              [agentType]: {
+                ...current,
+                enabled,
+                envText,
+                modelProviderId: modelProviderId ?? null,
+                // The structured mirrors read the same keys, so they have to
+                // move with the text or the two views disagree.
+                apiBaseUrl: findEnvValue(mergedEnv, keys.apiBaseUrl),
+                apiKey: findEnvValue(mergedEnv, keys.apiKey),
+                model: findEnvValue(mergedEnv, keys.model),
+              },
+            }
+          })
+        }
         reportAffectedSessions(affected)
       } finally {
         setSavingEnv((prev) => ({ ...prev, [agentType]: false }))
@@ -4411,21 +4612,26 @@ export function AcpAgentSettings() {
   // drafts (to preserve in-progress edits), so without this the collapsed raw
   // editor and the structured dropdowns could drift out of sync with disk (the
   // structured merge and the raw editor each write keys the other doesn't echo).
-  const reseedGrokDraft = useCallback(async () => {
+  const reseedAgentDraft = useCallback(async (agentType: AgentType) => {
     try {
       const fresh = await acpListAgents()
       setAgents(fresh)
       publishAgentDisplay(fresh)
-      const grok = fresh.find((a) => a.agent_type === "grok")
-      if (grok) {
-        setDrafts((prev) => ({ ...prev, grok: buildAgentDraft(grok) }))
+      const agent = fresh.find((a) => a.agent_type === agentType)
+      if (agent) {
+        setDrafts((prev) => ({ ...prev, [agentType]: buildAgentDraft(agent) }))
       }
     } catch (err) {
       // Non-fatal: the save already committed, and the agents-updated
       // subscription will resync shortly — never surface this as a save failure.
-      console.error("[Settings] reseed grok draft failed:", err)
+      console.error(`[Settings] reseed ${agentType} draft failed:`, err)
     }
   }, [])
+
+  const reseedGrokDraft = useCallback(
+    () => reseedAgentDraft("grok"),
+    [reseedAgentDraft]
+  )
 
   const runBinaryAction = useCallback(
     async (
@@ -7556,6 +7762,36 @@ export function AcpAgentSettings() {
                     />
                     <div className="pointer-events-none absolute inset-0 rounded-md bg-background/10 backdrop-blur-[3px] transition-opacity duration-200 group-focus-within:opacity-0" />
                   </div>
+                  {/*
+                    Backed by the same `envText` draft as the textarea above,
+                    not self-persisting: saving on toggle would also commit
+                    whatever unsaved edits the textarea happens to hold. One
+                    Save button owns both.
+                  */}
+                  <div className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3">
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium">
+                        {t("hostTools.label")}
+                      </label>
+                      <p className="text-[11px] text-muted-foreground">
+                        {t("hostTools.description")}
+                      </p>
+                    </div>
+                    <Switch
+                      checked={hostToolsAgentModeEnabled(selectedDraft.envText)}
+                      onCheckedChange={(checked) => {
+                        updateSelectedDraft((current) => ({
+                          ...current,
+                          envText: setHostToolsAgentMode(
+                            current.envText,
+                            checked
+                          ),
+                        }))
+                      }}
+                      disabled={selectedGrokSaving}
+                      aria-label={t("hostTools.label")}
+                    />
+                  </div>
                   <div className="flex justify-end">
                     <Button
                       size="sm"
@@ -8004,6 +8240,15 @@ export function AcpAgentSettings() {
                             ))}
                           </SelectContent>
                         </Select>
+                        {/* `untrusted` has no equivalent in codex-acp's three
+                            approval presets, so an ACP session cannot honor it
+                            (#442). Say so where the user picks it, rather than
+                            letting it look effective. */}
+                        {selectedDraft.codexApprovalPolicy === "untrusted" ? (
+                          <p className="text-[10px] text-yellow-500">
+                            {t("codex.approvalPolicyUntrustedAcpWarning")}
+                          </p>
+                        ) : null}
                       </div>
 
                       {selectedDraft.codexApprovalPolicy === "granular" ? (
@@ -8073,6 +8318,13 @@ export function AcpAgentSettings() {
                         </Select>
                         <p className="text-[10px] text-muted-foreground">
                           {t("codex.sandboxModeHint")}
+                        </p>
+                        {/* Sandbox mode is what houhub maps onto the session's
+                            starting approval preset (#442), so it reaches
+                            ordinary prompts even though approval_policy does
+                            not. Worth stating next to the control that does it. */}
+                        <p className="text-[10px] text-muted-foreground">
+                          {t("codex.sandboxModeSeedsPresetHint")}
                         </p>
                       </div>
 
@@ -9337,6 +9589,19 @@ supports_websockets = true`}
                       )}
                     </div>
 
+                    {/*
+                      The editor owns the `permission` key and hands back a
+                      whole rewritten document, so it goes through the same
+                      path as the raw JSON box below — draft-only, like the
+                      model fields above, with the card's Save button doing
+                      the write to opencode.json.
+                    */}
+                    <OpenCodePermissionsSection
+                      configText={selectedDraft.configText}
+                      onChange={handleConfigTextChange}
+                      disabled={selectedIsSavingConfig}
+                    />
+
                     <div className="space-y-1.5">
                       <label className="text-[11px] text-muted-foreground">
                         {t("openCode.nativeJsonConfig")}
@@ -10084,6 +10349,30 @@ supports_websockets = true`}
                     }
                     onSaved={refreshAgents}
                     onAffectedSessions={reportAffectedSessions}
+                  />
+                ) : selectedAgent.agent_type === "deepseek" ? (
+                  <DeepSeekConfigPanel
+                    agent={selectedAgent}
+                    saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                    onSaveEnv={(env, enabled) =>
+                      persistEnv(
+                        selectedAgent.agent_type,
+                        enabled,
+                        envMapToText(env),
+                        selectedAgent.model_provider_id,
+                        // The keys this panel owns, folded into the raw
+                        // editor's draft (which the enable switch persists
+                        // wholesale) so the two can never disagree.
+                        // `DEEPSEEK_ACP_MODEL` is NOT one of them — the raw
+                        // editor owns it, and folding it in would overwrite a
+                        // model line being typed there.
+                        {
+                          DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY,
+                          DEEPSEEK_BASE_URL: env.DEEPSEEK_BASE_URL,
+                          DEEPSEEK_ACP_PROVIDER: env.DEEPSEEK_ACP_PROVIDER,
+                        }
+                      )
+                    }
                   />
                 ) : selectedAgent.agent_type === "grok" ? (
                   <div className="space-y-3 rounded-md border bg-muted/10 p-3">
