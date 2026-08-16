@@ -2,6 +2,9 @@ use sea_orm::DatabaseConnection;
 #[cfg(feature = "tauri-runtime")]
 use tauri::State;
 
+#[cfg(feature = "tauri-runtime")]
+use crate::acp::manager::ConnectionManager;
+use crate::acp::terminal_runtime::TerminalShellRuntimeConfig;
 use crate::app_error::AppCommandError;
 use crate::db::service::app_metadata_service;
 #[cfg(feature = "tauri-runtime")]
@@ -210,6 +213,51 @@ pub(crate) async fn load_system_terminal_settings(
     Ok(normalize_terminal_settings(parsed))
 }
 
+/// Load the persisted shell selection into the live ACP terminal runtime.
+///
+/// Startup must not fail because of a malformed preference; the runtime keeps
+/// its system fallback when the stored value cannot be read.
+pub async fn apply_persisted_terminal_shell_config(
+    conn: &DatabaseConnection,
+    config: &TerminalShellRuntimeConfig,
+) {
+    match load_system_terminal_settings(conn).await {
+        Ok(settings) => config.set(settings.default_shell).await,
+        Err(err) => tracing::warn!(
+            "[settings] failed to load default terminal shell for ACP runtime: {err}"
+        ),
+    }
+}
+
+/// Persist, apply, and broadcast the default shell through one shared path.
+/// This keeps desktop and hosted workspace updates in sync with connections
+/// that are already alive.
+pub(crate) async fn set_system_terminal_settings_core(
+    conn: &DatabaseConnection,
+    config: &TerminalShellRuntimeConfig,
+    emitter: &crate::web::event_bridge::EventEmitter,
+    settings: SystemTerminalSettings,
+) -> Result<SystemTerminalSettings, AppCommandError> {
+    let normalized = normalize_terminal_settings(settings);
+    let serialized = serde_json::to_string(&normalized).map_err(|e| {
+        AppCommandError::invalid_input("Failed to serialize terminal settings")
+            .with_detail(e.to_string())
+    })?;
+
+    app_metadata_service::upsert_value(conn, SYSTEM_TERMINAL_SETTINGS_KEY, &serialized)
+        .await
+        .map_err(AppCommandError::from)?;
+
+    config.set(normalized.default_shell.clone()).await;
+    crate::web::event_bridge::emit_event(
+        emitter,
+        TERMINAL_SETTINGS_UPDATED_EVENT,
+        normalized.clone(),
+    );
+
+    Ok(normalized)
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn get_system_proxy_settings(
@@ -298,25 +346,11 @@ pub async fn update_system_terminal_settings(
     settings: SystemTerminalSettings,
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
+    manager: State<'_, ConnectionManager>,
 ) -> Result<SystemTerminalSettings, AppCommandError> {
-    let normalized = normalize_terminal_settings(settings);
-    let serialized = serde_json::to_string(&normalized).map_err(|e| {
-        AppCommandError::invalid_input("Failed to serialize terminal settings")
-            .with_detail(e.to_string())
-    })?;
-
-    app_metadata_service::upsert_value(&db.conn, SYSTEM_TERMINAL_SETTINGS_KEY, &serialized)
-        .await
-        .map_err(AppCommandError::from)?;
-
     let emitter = crate::web::event_bridge::EventEmitter::Tauri(app);
-    crate::web::event_bridge::emit_event(
-        &emitter,
-        TERMINAL_SETTINGS_UPDATED_EVENT,
-        normalized.clone(),
-    );
-
-    Ok(normalized)
+    let config = manager.terminal_shell_config();
+    set_system_terminal_settings_core(&db.conn, &config, &emitter, settings).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -340,4 +374,38 @@ pub async fn update_system_rendering_settings(
             .with_detail(err.to_string())
     })?;
     Ok(settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::fresh_in_memory_db;
+    use crate::web::event_bridge::EventEmitter;
+
+    #[tokio::test]
+    async fn terminal_shell_setting_persists_and_updates_live_runtime() {
+        let db = fresh_in_memory_db().await;
+        let config = TerminalShellRuntimeConfig::new();
+
+        let saved = set_system_terminal_settings_core(
+            &db.conn,
+            &config,
+            &EventEmitter::Noop,
+            SystemTerminalSettings {
+                default_shell: Some("  pwsh.exe  ".to_string()),
+            },
+        )
+        .await
+        .expect("save terminal setting");
+
+        assert_eq!(saved.default_shell.as_deref(), Some("pwsh.exe"));
+        assert_eq!(config.snapshot().await.as_deref(), Some("pwsh.exe"));
+
+        let restarted_config = TerminalShellRuntimeConfig::new();
+        apply_persisted_terminal_shell_config(&db.conn, &restarted_config).await;
+        assert_eq!(
+            restarted_config.snapshot().await.as_deref(),
+            Some("pwsh.exe")
+        );
+    }
 }
