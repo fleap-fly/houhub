@@ -46,6 +46,10 @@ interface ConversationShellProps {
     action: SessionFailureAction,
     failure: SessionFailureRecord
   ) => void
+  /** Closes a failure strip, taking every record it stands for. Passed for
+   *  every surface with a live store — dismissing is client-local, so viewers
+   *  get it too. */
+  onSessionFailureDismiss?: (ids: string[]) => void
   pendingPermission: PendingPermission | null
   pendingQuestion: PendingQuestion | null
   /** Awaiting-answer multiple-choice `ask_user_question`. */
@@ -123,6 +127,7 @@ export function ConversationShell({
   claudeApiRetry,
   sessionFailures,
   onSessionFailureAction,
+  onSessionFailureDismiss,
   pendingPermission,
   pendingQuestion,
   pendingAskQuestion,
@@ -313,6 +318,7 @@ export function ConversationShell({
         <SessionFailureBanner
           failures={sessionFailures}
           onAction={onSessionFailureAction}
+          onDismiss={onSessionFailureDismiss}
         />
       )}
 

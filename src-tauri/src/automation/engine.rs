@@ -32,7 +32,7 @@ use crate::commands::folders::{
     git_worktree_add, open_worktree_folder_core, resolve_worktree_folder_core,
 };
 use crate::db::entities::conversation::{self, ConversationStatus};
-use crate::db::service::automation_service;
+use crate::db::service::{automation_service, conversation_service};
 use crate::db::AppDatabase;
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
 use crate::models::{
@@ -500,8 +500,10 @@ impl AutomationEngine {
             .await
             .map_err(|e| e.to_string())?;
 
-        // Create the conversation row, then adopt it in send_prompt (Branch A).
-        let title = first_chars(&cfg.display_text, 80);
+        // Name the run after its automation, not the repeated prompt. Lock the
+        // seed before broadcasting the row so auto-title backfill cannot replace
+        // it with the agent's session-file title.
+        let title = first_chars(&auto.name, 80);
         let conversation_id =
             match create_conversation_core(&self.db.conn, cwd.folder_id, agent_type, Some(title))
                 .await
@@ -512,6 +514,12 @@ impl AutomationEngine {
                     return Err(e.to_string());
                 }
             };
+
+        if let Err(e) = conversation_service::lock_title(&self.db.conn, conversation_id).await {
+            tracing::warn!(
+                "[automation] run {run_id}: could not lock conversation {conversation_id} title: {e}"
+            );
+        }
 
         // Surface the produced conversation in every client's sidebar the instant
         // it exists (InProgress) — independent of the implicit upsert inside

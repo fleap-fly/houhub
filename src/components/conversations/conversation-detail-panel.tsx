@@ -1653,6 +1653,16 @@ const ConversationTabView = memo(function ConversationTabView({
     ]
   )
 
+  // Closing a strip is client-local (it only resolves the record in this
+  // client's projection), so unlike the recovery actions it is offered to
+  // viewers too — see `AcpActionsValue.dismissSessionFailure`.
+  const handleSessionFailureDismiss = useCallback(
+    (ids: string[]) => {
+      acpActions.dismissSessionFailures(tabId, ids)
+    },
+    [acpActions, tabId]
+  )
+
   const messageListNode = (
     <GoalControlProvider value={goalControlValue}>
       <MessageListView
@@ -1734,6 +1744,7 @@ const ConversationTabView = memo(function ConversationTabView({
           ? handleSessionFailureAction
           : undefined
       }
+      onSessionFailureDismiss={handleSessionFailureDismiss}
       pendingPermission={conn.pendingPermission}
       pendingQuestion={conn.pendingQuestion}
       pendingAskQuestion={conn.pendingAskQuestion}
