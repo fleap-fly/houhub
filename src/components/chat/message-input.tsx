@@ -117,8 +117,10 @@ import type {
 import {
   ATTACH_FILE_TO_SESSION_EVENT,
   APPEND_TEXT_TO_SESSION_EVENT,
+  ATTACH_SESSION_TO_SESSION_EVENT,
   type AttachFileToSessionDetail,
   type AppendTextToSessionDetail,
+  type AttachSessionToSessionDetail,
 } from "@/lib/session-attachment-events"
 import {
   ConversationContextBar,
@@ -184,6 +186,7 @@ import {
 } from "@/components/chat/composer/invocation-reference"
 import { cutSelectionToClipboard } from "@/components/chat/composer/clipboard-actions"
 import type { ReferenceAttrs } from "@/components/chat/composer/types"
+import { sessionToSuggestion } from "@/components/chat/composer/suggestion/adapters"
 import type { Editor, JSONContent } from "@tiptap/core"
 import { useReferenceSearch } from "@/components/chat/composer/use-reference-search"
 import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
@@ -203,6 +206,8 @@ import {
 export interface ComposerInjectContent {
   text: string
   skill?: { id: string; label: string }
+  /** Replace the document (default) or append the text at the caret. */
+  mode?: "replace" | "append"
 }
 
 interface MessageInputProps {
@@ -224,6 +229,8 @@ interface MessageInputProps {
   onConfigOptionChange?: (configId: string, valueId: string) => void
   agentType?: AgentType | null
   availableCommands?: AvailableCommandInfo[] | null
+  /** Keep the slash menu available while ACP command discovery is in flight. */
+  commandsLoading?: boolean
   promptCapabilities: PromptCapabilitiesInfo
   /** Enables local workspace references such as @file, folder branch picker,
    * server file browser, and direct local file:// path attachment. Cloud
@@ -526,6 +533,7 @@ export function MessageInput({
   onConfigOptionChange,
   agentType,
   availableCommands,
+  commandsLoading = false,
   promptCapabilities,
   enableWorkspaceReferences = true,
   contextLocation,
@@ -901,7 +909,29 @@ export function MessageInput({
     const raf = requestAnimationFrame(() => {
       const handle = editorRef.current
       if (handle) {
-        handle.setText(payload.text)
+        if (payload.mode === "append") {
+          // Quotes are appended as a standalone Markdown block. Keep a blank
+          // line on both sides so an existing draft cannot run into the quote
+          // and the quote cannot merge with prose typed afterwards. The
+          // composer stores literal hard breaks, so this survives send
+          // serialization without a Markdown round-trip.
+          const existing = handle.getText()
+          const prefix = existing
+            ? existing.endsWith("\n\n")
+              ? ""
+              : existing.endsWith("\n")
+                ? "\n"
+                : "\n\n"
+            : ""
+          const suffix = payload.text.endsWith("\n\n")
+            ? ""
+            : payload.text.endsWith("\n")
+              ? "\n"
+              : "\n\n"
+          handle.insertTextAtCursor(`${prefix}${payload.text}${suffix}`)
+        } else {
+          handle.setText(payload.text)
+        }
         // Prepend the skill as the leading invocation badge, so the sent
         // message opens with `${prefix}${id}`.
         if (payload.skill) {
@@ -1081,6 +1111,10 @@ export function MessageInput({
   }, [slashMenuOpen, availableSkills, agentType, slashTriggerChar, slashFilter])
   const slashAutocompleteCount =
     filteredSlashCommands.length + filteredSlashSkills.length
+  const slashMenuLoading =
+    commandsLoading && slashTriggerChar === "/" && slashAutocompleteCount === 0
+  const slashMenuVisible =
+    slashMenuOpen && (slashAutocompleteCount > 0 || slashMenuLoading)
 
   // Keep the highlighted row inside the current result window. As the user
   // types and the filter narrows, the previously-highlighted index can point
@@ -1125,7 +1159,7 @@ export function MessageInput({
   const detectSlashTrigger = useCallback(() => {
     const editor = editorRef.current?.getEditor()
     const hasSlashSource =
-      slashCommands.length > 0 || availableSkills.length > 0
+      slashCommands.length > 0 || availableSkills.length > 0 || commandsLoading
     const close = () => {
       setSlashMenuOpen(false)
       setSlashTriggerChar(null)
@@ -1149,11 +1183,23 @@ export function MessageInput({
     setSlashFilter(match[3])
     setSlashSelectedIndex(0)
     setSlashMenuOpen(true)
-  }, [slashCommands.length, availableSkills.length, agentType])
+  }, [slashCommands.length, availableSkills.length, agentType, commandsLoading])
 
   useEffect(() => {
     detectSlashTriggerRef.current = detectSlashTrigger
   }, [detectSlashTrigger])
+
+  // Command/skill discovery can finish after the user has already typed the
+  // trigger. Re-run detection when the source list changes so a `$` panel (or
+  // a slash panel that was showing its loading row) fills without another key
+  // press.
+  useEffect(() => {
+    if (!composerReady) return
+    const raf = requestAnimationFrame(() => {
+      detectSlashTriggerRef.current?.()
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [composerReady, detectSlashTrigger, slashCommands.length, availableSkills.length])
 
   // Insert one inline file reference badge per item, matching `@`-file mentions.
   // A genuine `file://` item uses its uri directly (deduped against the document);
@@ -2406,6 +2452,43 @@ export function MessageInput({
   useEffect(() => {
     if (!attachmentTabId) return
 
+    const handleAttachSession = (event: Event) => {
+      const detail = (event as CustomEvent<AttachSessionToSessionDetail>).detail
+      if (!detail || detail.tabId !== attachmentTabId) return
+      const editor = editorRef.current?.getEditor()
+      if (!editor) return
+      const reference = sessionToSuggestion(detail.conversation).reference
+      let alreadyPresent = false
+      editor.state.doc.descendants((node) => {
+        if (
+          node.type.name === "reference" &&
+          node.attrs?.refType === "session" &&
+          node.attrs?.uri === reference.uri
+        ) {
+          alreadyPresent = true
+          return false
+        }
+        return true
+      })
+      if (alreadyPresent) return
+      editor.chain().focus().insertReference(reference).insertContent(" ").run()
+    }
+
+    window.addEventListener(
+      ATTACH_SESSION_TO_SESSION_EVENT,
+      handleAttachSession
+    )
+    return () => {
+      window.removeEventListener(
+        ATTACH_SESSION_TO_SESSION_EVENT,
+        handleAttachSession
+      )
+    }
+  }, [attachmentTabId])
+
+  useEffect(() => {
+    if (!attachmentTabId) return
+
     const handleAppendText = (event: Event) => {
       const customEvent = event as CustomEvent<AppendTextToSessionDetail>
       if (!customEvent.detail) return
@@ -2769,7 +2852,24 @@ export function MessageInput({
   const handleExternalMenuKeyDown = useCallback(
     (event: KeyboardEvent): boolean => {
       if (event.isComposing) return false
-      if (!slashMenuOpen || slashAutocompleteCount === 0) return false
+      if (!slashMenuOpen) return false
+      // Keep the editor from submitting the draft while command discovery is
+      // still in flight. Arrow/Enter/Tab are owned by the loading panel even
+      // though there is no selectable row yet; ordinary text keys continue to
+      // update the inline filter through the editor.
+      if (slashAutocompleteCount === 0) {
+        if (event.key === "Escape") {
+          closeSlashMenu()
+          return true
+        }
+        return (
+          slashMenuLoading &&
+          (event.key === "ArrowDown" ||
+            event.key === "ArrowUp" ||
+            event.key === "Enter" ||
+            event.key === "Tab")
+        )
+      }
       if (event.key === "ArrowDown") {
         setSlashSelectedIndex((i) =>
           i < slashAutocompleteCount - 1 ? i + 1 : 0
@@ -2804,6 +2904,7 @@ export function MessageInput({
     [
       slashMenuOpen,
       slashAutocompleteCount,
+      slashMenuLoading,
       slashSelectedIndex,
       filteredSlashCommands,
       filteredSlashSkills,
@@ -3210,11 +3311,19 @@ export function MessageInput({
       onDragLeave={handleContainerDragLeave}
       onDrop={handleContainerDrop}
     >
-      {slashMenuOpen && slashAutocompleteCount > 0 && (
-        <div className="absolute bottom-full left-0 right-0 mb-1 z-50 flex max-h-[min(16rem,40dvh)] flex-col overflow-hidden rounded-xl border border-border bg-popover shadow-lg">
+      {slashMenuVisible && (
+        <div
+          data-testid="slash-menu"
+          className="absolute bottom-full left-0 right-0 mb-1 z-50 flex max-h-[min(16rem,40dvh)] flex-col overflow-hidden rounded-xl border border-border bg-popover shadow-lg"
+        >
           {/* No search box: the user types the filter inline after `/` (like the
               `@` panel); navigation is routed from the editor's keydown. */}
           <div ref={slashMenuListRef} className="flex-1 overflow-y-auto p-1">
+            {slashMenuLoading && (
+              <div className="px-3 py-2 text-sm text-muted-foreground">
+                {t("slashLoading")}
+              </div>
+            )}
             {filteredSlashCommands.map((cmd, i) => (
               <button
                 key={`cmd-${cmd.name}`}
@@ -3392,7 +3501,7 @@ export function MessageInput({
                 onPlainPaste={handlePlainPasteShortcut}
                 submitShortcut={shortcuts.send_message}
                 newlineShortcut={shortcuts.newline_in_message}
-                isExternalMenuOpen={slashMenuOpen && slashAutocompleteCount > 0}
+                isExternalMenuOpen={slashMenuVisible}
                 onExternalMenuKeyDown={handleExternalMenuKeyDown}
                 className="min-h-0 flex-1"
               />

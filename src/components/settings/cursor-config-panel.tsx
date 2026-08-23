@@ -259,7 +259,7 @@ export function CursorConfigPanel({
 
   // --- permissions card state ---
   const settings = agent.cursor_settings
-  // Default a fresh Cursor agent to Run Everything (--force): only when the
+  // Default a fresh Cursor ACP session to Run Everything (--force): only when the
   // CURSOR_FORCE knob was never set does it default on; an explicit "0" (the
   // user chose "Ask before running") is respected.
   const [force, setForce] = useState(() =>

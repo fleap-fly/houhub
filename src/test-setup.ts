@@ -35,6 +35,21 @@ if (typeof Element !== "undefined") {
   Element.prototype.setPointerCapture ??= () => {}
   Element.prototype.releasePointerCapture ??= () => {}
 }
+if (typeof window !== "undefined" && !window.matchMedia) {
+  // jsdom does not implement matchMedia, which useMediaQuery and responsive
+  // panels call during mount. Nothing matches by default; tests that need the
+  // other branch can replace the stub locally.
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia
+}
 if (typeof Range !== "undefined") {
   Range.prototype.getClientRects ??= () =>
     ({

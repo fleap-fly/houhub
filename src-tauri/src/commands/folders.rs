@@ -99,7 +99,7 @@ async fn prepare_remote_git_cmd_for_url(
 }
 
 /// Classify a git remote command error, detecting authentication failures.
-fn classify_remote_git_error(operation: &str, stderr: &[u8]) -> AppCommandError {
+pub(crate) fn classify_remote_git_error(operation: &str, stderr: &[u8]) -> AppCommandError {
     let msg = String::from_utf8_lossy(stderr).trim().to_string();
     tracing::error!("[GIT_CMD] {} failed, stderr: {}", operation, msg);
     let lower = msg.to_lowercase();
@@ -440,7 +440,7 @@ async fn count_changed_files_between(
 /// So: no leading `-`/`+`, no `:`, no whitespace or control characters. What
 /// survives can only be a single ref name — `ensure_local_branch_exists` then
 /// confirms it actually is one.
-fn ensure_pushable_branch_name(branch: &str) -> Result<(), AppCommandError> {
+pub(crate) fn ensure_pushable_branch_name(branch: &str) -> Result<(), AppCommandError> {
     let rejected = branch.is_empty()
         || branch.starts_with('-')
         || branch.starts_with('+')
@@ -7091,8 +7091,9 @@ mod tests {
         let refused = git_delete_branch(repo.clone(), "wt".into(), false)
             .await
             .expect_err("git refuses a branch held by a worktree");
+        let refusal = format!("{refused:?}");
         assert!(
-            format!("{refused:?}").contains("used by worktree"),
+            refusal.contains("used by worktree") || refusal.contains("checked out at"),
             "expected git's worktree refusal, got: {refused:?}"
         );
 

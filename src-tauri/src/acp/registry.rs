@@ -62,6 +62,30 @@ pub struct PlatformBinary {
     pub sha256: Option<&'static str>,
 }
 
+/// Archive-relative files that must be present alongside a directory entry.
+/// Unix and Windows archives can use different names (usually an `.exe`
+/// suffix); an empty set means the entry itself is sufficient.
+#[derive(Debug, Clone, Copy)]
+pub struct PlatformFiles {
+    pub unix: &'static [&'static str],
+    pub windows: &'static [&'static str],
+}
+
+impl PlatformFiles {
+    pub const NONE: Self = Self {
+        unix: &[],
+        windows: &[],
+    };
+
+    pub fn for_current_platform(&self) -> &'static [&'static str] {
+        if cfg!(windows) {
+            self.windows
+        } else {
+            self.unix
+        }
+    }
+}
+
 /// Launch entry inside an extracted directory-tree archive (see
 /// [`AgentDistribution::Binary::dir_entry`]). Paths are relative to the
 /// archive root, '/'-separated; `windows` names the `.cmd`/`.bat` shim.
@@ -69,6 +93,7 @@ pub struct PlatformBinary {
 pub struct BinaryDirEntry {
     pub unix: &'static str,
     pub windows: &'static str,
+    pub required_siblings: PlatformFiles,
 }
 
 impl BinaryDirEntry {
@@ -150,6 +175,8 @@ pub fn builtin_acp_agents() -> Vec<AgentType> {
         AgentType::Grok,
         AgentType::Cursor,
         AgentType::DeepSeek,
+        AgentType::Qoder,
+        AgentType::Antigravity,
     ]
 }
 
@@ -176,6 +203,8 @@ pub fn registry_id_for(agent_type: AgentType) -> &'static str {
         AgentType::Grok => "grok-build",
         AgentType::Cursor => "cursor",
         AgentType::DeepSeek => "deepseek-acp",
+        AgentType::Qoder => "qoder-cli",
+        AgentType::Antigravity => "antigravity-acp",
         // A custom agent's registry id IS its identity.
         AgentType::Custom(id) => id,
     }
@@ -196,6 +225,8 @@ pub fn from_registry_id(id: &str) -> Option<AgentType> {
         "grok-build" => Some(AgentType::Grok),
         "cursor" => Some(AgentType::Cursor),
         "deepseek-acp" => Some(AgentType::DeepSeek),
+        "qoder-cli" => Some(AgentType::Qoder),
+        "antigravity-acp" => Some(AgentType::Antigravity),
         // Only ids the user has actually registered resolve. An unregistered
         // id must stay `None` so the ACP-registry picker still offers it as
         // "addable" rather than treating it as already supported.
@@ -236,6 +267,12 @@ pub fn acp_adapter_relation(agent_type: AgentType) -> Option<AcpAdapterRelation>
 
 const ACP_ADAPTER_DOCS_URL: &str =
     "https://docs.houshanai.com/guide/supported-agents#acp-adapters";
+
+const ANTIGRAVITY_LAUNCH_ARGS: &[&str] = if cfg!(target_os = "linux") {
+    &["--uid="]
+} else {
+    &[]
+};
 
 /// Minimum adapter version whose `_session/steering` honors the
 /// `_meta.steering.idleBehavior = "promptRequired"` opt-in — one of the three
@@ -592,8 +629,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "Cline",
             description: "Autonomous coding agent CLI",
             distribution: AgentDistribution::Npx {
-                version: "3.0.55",
-                package: "cline@3.0.55",
+                version: "3.0.56",
+                package: "cline@3.0.56",
                 cmd: "cline",
                 args: &["--acp"],
                 env: &[],
@@ -606,39 +643,39 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "OpenCode",
             description: "The open source coding agent",
             distribution: AgentDistribution::Binary {
-                version: "1.18.18",
+                version: "1.18.20",
                 cmd: "opencode",
                 args: &["acp"],
                 env: &[],
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-darwin-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.20/opencode-darwin-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-darwin-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.20/opencode-darwin-x64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-linux-arm64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.20/opencode-linux-arm64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-linux-x64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.20/opencode-linux-x64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-windows-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.20/opencode-windows-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.18/opencode-windows-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.20/opencode-windows-x64.zip",
                         sha256: None,
                     },
                 ],
@@ -657,8 +694,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // Docker / Nix are the supported channels. The npm `hermes-agent`
             // package is a COMMUNITY bridge (wyrtensi/hermes-agent-npm, not
             // Nous Research), pinned here at an exact, audited version: its
-            // postinstall clones the OFFICIAL repo at tag v2026.8.13 verifying
-            // the full commit SHA (f80f453a…), bootstraps an isolated Python
+            // postinstall clones the OFFICIAL repo at tag v2026.8.19 verifying
+            // the full commit SHA (fcbd1076…), bootstraps an isolated Python
             // 3.11 venv with a checksum-pinned uv, and `uv sync --locked
             // --extra all` (⊇ the acp+mcp extras) from upstream's lockfile —
             // all inside the npm package directory; config/credentials stay in
@@ -666,25 +703,22 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // console script, so `hermes acp` is the same adapter the official
             // install runs. Keep the pin EXACT on version bumps and re-audit
             // the wrapper diff — the exact pin is what bounds the third-party
-            // trust surface. 0.20.1 audited: `bin/`, `lib/` and
-            // `scripts/postinstall.js` are byte-identical to 0.20.0 (the whole
-            // diff is the version string, the upstream tag/commit pin, and a
-            // README badge), the SHA check is still a hard `rev-parse
-            // <tag>^{commit}` equality on a 40-hex pin, and that tag really is
-            // NousResearch's own "Hermes Agent v0.20.1 (2026.8.13)" release
-            // resolving to the pinned commit.
+            // trust surface. 0.20.5 audited, and this bump is the cheap kind:
+            // every file in the tarball except `package.json` is byte-identical
+            // to the fully-read 0.20.4 wrapper. The new tag is NousResearch's
+            // own Hermes Agent v0.20.5 (2026.8.19) release.
             //
             // Launch preference: `resolve_npx_command("hermes")` checks PATH
             // first, so an official-installer `hermes` (which self-updates)
             // naturally outranks the npm-managed copy; the npm global install
             // is the managed/one-click channel houhub's Install button drives.
             distribution: AgentDistribution::Npx {
-                version: "0.20.1",
-                package: "hermes-agent@0.20.1",
+                version: "0.20.5",
+                package: "hermes-agent@0.20.5",
                 cmd: "hermes",
                 args: &["acp"],
                 env: &[],
-                node_required: Some("22.0.0"),
+                node_required: Some("20.0.0"),
             },
         },
         AgentType::CodeBuddy => AcpAgentMeta {
@@ -693,8 +727,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "CodeBuddy",
             description: "Tencent Cloud's official AI coding assistant (ACP)",
             distribution: AgentDistribution::Npx {
-                version: "2.137.0",
-                package: "@tencent-ai/codebuddy-code@2.137.0",
+                version: "2.137.1",
+                package: "@tencent-ai/codebuddy-code@2.137.1",
                 cmd: "codebuddy",
                 args: &["--acp"],
                 env: &[],
@@ -761,19 +795,19 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `models` that the composer's selectors and context ring read, and
             // prompting straight after it works. It also skips `session/load`'s
             // history replay, which houhub only drained to discard. The 1.0.1–
-            // 1.0.4 patches add nothing further here: re-probed live against the
-            // 1.0.4 binary, `initialize` still answers `sessionCapabilities:
+            // 1.0.4–1.0.5 patches add nothing further here: re-probed live against the
+            // 1.0.5 binary, `initialize` still answers `sessionCapabilities:
             // {list, resume, close}` plus the same
             // `promptCapabilities.embeddedContext`, so the resume rung stands.
             distribution: AgentDistribution::Npx {
-                version: "1.0.4",
-                package: "@xai-official/grok@1.0.4",
+                version: "1.0.5",
+                package: "@xai-official/grok@1.0.5",
                 cmd: "grok",
                 // Only the ACP subcommand lives here. Grok's ROOT-level launch
                 // flags (`--no-auto-update` always, `--permission-mode <value>`
                 // only for a non-default permission mode) MUST precede this
                 // subcommand — `grok agent stdio` itself rejects them (re-verified
-                // against 1.0.4: it still only accepts --debug/--debug-file/
+                // against 1.0.5: it still only accepts --debug/--debug-file/
                 // --leader-socket) — so `build_agent` inserts them ahead of these
                 // args rather than appending after. Since 1.0.3 `grok --help` no
                 // longer LISTS `--no-auto-update`, but it is still accepted:
@@ -781,7 +815,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 // `grok --no-auto-update agent stdio` initializes clean.
                 args: &["agent", "stdio"],
                 env: &[],
-                // `@xai-official/grok@1.0.4` declares `engines.node: ">=20"`;
+                // `@xai-official/grok@1.0.5` declares `engines.node: ">=20"`;
                 // surface that in preflight so Node 18 isn't silently accepted.
                 node_required: Some("20.0.0"),
             },
@@ -842,6 +876,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 dir_entry: Some(BinaryDirEntry {
                     unix: "dist-package/cursor-agent",
                     windows: "dist-package/cursor-agent.cmd",
+                    required_siblings: PlatformFiles::NONE,
                 }),
             },
         },
@@ -868,13 +903,74 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // and, since 0.2.0, `--setup` terminal auth for storing the key in
             // `$DSH_HOME/.credentials.yaml`.
             distribution: AgentDistribution::Npx {
-                version: "0.3.0",
-                package: "deepseek-acp@0.3.0",
+                version: "0.6.0",
+                package: "deepseek-acp@0.6.0",
                 cmd: "deepseek-acp",
                 args: &[],
                 env: &[],
                 // package.json declares `engines.node: ">=22"`.
                 node_required: Some("22.0.0"),
+            },
+        },
+        AgentType::Qoder => AcpAgentMeta {
+            agent_type,
+            supports_mcp: true,
+            name: "Qoder",
+            description: "Qoder coding agent CLI (native ACP)",
+            distribution: AgentDistribution::Npx {
+                version: "1.1.28",
+                package: "@qoder-ai/qodercli@1.1.28",
+                cmd: "qoder",
+                args: &["--acp"],
+                env: &[],
+                node_required: Some("20.0.0"),
+            },
+        },
+        AgentType::Antigravity => AcpAgentMeta {
+            agent_type,
+            supports_mcp: true,
+            name: "Google Antigravity",
+            description: "Google's AI coding agent (ACP)",
+            distribution: AgentDistribution::Binary {
+                version: "1.0.0",
+                cmd: "agy_acp_server",
+                args: ANTIGRAVITY_LAUNCH_ARGS,
+                env: &[],
+                platforms: &[
+                    PlatformBinary {
+                        platform: "darwin-aarch64",
+                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-agy_acp_server_20260818_01_RC01-darwin-arm64.zip",
+                        sha256: None,
+                    },
+                    PlatformBinary {
+                        platform: "linux-aarch64",
+                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-agy_acp_server_20260818_01_RC01-linux-arm64.zip",
+                        sha256: None,
+                    },
+                    PlatformBinary {
+                        platform: "linux-x86_64",
+                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-agy_acp_server_20260818_01_RC01-linux-x86_64.zip",
+                        sha256: None,
+                    },
+                    PlatformBinary {
+                        platform: "windows-aarch64",
+                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-agy_acp_server_20260818_01_RC01-windows-arm64.zip",
+                        sha256: None,
+                    },
+                    PlatformBinary {
+                        platform: "windows-x86_64",
+                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-agy_acp_server_20260818_01_RC01-windows-x86_64.zip",
+                        sha256: None,
+                    },
+                ],
+                dir_entry: Some(BinaryDirEntry {
+                    unix: "agy_acp_server.par",
+                    windows: "agy_acp_server.exe",
+                    required_siblings: PlatformFiles {
+                        unix: &["localharness_external"],
+                        windows: &["localharness_external.exe"],
+                    },
+                }),
             },
         },
         // Handled by the early return above; kept so the match stays
@@ -1041,14 +1137,14 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Cline,
-            "3.0.55",
-            "cline@3.0.55",
+            "3.0.56",
+            "cline@3.0.56",
             Some("22.0.0"),
         );
         assert_npx_version(
             AgentType::CodeBuddy,
-            "2.137.0",
-            "@tencent-ai/codebuddy-code@2.137.0",
+            "2.137.1",
+            "@tencent-ai/codebuddy-code@2.137.1",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -1066,25 +1162,25 @@ mod tests {
         assert_npx_version(AgentType::Pi, "0.0.33", "pi-acp@0.0.33", Some("22.0.0"));
         assert_npx_version(
             AgentType::Grok,
-            "1.0.4",
-            "@xai-official/grok@1.0.4",
+            "1.0.5",
+            "@xai-official/grok@1.0.5",
             Some("20.0.0"),
         );
         assert_npx_version(
             AgentType::DeepSeek,
-            "0.3.0",
-            "deepseek-acp@0.3.0",
+            "0.6.0",
+            "deepseek-acp@0.6.0",
             Some("22.0.0"),
         );
-        assert_binary_version(AgentType::OpenCode, "1.18.18", "/releases/download/v1.18.18/");
+        assert_binary_version(AgentType::OpenCode, "1.18.20", "/releases/download/v1.18.20/");
         // Hermes rides the community npm bridge (upstream retired its PyPI
         // channel at 0.19.0; see the registry entry). The npm package version
         // tracks the upstream version 1:1, and the pin must stay EXACT — the
         // audited wrapper code is only what the pinned version ships.
         assert_npx_version(
             AgentType::Hermes,
-            "0.20.1",
-            "hermes-agent@0.20.1",
+            "0.20.5",
+            "hermes-agent@0.20.5",
             Some("20.0.0"),
         );
     }

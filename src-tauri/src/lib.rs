@@ -17,6 +17,7 @@ pub mod chat_channel;
 pub mod commands;
 pub mod db;
 pub mod folder_links;
+pub mod forge;
 pub mod git_credential;
 pub mod git_repo;
 pub mod intern;
@@ -63,7 +64,7 @@ mod tauri_app {
         conversations,
         custom_skills as custom_skills_commands, delegation as delegation_commands,
         experts as experts_commands, feedback as feedback_commands, file_io, folder_commands,
-        folder_links, folders, houflow as houflow_commands, logging as logging_commands, mcp as mcp_commands,
+        folder_links, forge as forge_commands, folders, houflow as houflow_commands, logging as logging_commands, mcp as mcp_commands,
         model_provider as model_provider_commands, notification,
         office_tools as office_tools_commands, pet as pet_commands, project_boot,
         question as question_commands, quick_messages as quick_messages_commands,
@@ -1129,6 +1130,7 @@ mod tauri_app {
                 pet_commands::pet_save_window_state,
                 pet_commands::pet_marketplace_list,
                 pet_commands::pet_marketplace_install,
+                pet_commands::pet_marketplace_asset,
                 pet_commands::pet_celebrate,
                 pet_commands::pet_get_current_state,
                 pet_commands::pet_list_active_sessions,
@@ -1182,6 +1184,7 @@ mod tauri_app {
                 acp_commands::acp_preflight,
                 acp_commands::acp_cursor_auth_status,
                 acp_commands::acp_cursor_list_models,
+                acp_commands::acp_qoder_auth_status,
                 acp_commands::acp_connect,
                 acp_commands::acp_prompt,
                 acp_commands::acp_set_mode,
@@ -1342,6 +1345,14 @@ mod tauri_app {
                 work_task_commands::work_task_template_list,
                 work_task_commands::work_task_template_save,
                 work_task_commands::work_task_template_delete,
+                forge_commands::folder_forge_remote,
+                forge_commands::forge_list_issues,
+                forge_commands::forge_tab_count,
+                forge_commands::forge_list_labels,
+                forge_commands::work_task_create_from_forge,
+                forge_commands::work_task_lookup_by_source,
+                forge_commands::forge_settings_get,
+                forge_commands::forge_settings_set,
                 terminal_commands::terminal_spawn,
                 terminal_commands::terminal_write,
                 terminal_commands::terminal_resize,

@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
+#[cfg(feature = "tauri-runtime")]
+use tauri::Manager;
+
 use crate::app_error::AppCommandError;
 use crate::db::entities::conversation;
 use crate::db::entities::folder::FolderKind;
@@ -13,6 +16,8 @@ use crate::parsers::cline::ClineParser;
 use crate::parsers::codebuddy::CodeBuddyParser;
 use crate::parsers::codex::CodexParser;
 use crate::parsers::deepseek::DeepSeekParser;
+use crate::parsers::antigravity::AntigravityParser;
+use crate::parsers::qoder::QoderParser;
 use crate::parsers::cursor::CursorParser;
 use crate::parsers::gemini::GeminiParser;
 use crate::parsers::grok::GrokParser;
@@ -31,15 +36,30 @@ use crate::web::event_bridge::{
     IMPORT_SCAN_PROGRESS_EVENT, TABS_CHANGED_EVENT,
 };
 
-pub async fn list_all_conversations_core(
+#[derive(Default)]
+pub(crate) struct ListAllConversationsOptions {
+    pub(crate) folder_ids: Option<Vec<i32>>,
+    pub(crate) agent_type: Option<AgentType>,
+    pub(crate) search: Option<String>,
+    pub(crate) sort_by: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) include_children: bool,
+}
+
+pub(crate) async fn list_all_conversations_core(
     conn: &sea_orm::DatabaseConnection,
-    folder_ids: Option<Vec<i32>>,
-    agent_type: Option<AgentType>,
-    search: Option<String>,
-    sort_by: Option<String>,
-    status: Option<String>,
-    include_children: bool,
+    _emitter: &EventEmitter,
+    _chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
+    options: ListAllConversationsOptions,
 ) -> Result<Vec<DbConversationSummary>, AppCommandError> {
+    let ListAllConversationsOptions {
+        folder_ids,
+        agent_type,
+        search,
+        sort_by,
+        status,
+        include_children,
+    } = options;
     conversation_service::list_all(
         conn,
         folder_ids,
@@ -56,7 +76,7 @@ pub async fn list_all_conversations_core(
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn list_all_conversations(
-    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
     folder_ids: Option<Vec<i32>>,
     agent_type: Option<AgentType>,
     search: Option<String>,
@@ -64,14 +84,21 @@ pub async fn list_all_conversations(
     status: Option<String>,
     include_children: Option<bool>,
 ) -> Result<Vec<DbConversationSummary>, AppCommandError> {
+    let emitter = EventEmitter::Tauri(app.clone());
+    let db = app.state::<AppDatabase>();
+    let chat_channel_manager = app.state::<crate::chat_channel::manager::ChatChannelManager>();
     list_all_conversations_core(
         &db.conn,
-        folder_ids,
-        agent_type,
-        search,
-        sort_by,
-        status,
-        include_children.unwrap_or(false),
+        &emitter,
+        &chat_channel_manager,
+        ListAllConversationsOptions {
+            folder_ids,
+            agent_type,
+            search,
+            sort_by,
+            status,
+            include_children: include_children.unwrap_or(false),
+        },
     )
     .await
 }
@@ -169,7 +196,7 @@ fn list_conversations_sync(
     let mut all_conversations = Vec::new();
     let mut seen_keys = HashSet::new();
 
-    let parsers: Vec<(AgentType, Box<dyn AgentParser>)> = vec![
+    let mut parsers: Vec<(AgentType, Box<dyn AgentParser>)> = vec![
         (AgentType::ClaudeCode, Box::new(ClaudeParser::new())),
         (AgentType::Codex, Box::new(CodexParser::new())),
         (AgentType::OpenCode, Box::new(OpenCodeParser::new())),
@@ -183,7 +210,12 @@ fn list_conversations_sync(
         (AgentType::Grok, Box::new(GrokParser::new())),
         (AgentType::Cursor, Box::new(CursorParser::new())),
         (AgentType::DeepSeek, Box::new(DeepSeekParser::new())),
+        (AgentType::Qoder, Box::new(QoderParser::new())),
+        (AgentType::Antigravity, Box::new(AntigravityParser::new())),
     ];
+    for custom in crate::acp::custom_registry::all() {
+        parsers.push((custom, Box::new(AcpNativeParser::new(custom))));
+    }
 
     for (at, parser) in &parsers {
         if let Some(ref filter) = agent_type {
@@ -293,6 +325,8 @@ pub async fn get_conversation(
             AgentType::Grok => Box::new(GrokParser::new()),
             AgentType::Cursor => Box::new(CursorParser::new()),
             AgentType::DeepSeek => Box::new(DeepSeekParser::new()),
+            AgentType::Qoder => Box::new(QoderParser::new()),
+            AgentType::Antigravity => Box::new(AntigravityParser::new()),
             // Custom ACP agents have no native store to reverse-engineer;
             // their history is houhub's own ACP transcript.
             AgentType::Custom(_) => Box::new(AcpNativeParser::new(agent_type)),
@@ -385,6 +419,7 @@ fn compute_folders(all_conversations: &[ConversationSummary]) -> Vec<FolderInfo>
 pub async fn import_local_conversations_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
+    chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
     folder_id: i32,
 ) -> Result<ImportResult, AppCommandError> {
     // Share IMPORT_GUARD with the batch importer: `(external_id, agent_type)`
@@ -414,6 +449,7 @@ pub async fn import_local_conversations_core(
     // list itself, which also covers the newly imported rows.
     for id in updated_ids {
         emit_conversation_upsert(emitter, conn, id).await;
+        sync_conversation_title_to_channels_core(conn, chat_channel_manager, id).await;
     }
 
     Ok(result)
@@ -426,7 +462,14 @@ pub async fn import_local_conversations(
     db: tauri::State<'_, AppDatabase>,
     folder_id: i32,
 ) -> Result<ImportResult, AppCommandError> {
-    import_local_conversations_core(&db.conn, &EventEmitter::Tauri(app), folder_id).await
+    let manager = app.state::<crate::chat_channel::manager::ChatChannelManager>();
+    import_local_conversations_core(
+        &db.conn,
+        &EventEmitter::Tauri(app.clone()),
+        &manager,
+        folder_id,
+    )
+    .await
 }
 
 /// Serializes concurrent batch imports: `(external_id, agent_type)` has no DB
@@ -615,6 +658,7 @@ fn build_scan_result(
 pub async fn scan_importable_sessions_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
+    chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
 ) -> Result<ScanResult, AppCommandError> {
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
@@ -656,6 +700,7 @@ pub async fn scan_importable_sessions_core(
     // broadcast each one so open sidebars re-sort without a refetch.
     for id in import_service::sync_imported_sessions(conn, &conv_rows, &summaries).await {
         emit_conversation_upsert(emitter, conn, id).await;
+        sync_conversation_title_to_channels_core(conn, chat_channel_manager, id).await;
     }
 
     let folder_rows = load_folder_rows(conn).await?;
@@ -668,7 +713,8 @@ pub async fn scan_importable_sessions(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
 ) -> Result<ScanResult, AppCommandError> {
-    scan_importable_sessions_core(&db.conn, &EventEmitter::Tauri(app)).await
+    let manager = app.state::<crate::chat_channel::manager::ChatChannelManager>();
+    scan_importable_sessions_core(&db.conn, &EventEmitter::Tauri(app.clone()), &manager).await
 }
 
 /// Batch-import the selected sessions, creating (or reopening) each target
@@ -979,6 +1025,8 @@ pub async fn get_folder_conversation_core(
                 AgentType::Grok => Box::new(GrokParser::new()),
                 AgentType::Cursor => Box::new(CursorParser::new()),
                 AgentType::DeepSeek => Box::new(DeepSeekParser::new()),
+                AgentType::Qoder => Box::new(QoderParser::new()),
+                AgentType::Antigravity => Box::new(AntigravityParser::new()),
                 AgentType::Custom(_) => Box::new(AcpNativeParser::new(at)),
             };
                 match parser.get_conversation(&eid) {
@@ -1359,6 +1407,33 @@ pub(crate) async fn emit_conversation_upsert(
             "[conversations] upsert emit skipped (get_by_id {conversation_id} failed): {e}"
         ),
     }
+}
+
+pub(crate) async fn emit_preserved_conversation(
+    emitter: &EventEmitter,
+    conn: &sea_orm::DatabaseConnection,
+    preserved: Option<i32>,
+) {
+    if let Some(id) = preserved {
+        emit_conversation_upsert(emitter, conn, id).await;
+    }
+}
+
+/// Detach title propagation from lifecycle/event handlers so a slow channel
+/// provider cannot hold up ACP session processing.
+pub(crate) fn spawn_sync_conversation_title_until_current(
+    conn: sea_orm::DatabaseConnection,
+    chat_channel_manager: crate::chat_channel::manager::ChatChannelManager,
+    conversation_id: i32,
+) {
+    tokio::spawn(async move {
+        sync_conversation_title_to_channels_core(
+            &conn,
+            &chat_channel_manager,
+            conversation_id,
+        )
+        .await;
+    });
 }
 
 /// Emit a `conversation://changed` Deleted for `conversation_id` so every
@@ -2687,7 +2762,12 @@ mod tests {
         assert!(summary.git_branch.is_none());
 
         // It surfaces in the default sidebar query (active-folder scope).
-        let rows = list_all_conversations_core(&db.conn, None, None, None, None, None, false)
+        let rows = list_all_conversations_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            ListAllConversationsOptions::default(),
+        )
             .await
             .expect("list");
         assert!(rows.iter().any(|c| c.id == result.conversation_id));
@@ -3077,7 +3157,12 @@ mod tests {
     #[tokio::test]
     async fn list_all_conversations_core_empty_db_returns_empty() {
         let db = fresh_in_memory_db().await;
-        let rows = list_all_conversations_core(&db.conn, None, None, None, None, None, false)
+        let rows = list_all_conversations_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            ListAllConversationsOptions::default(),
+        )
             .await
             .expect("list");
         assert!(rows.is_empty(), "fresh db must have zero conversations");
@@ -3461,7 +3546,12 @@ mod tests {
     #[tokio::test]
     async fn import_local_conversations_core_missing_folder_errors() {
         let db = fresh_in_memory_db().await;
-        let err = import_local_conversations_core(&db.conn, &EventEmitter::Noop, 999_999)
+        let err = import_local_conversations_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            999_999,
+        )
             .await
             .expect_err("missing folder must surface as error");
         let msg = format!("{err:?}");
@@ -3516,7 +3606,12 @@ mod tests {
             .await
             .expect("delete");
         // After soft delete the row should no longer show up in list_all.
-        let remaining = list_all_conversations_core(&db.conn, None, None, None, None, None, false)
+        let remaining = list_all_conversations_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            ListAllConversationsOptions::default(),
+        )
             .await
             .expect("list");
         assert!(
@@ -4276,7 +4371,12 @@ mod tests {
         let folder_id = seed_folder(&db, "/tmp/legacy-guard").await;
 
         let _held = IMPORT_GUARD.try_lock().expect("guard free in test");
-        let err = import_local_conversations_core(&db.conn, &EventEmitter::Noop, folder_id)
+        let err = import_local_conversations_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            folder_id,
+        )
             .await
             .expect_err("legacy import must be rejected while an import is in progress");
         let msg = format!("{err:?}").to_lowercase();

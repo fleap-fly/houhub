@@ -13,6 +13,7 @@ import {
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
+import { BrowserLink } from "@/components/ui/browser-link"
 import { Button } from "@/components/ui/button"
 import {
   ContextMenu,
@@ -96,6 +97,8 @@ const APP_OPTIONS: { value: McpAppType; label: string }[] = [
   { value: "grok", label: "Grok" },
   { value: "cursor", label: "Cursor" },
   { value: "deepseek", label: "DeepSeek Harness" },
+  { value: "qoder", label: "Qoder" },
+  { value: "antigravity", label: "Google Antigravity" },
 ]
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -263,6 +266,8 @@ function appsToDraft(apps: McpAppType[]): Record<McpAppType, boolean> {
     grok: appSet.has("grok"),
     cursor: appSet.has("cursor"),
     deepseek: appSet.has("deepseek"),
+    qoder: appSet.has("qoder"),
+    antigravity: appSet.has("antigravity"),
   }
 }
 
@@ -1596,14 +1601,12 @@ export function McpSettings() {
                   </p>
 
                   {marketDetail.homepage ? (
-                    <a
+                    <BrowserLink
                       href={marketDetail.homepage}
-                      target="_blank"
-                      rel="noreferrer"
                       className="text-xs text-primary underline break-all"
                     >
                       {marketDetail.homepage}
-                    </a>
+                    </BrowserLink>
                   ) : null}
 
                   <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">

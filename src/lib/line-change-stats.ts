@@ -4,6 +4,7 @@ export interface LineChangeStats {
 }
 
 const MAX_LCS_MATCH_PAIRS = 200_000
+const MAX_LCS_WINDOW_PRODUCT = 1_000_000
 
 export function splitNormalizedLines(text: string): string[] {
   if (!text) return []
@@ -43,6 +44,35 @@ function contiguousChangedLineStats(
   }
 }
 
+function trimCommonOuterLines(
+  oldLines: string[],
+  newLines: string[]
+): { oldWindow: string[]; newWindow: string[] } {
+  let prefix = 0
+  while (
+    prefix < oldLines.length &&
+    prefix < newLines.length &&
+    oldLines[prefix] === newLines[prefix]
+  ) {
+    prefix += 1
+  }
+
+  let suffix = 0
+  while (
+    suffix < oldLines.length - prefix &&
+    suffix < newLines.length - prefix &&
+    oldLines[oldLines.length - 1 - suffix] ===
+      newLines[newLines.length - 1 - suffix]
+  ) {
+    suffix += 1
+  }
+
+  return {
+    oldWindow: oldLines.slice(prefix, oldLines.length - suffix),
+    newWindow: newLines.slice(prefix, newLines.length - suffix),
+  }
+}
+
 function lowerBound(values: number[], target: number): number {
   let left = 0
   let right = values.length
@@ -79,6 +109,22 @@ function exceedsLcsPairBudget(oldLines: string[], newLines: string[]): boolean {
   }
 
   return false
+}
+
+/**
+ * Shared guard for the collapsed line stats and expanded unified diff. The
+ * frequency-pair check catches duplicate-heavy windows that make an LCS
+ * expensive even when their dimensions are modest; the product check keeps
+ * genuinely large windows off the quadratic DP path.
+ */
+export function exceedsLineDiffBudget(
+  oldLines: string[],
+  newLines: string[]
+): boolean {
+  return (
+    oldLines.length * newLines.length > MAX_LCS_WINDOW_PRODUCT ||
+    exceedsLcsPairBudget(oldLines, newLines)
+  )
 }
 
 function lcsLengthByLine(oldLines: string[], newLines: string[]): number {
@@ -129,23 +175,65 @@ export function estimateChangedLineStats(
     return { additions: 0, deletions: oldLines.length }
   }
 
-  if (exceedsLcsPairBudget(oldLines, newLines)) {
-    return contiguousChangedLineStats(oldLines, newLines)
+  const { oldWindow, newWindow } = trimCommonOuterLines(oldLines, newLines)
+  if (oldWindow.length === 0) {
+    return { additions: newWindow.length, deletions: 0 }
+  }
+  if (newWindow.length === 0) {
+    return { additions: 0, deletions: oldWindow.length }
   }
 
-  const lcs = lcsLengthByLine(oldLines, newLines)
+  if (exceedsLineDiffBudget(oldWindow, newWindow)) {
+    return contiguousChangedLineStats(oldWindow, newWindow)
+  }
+
+  const lcs = lcsLengthByLine(oldWindow, newWindow)
   return {
-    additions: Math.max(0, newLines.length - lcs),
-    deletions: Math.max(0, oldLines.length - lcs),
+    additions: Math.max(0, newWindow.length - lcs),
+    deletions: Math.max(0, oldWindow.length - lcs),
   }
 }
 
 export function countUnifiedDiffLineChanges(text: string): LineChangeStats {
+  const lines = text.split("\n")
+  const hunkHeader = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/
+
+  // When hunk headers are present, classify body lines by their declared
+  // position. This keeps source lines whose content begins with `+++`/`---`
+  // from being mistaken for the file headers.
+  if (lines.some((line) => hunkHeader.test(line))) {
+    let additions = 0
+    let deletions = 0
+    let i = 0
+    while (i < lines.length) {
+      const header = hunkHeader.exec(lines[i])
+      i += 1
+      if (!header) continue
+      let oldRemaining = header[1] === undefined ? 1 : Number(header[1])
+      let newRemaining = header[2] === undefined ? 1 : Number(header[2])
+      while (i < lines.length && (oldRemaining > 0 || newRemaining > 0)) {
+        const line = lines[i++]
+        if (line.startsWith("\\")) continue
+        if (line.startsWith("-")) {
+          deletions += 1
+          oldRemaining -= 1
+        } else if (line.startsWith("+")) {
+          additions += 1
+          newRemaining -= 1
+        } else {
+          oldRemaining -= 1
+          newRemaining -= 1
+        }
+      }
+    }
+    return { additions, deletions }
+  }
+
   let additions = 0
   let deletions = 0
-  for (const line of text.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) additions += 1
-    if (line.startsWith("-") && !line.startsWith("---")) deletions += 1
+  for (const line of lines) {
+    if (line.startsWith("+") && !/^\+\+\+ /.test(line)) additions += 1
+    if (line.startsWith("-") && !/^--- /.test(line)) deletions += 1
   }
   return { additions, deletions }
 }

@@ -82,6 +82,28 @@ describe("isAgentLikeToolName", () => {
     }
   })
 
+  it("matches the houhub-mcp workbench companions across host naming conventions", () => {
+    // Each owns a HouhubMcpToolCard, so it breaks the tool-group run and renders
+    // standalone rather than folding into a "工具 ×N" tally.
+    for (const tool of [
+      "get_session_info",
+      "task_progress",
+      "task_complete",
+      "create_automation",
+      "create_work_task",
+    ]) {
+      expect(isAgentLikeToolName(tool)).toBe(true)
+      expect(isAgentLikeToolName(`mcp__houhub-mcp__${tool}`)).toBe(true)
+      expect(isAgentLikeToolName(`mcp__houhub__${tool}`)).toBe(true)
+      expect(isAgentLikeToolName(`houhub-mcp/${tool}`)).toBe(true)
+      expect(isAgentLikeToolName(`houhub-mcp.${tool}`)).toBe(true)
+      expect(isAgentLikeToolName(`houhub-mcp:${tool}`)).toBe(true)
+    }
+    // …without dragging the generic task tools along with them.
+    expect(isAgentLikeToolName("task")).toBe(false)
+    expect(isAgentLikeToolName("taskcreate")).toBe(false)
+  })
+
   it("matches Codex goal tools as standalone card tools", () => {
     expect(isAgentLikeToolName("create_goal")).toBe(true)
     expect(isAgentLikeToolName("update_goal")).toBe(true)

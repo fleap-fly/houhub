@@ -1,10 +1,5 @@
 import { computeLineDiff, type DiffHunk } from "@/components/merge/merge-diff"
-
-/**
- * Maximum product of line counts before falling back to naive diff.
- * Avoids O(n*m) LCS blowup for very large inputs.
- */
-const LCS_PAIR_BUDGET = 200_000
+import { exceedsLineDiffBudget } from "./line-change-stats"
 
 /**
  * Generate a unified diff string from old and new text.
@@ -27,15 +22,44 @@ export function generateUnifiedDiff(
   const path = filePath ?? "file"
   const header = `--- a/${path}\n+++ b/${path}`
 
-  // Performance gate: fall back to naive diff for large inputs
-  if (oldLines.length * newLines.length > LCS_PAIR_BUDGET) {
-    return buildNaiveDiff(header, oldLines, newLines)
+  // Diff only the changed window: trim common leading/trailing lines so the
+  // LCS and fallback operate on the actual edit, not the whole file.
+  let prefix = 0
+  while (
+    prefix < oldLines.length &&
+    prefix < newLines.length &&
+    oldLines[prefix] === newLines[prefix]
+  ) {
+    prefix += 1
   }
 
-  const hunks = computeLineDiff(oldLines, newLines)
+  let suffix = 0
+  while (
+    suffix < oldLines.length - prefix &&
+    suffix < newLines.length - prefix &&
+    oldLines[oldLines.length - 1 - suffix] ===
+      newLines[newLines.length - 1 - suffix]
+  ) {
+    suffix += 1
+  }
+
+  const midOld = oldLines.slice(prefix, oldLines.length - suffix)
+  const midNew = newLines.slice(prefix, newLines.length - suffix)
+
+  if (midOld.length === 0 && midNew.length === 0) return null
+
+  if (exceedsLineDiffBudget(midOld, midNew)) {
+    return buildNaiveDiff(header, midOld, midNew, prefix)
+  }
+
+  const hunks = computeLineDiff(midOld, midNew)
   if (hunks.length === 0) return null
 
-  const unifiedHunks = buildUnifiedHunks(oldLines, hunks, contextLines)
+  const offsetHunks =
+    prefix === 0
+      ? hunks
+      : hunks.map((hunk) => ({ ...hunk, baseStart: hunk.baseStart + prefix }))
+  const unifiedHunks = buildUnifiedHunks(oldLines, offsetHunks, contextLines)
 
   return `${header}\n${unifiedHunks}`
 }
@@ -56,10 +80,11 @@ function splitLines(text: string): string[] {
 function buildNaiveDiff(
   header: string,
   oldLines: string[],
-  newLines: string[]
+  newLines: string[],
+  windowStart: number
 ): string {
-  const oldStart = oldLines.length === 0 ? 0 : 1
-  const newStart = newLines.length === 0 ? 0 : 1
+  const oldStart = oldLines.length === 0 ? 0 : windowStart + 1
+  const newStart = newLines.length === 0 ? 0 : windowStart + 1
   const hunkHeader = `@@ -${oldStart},${oldLines.length} +${newStart},${newLines.length} @@`
 
   const parts = [header, hunkHeader]
@@ -114,11 +139,13 @@ function buildUnifiedHunks(
 
   // Render each merged region as a unified hunk
   const output: string[] = []
+  let newLineDelta = 0
 
   for (const group of merged) {
     const lines: string[] = []
     let oldCursor = group.ctxOldStart
     let newLineCount = 0
+    let groupDelta = 0
     const oldLineCount = group.ctxOldEnd - group.ctxOldStart
 
     for (const hunk of group.hunks) {
@@ -140,6 +167,7 @@ function buildUnifiedHunks(
         lines.push(`+${newLine}`)
         newLineCount++
       }
+      groupDelta += hunk.newLines.length - hunk.baseCount
     }
 
     // Trailing context
@@ -152,29 +180,14 @@ function buildUnifiedHunks(
     // Compute hunk header
     const oldStart = oldLineCount === 0 ? 0 : group.ctxOldStart + 1
     const newStart =
-      newLineCount === 0
-        ? 0
-        : group.ctxOldStart +
-          1 +
-          computeNewOffset(group.hunks, group.ctxOldStart)
+      newLineCount === 0 ? 0 : group.ctxOldStart + 1 + newLineDelta
 
     output.push(
       `@@ -${oldStart},${oldLineCount} +${newStart},${newLineCount} @@`
     )
     output.push(...lines)
+    newLineDelta += groupDelta
   }
 
   return output.join("\n")
-}
-
-/**
- * Compute the offset applied to new-line numbering by hunks before a given position.
- */
-function computeNewOffset(hunks: DiffHunk[], beforeOldLine: number): number {
-  let offset = 0
-  for (const hunk of hunks) {
-    if (hunk.baseStart >= beforeOldLine) break
-    offset += hunk.newLines.length - hunk.baseCount
-  }
-  return offset
 }

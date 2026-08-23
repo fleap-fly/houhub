@@ -1,8 +1,13 @@
 "use client"
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useConversationRuntime } from "@/contexts/conversation-runtime-context"
+import {
+  selectTimelineTurns,
+  useConversationRuntimeActions,
+  useConversationRuntimeStore,
+} from "@/stores/conversation-runtime-store"
 import { ContentPartsRenderer } from "./content-parts-renderer"
+import { CollapsibleSystemMessage } from "./collapsible-system-message"
 import { CollapsibleUserMessage } from "./collapsible-user-message"
 import {
   createMessageTurnAdapter,
@@ -23,6 +28,7 @@ import { UserResourceLinks } from "./user-resource-links"
 import { UserImageAttachments } from "./user-image-attachments"
 import { AgentPlanOverlay } from "@/components/chat/agent-plan-overlay"
 import { SubAgentOverlay } from "@/components/chat/sub-agent-overlay"
+import { SessionViewerHost } from "@/components/message/session-viewer-host"
 import { normalizeToolName } from "@/lib/tool-call-normalization"
 import { isDelegateToAgentToolName } from "@/lib/delegation-card"
 import type { DelegationCardSource } from "@/hooks/use-delegation-card-model"
@@ -38,10 +44,7 @@ import {
 import {
   AlertCircle,
   CheckIcon,
-  ChevronDown,
-  ChevronRight,
   CopyIcon,
-  Info,
   ListTodo,
   Loader2,
   Plus,
@@ -55,12 +58,14 @@ import {
   extractLatestPlanEntriesFromMessages,
 } from "@/lib/agent-plan"
 import type { AgentType, ConnectionStatus, MessageTurn } from "@/lib/types"
+import { isWindowedDetail } from "@/lib/turn-window"
 import { copyTextToClipboard } from "@/lib/utils"
 import { VirtualizedMessageThread } from "@/components/message/virtualized-message-thread"
 import {
   ConversationMessageNav,
   type MessageNavEntry,
 } from "@/components/message/conversation-message-nav"
+import { SelectionActionBubble } from "@/components/message/selection-action-bubble"
 import type { MessageScrollContextValue } from "@/components/message/message-scroll-context"
 import { extractSessionFilesGrouped } from "@/lib/session-files"
 import { unescapeComposerText } from "@/lib/composer-copy-text"
@@ -80,10 +85,10 @@ interface MessageListViewProps {
   detailError?: string | null
   /**
    * Set when the agent rejected `session/load` non-recoverably (e.g. the
-   * historical session_id was deleted). Takes precedence over `detailError`
-   * AND the renderable-content gate: even when the local DB has the full
-   * message history, the user must explicitly choose Reload or start a new
-   * conversation since the agent can't continue this thread.
+   * historical session_id was deleted). It replaces the message area only
+   * when there is no renderable local history; otherwise the owning panel
+   * surfaces the error in the composer dock with Reload/New conversation
+   * actions while keeping the transcript readable.
    */
   acpLoadError?: string | null
   hideEmptyState?: boolean
@@ -96,6 +101,8 @@ interface MessageListViewProps {
   showMessageNav?: boolean
   /** Optional per-user-turn phase label used by task transcripts. */
   userTurnHeader?: ((group: ResolvedMessageGroup) => string | null) | null
+  /** Quote a transcript selection into the owning composer. */
+  onQuoteSelection?: (text: string) => void
 }
 
 export interface ResolvedMessageGroup {
@@ -199,41 +206,6 @@ function extractDelegationSources(
   collectDelegationSources(parts, out)
   return out
 }
-
-const CollapsibleSystemMessage = memo(function CollapsibleSystemMessage({
-  group,
-}: {
-  group: ResolvedMessageGroup
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const t = useTranslations("Folder.chat.messageList")
-
-  return (
-    <div className="border rounded-md text-sm border-yellow-500/30 bg-yellow-500/5">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 w-full px-3 py-2.5 text-left hover:bg-yellow-500/10 transition-colors"
-      >
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-yellow-600 dark:text-yellow-500" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-yellow-600 dark:text-yellow-500" />
-        )}
-        <Info className="h-3.5 w-3.5 shrink-0 text-yellow-600 dark:text-yellow-500" />
-        <span className="font-medium text-yellow-700 dark:text-yellow-400">
-          {t("systemMessage")}
-        </span>
-      </button>
-      {expanded && (
-        <div className="px-3 pb-3 border-t border-yellow-500/20">
-          <div className="text-sm text-muted-foreground mt-2.5 max-h-96 overflow-auto">
-            <ContentPartsRenderer parts={group.parts} role={group.role} />
-          </div>
-        </div>
-      )}
-    </div>
-  )
-})
 
 function extractTextFromParts(parts: AdaptedContentPart[]): string {
   return parts
@@ -552,7 +524,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   sourceTurns?: MessageTurn[]
 }) {
   if (group.role === "system") {
-    return <CollapsibleSystemMessage group={group} />
+    return <CollapsibleSystemMessage parts={group.parts} />
   }
 
   return (
@@ -652,13 +624,26 @@ export function MessageListView({
   onNewSession,
   showMessageNav = true,
   userTurnHeader = null,
+  onQuoteSelection,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
-  const { getSession, getTimelineTurns } = useConversationRuntime()
-  const session = getSession(conversationId)
+  // Subscribe only to this conversation's runtime session and derived timeline.
+  // Streaming another conversation must not re-render this message list.
+  const session = useConversationRuntimeStore(
+    (s) => s.byConversationId.get(conversationId) ?? null
+  )
   const liveMessage = session?.liveMessage ?? null
-  const timelineTurns = getTimelineTurns(conversationId)
+  const timelineTurns = useConversationRuntimeStore((s) =>
+    selectTimelineTurns(s, conversationId)
+  )
+  const detail = session?.detail ?? null
+  const hasOlderTurns = isWindowedDetail(detail) && detail.turns_offset > 0
+  const loadingOlderTurns = session?.loadingOlderTurns ?? false
+  const { loadOlderTurns } = useConversationRuntimeActions()
+  const handleLoadOlder = useCallback(() => {
+    loadOlderTurns(conversationId)
+  }, [loadOlderTurns, conversationId])
 
   const shouldUseSmoothResize = !(
     isActive &&
@@ -933,6 +918,7 @@ export function MessageListView({
   // Collapse state is owned here (not in the panel) so the expensive per-file
   // `navEntries` is computed only while the panel is open.
   const [navExpanded, setNavExpanded] = useState(false)
+  const selectionBoxRef = useRef<HTMLDivElement | null>(null)
 
   // Cheap user-message tally for the collapsed chip — counts user turns without
   // parsing any file diffs.
@@ -1000,11 +986,11 @@ export function MessageListView({
     )
   }
 
-  // ACP load failures always replace content: even when the local DB has
-  // the conversation, the agent can't resume it, so silently rendering
-  // the history would mislead the user into thinking a follow-up message
-  // would extend the same thread.
-  const blockingLoadError = acpLoadError ?? null
+  // A failed ACP resume does not invalidate the local transcript. Keep the
+  // history visible and let the composer-docked banner provide the recovery
+  // actions; only replace the message area when there is no local content to
+  // show at all.
+  const blockingLoadError = hasRenderableContent ? null : (acpLoadError ?? null)
   const fallbackLoadError =
     detailError && !hasRenderableContent ? detailError : null
   const renderedLoadError = blockingLoadError ?? fallbackLoadError
@@ -1058,29 +1044,40 @@ export function MessageListView({
   }
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col">
-      <MessageThread
-        className="flex-1 min-h-0"
-        resize={shouldUseSmoothResize ? "smooth" : undefined}
+    <SessionViewerHost>
+      <div
+        ref={selectionBoxRef}
+        className="relative flex h-full min-h-0 flex-col"
       >
-        <AutoScrollOnSend signal={sendSignal} />
-        <VirtualizedMessageThread
-          items={threadItems}
-          getItemKey={getThreadItemKey}
-          renderItem={renderThreadItem}
-          emptyState={emptyState}
-          scrollApiRef={scrollApiRef}
-        />
-        <MessageThreadScrollButton />
-      </MessageThread>
-      {liveMessage && connStatus === "prompting" && (
-        <LiveTurnStats
-          message={liveMessage}
-          agentType={agentType}
-          isStreaming={connStatus === "prompting"}
-        />
-      )}
-      {/* Shared overlay stack pinned to the inline-start edge (top-left in LTR,
+        <MessageThread
+          className="flex-1 min-h-0"
+          resize={shouldUseSmoothResize ? "smooth" : undefined}
+        >
+          <AutoScrollOnSend signal={sendSignal} />
+          <VirtualizedMessageThread
+            items={threadItems}
+            getItemKey={getThreadItemKey}
+            renderItem={renderThreadItem}
+            emptyState={emptyState}
+            scrollApiRef={scrollApiRef}
+            hasOlder={hasOlderTurns}
+            isLoadingOlder={loadingOlderTurns}
+            onLoadOlder={handleLoadOlder}
+            loadOlderLabel={t("loadEarlier")}
+            loadingOlderLabel={t("loadingEarlier")}
+            prependEpoch={session?.olderTurnsPrependEpoch ?? 0}
+            prependScopeKey={conversationId}
+          />
+          <MessageThreadScrollButton />
+        </MessageThread>
+        {liveMessage && connStatus === "prompting" && (
+          <LiveTurnStats
+            message={liveMessage}
+            agentType={agentType}
+            isStreaming={connStatus === "prompting"}
+          />
+        )}
+        {/* Shared overlay stack pinned to the inline-start edge (top-left in LTR,
           top-right in RTL). A flex column keeps the order stable regardless of
           each panel's expand/collapse height: the message navigator first, then
           the plan panel, then the sub-agent panel. Empty panels render null and
@@ -1089,30 +1086,35 @@ export function MessageListView({
           edge), rounded on the end side — that expand toward the inline-end on
           hover. Logical `start-0` + `items-start` keep the anchor and the bullet
           on the same side, so the whole stack mirrors cleanly in RTL. */}
-      <div className="pointer-events-none absolute start-0 top-4 z-20 flex max-w-[min(22rem,calc(100%-2rem))] flex-col items-start gap-2">
-        {showMessageNav && userMessageCount > 0 && (
-          <ConversationMessageNav
-            count={userMessageCount}
-            expanded={navExpanded}
-            onToggle={setNavExpanded}
-            entries={navEntries}
-            scrollApiRef={scrollApiRef}
+        <div className="pointer-events-none absolute start-0 top-4 z-20 flex max-w-[min(22rem,calc(100%-2rem))] flex-col items-start gap-2">
+          {showMessageNav && userMessageCount > 0 && (
+            <ConversationMessageNav
+              count={userMessageCount}
+              expanded={navExpanded}
+              onToggle={setNavExpanded}
+              entries={navEntries}
+              scrollApiRef={scrollApiRef}
+            />
+          )}
+          <AgentPlanOverlay
+            key={agentPlanOverlayKey}
+            message={liveMessage ?? null}
+            entries={historicalPlanEntries}
+            planKey={historicalPlanKey}
+            defaultExpanded={false}
+            isStreaming={connStatus === "prompting"}
           />
-        )}
-        <AgentPlanOverlay
-          key={agentPlanOverlayKey}
-          message={liveMessage ?? null}
-          entries={historicalPlanEntries}
-          planKey={historicalPlanKey}
-          defaultExpanded={false}
-          isStreaming={connStatus === "prompting"}
-        />
-        <SubAgentOverlay
-          key={subAgentOverlayKey}
-          delegations={lastAssistantDelegations}
-          overlayKey={subAgentOverlayKey}
+          <SubAgentOverlay
+            key={subAgentOverlayKey}
+            delegations={lastAssistantDelegations}
+            overlayKey={subAgentOverlayKey}
+          />
+        </div>
+        <SelectionActionBubble
+          containerRef={selectionBoxRef}
+          onQuote={onQuoteSelection}
         />
       </div>
-    </div>
+    </SessionViewerHost>
   )
 }

@@ -69,19 +69,19 @@ export function getEventStream(): EventStream | null {
 }
 
 /**
- * Open a URL in the default browser (desktop) or new tab (web).
+ * Open a URL in the default browser (desktop) or a new tab (web).
+ *
+ * A remote workspace still runs inside a Tauri webview, so it must use the
+ * opener plugin as well; `window.open` has no registered new-window handler
+ * in the desktop shell. Filesystem paths keep their remote guard below,
+ * because those paths belong to a specific host.
  */
 export async function openUrl(url: string): Promise<void> {
-  if (isDesktop() && getActiveRemoteConnectionId() === null) {
+  if (isDesktop()) {
     const { openUrl: tauriOpenUrl } = await import("@tauri-apps/plugin-opener")
     await tauriOpenUrl(url)
   } else {
-    const opened = window.open(url, "_blank")
-    if (!opened) {
-      throw new Error(
-        "Browser blocked the popup. Open the link from the account menu again."
-      )
-    }
+    window.open(url, "_blank", "noreferrer")
   }
 }
 

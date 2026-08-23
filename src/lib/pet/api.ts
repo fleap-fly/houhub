@@ -83,6 +83,14 @@ export async function installMarketplacePet(
   return getTransport().call("pet_marketplace_install", { ...request })
 }
 
+/** Proxy marketplace artwork through the workspace backend so remote webviews
+ * do not need direct access to the marketplace host. */
+export async function fetchMarketplaceAsset(
+  url: string
+): Promise<PetSpriteAsset> {
+  return getTransport().call("pet_marketplace_asset", { url })
+}
+
 export async function getPetSettings(): Promise<PetWindowConfig> {
   return getTransport().call("pet_get_settings")
 }

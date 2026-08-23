@@ -7,6 +7,14 @@ import {
   resolveHouflowCloudModelSettings,
 } from "./cloud-session-config"
 import type { HouflowAgentTarget, HouflowGatewayCatalog } from "./types"
+import type { SessionConfigSelectInfo } from "@/lib/types"
+
+function selectKind(
+  option: { kind: unknown } | undefined
+): SessionConfigSelectInfo {
+  expect(option?.kind).toMatchObject({ type: "select" })
+  return option?.kind as SessionConfigSelectInfo
+}
 
 const gateway: HouflowGatewayCatalog = {
   provider: {
@@ -100,13 +108,13 @@ describe("Houflow cloud session config", () => {
       "model",
       "reasoning_effort",
     ])
-    expect(options[0]?.kind.options.map((option) => option.value)).toEqual([
+    expect(selectKind(options[0]).options.map((option) => option.value)).toEqual([
       "openai/gpt-5.6-sol",
       "openai/gpt-5.6-terra",
       "openai/gpt-5.6-luna",
       "anthropic/claude-opus-4.6",
     ])
-    expect(options[1]?.kind.options.map((option) => option.value)).toEqual([
+    expect(selectKind(options[1]).options.map((option) => option.value)).toEqual([
       "low",
       "medium",
       "high",
@@ -141,14 +149,19 @@ describe("Houflow cloud session config", () => {
       model: "openai/gpt-5.6-terra",
       reasoningEffort: "max",
     })
-    expect(
-      houflowCloudSessionConfigOptions(
-        terra,
-        gateway,
-        labels,
-        target({ provider: "openai/gpt-5.6-terra" })
-      )[1]?.kind.options.map((option) => option.value)
-    ).toEqual(["low", "medium", "high", "xhigh", "max"])
+    const terraOptions = houflowCloudSessionConfigOptions(
+      terra,
+      gateway,
+      labels,
+      target({ provider: "openai/gpt-5.6-terra" })
+    )
+    expect(selectKind(terraOptions[1]).options.map((option) => option.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ])
 
     expect(legacy).toEqual({
       modelProviderId: "default",

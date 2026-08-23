@@ -14,6 +14,7 @@ import {
   FolderX,
   Info,
   ChevronRight,
+  MessageSquarePlus,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import type { DbConversationSummary, ConversationStatus } from "@/lib/types"
@@ -52,6 +53,10 @@ import { Input } from "@/components/ui/input"
 import { ConversationStatusDot } from "./conversation-status-dot"
 import { SessionDetailsDialog } from "./session-details-dialog"
 import { AgentIcon } from "@/components/agent-icon"
+import {
+  emitAttachSessionToSession,
+} from "@/lib/session-attachment-events"
+import { useTabStore } from "@/stores/tab-store"
 
 /**
  * Horizontal indent added per delegation-nesting level. Chosen so a child's
@@ -145,6 +150,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const tSidebar = useTranslations("Folder.sidebar")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
+  const activeTabId = useTabStore((state) => state.activeTabId)
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -198,6 +204,19 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
     conversation.folder_id,
     onDelete,
   ])
+
+  const handleAttachToCurrentSession = useCallback(() => {
+    // Resolve the tab at click time. A context menu can stay open while the
+    // user switches tabs or closes the original target, so the render-time
+    // active id is only a disabled-state hint, never the event destination.
+    const state = useTabStore.getState()
+    const tabId = state.activeTabId
+    if (!tabId || !state.tabs.some((tab) => tab.id === tabId)) return
+    emitAttachSessionToSession({
+      tabId,
+      conversation,
+    })
+  }, [conversation])
 
   const status = conversation.status as ConversationStatus
   const isRunning = status === "in_progress"
@@ -519,6 +538,14 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
               <ContextMenuSeparator />
             </>
           )}
+          <ContextMenuItem
+            disabled={!activeTabId}
+            onSelect={handleAttachToCurrentSession}
+          >
+            <MessageSquarePlus className="h-4 w-4" />
+            {t("attachToCurrentSession")}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
           <ContextMenuItem onSelect={handleRenameOpen}>
             <Pencil className="h-4 w-4" />
             {t("rename")}

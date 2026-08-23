@@ -10,6 +10,7 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { cn } from "@/lib/utils"
+import type { SidebarSectionKey } from "@/lib/sidebar-view-mode-storage"
 
 /**
  * Collapsible heading for one of the two top-level sidebar sections: "pinned"
@@ -35,9 +36,9 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
   onImportSessions,
   topGap = false,
 }: {
-  section: "pinned" | "folders" | "chats"
+  section: SidebarSectionKey
   expanded: boolean
-  onToggle: (section: "pinned" | "folders" | "chats") => void
+  onToggle: (section: SidebarSectionKey) => void
   /**
    * When provided on the "chats" section, renders a New-chat action button at
    * the row's right edge, revealed only while the row is hovered/focused (and
@@ -82,7 +83,9 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
       ? t("sectionPinned")
       : section === "chats"
         ? t("sectionChats")
-        : t("sectionFolders")
+        : section === "recent"
+          ? t("sectionRecent")
+          : t("sectionFolders")
   const showNewChat = section === "chats" && onNewChat != null
   // The folders section mirrors the chats section's right-edge affordance, but
   // with two buttons (Open Folder / Clone Repository) — the same "add a folder"

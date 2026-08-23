@@ -88,9 +88,14 @@ export function followUpScenario(intent: FollowUpIntent): FollowUpScenario {
 /** Whether this scenario can be sent with the text currently in the box. */
 export function canSubmitFollowUp(
   intent: FollowUpIntent,
-  text: string
+  text: string,
+  hasAttachments = false
 ): boolean {
-  return text.trim().length > 0 || followUpScenario(intent).allowsEmpty
+  return (
+    text.trim().length > 0 ||
+    hasAttachments ||
+    followUpScenario(intent).allowsEmpty
+  )
 }
 
 /** What the follow-up composer resolves its commands / references against. */

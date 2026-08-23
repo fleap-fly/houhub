@@ -96,6 +96,14 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   mcp__houhub__delegate_to_agent: "delegate_to_agent",
   get_delegation_status: "get_delegation_status",
   cancel_delegation: "cancel_delegation",
+  // Workbench companion tools (Qoder and MCP relays may preserve the bare
+  // name rather than the server namespace). Keep their canonical identities
+  // ahead of the generic `task*` heuristics below.
+  get_session_info: "get_session_info",
+  task_progress: "task_progress",
+  task_complete: "task_complete",
+  create_automation: "create_automation",
+  create_work_task: "create_work_task",
   // houhub-mcp live-feedback poll (server prefix varies by host; the suffix rule
   // in `normalizeToolName` covers the other separators). Codex persists it under
   // the bare `check_user_feedback` name, dropping the `mcp__houhub_mcp` namespace.
@@ -407,6 +415,12 @@ export function normalizeToolName(toolName: string): string {
   if (/[^a-z0-9]get_delegation_status$/.test(canonical))
     return "get_delegation_status"
   if (/[^a-z0-9]cancel_delegation$/.test(canonical)) return "cancel_delegation"
+  if (/[^a-z0-9]get_session_info$/.test(canonical)) return "get_session_info"
+  if (/[^a-z0-9]task_progress$/.test(canonical)) return "task_progress"
+  if (/[^a-z0-9]task_complete$/.test(canonical)) return "task_complete"
+  if (/[^a-z0-9]create_automation$/.test(canonical))
+    return "create_automation"
+  if (/[^a-z0-9]create_work_task$/.test(canonical)) return "create_work_task"
   if (/[^a-z0-9]create_goal$/.test(canonical)) return "create_goal"
   if (/[^a-z0-9]update_goal$/.test(canonical)) return "update_goal"
 
@@ -442,6 +456,20 @@ const DELEGATION_COMPANION_TOOLS: ReadonlySet<string> = new Set([
   "delegate_to_agent",
   "get_delegation_status",
   "cancel_delegation",
+])
+
+const WORKBENCH_COMPANION_TOOLS: ReadonlySet<string> = new Set([
+  "get_session_info",
+  "task_progress",
+  "task_complete",
+  "create_automation",
+  "create_work_task",
+])
+
+const MCP_COMPANION_TOOLS = new Set([
+  ...DELEGATION_COMPANION_TOOLS,
+  ...WORKBENCH_COMPANION_TOOLS,
+  "check_user_feedback",
 ])
 
 export function inferLiveToolName(params: {
@@ -496,6 +524,17 @@ export function inferLiveToolName(params: {
   if (metaToolName) {
     const normalizedMeta = normalizeToolName(metaToolName)
     if (DELEGATION_COMPANION_TOOLS.has(normalizedMeta)) return normalizedMeta
+  }
+
+  // Qoder places the MCP tool identity under `_meta.qoder.toolName` instead
+  // of Claude Code's namespace. This is authoritative on the opening frame;
+  // resolving it before input-shape heuristics prevents `{task_id}` from
+  // becoming the generic `task` tool and keeps the workbench companions
+  // standalone through every adapter pass.
+  const qoderToolName = extractQoderToolName(params.meta)
+  if (qoderToolName) {
+    const normalizedQoder = normalizeToolName(qoderToolName)
+    if (MCP_COMPANION_TOOLS.has(normalizedQoder)) return normalizedQoder
   }
 
   // The delegation broker stamps `meta["houhub.delegation"]` onto the parent's
@@ -600,6 +639,18 @@ function extractClaudeCodeToolName(
   const tn = (cc as Record<string, unknown>).toolName
   if (typeof tn !== "string") return null
   const trimmed = tn.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+function extractQoderToolName(
+  meta: Record<string, unknown> | null | undefined
+): string | null {
+  if (!meta || typeof meta !== "object") return null
+  const qoder = (meta as Record<string, unknown>).qoder
+  if (!qoder || typeof qoder !== "object") return null
+  const toolName = (qoder as Record<string, unknown>).toolName
+  if (typeof toolName !== "string") return null
+  const trimmed = toolName.trim()
   return trimmed.length > 0 ? trimmed : null
 }
 

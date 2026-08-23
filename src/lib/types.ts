@@ -1,4 +1,4 @@
-/** The thirteen agents houhub ships hand-written support for. */
+/** The fifteen agents houhub ships hand-written support for. */
 export type BuiltinAgentType =
   | "claude_code"
   | "codex"
@@ -13,6 +13,8 @@ export type BuiltinAgentType =
   | "grok"
   | "cursor"
   | "deepseek"
+  | "qoder"
+  | "antigravity"
 
 /**
  * Which agent backs a conversation.
@@ -122,8 +124,11 @@ export interface AgentExecutionStats {
   lines_removed?: number | null
   other_tool_count?: number | null
   tool_calls?: AgentToolCall[]
-  /** The child's own session id when the sub-agent has a standalone transcript
-   *  (currently Grok native sub-agents). */
+  /** The child's own session id, when the sub-agent ran as a standalone session
+   *  on disk instead of as chunks folded into the parent (Grok: every
+   *  `spawn_subagent` child). Drives the Agent card's "open the sub-agent's
+   *  session" action — `getConversation` resolves it even though the session is
+   *  hidden from the sidebar. Absent for every other agent. */
   child_session_id?: string | null
 }
 
@@ -209,9 +214,13 @@ export type ContentBlock =
       is_error: boolean
       agent_stats?: AgentExecutionStats | null
       /**
-       * Images returned in a tool result, for example a Read of an image or a
-       * multi-page PDF. Historical replay renders these in place like live ACP
-       * image output.
+       * Images returned in a tool result (e.g. Claude Code's `Read` of a
+       * PNG/JPEG, or a multi-page PDF read returning one image per page).
+       * Mirror of Rust `ContentBlock::ToolResult.images`. The adapter renders
+       * these in-position as `generated-image` cards so the historical (JSONL
+       * replay) path matches the live ACP stream — which surfaces the same
+       * bytes via `ToolCallInfo.images` and an `image_generation` block.
+       * Absent/empty for the common text-only tool result.
        */
       images?: ImageData[] | null
       /**
@@ -277,9 +286,10 @@ export interface ConversationDetail {
   turns: MessageTurn[]
   session_stats?: SessionStats | null
   /**
-   * Byte length of the source transcript this parse consumed. Retires
-   * background-overlay turns whose `background_activity` watermark it has
-   * caught up to.
+   * Byte length of the source transcript this parse consumed (Claude only;
+   * absent elsewhere). Retires background-overlay turns whose
+   * `background_activity` watermark it has caught up to — see
+   * `BackgroundOverlayEntry` in the conversation runtime store.
    */
   transcript_watermark?: number | null
 }
@@ -393,7 +403,7 @@ export interface DbConversationSummary {
   message_count: number
   /** Number of direct, non-deleted delegation children (computed by the backend
    *  `fill_child_counts` aggregate). `child_count > 0` means this conversation is
-   *  expandable into its sub-session subtree and drives the sidebar chevron. */
+   *  expandable into its sub-session subtree — drives the sidebar chevron. */
   child_count: number
   created_at: string
   updated_at: string
@@ -404,6 +414,9 @@ export interface DbConversationSummary {
   parent_id?: number | null
   parent_tool_use_id?: string | null
   delegation_call_id?: string | null
+  /** Set when the conversation was re-parented out of a removed worktree: the
+   *  worktree path it originally ran in. Drives the "source worktree removed"
+   *  badge. */
   origin_cwd?: string | null
 }
 
@@ -582,7 +595,8 @@ export interface DbConversationDetail {
   summary: DbConversationSummary
   turns: MessageTurn[]
   session_stats?: SessionStats | null
-  /** See `ConversationDetail.transcript_watermark`, threaded through from the parser. */
+  /** See `ConversationDetail.transcript_watermark` (threaded through the DB
+   *  fetch path from the same parser detail). */
   transcript_watermark?: number | null
   /**
    * Id of the persisted user turn the backend identified as the in-flight prompt
@@ -592,6 +606,46 @@ export interface DbConversationDetail {
    * mid-stream, which would otherwise double-render against the live reply.
    */
   in_flight_user_turn_id?: string | null
+  /**
+   * Turn-window metadata, present only when the request asked for a window
+   * (`tailTurns`/`fromIndex`); their absence marks a legacy full response
+   * (old server) and disables windowed merging. `turns` then holds
+   * `full[turns_offset..]` while every other field still describes the full
+   * transcript. See `src/lib/turn-window.ts` for the derivation helpers.
+   */
+  turns_offset?: number | null
+  turns_total?: number | null
+  /** Assistant turns in `full[0..turns_offset)` (baseline globalization). */
+  assistant_turns_before_offset?: number | null
+  /**
+   * Structural fingerprint of `full[0..turns_offset)` as a fixed-width 16-hex
+   * string (a raw u64 JSON number would be rounded past 2^53-1). Compared on
+   * window refreshes to detect prefix rewrites (compaction), and used as the
+   * seed for client-side chain extension.
+   */
+  prefix_hash?: string | null
+  /**
+   * Max timestamp across `full[0..turns_offset)`; absent when the window
+   * covers the whole transcript. A background overlay turn may only be
+   * retired by the watermark rule when its timestamp is STRICTLY greater
+   * than this bound (its persisted twin is then provably inside the window).
+   */
+  uncovered_prefix_max_ts?: string | null
+}
+
+/** One page of older history for reverse infinite scroll:
+ *  `full[turns_offset .. turns_offset + turns.length)`. */
+export interface ConversationTurnsPage {
+  turns: MessageTurn[]
+  turns_offset: number
+  turns_total: number
+  assistant_turns_before_offset: number
+  /** H(0..turns_offset) — adopted as the window fingerprint after a prepend. */
+  prefix_hash: string
+  /** H(0..min(beforeIndex, total)) — must equal the client's current window
+   *  fingerprint for the page to legally join the loaded window. */
+  prefix_hash_before_index: string
+  uncovered_prefix_max_ts?: string | null
 }
 
 export type ConversationStatus =
@@ -644,6 +698,8 @@ export const AGENT_DISPLAY_ORDER: BuiltinAgentType[] = [
   "grok",
   "cursor",
   "deepseek",
+  "qoder",
+  "antigravity",
 ]
 
 const AGENT_DISPLAY_ORDER_INDEX = new Map<AgentType, number>(
@@ -676,13 +732,14 @@ export const ALL_AGENT_TYPES: BuiltinAgentType[] = [
   "grok",
   "cursor",
   "deepseek",
+  "qoder",
+  "antigravity",
 ]
 
 export const MODEL_PROVIDER_AGENT_TYPES: BuiltinAgentType[] = [
   "claude_code",
   "codex",
   "gemini",
-  "pi",
   "grok",
 ]
 
@@ -891,6 +948,13 @@ export const HERMES_PROVIDERS: HermesProviderOption[] = [
     needsBaseUrl: false,
     kind: "apiKey",
   },
+  // New in Hermes 0.20.0.
+  {
+    id: "ai-gateway",
+    label: "Vercel AI Gateway",
+    needsBaseUrl: false,
+    kind: "apiKey",
+  },
   // OAuth / external providers — credentials set via the terminal `--setup` flow.
   {
     id: "nous",
@@ -941,6 +1005,15 @@ export const HERMES_PROVIDERS: HermesProviderOption[] = [
     needsBaseUrl: false,
     kind: "aws",
   },
+  // Google Vertex AI (Hermes 0.20.0) — service-account JSON / application-
+  // default credentials, configured via the terminal `--setup` flow like the
+  // other no-key providers, hence `oauth` (no API-key or base-URL field).
+  {
+    id: "vertex",
+    label: "Google Vertex AI",
+    needsBaseUrl: false,
+    kind: "oauth",
+  },
 ]
 
 /**
@@ -971,6 +1044,8 @@ export const AGENT_LABELS: Record<BuiltinAgentType, string> = {
   grok: "Grok",
   cursor: "Cursor",
   deepseek: "DeepSeek Harness",
+  qoder: "Qoder",
+  antigravity: "Google Antigravity",
 }
 
 export const AGENT_COLORS: Record<BuiltinAgentType, string> = {
@@ -987,6 +1062,8 @@ export const AGENT_COLORS: Record<BuiltinAgentType, string> = {
   grok: "bg-neutral-900",
   cursor: "bg-zinc-800",
   deepseek: "bg-[#4D6BFE]",
+  qoder: "bg-[#6C4CF1]",
+  antigravity: "bg-[#1A73E8]",
 }
 
 // ACP connection status (matches Rust ConnectionStatus)
@@ -1036,6 +1113,13 @@ export interface PermissionOptionInfo {
   option_id: string
   name: string
   kind: string
+  /**
+   * The option's ACP `_meta`, forwarded verbatim from the wire. codex-acp
+   * ≥1.1.8 and claude-agent-acp ≥0.64.1 hang
+   * `permission: {version: 1, changes: [...]}` here — see
+   * `parsePermissionOptionChanges` in `lib/permission-request.ts`. Absent for
+   * agents that send no option metadata.
+   */
   meta?: Record<string, unknown> | null
 }
 
@@ -1134,7 +1218,15 @@ export interface SessionConfigSelectInfo {
   groups: SessionConfigSelectGroupInfo[]
 }
 
-export type SessionConfigKindInfo = { type: "select" } & SessionConfigSelectInfo
+/** An on/off toggle config option (ACP's unstable boolean config kind). Cline
+ *  3.0.50+ ships one as `auto_approve` ("Auto-approve tools"). */
+export interface SessionConfigBooleanInfo {
+  current_value: boolean
+}
+
+export type SessionConfigKindInfo =
+  | ({ type: "select" } & SessionConfigSelectInfo)
+  | ({ type: "boolean" } & SessionConfigBooleanInfo)
 
 export interface SessionConfigOptionInfo {
   id: string
@@ -1150,6 +1242,10 @@ export interface AgentOptionsSnapshot {
   /** Slash commands captured during the same transient probe as modes/config
    *  (empty when the agent advertises none in the probe window). */
   available_commands: AvailableCommandInfo[]
+  /** What the agent accepts in a prompt, from the same probe. Lets a composer
+   *  with no live session (the to-do task boxes) encode an attached image the
+   *  way this agent takes it. Null when the agent advertised none. */
+  prompt_capabilities?: PromptCapabilitiesInfo | null
 }
 
 export interface AgentDelegationDefaults {
@@ -1180,6 +1276,8 @@ export interface AutomationLabelSnapshot {
   branch_label?: string
 }
 
+/** What firing the automation does. Optional in stored configs — absent means
+ *  the legacy `launch_session`. */
 export type AutomationAction = "launch_session" | "enqueue_task"
 
 /** The captured composer snapshot stored in `automation.config`. `mode_id` +
@@ -1266,6 +1364,9 @@ export type WorkTaskStatus =
   | "failed"
   | "canceled"
 
+/** The captured composer snapshot stored in `work_task.config`. Optional
+ *  agent/mode/config fields are per-task overrides; empty = inherit the
+ *  folder's task settings at launch. */
 export interface WorkTaskConfig {
   prompt_blocks: PromptInputBlock[]
   display_text: string
@@ -1279,8 +1380,10 @@ export interface WorkTask {
   id: number
   folder_id: number
   title: string
+  // Serialized from an opaque JSON column; guard against a null parse fallback.
   config: WorkTaskConfig | null
   status: WorkTaskStatus
+  /** agent_error | setup_error | verdict_blocked | interrupted */
   failure_reason: string | null
   last_error: string | null
   run_seq: number
@@ -1296,10 +1399,13 @@ export interface WorkTask {
    *  else the folder default). Absent/null = nothing configured anywhere. */
   agent_type?: AgentType | null
   conversation_id: number | null
+  /** Live ACP connection of the current generation; stale after a settle —
+   *  gate on status before attaching. */
   connection_id: string | null
   base_branch: string | null
   base_sha: string | null
   work_branch: string | null
+  /** null = nothing pending; "failed" = worktree cleanup failed (retryable). */
   cleanup_state: string | null
   verdict: string | null
   result_summary: string | null
@@ -1307,6 +1413,12 @@ export interface WorkTask {
   additions: number | null
   deletions: number | null
   merge_commit: string | null
+  /** How a done task ended: 'merged' | 'delivered_pr' |
+   *  'accepted_without_merge'. Absent on live tasks and on rows finished
+   *  before the column existed. */
+  completion_kind?: string | null
+  /** Acceptance red/green light of the current review, if a preflight
+   *  command ran. */
   preflight: WorkTaskPreflight | null
   /** The merge this reviewed task is waiting to run — the user clicked merge
    *  while another task of the same project was landing. Absent/null = not
@@ -1314,8 +1426,16 @@ export interface WorkTask {
    *  `queued_at`. */
   merge_queued?: WorkTaskQueuedMerge | null
   archived_at: string | null
-  /** Planned start of a to-do task; null when it should be started manually. */
+  /** Planned start of a to-do task (ISO); null = no plan. Consumed the moment
+   *  the task is claimed, by the scheduler or by hand. */
   scheduled_at: string | null
+  /** Forge provenance ('forge_issue' | 'forge_pr'); absent = not forge-sourced. */
+  source_kind?: string | null
+  /** Canonical source key ({provider}:{host}:{owner_repo}:{kind}:{number}). */
+  source_key?: string | null
+  /** Source snapshot (url, title, numbers …); shape mirrors ForgeSourceMeta. */
+  source_meta?: ForgeSourceMeta | null
+  /** Latest agent_progress milestone — present on live (running/awaiting/merging) rows only. */
   latest_progress?: string | null
   created_at: string
   updated_at: string
@@ -1323,6 +1443,212 @@ export interface WorkTask {
   settled_at: string | null
   finished_at: string | null
 }
+
+/** Provenance snapshot of a forge-triggered task (mirrors Rust ForgeSourceMeta). */
+export interface ForgeSourceMeta {
+  provider: ForgeProviderId
+  server_host: string
+  api_base: string
+  account_id: string
+  owner_repo: string
+  number: number
+  /** Canonical html URL, server-derived. */
+  url: string
+  /** Issue/PR title at trigger time. */
+  title: string
+  /** PR-only fields (absent on issues; filled by trigger-time hydration in M8). */
+  base_ref?: string | null
+  head_ref?: string | null
+  head_sha?: string | null
+  head_repo?: string | null
+  /** URL of the PR created by the delivery acceptance path (P1). */
+  result_pr?: string | null
+  /** The trigger dialog's write-back answer, frozen at trigger time. Absent on
+   *  rows minted before the choice lived here — those stay silent. */
+  writeback?: boolean | null
+}
+
+export type ForgeTab = "issues" | "prs"
+
+/** Normalized across both forges. `merged` only reaches a pull request row —
+ *  GitHub reports merged ones as plain `closed`, so the backend derives it. */
+export type ForgeItemState = "open" | "closed" | "merged"
+
+/** How the workbench list is ordered (mirrors Rust ForgeSort). Four NAMED
+ *  orders rather than a field/direction pair: the two forges spell their sort
+ *  fields differently and accept different sets, so this is the intersection. */
+export type ForgeSort =
+  | "newest"
+  | "oldest"
+  | "recently_updated"
+  | "least_recently_updated"
+
+/** One label as the forge paints it (mirrors Rust ForgeLabel). */
+export interface ForgeLabel {
+  name: string
+  /** `#rrggbb`, normalized from GitHub's bare digits and GitLab's hashed ones —
+   *  or null when the forge sent something that is not hex (GitLab accepts CSS
+   *  colour names on write). Null draws the neutral chip. */
+  color: string | null
+}
+
+/** The repository's label vocabulary (mirrors Rust ForgeLabelList). */
+export interface ForgeLabelList {
+  labels: ForgeLabel[]
+  /** The repository has more labels than one page holds — said out loud so a
+   *  filter list that stops at 100 does not read as complete. */
+  truncated: boolean
+}
+
+/** One row of the forge workbench list (mirrors Rust ForgeIssueRow). */
+export interface ForgeIssueRow {
+  number: number
+  title: string
+  /** Capped body from the list payload — the trigger snapshot's source. */
+  body: string | null
+  state: string
+  /** Draft / work-in-progress pull request. Always false for issues. */
+  draft: boolean
+  labels: ForgeLabel[]
+  author: string | null
+  updated_at: string | null
+  html_url: string
+  is_pr: boolean
+  /** Human comments (GitHub `comments` / GitLab `user_notes_count`) — system
+   *  timeline events are excluded by both, which is what makes it mean
+   *  "there is a discussion here". */
+  comments: number
+}
+
+/** One page of the workbench list (mirrors Rust ForgeIssueList). */
+export interface ForgeIssueList {
+  rows: ForgeIssueRow[]
+  /** 1-based page actually served (already clamped by the backend). */
+  page: number
+  per_page: number
+  /** Matching items, or null when the forge declines to count — GitLab omits
+   *  its totals past 10k rows, and its locally-filtered closed-MR query would
+   *  report a count that includes rows the user cannot see. Null means the UI
+   *  must fall back to previous/next instead of page numbers. */
+  total_count: number | null
+  /** How many of those matches the forge will actually PAGE through, when that
+   *  is fewer than `total_count`. GitHub Search serves only the first 1000
+   *  results and answers 422 past them, so page NUMBERS come from this and the
+   *  "N results" summary from `total_count`. Null means every match is
+   *  reachable (always so on GitLab). */
+  reachable_count: number | null
+  has_next: boolean
+  /** GitHub search timed out; this page is partial. */
+  incomplete: boolean
+}
+
+/** A folder's `origin` remote parsed into forge coordinates. */
+export interface ForgeRemote {
+  server_host: string
+  owner_repo: string
+  remote_url: string
+  /** Which forge this host is — decided by the backend from the configured
+   *  accounts and the hostname, never chosen here. */
+  provider: ForgeProviderId
+}
+
+/** Latest task (any state) for a source key — the row chip's data. */
+export interface ForgeTaskLink {
+  source_key: string
+  task_id: number
+  status: WorkTaskStatus
+  verdict: string | null
+  updated_at: string
+}
+
+/** How the trigger dialog asks the work item to be handled. A template NAME
+ *  the server resolves into its own instruction text — prompt text never
+ *  crosses the wire. `fix`/`investigate`/`plan_first` are issue scenarios,
+ *  `review_fix`/`review_only` are PR/MR scenarios. */
+export type ForgeScenarioId =
+  | "fix"
+  | "investigate"
+  | "plan_first"
+  | "review_fix"
+  | "review_only"
+
+/** Trigger payload (client supplies coordinates + display snapshot only —
+ *  the server derives everything trusted). */
+export interface ForgeTaskDraftInput {
+  folder_id: number
+  source: {
+    kind: "issue" | "pr"
+    provider: ForgeProviderId
+    server_host: string
+    account_id?: string | null
+    owner_repo: string
+    number: number
+  }
+  snapshot: {
+    title: string
+    body?: string | null
+    labels?: string[]
+    author?: string | null
+  }
+  /** Absent/null = the kind's default (`fix` for issues, `review_fix` for
+   *  proposed changes). */
+  scenario?: ForgeScenarioId | null
+  instruction?: string | null
+  /** Comment the outcome back on this item once the task finishes — the
+   *  trigger dialog's own box, recorded on the task and frozen at trigger
+   *  time. Always sent explicitly by the dialog; ABSENT is read server-side as
+   *  "silent", not as the dialog's default, because a request without it came
+   *  from a client that never showed the question. */
+  writeback?: boolean | null
+  agent_type?: string | null
+  force?: boolean
+}
+
+/** One scope's repository-panel preferences — mirrors
+ *  `forge::settings::ForgePanelSettings`.
+ *
+ *  What lives here is the dimension this page adds on top of a folder's
+ *  task-settings stage prompts: how you like an ISSUE handled, and what you
+ *  always want said for a review as opposed to a fix. */
+export interface ForgePanelSettings {
+  /** Scenario the trigger dialog preselects for an issue; null = the built-in
+   *  default. Consumed by the DIALOG — the request it then sends always names
+   *  a scenario outright. */
+  default_issue_scenario?: ForgeScenarioId | null
+  /** Same, for a pull/merge request. */
+  default_pr_scenario?: ForgeScenarioId | null
+  /** What the trigger dialog's write-back switch starts as. Only the starting
+   *  position: the switch is on screen every time, and what it says when the
+   *  user presses Create is what the task records. */
+  writeback_default: boolean
+  /** Standing instructions appended after a scenario's built-in wording,
+   *  keyed by scenario id plus the reserved `all` (every scenario). */
+  scenario_prompts: Record<string, string>
+}
+
+/** Every scope of the panel's preferences — mirrors
+ *  `forge::settings::ForgeSettingsStore`.
+ *
+ *  Scoped the same way task settings are: a global row plus optional per-folder
+ *  overrides, and an override wins WHOLESALE rather than merging field by
+ *  field. Sent as one value because the settings dialog shows one folder while
+ *  saying whether that folder is following the global row, which takes both. */
+export interface ForgeSettingsStore {
+  global: ForgePanelSettings
+  /** Keyed by folder id (JSON has no integer keys, so they arrive as strings).
+   *  A folder with no entry follows `global` — absence IS the answer, so there
+   *  is no separate "follows global" flag to keep in sync. */
+  folders: Record<string, ForgePanelSettings>
+}
+
+/** Reserved `scenario_prompts` key applied to every scenario. */
+export const FORGE_SCENARIO_PROMPT_ALL = "all"
+
+/** Discriminated trigger outcome — duplicate/mismatch are answers, not errors. */
+export type ForgeCreateResult =
+  | { outcome: "created"; task: WorkTask }
+  | { outcome: "duplicate"; existing: WorkTask }
+  | { outcome: "folder_mismatch"; folder_remote: ForgeRemote | null }
 
 /** A merge parked on a reviewed task while its project lands another one. */
 export interface WorkTaskQueuedMerge {
@@ -1336,11 +1662,14 @@ export interface WorkTaskQueuedMerge {
 /** Result of the folder's preflight command for one review generation. */
 export interface WorkTaskPreflight {
   status: "running" | "passed" | "failed"
+  /** Display name of the folder command that ran. */
   command: string
   exit_code?: number | null
+  /** Trailing combined output — present when the light is red. */
   output_tail?: string | null
 }
 
+/** One append-only timeline entry ("how the task advanced"). */
 export interface WorkTaskEvent {
   id: number
   task_id: number
@@ -1356,24 +1685,31 @@ export interface WorkTaskDraft {
   config: WorkTaskConfig
 }
 
+/** A saved task blueprint (global; the folder is picked at creation time).
+ *  Saving under an existing name replaces that template. */
 export interface WorkTaskTemplate {
   id: number
   name: string
   title: string
+  // Serialized from an opaque JSON column; guard against a null parse fallback.
   config: WorkTaskConfig | null
   created_at: string
   updated_at: string
 }
 
+/** Per-folder task defaults (work_task_settings.config). */
 export interface WorkTaskFolderSettings {
   default_agent_type?: AgentType | null
   mode_id?: string | null
   config_values: Record<string, string>
   label_snapshot?: AutomationLabelSnapshot | null
   auto_process: boolean
+  /** 0 = unlimited. */
   max_concurrent: number
   merge_strategy: "squash" | "merge"
-  /** Land reviewed tasks automatically when the engine can merge them. */
+  /** Land reviewed tasks automatically: when a task settles into review and is
+   *  actually mergeable, the engine dispatches the same merge the button would
+   *  (agent-written commit message, worktree per `delete_worktree_default`). */
   auto_merge: boolean
   delete_worktree_default: boolean
   /** Directory new task worktrees are created IN — each task still gets its
@@ -1384,7 +1720,10 @@ export interface WorkTaskFolderSettings {
   /** folder_command id run in the worktree when a task settles into review
    *  (the acceptance red/green light); null = no preflight. */
   preflight_command_id?: number | null
+  /** Free-form preflight shell line; wins over `preflight_command_id`. */
   preflight_command?: string | null
+  /** Shell line run inside a freshly created worktree before the agent
+   *  starts (deps install, env seeding). */
   init_command?: string | null
   /** Extra instructions appended after the built-in prompt of a launch stage.
    *  Keys are the engine's stage ids (`work` | `retry` | `return` | `merge`)
@@ -1392,6 +1731,7 @@ export interface WorkTaskFolderSettings {
   stage_prompts?: Record<string, string> | null
 }
 
+/** Changed file of a task worktree vs its recorded base. */
 export interface WorkTaskChangedFile {
   file: string
   additions: number
@@ -1586,8 +1926,20 @@ export interface ToolCallImageWire {
 
 // ACP events pushed from Rust backend (discriminated by "type" field)
 /**
- * One background task settled by a transcript record. Mirrors Rust
- * `BackgroundSettledInfo`.
+ * One background task settled by a `<task-notification>` transcript record
+ * (mirror of Rust `BackgroundSettledInfo`). `task_id` is the launch ack's
+ * `agentId` (async sub-agent) or `backgroundTaskId` (background shell);
+ * `status` is the notification's `<status>` verbatim (`"completed"` on
+ * success). The same id may settle more than once (a resumed sub-agent
+ * notifies again).
+ *
+ * `tool_use_id`/`result` come from the same notification's `<tool-use-id>`/
+ * `<result>` tags. The `background_activity` handler uses them to flip the
+ * launch card in-memory (rewriting its `[[houhub-background-task]]` marker via
+ * `resolveBackgroundTask`) instead of a `refetchDetail` — which double-rendered
+ * the #870-held turn and raced the transcript's last write. `tool_use_id` is
+ * the launching tool call's id (`toolu_…`), NOT `task_id`; absent for a
+ * background shell (no marker card to flip).
  */
 export interface BackgroundSettledInfo {
   task_id: string
@@ -1595,8 +1947,6 @@ export interface BackgroundSettledInfo {
   summary?: string | null
   tool_use_id?: string | null
   result?: string | null
-  /** True when the reply is already visible on the held ACP turn. */
-  wire_visible?: boolean
 }
 
 export type AcpEvent =
@@ -1693,6 +2043,13 @@ export type AcpEvent =
       folder_id: number
     }
   | {
+      // Agent published a live ACP session title. The backend writes the
+      // conversation row and broadcasts `conversation://changed`; the
+      // frontend does not apply this event itself.
+      type: "native_session_title"
+      title: string
+    }
+  | {
       type: "conversation_status_changed"
       conversation_id: number
       status: ConversationStatus
@@ -1746,6 +2103,16 @@ export type AcpEvent =
       agent_type: string
       /** Stable backend error identifier for localization (e.g. "initialize_timeout"). */
       code: string | null
+      /**
+       * Diagnostic evidence for errors the backend *inferred* rather than
+       * received — the `turn_failed_empty*` family, where the agent reported
+       * success and the wire carried no error. Agent stderr tail plus a
+       * summary of updates the backend could not parse.
+       *
+       * Already redacted and length-bounded by the backend. Render it in the
+       * alert detail only: it must not reach the OS notification or the
+       * connection-status tooltip.
+       */
       details?: string | null
     }
   | {
@@ -1756,9 +2123,19 @@ export type AcpEvent =
       // `codexErrorInfo` carried one. With AIR advertised, codex 1.2+ replaces
       // this channel with severity-"warning" `session_failure` records, so it
       // now serves only legacy paths.
+      //
+      // pi shares this channel (#525): pi-acp announces `auto_retry_start` as
+      // ordinary prose, so the backend classifies it out of the transcript and
+      // routes it here. pi sends an EMPTY `message` — it forwards no error text,
+      // only the counters below — and the banner renders its own localized line
+      // in that case. All three counters are absent for codex, which reports
+      // none of them.
       type: "turn_retrying"
       message: string
       error_status?: number
+      attempt?: number
+      max_retries?: number
+      retry_delay_ms?: number
     }
   | {
       // JetBrains AIR typed session failure upsert
@@ -1788,9 +2165,13 @@ export type AcpEvent =
     }
   /**
    * Out-of-turn activity surfaced from the agent's own session transcript by
-   * the backend watcher. Overlay turns are upserted by turn id, settled entries
-   * notify users, and `outstanding` keeps active background work from being
-   * reaped by the idle sweep.
+   * the backend watcher (Claude only): async sub-agent / background-shell
+   * `<task-notification>` completions, the agent's continued work after them,
+   * and cron//loop autonomous turns (which produce no wire events at all).
+   * `turns` are UPSERTs keyed by `MessageTurn.id` into the conversation
+   * runtime store's background overlay; `settled` entries each raise one OS
+   * notification; `outstanding` mirrors into the connection for the idle-sweep
+   * exemption (nothing renders the count).
    */
   | {
       type: "background_activity"
@@ -2074,6 +2455,7 @@ export interface FeedbackItem {
 export interface SessionLastError {
   message: string
   code?: string | null
+  /** Mirrors `AcpEvent` error `details`; already redacted by the backend. */
   details?: string | null
 }
 
@@ -2147,12 +2529,19 @@ export interface LiveSessionSnapshot {
   /** Live-feedback notes for the current turn. Absent on older payloads /
    *  when empty (then treated as `[]`). */
   feedback?: FeedbackItem[]
-  /** Launched-but-unresolved background tasks accounted from the transcript. */
+  /** Launched-but-unresolved background tasks (async sub-agents / background
+   *  shells) accounted from the transcript. Lets a client attaching
+   *  mid-episode recover the pending count the one-shot `background_activity`
+   *  events won't replay. Absent / omitted when zero. */
   background_outstanding?: number
   /** Whether this agent has the `check_user_feedback` tool (fixed at launch).
    *  The frontend gates the feedback bar on this — the agent's real capability —
    *  not the (possibly later-toggled) global setting. Absent → `false`. */
   feedback_tool_available?: boolean
+  /** Whether feedback notes ride the native `_session/steering` push channel
+   *  (synthesized backend-side from advertisement + registry policy + runtime
+   *  version proof — the frontend must NOT re-derive it from agent type).
+   *  Absent → `false`. */
   native_steering_available?: boolean
   modes: SessionModeStateInfo | null
   current_mode: string | null
@@ -2214,6 +2603,13 @@ export interface AcpAgentInfo {
   description: string
   available: boolean
   distribution_type: string
+  /**
+   * Whether houhub's entry for this agent is a third-party ACP *adapter*
+   * wrapping a vendor CLI of a different name (Claude Code → claude-agent-acp,
+   * Codex → codex-acp). Surfaces without a preflight result use it to say "the
+   * ACP adapter isn't installed" rather than "the agent isn't" — the single
+   * most-reported confusion.
+   */
   is_acp_adapter: boolean
   /**
    * For custom agents, where the definition came from ("registry" | "manual");
@@ -2256,7 +2652,7 @@ export interface AcpAgentInfo {
   cursor_cli_config_json: string | null
   /** Parsed scalar settings backing the Cursor panel's structured controls
    * (sandbox / permission rules; the Run Everything permission mode is a
-   * launch flag, not a config key). Cursor agent only. */
+   * launch flag, not a config key). Cursor ACP only. */
   cursor_settings: CursorSettings | null
   model_provider_id: number | null
   /** Display icon for a custom ACP agent — normally an inlined
@@ -2345,13 +2741,13 @@ export interface CodexSandboxStructuredConfig {
 
 /** Parsed keys from ~/.grok/config.toml. `null` means the key is absent.
  * Serialized snake_case to match AcpAgentInfo. The stock per-session model is
- * NOT here — it's chosen from the composer. But a HouHub-managed custom (BYO
+ * NOT here — it's chosen from the composer. But a houhub-managed custom (BYO
  * endpoint) model IS: it's the `[model.<id>]` block whose id equals
  * [models].default, read back through the custom_* fields. */
 export interface GrokSettings {
   default_reasoning_effort: string | null
   permission_mode: string | null
-  /** The HouHub-managed custom model id ([model.<id>] == [models].default). */
+  /** The houhub-managed custom model id ([model.<id>] == [models].default). */
   custom_model_id: string | null
   /** [model.<id>].base_url — null ⇒ Grok's official xAI endpoint. */
   custom_base_url: string | null
@@ -2382,7 +2778,7 @@ export interface GrokStructuredConfig {
 }
 
 /** Parsed keys from ~/.cursor/cli-config.json (shared with the Cursor CLI's
- * own /config UI). Only the HouHub-managed subset is projected; everything
+ * own /config UI). Only the houhub-managed subset is projected; everything
  * else is preserved verbatim on write. */
 export interface CursorSettings {
   /** sandbox.mode — "enabled" | "disabled". */
@@ -2411,7 +2807,7 @@ export interface CursorAuthStatus {
   email: string | null
   membership: string | null
   error: string | null
-  /** Absolute path to the cursor-agent binary HouHub would launch; the panel
+  /** Absolute path to the cursor-agent binary houhub would launch; the panel
    * builds a copy-pasteable `"<binary_path>" login` command from it (the
    * managed binary isn't on PATH). Null when not installed. */
   binary_path?: string | null
@@ -2432,12 +2828,33 @@ export interface CursorModelsResult {
   error: string | null
 }
 
+/** Result of probing `qoder status -o json` (auth card). A probe that could
+ * not run reports `error` with `logged_in: false`; the panel renders that as
+ * "could not check", never as "signed out". */
+export interface QoderAuthStatus {
+  installed: boolean
+  logged_in: boolean
+  username: string | null
+  email: string | null
+  /** Account tier, e.g. `personal_standard`. */
+  user_type: string | null
+  /** Version the probed binary reports — the one that would actually launch,
+   * not necessarily the version houhub's registry pins. */
+  version: string | null
+  allow_byok: boolean | null
+  error: string | null
+  /** Absolute path to the qoder binary houhub would launch; the panel builds a
+   * copy-pasteable `"<binary_path>" login` command from it. */
+  binary_path?: string | null
+}
+
 // Lightweight agent status returned by acp_get_agent_status
 export interface AcpAgentStatus {
   agent_type: AgentType
   available: boolean
   enabled: boolean
   installed_version: string | null
+  /** See AcpAgentInfo.is_acp_adapter. */
   is_acp_adapter: boolean
 }
 
@@ -2701,6 +3118,13 @@ export interface SystemRenderingSettings {
   disable_hardware_acceleration: boolean
 }
 
+/** "Launch at login". The OS registration is the source of truth, so an update
+ * returns the state the system actually settled on — which can differ from what
+ * was requested (e.g. Windows Task Manager vetoing the Run entry). */
+export interface SystemAutostartSettings {
+  enabled: boolean
+}
+
 // --- Logging ---
 
 export type LogLevel = "off" | "error" | "warn" | "info" | "debug" | "trace"
@@ -2783,6 +3207,8 @@ export interface GitSettings {
   custom_path: string | null
 }
 
+/** A stored forge credential. Despite the name (kept for the wire format),
+ *  this is any host's account — GitHub, GitLab, or a plain git remote. */
 export interface GitHubAccount {
   id: string
   server_url: string
@@ -2791,7 +3217,13 @@ export interface GitHubAccount {
   avatar_url: string | null
   is_default: boolean
   created_at: string
+  /** Which forge the token is for. Absent on accounts stored before GitLab
+   *  support (and on plain git credentials), where it keeps meaning "a
+   *  credential for this host, whichever forge lives there". */
+  provider?: ForgeProviderId | null
 }
+
+export type ForgeProviderId = "github" | "gitlab"
 
 export interface GitHubAccountsSettings {
   accounts: GitHubAccount[]
@@ -2818,6 +3250,8 @@ export type McpAppType =
   | "grok"
   | "cursor"
   | "deepseek"
+  | "qoder"
+  | "antigravity"
 
 export interface LocalMcpServer {
   id: string
@@ -2921,7 +3355,14 @@ export type GitResetMode = "soft" | "mixed" | "hard" | "keep"
 export interface GitBranchList {
   local: string[]
   remote: string[]
+  /** Branches checked out in some *other* worktree than the queried path. */
   worktree_branches: string[]
+  /**
+   * The branch checked out in the repo's main working tree, when that is not the
+   * queried path itself. It appears in `worktree_branches` like any other — but
+   * its checkout is the repo, so it can neither be deleted nor removed.
+   */
+  main_worktree_branch?: string | null
 }
 
 /**
@@ -2950,6 +3391,20 @@ export interface GitHeadInfo {
 export interface WorktreeResolution {
   path: string | null
   folder_id: number | null
+}
+
+/**
+ * What removing a worktree actually did (mirrors Rust `GitWorktreeRemoval`).
+ * `worktree_path` is null when the branch had no worktree left to remove — what
+ * a retry after a partially applied removal sees. `folder_id` is the workspace
+ * folder dropped along with the directory (only the "…and branch" variant drops
+ * one), and `reparented` counts the conversations it moved to the repo folder.
+ */
+export interface GitWorktreeRemoval {
+  worktree_path: string | null
+  branch_deleted: boolean
+  folder_id: number | null
+  reparented: number
 }
 
 export interface GitConflictInfo {
@@ -3247,14 +3702,25 @@ export interface CheckItem {
   fixes: FixAction[]
 }
 
+/**
+ * Structured explainer data for agents whose houhub entry is a third-party ACP
+ * adapter rather than the vendor's own CLI (Claude Code, Codex). The backend
+ * ships only facts — the wording lives in i18n, the same way buildVersionCheck
+ * owns the version card's copy.
+ */
 export interface AdapterInfo {
   /** npm spec houhub installs, e.g. "@agentclientprotocol/codex-acp@1.3.0". */
   adapter_package: string
+  /** Command the launch gate resolves, e.g. "codex-acp". */
   adapter_cmd: string
   adapter_installed: boolean
+  /** The vendor CLI, e.g. "codex". */
   native_cmd: string
+  /** Display name for the vendor CLI, e.g. "Codex CLI". */
   native_label: string
+  /** Where the user's own vendor CLI was found. houhub never launches it. */
   native_path: string | null
+  /** Config dir both read, so installing the adapter needs no second login. */
   shared_config_dir: string
   docs_url: string
 }
@@ -3264,34 +3730,11 @@ export interface PreflightResult {
   agent_name: string
   passed: boolean
   checks: CheckItem[]
+  /** Null unless this agent is an ACP adapter. Never affects `passed`. */
   adapter: AdapterInfo | null
 }
 
 // ─── OpenCode Plugins ───
-
-// ─── OpenCode Provider Catalog (models.dev) ───
-
-/** A model entry under a catalog provider, normalized from models.dev. */
-export interface OpenCodeCatalogModel {
-  id: string
-  name: string
-  reasoning: boolean
-  tool_call: boolean
-  context: number | null
-  cost_in: number | null
-  cost_out: number | null
-}
-
-/** One provider from the models.dev catalog (the same registry OpenCode reads). */
-export interface OpenCodeCatalogProvider {
-  id: string
-  name: string
-  npm: string | null
-  env: string[]
-  doc: string | null
-  auth_kind: "api" | "oauth"
-  models: OpenCodeCatalogModel[]
-}
 
 export type PluginStatus = "installed" | "missing"
 
@@ -3307,6 +3750,34 @@ export interface PluginCheckSummary {
   cache_dir: string
   plugins: PluginInfo[]
   has_project_config_hint: boolean
+}
+
+// ─── OpenCode Provider Catalog (models.dev) ───
+
+/** A model entry under a catalog provider, normalized from models.dev. */
+export interface OpenCodeCatalogModel {
+  id: string
+  name: string
+  reasoning: boolean
+  tool_call: boolean
+  context: number | null
+  cost_in: number | null
+  cost_out: number | null
+}
+
+/**
+ * One provider from the models.dev catalog (the same registry OpenCode reads).
+ * `auth_kind` is `"oauth"` for providers OpenCode signs into via a browser flow
+ * (ChatGPT, GitHub Copilot, GitLab Duo), `"api"` otherwise.
+ */
+export interface OpenCodeCatalogProvider {
+  id: string
+  name: string
+  npm: string | null
+  env: string[]
+  doc: string | null
+  auth_kind: "api" | "oauth"
+  models: OpenCodeCatalogModel[]
 }
 
 export type PluginInstallEventKind = "started" | "log" | "completed" | "failed"
@@ -3390,16 +3861,18 @@ export interface ModelProviderInfo {
   api_url: string
   api_key: string
   api_key_masked: string
+  /** Agents this shared provider is available to. Older rows expose only
+   * `agent_type`; the frontend keeps that as the fallback. */
   agent_types: AgentType[]
   agent_type: AgentType
-  models: string[]
   /**
    * Model value, interpretation depends on agent_type:
    * - claude_code: JSON string of {main, reasoning, haiku, sonnet, opus}
-   * - non-Claude providers: optional display/default metadata only; runtime
-   *   model selection stays in each agent's own settings
+   * - codex / gemini / others: plain model name string
    */
   model: string | null
+  /** Catalog of models advertised by the provider. */
+  models: string[]
   created_at: string
   updated_at: string
 }

@@ -10,12 +10,15 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react"
 import {
+  AlertCircle,
   Copy,
   Download,
   FileCode,
   FileImage,
   FileText,
   Info,
+  Loader2,
+  Plus,
   RefreshCw,
   SquarePen,
   X,
@@ -59,6 +62,7 @@ import { QuickActions } from "@/components/chat/quick-actions"
 import type { ComposerInjectContent } from "@/components/chat/message-input"
 import { TileScrollContainer } from "@/components/conversations/tile-scroll-container"
 import { GroupSplitHandle } from "@/components/conversations/group-split-handle"
+import { OverlayHostHiddenProvider } from "@/components/ui/overlay-host-hidden"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { TabBar } from "@/components/tabs/tab-bar"
 import { TabDragGhost } from "@/components/tabs/tab-drag-ghost"
@@ -75,8 +79,10 @@ import {
   createChatConversation,
   createChatDir,
   createConversation,
+  getFolderConversation,
   openSettingsWindow,
 } from "@/lib/api"
+import { isWindowedDetail } from "@/lib/turn-window"
 import {
   flushRetryDelayMs,
   forkSendBlockedByQueue,
@@ -126,6 +132,7 @@ import {
   clearMessageInputDraft,
   saveMessageInputDraft,
 } from "@/lib/message-input-draft"
+import { buildQuotedMarkdown } from "@/lib/message-quote"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -237,6 +244,7 @@ const ConversationTabView = memo(function ConversationTabView({
   groupId,
 }: ConversationTabViewProps) {
   const t = useTranslations("Folder.conversation")
+  const tMessageList = useTranslations("Folder.chat.messageList")
   const tWelcome = useTranslations("Folder.chat.welcomeInputPanel")
   const tDiag = useTranslations("DiagnosticsSettings")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -855,7 +863,12 @@ const ConversationTabView = memo(function ConversationTabView({
 
   useEffect(() => {
     if (effectiveConversationId <= 0) return
-    setExternalId(effectiveConversationId, detail?.summary.external_id ?? null)
+    // Only write a real id. During a detail reload `detail` is temporarily
+    // null; clearing the already-resolved runtime id would make the next
+    // reconnect start a new ACP session and orphan the conversation history.
+    const persisted = detail?.summary.external_id
+    if (!persisted) return
+    setExternalId(effectiveConversationId, persisted)
   }, [effectiveConversationId, detail?.summary.external_id, setExternalId])
 
   useEffect(() => {
@@ -1532,6 +1545,12 @@ const ConversationTabView = memo(function ConversationTabView({
     setQuickActionInject(null)
   }, [])
 
+  const handleQuoteSelection = useCallback((selected: string) => {
+    const quoted = buildQuotedMarkdown(selected)
+    if (!quoted) return
+    setQuickActionInject({ text: quoted, mode: "append" })
+  }, [])
+
   const canShowDetailErrorActions =
     hasPersistedConversation && dbConversationId != null && !!folder
   const handleReloadDetail = useCallback(() => {
@@ -1561,6 +1580,51 @@ const ConversationTabView = memo(function ConversationTabView({
     })
     closeTab(tabId)
   }, [closeTab, folder, openNewConversationTab, tabId, workingDirForConnection])
+
+  // A failed `session/load` must leave the local transcript readable while
+  // making the unavailable composer actionable. The recovery controls live in
+  // the same dock as the input, so Reload/New conversation never hide history.
+  const acpLoadErrorBanner =
+    hasPersistedConversation && acpLoadError ? (
+      <div
+        role="alert"
+        className="flex w-full items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+      >
+        <AlertCircle aria-hidden="true" className="h-4 w-4 shrink-0" />
+        <span
+          className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
+          title={acpLoadError}
+        >
+          {acpLoadError}
+        </span>
+        {canShowDetailErrorActions && (
+          <>
+            <button
+              type="button"
+              onClick={handleReloadDetail}
+              disabled={detailLoading}
+              aria-busy={detailLoading}
+              className="flex shrink-0 items-center gap-1 rounded border border-destructive/40 px-2 py-0.5 font-medium transition-colors hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-50"
+            >
+              {detailLoading ? (
+                <Loader2 aria-hidden="true" className="h-3 w-3 animate-spin" />
+              ) : (
+                <RefreshCw aria-hidden="true" className="h-3 w-3" />
+              )}
+              {tMessageList("errorActionReload")}
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenNewSession}
+              className="flex shrink-0 items-center gap-1 rounded border border-destructive/40 px-2 py-0.5 font-medium transition-colors hover:bg-destructive/10"
+            >
+              <Plus aria-hidden="true" className="h-3 w-3" />
+              {tMessageList("errorActionNewSession")}
+            </button>
+          </>
+        )}
+      </div>
+    ) : null
 
   // Goal pause/clear is a live, owner-only action, so decide availability once
   // here (where the connection is owned) rather than in the deep goal card.
@@ -1679,6 +1743,7 @@ const ConversationTabView = memo(function ConversationTabView({
         onNewSession={
           canShowDetailErrorActions ? handleOpenNewSession : undefined
         }
+        onQuoteSelection={acpLoadError ? undefined : handleQuoteSelection}
       />
     </GoalControlProvider>
   )
@@ -1769,6 +1834,7 @@ const ConversationTabView = memo(function ConversationTabView({
       attachmentTabId={tabId}
       draftStorageKey={draftStorageKey}
       hideInput={isWelcomeMode || Boolean(acpLoadError)}
+      composerBanner={acpLoadErrorBanner}
       feedbackList={
         feedback.showList ? (
           <FeedbackNotesDisplay notes={feedback.notes} />
@@ -2258,22 +2324,30 @@ export function ConversationDetailPanel() {
     conversations
   )
 
-  const getExportData = useCallback(() => {
+  const getExportData = useCallback(async () => {
     if (!activeConversationTab?.conversationId) return null
     const session = getRuntimeSession(activeConversationTab.conversationId)
     if (!session?.detail) return null
+    let detail = session.detail
+    // The active view may contain only a tail window. Exports must include the
+    // complete transcript, so fetch the full detail when older pages exist.
+    if (isWindowedDetail(detail) && detail.turns_offset > 0) {
+      detail = await getFolderConversation(
+        session.dbConversationId ?? activeConversationTab.conversationId
+      )
+    }
     return {
-      summary: session.detail.summary,
-      turns: session.detail.turns,
-      sessionStats: session.detail.session_stats,
+      summary: detail.summary,
+      turns: detail.turns,
+      sessionStats: detail.session_stats,
       labels: exportLabels,
     }
   }, [activeConversationTab, exportLabels])
 
   const handleExportMarkdown = useCallback(async () => {
-    const data = getExportData()
-    if (!data) return
     try {
+      const data = await getExportData()
+      if (!data) return
       const result = await exportAsMarkdown(data)
       if (result === "saved") toast.success(t("exportSuccess"))
       // "cancelled": user dismissed the Save dialog — stay silent,
@@ -2285,9 +2359,9 @@ export function ConversationDetailPanel() {
   }, [getExportData, t])
 
   const handleExportHtml = useCallback(async () => {
-    const data = getExportData()
-    if (!data) return
     try {
+      const data = await getExportData()
+      if (!data) return
       const result = await exportAsHtml(data)
       if (result === "saved") toast.success(t("exportSuccess"))
     } catch (err) {
@@ -2297,12 +2371,15 @@ export function ConversationDetailPanel() {
   }, [getExportData, t])
 
   const handleExportImage = useCallback(async () => {
-    const data = getExportData()
-    if (!data) return
     const taskId = `export-image-${Date.now()}`
     addTask(taskId, t("exportImage"))
     updateTask(taskId, { status: "running" })
     try {
+      const data = await getExportData()
+      if (!data) {
+        updateTask(taskId, { status: "completed" })
+        return
+      }
       const result = await exportAsImage(data)
       updateTask(taskId, { status: "completed" })
       if (result === "saved") toast.success(t("exportSuccess"))
@@ -2451,7 +2528,14 @@ export function ConversationDetailPanel() {
         {(isSplit || canTileG) && active && (
           <span className="sr-only">{t("activeConversationIndicator")}</span>
         )}
-        {view}
+        {/* A backgrounded tab is kept mounted and merely hidden (its session is
+            still live), but a "查看会话" drawer opened from it portals to the
+            body — so without this it went on painting over whichever tab the
+            user switched to. The flag is additive, so a visible tab inside a
+            covered workspace stays hidden. */}
+        <OverlayHostHiddenProvider hidden={!canTileG && !visible}>
+          {view}
+        </OverlayHostHiddenProvider>
       </div>
     )
   }

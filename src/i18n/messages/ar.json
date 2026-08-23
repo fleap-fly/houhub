@@ -175,7 +175,9 @@
       "panelOpacity": "عتامة اللوحات",
       "panelOpacityHint": "مدى عتامة الشريط الجانبي واللوحات وأشرطة التبويب. الأقل يُظهر المزيد من الصورة.",
       "errorTooLarge": "الصورة كبيرة جدًا (16 ميجابايت كحد أقصى).",
-      "errorUploadFailed": "فشل تعيين صورة الخلفية."
+      "errorUploadFailed": "فشل تعيين صورة الخلفية.",
+      "formatHint": "‏PNG وJPEG وWebP وGIF. تُشغَّل الصور المتحركة تلقائيًا.",
+      "errorUnsupportedFormat": "صيغة صورة غير مدعومة. اختر ملف PNG أو JPEG أو WebP أو GIF."
     },
     "customStyle": {
       "sectionTitle": "نمط مخصص",
@@ -305,7 +307,11 @@
       "downloadFailed": "فشل تنزيل حزمة التحديث. يرجى المحاولة مرة أخرى لاحقًا.",
       "installFailed": "فشل تثبيت التحديث. يرجى إغلاق التطبيق ثم إعادة المحاولة.",
       "unknown": "فشل التحديث. يرجى المحاولة مرة أخرى لاحقًا."
-    }
+    },
+    "autostartTitle": "التشغيل عند تسجيل الدخول",
+    "autostartDescription": "يبدأ التشغيل تلقائيًا بعد تسجيل الدخول إلى هذا الجهاز.",
+    "autostartSaveFailed": "فشل حفظ إعدادات التشغيل عند تسجيل الدخول: {message}",
+    "autostartUnavailable": "تعذّر قراءة إدخال بدء التشغيل على هذا الجهاز: {message}"
   },
   "VersionControlSettings": {
     "loading": "جارٍ التحميل...",
@@ -374,7 +380,15 @@
       "serverRequired": "عنوان الخادم مطلوب.",
       "usernameRequired": "اسم المستخدم مطلوب.",
       "passwordRequired": "كلمة المرور مطلوبة."
-    }
+    },
+    "gitlabTitle": "حسابات GitLab",
+    "gitlabDescription": "إدارة حسابات GitLab للمصادقة. يتم تخزين الرموز محليًا.",
+    "gitlabTokenHint": "أنشئ رمز وصول شخصيًا بنطاق api من GitLab → Preferences → Access tokens.",
+    "gitlabNoAccounts": "لا يوجد حساب GitLab بعد",
+    "updateToken": "تحديث الرمز",
+    "updateTokenTitle": "تحديث رمز هذا الحساب",
+    "updateTokenDescription": "يستبدل الرمز المحفوظ لـ {username} مع الإبقاء على الحساب نفسه. تظل المهام التي أُنشئت بهذا الحساب تعمل — أما حذفه وإضافته من جديد فيُنشئ حسابًا آخر بالنسبة لها.",
+    "updateTokenSubmit": "تحقّق وحدّث"
   },
   "ShortcutSettings": {
     "sectionTitle": "الاختصارات",
@@ -1276,7 +1290,11 @@
       "providerDisconnected": "تم قطع اتصال {providerId}",
       "disconnectFailed": "فشل قطع اتصال {providerId}",
       "catalogRefreshed": "تم تحديث الكتالوج — {count} مزودًا",
-      "catalogRefreshFailed": "فشل تحديث الكتالوج"
+      "catalogRefreshFailed": "فشل تحديث الكتالوج",
+      "qoderSaved": "تم حفظ إعدادات Qoder",
+      "saveQoderConfigFailed": "تعذّر حفظ إعدادات Qoder",
+      "antigravitySaved": "Antigravity config saved",
+      "saveAntigravityConfigFailed": "Failed to save Antigravity config"
     },
     "version": {
       "statusLabel": "حالة الإصدار",
@@ -1438,7 +1456,53 @@
       "missing": "يتواصل HouHub مع الوكلاء عبر ACP، و{nativeLabel} لا تدعم ACP، لذا يحتاج HouHub إلى حزمة محوّل منفصلة هي {adapterPackage}، يتولى صيانتها مشروع Agent Client Protocol (بدأه فريق Zed). تأتي ببيئة تشغيل خاصة بها، فلا حاجة لتثبيت {nativeCmd} أولاً؛ وإن كانت لديك فالاثنان يتعايشان ويتشاركان تسجيل الدخول والإعدادات في {configDir}. ثبّتها من الأسفل.",
       "readyWithNative": "المحوّل {adapterCmd} مثبّت — وهو ما يشغّله HouHub، وليس {nativeCmd} الخاص بك في {nativePath}. هما حزمتان مستقلتان تتعايشان، وكلتاهما تقرأ {configDir}، لذا فتسجيل الدخول والإعدادات مشتركة.",
       "ready": "المحوّل {adapterCmd} مثبّت — وهو ما يشغّله HouHub. يأتي ببيئة تشغيل خاصة به، لذا لا حاجة إلى {nativeLabel}؛ وإن ثبّتها لاحقاً فالاثنان يتعايشان ويتشاركان {configDir}."
-    }
+    },
+    "qoder": {
+      "configDescription": "سجّل الدخول إلى Qoder من هنا. أما بقية ما تقرأه الواجهة فيوجد كله في ملف واحد هو $QODER_CONFIG_DIR/settings.json (الافتراضي ~/.qoder) المشترك مع واجهة qoder، ويُحرَّر حرفيًا في الأسفل. النموذج وقوة الاستدلال ليسا هنا: إذ يعلن عنهما Qoder عبر ACP، فتتولاهما محدِّدات مربع الإدخال لكل جلسة.",
+      "authTitle": "الحساب",
+      "authChecking": "جارٍ التحقق…",
+      "authNotInstalled": "qoder غير مثبّت",
+      "authUnknown": "الحالة غير متاحة",
+      "authLoggedIn": "تم تسجيل الدخول",
+      "authNotLoggedIn": "لم يتم تسجيل الدخول",
+      "loginHint": "نفِّذ هذا الأمر في الطرفية لتسجيل الدخول بحساب Qoder (سيُفتح المتصفح)، ثم اضغط تحديث:",
+      "authMethodLabel": "طريقة المصادقة",
+      "tokenLabel": "رمز الوصول الشخصي",
+      "tokenPlaceholder": "لأجهزة بلا واجهة أو الخوادم",
+      "tokenHint": "QODER_PERSONAL_ACCESS_TOKEN — بيانات اعتماد غير تفاعلية للأجهزة التي يتعذّر فيها تسجيل الدخول عبر المتصفح. اتركه فارغًا لاستخدام تسجيل دخول حساب qoder.",
+      "saveToken": "حفظ الرمز",
+      "advancedToggle": "متقدم: ملف settings.json الخام",
+      "advancedHint": "ملف settings.json كاملًا، ويُكتب حرفيًا عند الحفظ — وهو أيضًا السبيل الوحيد لحذف مفتاح.",
+      "saveRawConfig": "حفظ الملف"
+    },
+    "antigravity": {
+      "configDescription": "Antigravity needs an authentication method before it can start a session. The choice is written to auth.type in $GEMINI_HOME/antigravity-acp/settings.json, which is the only place the ACP server looks — without it every new session fails with \"Authentication required\". Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",
+      "methodLabel": "Authentication method",
+      "methods": {
+        "oauth-personal": "Sign in with Google",
+        "oauth-business": "Gemini Enterprise",
+        "gemini-api-key": "Gemini API key",
+        "agent-platform": "Gemini Enterprise Agent Platform"
+      },
+      "methodHints": {
+        "oauth-personal": "Your Google account, on any Antigravity plan including the free tier. The first new session opens a browser to finish signing in; the token is then cached and reused.",
+        "oauth-business": "Your Gemini Enterprise account. Needs a GCP project and location, and the first new session opens a browser.",
+        "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
+        "agent-platform": "Formerly Vertex AI. Use an API key, or a project and location with Application Default Credentials (gcloud auth application-default login)."
+      },
+      "geminiApiKeyLabel": "Gemini API key",
+      "googleApiKeyLabel": "Google API key",
+      "googleApiKeyHint": "Optional. When set it is used on its own — the project and location below are ignored. Leave it empty to authenticate with Application Default Credentials instead.",
+      "gcpProjectLabel": "GCP project",
+      "gcpLocationLabel": "GCP location",
+      "missingGeminiApiKey": "Enter a Gemini API key, or pick a different authentication method — sessions will fail to start without it.",
+      "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
+      "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
+      "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
+      "save": "Save"
+    },
+    "customAgentMcpLabel": "دعم MCP",
+    "customAgentMcpHint": "يرسل رفيق MCP المدمج في houhub إلى هذا الوكيل عند بدء الجلسة — وهو القناة التي تعتمد عليها الإحالة والتغذية الراجعة الحية وأدوات المهام. أوقفه مع الوكلاء الذين يرفضون خوادم MCP ويفشلون في الاتصال؛ ويسري التغيير من الاتصال التالي."
   },
   "SettingsPages": {
     "agentsLoading": "جارٍ تحميل إعدادات الوكلاء...",
@@ -1629,8 +1693,11 @@
       "openFolder": "فتح مجلد",
       "searchPlaceholder": "بحث عن محادثات...",
       "viewOptions": "خيارات العرض",
+      "listOptions": "قائمة المحادثات",
       "showCompleted": "عرض المحادثات المكتملة",
       "showWorktrees": "عرض مجلدات worktree",
+      "showRecent": "عرض مجموعة الأحدث",
+      "navigationItems": "عناصر التنقل",
       "moreOptions": "المزيد من الخيارات",
       "sortBy": "الترتيب حسب",
       "sortByCreatedAt": "وقت الإنشاء",
@@ -1698,7 +1765,15 @@
       "loadingSubsessions": "جارٍ تحميل المحادثات الفرعية…",
       "worktreeRemovedBadge": "تمت إزالة شجرة العمل الأصلية",
       "tasks": "لوحة المهام",
-      "runningCountBadge": "{count} جلسة قيد التشغيل"
+      "runningCountBadge": "{count} جلسة قيد التشغيل",
+      "showRecent": "عرض مجموعة الأحدث",
+      "sectionOrderMoveUp": "تحريك لأعلى",
+      "sectionOrderMoveDown": "تحريك لأسفل",
+      "sectionOrderItemLabel": "{name} — الموضع {position} من {total}",
+      "sectionRecent": "الأحدث",
+      "noRecent": "لا توجد محادثات حديثة",
+      "showMoreRecent": "عرض المزيد ({count})",
+      "forge": "لوحة المستودع"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
@@ -1791,7 +1866,8 @@
       "markCompleted": "وضع علامة كمكتمل",
       "reopen": "إعادة فتح",
       "expandSubsessions": "توسيع المحادثات الفرعية",
-      "collapseSubsessions": "طي المحادثات الفرعية"
+      "collapseSubsessions": "طي المحادثات الفرعية",
+      "attachToCurrentSession": "إضافة إلى الجلسة"
     },
     "search": {
       "dialogTitle": "بحث",
@@ -1859,6 +1935,16 @@
         "cacheRead": "قراءة الكاش",
         "cacheWrite": "كتابة الكاش",
         "total": "الإجمالي"
+      },
+      "quickActions": {
+        "title": "إجراءات سريعة",
+        "groups": {
+          "workspace": "مساحة العمل",
+          "sessions": "الجلسات",
+          "navigation": "التنقل",
+          "more": "المزيد"
+        },
+        "showPet": "إظهار الحيوان الأليف"
       }
     },
     "auxPanel": {
@@ -2063,7 +2149,9 @@
         "stashChanges": "تخزين التغييرات في stash",
         "stashPop": "استرجاع stash",
         "deleteBranch": "حذف الفرع {branchName}",
-        "updateBranch": "تحديث الفرع {branchName}"
+        "updateBranch": "تحديث الفرع {branchName}",
+        "removeWorktree": "حذف worktree الخاص بـ {branchName}",
+        "removeWorktreeAndBranch": "حذف worktree والفرع {branchName}"
       },
       "confirm": {
         "mergeTitle": "دمج الفرع",
@@ -2075,7 +2163,15 @@
         "deleteTitle": "حذف الفرع",
         "deleteDescription": "حذف الفرع {branchName}؟ لا يمكن التراجع عن هذا الإجراء.",
         "forceDeleteTitle": "حذف الفرع بالقوة",
-        "forceDeleteDescription": "الفرع {branchName} لم يتم دمجه بالكامل. هل أنت متأكد من أنك تريد حذفه بالقوة؟ لا يمكن التراجع عن هذا الإجراء."
+        "forceDeleteDescription": "الفرع {branchName} لم يتم دمجه بالكامل. هل أنت متأكد من أنك تريد حذفه بالقوة؟ لا يمكن التراجع عن هذا الإجراء.",
+        "deleteWorktreeTitle": "حذف worktree",
+        "deleteWorktreeDescription": "حذف مجلد worktree الذي تم سحب {branchName} فيه؟ سيتم الاحتفاظ بالفرع وإيداعاته.",
+        "forceDeleteWorktreeTitle": "فرض حذف worktree",
+        "forceDeleteWorktreeDescription": "يحتوي worktree الخاص بـ {branchName} على ملفات غير مودعة أو غير متتبعة. هل تريد حذفه على أي حال؟ لا يمكن استرجاع تلك التغييرات.",
+        "deleteWorktreeAndBranchTitle": "حذف worktree والفرع",
+        "deleteWorktreeAndBranchDescription": "حذف worktree الخاص بـ {branchName} والفرع نفسه ومجلده في مساحة العمل؟ ستنتقل جلساته إلى مجلد المستودع. لا يمكن التراجع عن هذا الإجراء.",
+        "forceDeleteWorktreeAndBranchTitle": "فرض حذف worktree والفرع",
+        "forceDeleteWorktreeAndBranchDescription": "يحتوي worktree الخاص بـ {branchName} على ملفات غير مودعة، أو أن الفرع غير مدمج بالكامل. هل تريد حذفهما على أي حال؟ لا يمكن التراجع عن هذا الإجراء."
       },
       "current": "الحالي",
       "switchToBranch": "التبديل إلى هذا الفرع",
@@ -2152,7 +2248,9 @@
       "searchAriaLabel": "البحث في الفروع والإجراءات",
       "branchListLabel": "الفروع والإجراءات",
       "noMatches": "لا توجد نتائج",
-      "pushBranch": "دفع"
+      "pushBranch": "دفع",
+      "deleteWorktree": "حذف worktree",
+      "deleteWorktreeAndBranch": "حذف worktree والفرع"
     },
     "commitDialog": {
       "toasts": {
@@ -2625,7 +2723,8 @@
           "turnFailedEmpty": "أنهى {agent} الجولة دون إنتاج أي رد.",
           "turnFailedEmptyProtocol": "أنتج {agent} مخرجات تعذّر على houhub تحليلها — قد لا يتوافق إصدار الوكيل مع البروتوكول.",
           "turnFailedEmptyMetadata": "أرسل {agent} تحديثات حالة فقط في هذه الجولة (الخطة / الوضع / الاستخدام) دون أي رد.",
-          "detailsInAlerts": "افتح التنبيهات في شريط الحالة ووسّع التفاصيل لعرض مخرجات الوكيل."
+          "detailsInAlerts": "افتح التنبيهات في شريط الحالة ووسّع التفاصيل لعرض مخرجات الوكيل.",
+          "mcpRejectedByAgent": "رفض {agent} الجلسة أثناء إرفاق رفيق MCP الخاص بـ houhub: {message} إن كان هذا الوكيل لا يدعم MCP، فأوقف «دعم MCP» من الإعدادات ثم أعد الاتصال."
         },
         "unableReadAgentConfig": "تعذر قراءة إعدادات الوكيل: {message}",
         "connectFailedTitle": "فشل اتصال {agent}",
@@ -2641,7 +2740,9 @@
           "nextRetryIn": "المحاولة التالية خلال {seconds}ث",
           "line": "{error}{status} · {retry}",
           "lineWithDelay": "{error}{status} · {retry}، {delay}",
-          "httpStatus": " (HTTP {status})"
+          "httpStatus": " (HTTP {status})",
+          "lineNoError": "{retry}",
+          "lineNoErrorWithDelay": "{retry}، {delay}"
         },
         "configOptionAdjusted": "ضبط {agent} {option} على {actual} بدلاً من {requested}"
       },
@@ -2728,7 +2829,10 @@
         "steerIntoTurn": "إدراج في الدور الحالي",
         "steerQueuedInstead": "أُضيفت إلى قائمة الانتظار — ستُرسل مع الدور التالي.",
         "steerFailed": "تعذّر الإدراج في الدور الحالي",
-        "steerAttachmentsUnsupported": "نص فقط — المسودات التي تحتوي على مرفقات تمر عبر قائمة الانتظار."
+        "steerAttachmentsUnsupported": "نص فقط — المسودات التي تحتوي على مرفقات تمر عبر قائمة الانتظار.",
+        "toggleOn": "تشغيل",
+        "toggleOff": "إيقاف",
+        "slashLoading": "جارٍ تحميل الأوامر…"
       },
       "messageQueue": {
         "addToQueue": "إضافة للقائمة",
@@ -2957,7 +3061,18 @@
         "completedAt": "وقت الإنجاز",
         "jumpToPreviousUserMessage": "الانتقال إلى رسالة المستخدم",
         "showMore": "عرض المزيد",
-        "showLess": "طي"
+        "showLess": "طي",
+        "loadEarlier": "تحميل الرسائل السابقة",
+        "loadingEarlier": "جارٍ تحميل الرسائل السابقة…",
+        "selectionActions": "إجراءات التحديد",
+        "selectionCopy": "نسخ النص",
+        "selectionCopied": "تم النسخ",
+        "selectionCopyFailed": "فشل النسخ",
+        "selectionQuote": "اقتباس",
+        "copyImage": "نسخ الصورة",
+        "copiedImage": "تم نسخ الصورة",
+        "copyImageFailed": "تعذّر نسخ الصورة: {message}",
+        "copyImageUnsupported": "نسخ هذه الصورة غير مدعوم هنا"
       },
       "liveTurnStats": {
         "thinking": "جارٍ التفكير...",
@@ -3369,6 +3484,25 @@
         "viewTree": "عرض الشجرة",
         "fields": "{count, plural, zero {لا حقول} one {حقل واحد} two {حقلان} few {# حقول} many {# حقلًا} other {# حقل}}",
         "items": "{count, plural, zero {لا عناصر} one {عنصر واحد} two {عنصران} few {# عناصر} many {# عنصرًا} other {# عنصر}}"
+      },
+      "houhubMcpTool": {
+        "getSessionInfo": "قراءة المحادثة {session}",
+        "getSessionInfoNoId": "قراءة محادثة",
+        "taskProgress": "التقدم: {message}",
+        "taskProgressNoMessage": "الإبلاغ عن تقدم المهمة",
+        "taskComplete": "انتهت المهمة · {verdict}",
+        "taskCompleteWithSummary": "انتهت المهمة · {verdict}: {summary}",
+        "createAutomation": "إنشاء الأتمتة {name}",
+        "createAutomationNoName": "إنشاء أتمتة",
+        "createWorkTask": "إنشاء مهمة العمل {title}",
+        "createWorkTaskNoTitle": "إنشاء مهمة عمل",
+        "promptLabel": "التعليمات",
+        "verdict": {
+          "success": "ناجحة",
+          "needs_review": "بحاجة إلى مراجعة",
+          "blocked": "متوقفة",
+          "unknown": "غير معروف"
+        }
       }
     },
     "diffPreview": {
@@ -4934,7 +5068,40 @@
     "settingsWorktreeRootBrowse": "اختيار مجلد الـ worktree",
     "settingsTabMerge": "الدمج",
     "settingsTabWorktree": "Worktree",
-    "eventMergeQueued": "أُضيف إلى طابور الدمج"
+    "eventMergeQueued": "أُضيف إلى طابور الدمج",
+    "actionDeleteWorktree": "حذف الـ worktree",
+    "restartDuplicateSource": "{task} تعالج بالفعل عنصر العمل نفسه — إعادة تشغيل هذه البطاقة ستترك مهمتين نشطتين على عنصر واحد.",
+    "restartDuplicateSourceAnon": "مهمة أخرى",
+    "actionRestartAnyway": "أعد التشغيل على أي حال",
+    "deleteWorktreeConfirmTitle": "حذف الـ worktree؟",
+    "deleteWorktreeConfirmBody": "سيُحذف مجلد الـ worktree وفرع العمل الخاص به نهائيًا. تبقى المهمة على اللوحة، وتنتقل محادثتها إلى مجلد المشروع.",
+    "eventForgeWriteback": "تم التعليق على المشكلة",
+    "eventForgeWritebackFailed": "فشل التعليق على المشكلة",
+    "actionDeliverPr": "فتح طلب سحب",
+    "actionDeliverPrMr": "فتح طلب دمج",
+    "actionDeliverPrBack": "ادفع إلى طلب السحب",
+    "actionDeliverPrBackMr": "ادفع إلى طلب الدمج",
+    "detailPullRequest": "طلب السحب",
+    "detailMergeRequest": "طلب دمج",
+    "deliverPrTitle": "التسليم كطلب سحب",
+    "deliverPrTitleMr": "التسليم كطلب دمج",
+    "deliverPrDescription": "يدفع فرع هذه المهمة إلى {repo} ويفتح طلب سحب نحو {base}. تُربط المشكلة تلقائيًا، فتُغلق عند الدمج.",
+    "deliverPrDescriptionMr": "يدفع فرع هذه المهمة إلى {repo} ويفتح طلب دمج نحو {base}. تُربط المشكلة تلقائيًا، فتُغلق عند الدمج.",
+    "deliverPrTitleLabel": "عنوان طلب السحب",
+    "deliverPrTitleLabelMr": "عنوان طلب الدمج",
+    "deliverPrDraft": "الفتح كمسودة",
+    "deliverPrSubmit": "الدفع والفتح",
+    "deliverPrSubmitting": "جارٍ الدفع…",
+    "deliverPrDone": "تم فتح طلب السحب",
+    "deliverPrDoneMr": "تم فتح طلب الدمج",
+    "deliverPrOpen": "عرض",
+    "deliverPrBackTitle": "الإعادة إلى طلب السحب",
+    "deliverPrBackTitleMr": "الإعادة إلى طلب الدمج",
+    "deliverPrBackDescription": "يدفع إيداعات هذه المهمة إلى {branch}، فرع رأس {repo}#{number}. لا يُفتح شيء جديد — المراجعة القائمة هي التي تستلم العمل.",
+    "deliverPrBackDescriptionMr": "يدفع إيداعات هذه المهمة إلى {branch}، الفرع المصدر لـ {repo}!{number}. لا يُفتح شيء جديد — المراجعة القائمة هي التي تستلم العمل.",
+    "deliverPrBackSubmit": "ادفع",
+    "deliverPrBackDone": "تم الدفع إلى طلب السحب",
+    "deliverPrBackDoneMr": "تم الدفع إلى طلب الدمج"
   },
   "TokenUsage": {
     "title": "استهلاك الرموز",
@@ -5126,5 +5293,103 @@
     "tonePop": "طقّة",
     "toneAlert": "تنبيه",
     "toneDescend": "نغمة هابطة"
+  },
+  "Forge": {
+    "title": "لوحة المستودع",
+    "pickFolder": "اختر مجلد مشروع",
+    "noRemote": "لا يحتوي هذا المجلد على remote معروف (origin)",
+    "errors": {
+      "noAccount": "لا يوجد حساب {provider} مُهيّأ للمضيف {host}. أضف حسابًا من الإعدادات ← التحكم بالإصدارات لتحميل هذا المستودع."
+    },
+    "addAccount": "إضافة حساب",
+    "empty": "لا يوجد شيء هنا",
+    "refresh": "تحديث",
+    "searchPlaceholder": "البحث في العنوان والوصف…",
+    "clearSearch": "مسح البحث",
+    "tabIssues": "المشكلات",
+    "tabPrs": "طلبات السحب",
+    "tabMrs": "طلبات الدمج",
+    "countOpen": "{count} مفتوح",
+    "countClosed": "{count} مغلق",
+    "countAll": "{count} إجمالاً",
+    "stateOpen": "مفتوحة",
+    "stateClosed": "مغلقة",
+    "stateAll": "الكل",
+    "stateMerged": "مدمج",
+    "stateDraft": "مسودة",
+    "assignedMe": "المسندة إليّ",
+    "labelsFilter": "التسميات",
+    "searchLabels": "البحث في التسميات…",
+    "noLabels": "لا توجد تسميات مطابقة",
+    "clearLabels": "مسح تصفية التسميات",
+    "labelsTruncated": "يتم عرض أول 100 تسمية فقط.",
+    "sortBy": "الترتيب",
+    "sortNewest": "الأحدث",
+    "sortOldest": "الأقدم",
+    "sortRecentlyUpdated": "المحدَّثة مؤخرًا",
+    "sortLeastRecentlyUpdated": "الأقدم تحديثًا",
+    "start": "معالجة",
+    "viewTask": "عرض المهمة في اللوحة",
+    "retrigger": "إعادة المعالجة",
+    "commentCount": "{count} تعليق",
+    "pagination": "ترقيم الصفحات",
+    "previousPage": "الصفحة السابقة",
+    "nextPage": "الصفحة التالية",
+    "goToPage": "الانتقال إلى الصفحة {page}",
+    "pageSize": "لكل صفحة",
+    "incompleteResults": "انتهت مهلة البحث، لذا قد تكون هذه الصفحة ناقصة.",
+    "reachableCap": "يمكن تصفّح أول {count} نتيجة فقط؛ ضيّق عوامل التصفية للوصول إلى البقية.",
+    "openRepo": "فتح المستودع",
+    "stateFilter": "الحالة",
+    "emptyPage": "لا شيء في هذه الصفحة",
+    "dialogDescription": "ينشئ مهمة في مجلد {repo} — يعمل الوكيل في worktree مستقل وتراجع النتيجة قبل الدمج.",
+    "dialogDescriptionPr": "ينشئ مهمة قيد الانتظار في مجلد {repo}، مع سحب شجرة العمل عند رأس طلب السحب هذا — تُبنى إيداعات الوكيل فوقه وتُدفع إلى طلب السحب نفسه بعد قبولك.",
+    "dialogDescriptionMr": "ينشئ مهمة قيد الانتظار في مجلد {repo}، مع سحب شجرة العمل عند رأس طلب الدمج هذا — تُبنى إيداعات الوكيل فوقه وتُدفع إلى طلب الدمج نفسه بعد قبولك.",
+    "instructionPlaceholder": "تعليمات إضافية للوكيل (اختياري)…",
+    "writebackLabel": "التعليق بالنتيجة على هذا العنصر",
+    "writebackHint": "عند انتهاء المهمة ينشر houhub تعليقًا على هذا العنصر: النتيجة والرابط وأرقام التغيير.",
+    "previewToggle": "معاينة محتوى القضية الذي ستحمله المهمة",
+    "previewEmpty": "(بدون وصف)",
+    "duplicateBody": "توجد مهمة نشطة تعالج هذا العنصر بالفعل: {title} ({status}). إنشاء أخرى على أي حال؟",
+    "folderMismatch": "remote هذا المجلد هو {remote}، وليس مستودع هذه القضية — اختر المجلد المطابق.",
+    "cancel": "إلغاء",
+    "create": "إنشاء مهمة",
+    "creating": "جارٍ الإنشاء…",
+    "createAnyway": "إنشاء على أي حال",
+    "viewExisting": "عرض المهمة الحالية",
+    "scenarioLabel": "طريقة المعالجة",
+    "scenarioFix": "إصلاح / تنفيذ مباشرة",
+    "scenarioFixHint": "ينفذ الوكيل الحل أو الإصلاح في worktree الخاص به — وتراجع أنت التغييرات قبل الدمج.",
+    "scenarioInvestigate": "تحليل فقط",
+    "scenarioInvestigateHint": "إعادة إنتاج المشكلة وتشخيصها دون إصلاح؛ تصلك النتائج كتقرير، ويمكنك إعادة المهمة للحصول على الإصلاح.",
+    "scenarioPlanFirst": "الخطة أولاً",
+    "scenarioPlanFirstHint": "يقدّم الوكيل خطة تنفيذ ثم يتوقف — وافق عليها بإعادة المهمة لتنفيذها.",
+    "scenarioReviewFix": "مراجعة وإصلاح",
+    "scenarioReviewFixHint": "يراجع التغييرات ويصلح المشكلات فوقها؛ وعند القبول تُدفع الإيداعات إلى الفرع نفسه.",
+    "scenarioReviewOnly": "مراجعة فقط",
+    "scenarioReviewOnlyHint": "تقرير مراجعة بالملاحظات والاقتراحات دون أي إيداع — أعد المهمة إذا أردت تطبيق الإصلاحات.",
+    "settingsTitle": "إعدادات اللوحة",
+    "settingsDescription": "طريقة التعامل مع المشكلات والتغييرات في {folder}.",
+    "settingsScope": "النطاق",
+    "settingsScopeGlobal": "كل المجلدات (الإعدادات العامة)",
+    "settingsScopeGlobalHint": "المجلدات بلا إعدادات خاصة تستخدم هذه الإعدادات العامة.",
+    "settingsSource": "مصدر الإعدادات",
+    "settingsSourceGlobal": "الإعدادات العامة",
+    "settingsSourceCustom": "إعداد خاص",
+    "settingsSourceCustomHint": "يحفظ إعدادات خاصة بهذا المجلد ويتوقف عن اتباع الإعدادات العامة.",
+    "settingsSourceGlobalFollow": "يتبع إعدادات اللوحة العامة، وأي تغيير هناك يسري هنا تلقائيًا.",
+    "settingsIssueDefault": "الافتراضي للمشكلات",
+    "settingsIssueDefaultHint": "ما يكون محددًا مسبقًا عند فتح نافذة المعالجة لمشكلة.",
+    "settingsPrDefault": "الافتراضي لطلبات الدمج",
+    "settingsPrDefaultHint": "ما يكون محددًا مسبقًا عند فتح نافذة المعالجة لطلب دمج.",
+    "settingsWritebackDefault": "التعليق بالنتيجة افتراضيًا",
+    "settingsWritebackDefaultHint": "الوضع الابتدائي لذلك المفتاح في نافذة المعالجة، ويمكن تغييره لكل عنصر.",
+    "settingsPromptsIntro": "تُضاف التعليمات الدائمة بعد النص المدمج للسيناريو المختار وقبل ما تكتبه في نافذة المعالجة، ولا حاجة لتكرار النص المدمج هنا. وهي تُرسل مع الجولة الأولى من المهمة فقط؛ أما ما تريده في كل جولة فمكانه موجّهات إعدادات المهام.",
+    "settingsPromptsLabel": "السيناريو",
+    "settingsPromptAll": "كل السيناريوهات",
+    "settingsPromptAllHint": "تُرسل مع كل مهمة تنشئها هذه اللوحة، مهما كان السيناريو.",
+    "settingsPromptScenarioHint": "تُرسل فقط مع المهام المنشأة بهذا السيناريو.",
+    "settingsPromptPlaceholder": "مثال: أجب بالعربية. شغّل اختبارات المشروع قبل الإنهاء.",
+    "save": "حفظ"
   }
 }

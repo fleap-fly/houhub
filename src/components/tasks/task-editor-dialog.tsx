@@ -47,6 +47,7 @@ import {
   workTaskTemplateList,
   workTaskTemplateSave,
 } from "@/lib/api"
+import { toErrorMessage } from "@/lib/app-error"
 import type {
   AgentType,
   PromptInputBlock,
@@ -284,7 +285,7 @@ function TaskEditorBody({
       }
       await onSubmit(draft)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(toErrorMessage(e))
     } finally {
       setSaving(false)
     }
@@ -324,7 +325,7 @@ function TaskEditorBody({
       })
       setTemplates(await workTaskTemplateList())
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(toErrorMessage(e))
     } finally {
       setTemplateBusy(false)
     }
@@ -335,7 +336,7 @@ function TaskEditorBody({
       await workTaskTemplateDelete(id)
       setTemplates((prev) => prev.filter((tpl) => tpl.id !== id))
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(toErrorMessage(e))
     }
   }
 

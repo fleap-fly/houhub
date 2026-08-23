@@ -175,7 +175,9 @@
       "panelOpacity": "面板不透明度",
       "panelOpacityHint": "侧栏、面板与标签栏的不透明程度。越低，透出的图片越多。",
       "errorTooLarge": "图片太大（最大 16 MB）。",
-      "errorUploadFailed": "设置背景图片失败。"
+      "errorUploadFailed": "设置背景图片失败。",
+      "formatHint": "支持 PNG、JPEG、WebP、GIF；动图会自动播放。",
+      "errorUnsupportedFormat": "不支持的图片格式，请选择 PNG、JPEG、WebP 或 GIF。"
     },
     "customStyle": {
       "sectionTitle": "自定义样式",
@@ -305,7 +307,11 @@
       "downloadFailed": "下载更新包失败，请稍后重试。",
       "installFailed": "安装更新失败，请关闭应用后重试。",
       "unknown": "更新失败，请稍后重试。"
-    }
+    },
+    "autostartTitle": "开机自启",
+    "autostartDescription": "登录这台电脑后自动启动，无需每次手动打开。",
+    "autostartSaveFailed": "开机自启设置保存失败：{message}",
+    "autostartUnavailable": "无法读取本机的开机自启状态：{message}"
   },
   "VersionControlSettings": {
     "loading": "加载中...",
@@ -374,7 +380,15 @@
       "serverRequired": "请输入服务器地址。",
       "usernameRequired": "请输入用户名。",
       "passwordRequired": "请输入密码。"
-    }
+    },
+    "gitlabTitle": "GitLab 账号",
+    "gitlabDescription": "管理用于身份验证的 GitLab 账号。令牌存储在本地。",
+    "gitlabTokenHint": "在 GitLab → Preferences → Access tokens 中创建带 api 权限的个人访问令牌。",
+    "gitlabNoAccounts": "还没有 GitLab 账号",
+    "updateToken": "更新令牌",
+    "updateTokenTitle": "更新该账号的令牌",
+    "updateTokenDescription": "替换为 {username} 保存的令牌，账号本身保持不变。由该账号触发的任务仍可继续——删除后重新添加对它们来说是另一个账号。",
+    "updateTokenSubmit": "校验并更新"
   },
   "ShortcutSettings": {
     "sectionTitle": "快捷键",
@@ -1276,7 +1290,11 @@
       "providerDisconnected": "已断开 {providerId}",
       "disconnectFailed": "断开 {providerId} 失败",
       "catalogRefreshed": "目录已刷新——{count} 个 provider",
-      "catalogRefreshFailed": "刷新目录失败"
+      "catalogRefreshFailed": "刷新目录失败",
+      "qoderSaved": "Qoder 配置已保存",
+      "saveQoderConfigFailed": "保存 Qoder 配置失败",
+      "antigravitySaved": "已保存 Antigravity 配置",
+      "saveAntigravityConfigFailed": "保存 Antigravity 配置失败"
     },
     "version": {
       "statusLabel": "版本状态",
@@ -1438,7 +1456,53 @@
       "missing": "HouHub 通过 ACP 协议驱动智能体，而 {nativeLabel} 本身不支持 ACP，所以 HouHub 需要单独的适配器包 {adapterPackage}（由 Agent Client Protocol 项目维护，最初由 Zed 团队发起）。它自带运行时，因此不必先装 {nativeCmd} CLI；如果你已经装了，两者可以共存，并共用 {configDir} 里的登录和配置。点击下方安装即可。",
       "readyWithNative": "适配器 {adapterCmd} 已安装 —— HouHub 启动的是它，而不是你本地的 {nativeCmd}（{nativePath}）。两者是各自独立的包，可以共存，且都读取 {configDir}，登录和配置共享。",
       "ready": "适配器 {adapterCmd} 已安装 —— HouHub 启动的就是它。它自带运行时，所以不需要另外安装 {nativeLabel}；即便以后你装了，两者也能共存并共用 {configDir}。"
-    }
+    },
+    "qoder": {
+      "configDescription": "在此登录 Qoder 账号。CLI 读取的其余配置全部集中在一个文件里——$QODER_CONFIG_DIR/settings.json（默认 ~/.qoder，与 qoder CLI 共享），请在下方按原文编辑。模型与推理强度不在这里：Qoder 通过 ACP 上报它们，由输入框的选择器按会话决定。",
+      "authTitle": "账号",
+      "authChecking": "检测中…",
+      "authNotInstalled": "qoder 未安装",
+      "authUnknown": "状态不可用",
+      "authLoggedIn": "已登录",
+      "authNotLoggedIn": "未登录",
+      "loginHint": "在终端运行以下命令登录 Qoder 账号（会打开浏览器），完成后点刷新：",
+      "authMethodLabel": "登录方式",
+      "tokenLabel": "个人访问令牌",
+      "tokenPlaceholder": "用于无头 / 服务器环境",
+      "tokenHint": "QODER_PERSONAL_ACCESS_TOKEN —— 浏览器登录跑不起来时使用的非交互凭据。留空则使用 qoder 账号登录。",
+      "saveToken": "保存令牌",
+      "advancedToggle": "高级：原始 settings.json",
+      "advancedHint": "完整的 settings.json，保存时按原文写入——这也是唯一能删除某个键的入口。",
+      "saveRawConfig": "保存文件"
+    },
+    "antigravity": {
+      "configDescription": "Antigravity 必须先选定认证方式才能开始会话。所选方式会写入 $GEMINI_HOME/antigravity-acp/settings.json 的 auth.type —— 这是 ACP 服务端唯一读取的位置，不写就每次新建会话都会报 “Authentication required”。模型与会话模式不在这里：Antigravity 通过 ACP 上报它们，由输入框的选择器按会话管理。",
+      "methodLabel": "认证方式",
+      "methods": {
+        "oauth-personal": "使用 Google 账号登录",
+        "oauth-business": "Gemini Enterprise",
+        "gemini-api-key": "Gemini API Key",
+        "agent-platform": "Gemini Enterprise Agent Platform"
+      },
+      "methodHints": {
+        "oauth-personal": "你的 Google 账号，任意 Antigravity 套餐（含免费版）均可。首次新建会话会自动打开浏览器完成登录，之后令牌会被缓存复用。",
+        "oauth-business": "你的 Gemini Enterprise 账号。需要填 GCP 项目与区域，首次新建会话会打开浏览器。",
+        "gemini-api-key": "Gemini Developer API 的密钥，以 GEMINI_API_KEY 传给智能体。",
+        "agent-platform": "即原 Vertex AI。可用 API Key，或用项目 + 区域配合应用默认凭据（gcloud auth application-default login）。"
+      },
+      "geminiApiKeyLabel": "Gemini API Key",
+      "googleApiKeyLabel": "Google API Key",
+      "googleApiKeyHint": "可选。填了就单独使用它，下面的项目与区域会被忽略；留空则改用应用默认凭据认证。",
+      "gcpProjectLabel": "GCP 项目",
+      "gcpLocationLabel": "GCP 区域",
+      "missingGeminiApiKey": "请填写 Gemini API Key，或改用其他认证方式 —— 否则会话无法启动。",
+      "missingAgentPlatformConfig": "请填写 API Key，或同时填写项目与区域 —— 二者缺一不可，否则会话无法启动。",
+      "missingEnterpriseConfig": "Gemini Enterprise 需要同时填写项目与区域。",
+      "settingsFileHint": "auth.type 会保存到该文件；你自己写在里面的其他键会原样保留。",
+      "save": "保存"
+    },
+    "customAgentMcpLabel": "MCP 支持",
+    "customAgentMcpHint": "会话建立时向该智能体注入 houhub 内置的 houhub-mcp 伴生进程 —— 委托、实时反馈与任务工具都依赖它。若该智能体不支持 MCP、连接时报错，请关闭此项；设置在下次连接时生效。"
   },
   "SettingsPages": {
     "agentsLoading": "加载 Agent 设置中...",
@@ -1629,8 +1693,11 @@
       "openFolder": "打开文件夹",
       "searchPlaceholder": "搜索会话...",
       "viewOptions": "显示选项",
+      "listOptions": "会话列表",
       "showCompleted": "显示已完成会话",
       "showWorktrees": "显示工作树文件夹",
+      "showRecent": "显示「最近」分组",
+      "navigationItems": "菜单导航项",
       "moreOptions": "更多选项",
       "sortBy": "排序方式",
       "sortByCreatedAt": "按创建时间排序",
@@ -1698,7 +1765,15 @@
       "loadingSubsessions": "正在加载子会话…",
       "worktreeRemovedBadge": "源 worktree 已删除",
       "tasks": "任务看板",
-      "runningCountBadge": "{count} 个会话进行中"
+      "runningCountBadge": "{count} 个会话进行中",
+      "showRecent": "显示「最近」分组",
+      "sectionOrderMoveUp": "上移",
+      "sectionOrderMoveDown": "下移",
+      "sectionOrderItemLabel": "{name} — 第 {position} 位，共 {total} 位",
+      "sectionRecent": "最近",
+      "noRecent": "暂无最近会话",
+      "showMoreRecent": "显示更多（{count}）",
+      "forge": "仓库面板"
     },
     "conversation": {
       "reloadFailed": "会话重新加载失败：{message}",
@@ -1791,7 +1866,8 @@
       "markCompleted": "标记为已完成",
       "reopen": "重新打开",
       "expandSubsessions": "展开子会话",
-      "collapseSubsessions": "折叠子会话"
+      "collapseSubsessions": "折叠子会话",
+      "attachToCurrentSession": "添加到会话"
     },
     "search": {
       "dialogTitle": "搜索",
@@ -1859,6 +1935,16 @@
         "cacheRead": "缓存读取",
         "cacheWrite": "缓存写入",
         "total": "总计"
+      },
+      "quickActions": {
+        "title": "快捷操作",
+        "groups": {
+          "workspace": "工作区",
+          "sessions": "会话",
+          "navigation": "菜单导航",
+          "more": "更多"
+        },
+        "showPet": "显示宠物"
       }
     },
     "auxPanel": {
@@ -2063,7 +2149,9 @@
         "stashChanges": "贮藏更改",
         "stashPop": "取消贮藏",
         "deleteBranch": "删除分支 {branchName}",
-        "updateBranch": "更新分支 {branchName}"
+        "updateBranch": "更新分支 {branchName}",
+        "removeWorktree": "删除 {branchName} 的工作树",
+        "removeWorktreeAndBranch": "删除工作树及分支 {branchName}"
       },
       "confirm": {
         "mergeTitle": "合并分支",
@@ -2075,7 +2163,15 @@
         "deleteTitle": "删除分支",
         "deleteDescription": "确定删除分支 {branchName} 吗？此操作不可恢复。",
         "forceDeleteTitle": "强制删除分支",
-        "forceDeleteDescription": "分支 {branchName} 尚未完全合并，确定要强制删除吗？此操作不可恢复。"
+        "forceDeleteDescription": "分支 {branchName} 尚未完全合并，确定要强制删除吗？此操作不可恢复。",
+        "deleteWorktreeTitle": "删除工作树",
+        "deleteWorktreeDescription": "删除检出了 {branchName} 的工作树目录？分支及其提交会保留。",
+        "forceDeleteWorktreeTitle": "强制删除工作树",
+        "forceDeleteWorktreeDescription": "{branchName} 的工作树中有未提交或未跟踪的文件。仍要删除吗？这些改动将无法恢复。",
+        "deleteWorktreeAndBranchTitle": "删除工作树及分支",
+        "deleteWorktreeAndBranchDescription": "删除 {branchName} 的工作树、该分支本身及其工作区文件夹？其中的会话会移动到仓库文件夹下。此操作无法撤销。",
+        "forceDeleteWorktreeAndBranchTitle": "强制删除工作树及分支",
+        "forceDeleteWorktreeAndBranchDescription": "{branchName} 的工作树中有未提交的文件，或该分支尚未完全合并。仍要一并删除吗？此操作无法撤销。"
       },
       "current": "当前",
       "switchToBranch": "切换到此分支",
@@ -2152,7 +2248,9 @@
       "searchAriaLabel": "搜索分支和操作",
       "branchListLabel": "分支和操作",
       "noMatches": "无匹配项",
-      "pushBranch": "推送"
+      "pushBranch": "推送",
+      "deleteWorktree": "删除工作树",
+      "deleteWorktreeAndBranch": "删除工作树及分支"
     },
     "commitDialog": {
       "toasts": {
@@ -2625,7 +2723,8 @@
           "turnFailedEmpty": "{agent} 本轮没有产生任何回复就结束了。",
           "turnFailedEmptyProtocol": "{agent} 本轮的输出 houhub 无法解析，可能是代理版本与协议不匹配。",
           "turnFailedEmptyMetadata": "{agent} 本轮只收到状态更新（计划 / 模式 / 用量），没有收到任何回复。",
-          "detailsInAlerts": "在状态栏的「告警」中展开详情，可查看代理输出。"
+          "detailsInAlerts": "在状态栏的「告警」中展开详情，可查看代理输出。",
+          "mcpRejectedByAgent": "附带 houhub 的 MCP 伴生进程时，{agent} 拒绝了本次会话：{message} 如果该智能体不支持 MCP，请在设置中关闭它的“MCP 支持”后重新连接。"
         },
         "unableReadAgentConfig": "无法读取 Agent 配置：{message}",
         "connectFailedTitle": "{agent} 连接失败",
@@ -2641,7 +2740,9 @@
           "nextRetryIn": "{seconds} 秒后重试",
           "line": "{error}{status} · {retry}",
           "lineWithDelay": "{error}{status} · {retry}，{delay}",
-          "httpStatus": "（HTTP {status}）"
+          "httpStatus": "（HTTP {status}）",
+          "lineNoError": "{retry}",
+          "lineNoErrorWithDelay": "{retry}，{delay}"
         },
         "configOptionAdjusted": "{agent} 把{option}设成了 {actual}，而不是 {requested}"
       },
@@ -2728,7 +2829,10 @@
         "steerIntoTurn": "插入当前回合",
         "steerQueuedInstead": "已转入队列——将随下一回合发送。",
         "steerFailed": "无法插入当前回合",
-        "steerAttachmentsUnsupported": "仅支持纯文本——带附件的草稿请走队列。"
+        "steerAttachmentsUnsupported": "仅支持纯文本——带附件的草稿请走队列。",
+        "toggleOn": "开",
+        "toggleOff": "关",
+        "slashLoading": "正在加载命令…"
       },
       "messageQueue": {
         "addToQueue": "加入队列",
@@ -2967,7 +3071,18 @@
         "completedAt": "完成时间",
         "jumpToPreviousUserMessage": "跳转到上一条用户消息",
         "showMore": "展开",
-        "showLess": "收起"
+        "showLess": "收起",
+        "loadEarlier": "加载更早的消息",
+        "loadingEarlier": "正在加载更早的消息…",
+        "selectionActions": "选中内容操作",
+        "selectionCopy": "复制文本",
+        "selectionCopied": "已复制",
+        "selectionCopyFailed": "复制失败",
+        "selectionQuote": "引用",
+        "copyImage": "复制图片",
+        "copiedImage": "已复制图片",
+        "copyImageFailed": "复制图片失败：{message}",
+        "copyImageUnsupported": "当前环境不支持复制该图片"
       },
       "liveTurnStats": {
         "thinking": "思考中...",
@@ -3369,6 +3484,25 @@
         "viewTree": "查看树状视图",
         "fields": "{count} 个字段",
         "items": "{count} 项"
+      },
+      "houhubMcpTool": {
+        "getSessionInfo": "读取会话 {session}",
+        "getSessionInfoNoId": "读取会话",
+        "taskProgress": "进度：{message}",
+        "taskProgressNoMessage": "上报任务进度",
+        "taskComplete": "任务结束 · {verdict}",
+        "taskCompleteWithSummary": "任务结束 · {verdict}：{summary}",
+        "createAutomation": "创建自动化 {name}",
+        "createAutomationNoName": "创建自动化",
+        "createWorkTask": "创建待办任务 {title}",
+        "createWorkTaskNoTitle": "创建待办任务",
+        "promptLabel": "指令",
+        "verdict": {
+          "success": "成功",
+          "needs_review": "待复核",
+          "blocked": "受阻",
+          "unknown": "未知"
+        }
       }
     },
     "diffPreview": {
@@ -4934,7 +5068,40 @@
     "settingsWorktreeRootBrowse": "选择 worktree 目录",
     "settingsTabMerge": "合并",
     "settingsTabWorktree": "Worktree",
-    "eventMergeQueued": "加入合并队列"
+    "eventMergeQueued": "加入合并队列",
+    "actionDeleteWorktree": "删除 worktree",
+    "restartDuplicateSource": "{task} 已经在处理同一个工作项——再启动这一张会让同一个工作项上同时活着两个任务。",
+    "restartDuplicateSourceAnon": "另一个任务",
+    "actionRestartAnyway": "仍然重启",
+    "deleteWorktreeConfirmTitle": "删除 worktree？",
+    "deleteWorktreeConfirmBody": "worktree 目录及其工作分支将被彻底删除。任务仍留在看板上，其会话会移到项目文件夹下。",
+    "eventForgeWriteback": "已回写评论",
+    "eventForgeWritebackFailed": "回写评论失败",
+    "actionDeliverPr": "创建 PR",
+    "actionDeliverPrMr": "创建 MR",
+    "actionDeliverPrBack": "推回 PR",
+    "actionDeliverPrBackMr": "推回 MR",
+    "detailPullRequest": "Pull Request",
+    "detailMergeRequest": "合并请求",
+    "deliverPrTitle": "推送并创建 PR",
+    "deliverPrTitleMr": "推送并创建 MR",
+    "deliverPrDescription": "把该任务的分支推送到 {repo}，并向 {base} 创建 Pull Request。正文会自动关联来源 Issue，PR 合并时 Issue 一并关闭。",
+    "deliverPrDescriptionMr": "把该任务的分支推送到 {repo}，并向 {base} 创建合并请求。正文会自动关联来源 Issue，合并请求合并时 Issue 一并关闭。",
+    "deliverPrTitleLabel": "PR 标题",
+    "deliverPrTitleLabelMr": "合并请求标题",
+    "deliverPrDraft": "创建为草稿",
+    "deliverPrSubmit": "推送并创建",
+    "deliverPrSubmitting": "推送中…",
+    "deliverPrDone": "PR 已创建",
+    "deliverPrDoneMr": "合并请求已创建",
+    "deliverPrOpen": "查看",
+    "deliverPrBackTitle": "推回该 Pull Request",
+    "deliverPrBackTitleMr": "推回该合并请求",
+    "deliverPrBackDescription": "把这个任务的提交推到 {repo}#{number} 的头分支 {branch}。不会新建任何东西——工作直接进入已经存在的那个评审。",
+    "deliverPrBackDescriptionMr": "把这个任务的提交推到 {repo}!{number} 的源分支 {branch}。不会新建任何东西——工作直接进入已经存在的那个评审。",
+    "deliverPrBackSubmit": "推送",
+    "deliverPrBackDone": "已推回 PR",
+    "deliverPrBackDoneMr": "已推回合并请求"
   },
   "TokenUsage": {
     "title": "Token 用量",
@@ -5126,5 +5293,103 @@
     "tonePop": "轻点",
     "toneAlert": "警示",
     "toneDescend": "下行音"
+  },
+  "Forge": {
+    "title": "仓库面板",
+    "pickFolder": "选择项目文件夹",
+    "noRemote": "该文件夹没有可识别的代码托管远端（origin）",
+    "errors": {
+      "noAccount": "还没有为 {host} 配置 {provider} 账号。请在「设置 → 版本控制」中添加后再加载该仓库。"
+    },
+    "addAccount": "添加账号",
+    "empty": "暂无内容",
+    "refresh": "刷新",
+    "searchPlaceholder": "搜索标题和描述…",
+    "clearSearch": "清除搜索",
+    "tabIssues": "议题",
+    "tabPrs": "拉取请求",
+    "tabMrs": "合并请求",
+    "countOpen": "{count} 个开启中",
+    "countClosed": "{count} 个已关闭",
+    "countAll": "共 {count} 个",
+    "stateOpen": "开启中",
+    "stateClosed": "已关闭",
+    "stateAll": "全部",
+    "stateMerged": "已合并",
+    "stateDraft": "草稿",
+    "assignedMe": "指派给我",
+    "labelsFilter": "标签",
+    "searchLabels": "搜索标签…",
+    "noLabels": "没有匹配的标签",
+    "clearLabels": "清除标签筛选",
+    "labelsTruncated": "仅列出前 100 个标签。",
+    "sortBy": "排序",
+    "sortNewest": "最新",
+    "sortOldest": "最早",
+    "sortRecentlyUpdated": "最近更新",
+    "sortLeastRecentlyUpdated": "最久未更新",
+    "start": "处理",
+    "viewTask": "在看板中查看任务",
+    "retrigger": "再次处理",
+    "commentCount": "{count} 条评论",
+    "pagination": "分页",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "goToPage": "跳到第 {page} 页",
+    "pageSize": "每页",
+    "incompleteResults": "搜索超时，本页可能有遗漏。",
+    "reachableCap": "只能翻阅前 {count} 条，其余的请缩小筛选范围后查看。",
+    "openRepo": "打开仓库",
+    "stateFilter": "状态",
+    "emptyPage": "本页没有内容",
+    "dialogDescription": "将在 {repo} 对应的文件夹创建一个待办任务——智能体在独立工作树里干活，你验收后才落地。",
+    "dialogDescriptionPr": "将在 {repo} 对应的文件夹创建一个待办任务，工作树直接检出到这个 PR 的头提交——智能体的提交叠在它上面，验收后推回同一个 PR。",
+    "dialogDescriptionMr": "将在 {repo} 对应的文件夹创建一个待办任务，工作树直接检出到这个合并请求的头提交——智能体的提交叠在它上面，验收后推回同一个合并请求。",
+    "instructionPlaceholder": "给智能体的补充说明（可选）…",
+    "writebackLabel": "完成后回写评论",
+    "writebackHint": "任务完成后，在这个条目下发一条评论：结果、链接和改动行数。",
+    "previewToggle": "预览任务将携带的 Issue 内容",
+    "previewEmpty": "（无描述）",
+    "duplicateBody": "已有一个活跃任务在处理该条目：{title}（{status}）。仍要再建一个吗？",
+    "folderMismatch": "当前文件夹的远端是 {remote}，与该 Issue 的仓库不一致——请选择匹配的文件夹。",
+    "cancel": "取消",
+    "create": "创建待办任务",
+    "creating": "创建中…",
+    "createAnyway": "仍要新建",
+    "viewExisting": "查看既有任务",
+    "scenarioLabel": "处理方式",
+    "scenarioFix": "直接修复 / 实现",
+    "scenarioFixHint": "智能体在工作树里实现或修复，你评审改动后才落地。",
+    "scenarioInvestigate": "仅分析验证",
+    "scenarioInvestigateHint": "只复现和定位、不动手修——产出结论报告，想修时把任务退回去接着干。",
+    "scenarioPlanFirst": "先出方案",
+    "scenarioPlanFirstHint": "先产出实施方案就停——你确认后退回任务，再在同一工作树里实施。",
+    "scenarioReviewFix": "评审并修复",
+    "scenarioReviewFixHint": "评审改动并顺手修掉问题，验收后提交推回原分支。",
+    "scenarioReviewOnly": "仅评审",
+    "scenarioReviewOnlyHint": "只出评审报告（问题、位置、建议），不改代码——需要修时退回任务即可。",
+    "settingsTitle": "面板设置",
+    "settingsDescription": "{folder} 中 Issue 和变更的处理方式。",
+    "settingsScope": "作用域",
+    "settingsScopeGlobal": "全部文件夹（全局默认）",
+    "settingsScopeGlobalHint": "未单独设置的文件夹将使用这份全局默认配置。",
+    "settingsSource": "配置来源",
+    "settingsSourceGlobal": "使用全局默认",
+    "settingsSourceCustom": "单独配置",
+    "settingsSourceCustomHint": "为此文件夹保存独立设置，不再跟随全局默认。",
+    "settingsSourceGlobalFollow": "跟随全局面板设置，全局改动会自动生效。",
+    "settingsIssueDefault": "Issue 默认处理方式",
+    "settingsIssueDefaultHint": "打开 Issue 的处理弹层时预先选中的方式。",
+    "settingsPrDefault": "PR / MR 默认处理方式",
+    "settingsPrDefaultHint": "打开 PR 或 MR 的处理弹层时预先选中的方式。",
+    "settingsWritebackDefault": "默认回写评论",
+    "settingsWritebackDefaultHint": "处理弹层里那个开关的初始状态，每个条目仍可单独改。",
+    "settingsPromptsIntro": "常驻提示词会拼在所选场景的内置指令之后、你在处理弹层里填的补充说明之前，内置指令不用在这里重复。它只随任务的第一轮发出；每一轮都要带的内容请写在待办任务设置的提示词里。",
+    "settingsPromptsLabel": "场景",
+    "settingsPromptAll": "所有场景",
+    "settingsPromptAllHint": "这个面板创建的每个任务都会带上，不分场景。",
+    "settingsPromptScenarioHint": "只有这个场景创建的任务才会带上。",
+    "settingsPromptPlaceholder": "例如：用中文回复；完成前先跑一遍项目的测试。",
+    "save": "保存"
   }
 }

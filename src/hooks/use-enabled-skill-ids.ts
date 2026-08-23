@@ -22,6 +22,29 @@ let inflight: Promise<ExpertInstallStatus[] | null> | null = null
 // focus-refetch race where an orphaned earlier request resolves last.
 let generation = 0
 const subscribers = new Set<(snapshot: ExpertInstallStatus[]) => void>()
+let focusListenerCount = 0
+
+// Multiple tiled composers can use this hook at once. Keep one shared focus
+// listener so a single focus event schedules one status refresh.
+function onWindowFocus() {
+  generation += 1
+  inflight = null
+  void loadSnapshot()
+}
+
+function retainFocusListener() {
+  if (focusListenerCount === 0) {
+    window.addEventListener("focus", onWindowFocus)
+  }
+  focusListenerCount += 1
+}
+
+function releaseFocusListener() {
+  focusListenerCount = Math.max(0, focusListenerCount - 1)
+  if (focusListenerCount === 0) {
+    window.removeEventListener("focus", onWindowFocus)
+  }
+}
 
 /**
  * Load the experts + office-tools + science install-status snapshots and merge
@@ -99,26 +122,12 @@ export function useEnabledSkillIds(agentType: AgentType | null): {
       if (!cancelled) setSnapshot(next)
     }
     subscribers.add(onUpdate)
+    retainFocusListener()
     return () => {
       cancelled = true
       subscribers.delete(onUpdate)
+      releaseFocusListener()
     }
-  }, [])
-
-  // Re-fetch when the window regains focus — the settings window links/unlinks
-  // skills while this conversation window stays mounted. Bump the generation
-  // and clear the in-flight handle so a fresh request runs; the resolve
-  // notifies every subscriber (no direct setState here, so the lint rule
-  // against state-in-effect stays satisfied). On failure the cache is kept, so
-  // a transient error never resets a good snapshot.
-  useEffect(() => {
-    const onFocus = () => {
-      generation += 1
-      inflight = null
-      loadSnapshot()
-    }
-    window.addEventListener("focus", onFocus)
-    return () => window.removeEventListener("focus", onFocus)
   }, [])
 
   const piSkillsUnmanaged = useMemo(() => {

@@ -23,6 +23,7 @@ export type WorkbenchRouteId =
   | "automations"
   | "cloud"
   | "tasks"
+  | "forge"
   | "tokenUsage"
 
 interface WorkbenchRouteContextValue {

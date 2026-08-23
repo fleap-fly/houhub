@@ -4,6 +4,7 @@ import StarterKit from "@tiptap/starter-kit"
 
 import { InactiveSelectionHighlight } from "./inactive-selection"
 import { Reference } from "./nodes/reference-node"
+import { QuoteLineDecoration } from "./quote-decoration"
 import {
   MentionSuggestion,
   type MentionController,
@@ -13,8 +14,11 @@ import {
  * Options for the shared composer extension set.
  */
 export interface ComposerExtensionOptions {
-  /** Placeholder shown when the document is empty. */
-  placeholder?: string
+  /** Placeholder shown when the document is empty. Pass a getter to keep it
+   *  live: Tiptap resolves it per decoration pass, so a host whose hint changes
+   *  (the task drawer's follow-up scenarios) can update it without recreating
+   *  the editor — and losing the document with it. */
+  placeholder?: string | (() => string)
   /**
    * When provided, enables the unified `@` mention panel: the suggestion plugin
    * forwards lifecycle/keys to this controller, whose React popup owns data and
@@ -70,7 +74,10 @@ export function buildComposerExtensions(
       underline: false,
     }),
     Placeholder.configure({
-      placeholder: options.placeholder ?? "",
+      placeholder:
+        typeof options.placeholder === "function"
+          ? options.placeholder
+          : (options.placeholder ?? ""),
       // Only paint the placeholder while the editor is editable so a disabled
       // composer reads as empty rather than as a hint.
       showOnlyWhenEditable: true,
@@ -78,6 +85,9 @@ export function buildComposerExtensions(
     Reference,
     // Keeps the selection visible when focus moves to the right-click menu.
     InactiveSelectionHighlight,
+    // Paints line-leading `> ` markers as a blockquote rule. Decoration only —
+    // the characters stay in the document, so send/copy/draft text is unchanged.
+    QuoteLineDecoration,
   ]
   if (options.mentionController) {
     extensions.push(

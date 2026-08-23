@@ -218,6 +218,34 @@ pub async fn refresh_auto_title(
     Ok(res.rows_affected > 0)
 }
 
+/// Seed a conversation title from the first prompt without replacing a title
+/// supplied by the user or by the agent. This is a compare-and-set update so a
+/// concurrent native title cannot be overwritten by a late prompt callback.
+pub async fn seed_auto_title_if_empty(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    title: String,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let title = title.trim();
+    if title.is_empty() {
+        return Ok(false);
+    }
+    let result = conversation::Entity::update_many()
+        .col_expr(conversation::Column::Title, Expr::value(title))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(conversation::Column::TitleLocked.eq(false))
+        .filter(
+            sea_orm::Condition::any()
+                .add(conversation::Column::Title.is_null())
+                .add(conversation::Column::Title.eq("")),
+        )
+        .exec(conn)
+        .await?;
+    Ok(result.rows_affected > 0)
+}
+
 /// Lock a row's title WITHOUT rewriting it. For a conversation whose name was
 /// typed by the user somewhere else — a work task's title, an automation's name
 /// — the seed passed to [`create`] already IS the name; all that's missing is
@@ -348,6 +376,127 @@ pub async fn update_pin(
     active.pinned_at = Set(pinned.then(Utc::now));
     active.update(conn).await?;
     Ok(())
+}
+
+/// Bind an ACP session id while preserving history when a connection is
+/// re-used by a different session. The unique external-id index means the
+/// writer lock is acquired before checking the holder, so concurrent session
+/// starts cannot silently move history between rows.
+pub async fn bind_external_id(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    external_id: &str,
+    continues: &[String],
+) -> Result<Option<i32>, DbError> {
+    use sea_orm::sea_query::Expr;
+    use sea_orm::TransactionTrait;
+
+    let requested = external_id.to_owned();
+    let continues = continues.to_vec();
+    let outcome = conn
+        .transaction::<_, BindExternalOutcome, sea_orm::DbErr>(|txn| {
+            Box::pin(async move {
+                let claimed = conversation::Entity::update_many()
+                    .col_expr(
+                        conversation::Column::UpdatedAt,
+                        Expr::col(conversation::Column::UpdatedAt).into(),
+                    )
+                    .filter(conversation::Column::Id.eq(conversation_id))
+                    .filter(conversation::Column::DeletedAt.is_null())
+                    .exec(txn)
+                    .await?;
+                if claimed.rows_affected == 0 {
+                    return Ok(BindExternalOutcome::Bound(None));
+                }
+
+                let current = conversation::Entity::find_by_id(conversation_id)
+                    .one(txn)
+                    .await?
+                    .ok_or_else(|| {
+                        sea_orm::DbErr::Custom(format!(
+                            "conversation {conversation_id} disappeared during bind"
+                        ))
+                    })?;
+                let previous = current.external_id.clone();
+                let is_continuation = previous
+                    .as_deref()
+                    .is_some_and(|id| continues.iter().any(|c| c == id));
+                let repoints = previous.as_deref().is_some_and(|id| {
+                    id != requested.as_str() && !continues.iter().any(|c| c == id)
+                });
+
+                if previous.as_deref() != Some(requested.as_str()) {
+                    let holder = conversation::Entity::find()
+                        .filter(conversation::Column::ExternalId.eq(requested.clone()))
+                        .filter(conversation::Column::AgentType.eq(current.agent_type.clone()))
+                        .filter(conversation::Column::Id.ne(conversation_id))
+                        .one(txn)
+                        .await?;
+                    if let Some(holder) = holder {
+                        return Ok(BindExternalOutcome::Refused(holder.id));
+                    }
+                }
+
+                if !repoints || is_continuation {
+                    let mut active: conversation::ActiveModel = current.into();
+                    active.external_id = Set(Some(requested));
+                    active.updated_at = Set(Utc::now());
+                    active.update(txn).await?;
+                    return Ok(BindExternalOutcome::Bound(None));
+                }
+
+                let previous = previous.expect("repoints implies a previous session");
+                let preserved = conversation::ActiveModel {
+                    id: NotSet,
+                    folder_id: Set(current.folder_id),
+                    title: Set(current.title.clone()),
+                    title_locked: Set(current.title_locked),
+                    agent_type: Set(current.agent_type.clone()),
+                    status: Set(match current.status {
+                        conversation::ConversationStatus::InProgress => {
+                            conversation::ConversationStatus::PendingReview
+                        }
+                        ref status => status.clone(),
+                    }),
+                    kind: Set(current.kind.clone()),
+                    model: Set(current.model.clone()),
+                    git_branch: Set(current.git_branch.clone()),
+                    external_id: Set(Some(previous)),
+                    parent_id: Set(current.parent_id),
+                    parent_tool_use_id: Set(None),
+                    delegation_call_id: Set(None),
+                    message_count: Set(current.message_count),
+                    created_at: Set(current.created_at),
+                    updated_at: Set(current.updated_at),
+                    deleted_at: Set(None),
+                    pinned_at: Set(None),
+                    origin_cwd: Set(current.origin_cwd.clone()),
+                };
+                let mut active: conversation::ActiveModel = current.into();
+                active.external_id = Set(Some(requested));
+                active.updated_at = Set(Utc::now());
+                active.update(txn).await?;
+                let row = preserved.insert(txn).await?;
+                Ok(BindExternalOutcome::Bound(Some(row.id)))
+            })
+        })
+        .await
+        .map_err(|error| match error {
+            sea_orm::TransactionError::Connection(error)
+            | sea_orm::TransactionError::Transaction(error) => DbError::Database(error),
+        })?;
+
+    match outcome {
+        BindExternalOutcome::Bound(id) => Ok(id),
+        BindExternalOutcome::Refused(holder_id) => Err(DbError::Conflict(format!(
+            "agent session {external_id} is already bound to conversation {holder_id}; refusing to move it onto conversation {conversation_id}"
+        ))),
+    }
+}
+
+enum BindExternalOutcome {
+    Bound(Option<i32>),
+    Refused(i32),
 }
 
 /// Persist the agent session id (`external_id`) for a conversation as a single

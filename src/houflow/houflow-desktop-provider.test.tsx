@@ -192,7 +192,7 @@ describe("HouflowDesktopProvider workspace selection", () => {
       },
       {
         agent_type: "cursor",
-        name: "Cursor Agent",
+        name: "Cursor",
         enabled: true,
         available: true,
       },

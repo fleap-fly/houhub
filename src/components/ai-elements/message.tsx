@@ -29,10 +29,12 @@ import {
   defaultRemarkPlugins,
 } from "streamdown"
 import { markdownLinkComponents } from "./markdown-link"
+import { maskLiteralSpans } from "./markdown-mask"
 import { rehypePluginsAllowingHouhub } from "./rehype-allow-houhub"
 import { remarkTrimCjkAutolinkTail } from "./remark-cjk-autolink-tail"
 import { remarkRewriteFileUriLinks } from "./remark-file-uri-links"
-import { useStreamdownPlugins } from "./streamdown-plugins"
+import { remarkRestoreWindowsPaths } from "./remark-windows-paths"
+import { MATH_FENCE_PAD, useStreamdownPlugins } from "./streamdown-plugins"
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"]
@@ -340,30 +342,81 @@ export const MessageBranchPage = ({
 // / `/slash`-badging hooks were removed.
 export type MessageResponseProps = ComponentProps<typeof Streamdown>
 
-// remark-math only supports `$` delimiters. Convert LaTeX-style
-// `\[...\]` / `\(...\)` to `$$...$$` / `$...$` so they are recognized.
-// Code blocks and inline code are preserved to avoid false positives.
+// remark-math uses dollar delimiters. Single-dollar math is disabled so
+// currency and shell variables remain prose. LaTeX-style delimiters are
+// rewritten to double-dollar fences, with a zero-width pad where CommonMark
+// would otherwise treat a multiline opener/closer as a block fence.
 export function normalizeMathDelimiters(text: string): string {
-  const saved: string[] = []
-  const placeholder = (m: string) => {
-    saved.push(m)
-    return `\0CBLK${saved.length - 1}\0`
-  }
-  const masked = text.replace(
-    /`{3,}[\s\S]*?`{3,}|~{3,}[\s\S]*?~{3,}|`[^`\n]+`/g,
-    placeholder
-  )
-  const normalized = masked
+  const { masked, restore } = maskLiteralSpans(text)
+  const source = masked.replace(/\r\n|\r/g, "\n")
+  const normalized = source
     .replace(/\\\[([\s\S]*?)\\\]/g, (_m, inner: string) => `$$${inner}$$`)
-    .replace(/\\\(([\s\S]*?)\\\)/g, (_m, inner: string) => `$${inner}$`)
-  return normalized.replace(
-    /\0CBLK(\d+)\0/g,
-    (_m, i: string) => saved[Number(i)]
-  )
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_m, inner: string, offset: number) => {
+      if (!inner.includes("\n")) return `$$${inner}$$`
+      const lineStart = source.lastIndexOf("\n", offset - 1) + 1
+      const atContentStart =
+        containerPrefixEnd(source, lineStart, offset) === offset
+      const open = atContentStart ? MATH_FENCE_PAD : ""
+      return `${open}$$${inner}${MATH_FENCE_PAD}$$`
+    })
+  return restore(normalized)
+}
+
+function isSpaceOrTab(code: number): boolean {
+  return code === 32 || code === 9
+}
+
+function containerPrefixEnd(source: string, start: number, end: number): number {
+  let i = start
+  for (;;) {
+    while (i < end && isSpaceOrTab(source.charCodeAt(i))) i += 1
+    if (i >= end) return i
+
+    const ch = source.charCodeAt(i)
+    if (ch === 62) {
+      i += 1
+      continue
+    }
+
+    if (ch === 42 || ch === 45 || ch === 43) {
+      if (i + 1 < end && isSpaceOrTab(source.charCodeAt(i + 1))) {
+        i += 2
+        continue
+      }
+      return i
+    }
+
+    if (ch >= 48 && ch <= 57) {
+      let j = i
+      let digits = 0
+      while (
+        j < end &&
+        digits < 9 &&
+        source.charCodeAt(j) >= 48 &&
+        source.charCodeAt(j) <= 57
+      ) {
+        digits += 1
+        j += 1
+      }
+      const marker = j < end ? source.charCodeAt(j) : 0
+      if (
+        (marker === 46 || marker === 41) &&
+        j + 1 < end &&
+        isSpaceOrTab(source.charCodeAt(j + 1))
+      ) {
+        i = j + 2
+        continue
+      }
+      return i
+    }
+
+    return i
+  }
 }
 
 const remarkPlugins = [
   ...Object.values(defaultRemarkPlugins),
+  remarkRestoreWindowsPaths,
   remarkRewriteFileUriLinks,
   remarkTrimCjkAutolinkTail,
 ]
@@ -392,7 +445,7 @@ function MessageResponseImpl({
   return (
     <Streamdown
       className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-3 [&_ol]:pl-3",
+        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-3 [&_ol]:pl-3 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:not-italic",
         className
       )}
       plugins={plugins}

@@ -49,6 +49,8 @@ const MAX_MANIFEST_ENTRY_BYTES: usize = 64 * 1024;
 /// so a malformed package fails fast during extraction instead of after a
 /// full uncompress.
 const MAX_SPRITESHEET_ENTRY_BYTES: usize = 16 * 1024 * 1024;
+/// Cap for a proxied marketplace image (poster / preview / spritesheet).
+const MAX_ASSET_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Per-pet-id locks serializing concurrent `install(...)` calls. Keys are
 /// pet ids; entries are kept indefinitely (each is a small `Arc<Mutex<()>>`
@@ -415,6 +417,39 @@ async fn read_capped_response(
         buf.extend_from_slice(&chunk);
     }
     Ok(buf)
+}
+
+/// Fetch a marketplace image through the backend. The strict host prefix keeps
+/// this endpoint from becoming an open proxy while allowing the desktop webview
+/// to load artwork on networks where it cannot reach the CDN directly.
+pub async fn fetch_asset(url: &str) -> Result<(String, Vec<u8>), AppCommandError> {
+    let trimmed = url.trim();
+    if !trimmed.starts_with(MARKETPLACE_URL_PREFIX) {
+        return Err(AppCommandError::invalid_input(format!(
+            "Asset URL must point to {MARKETPLACE_BASE_URL}."
+        )));
+    }
+
+    let response = client()?
+        .get(trimmed)
+        .send()
+        .await
+        .map_err(|e| AppCommandError::network(format!("Failed to fetch pet asset: {e}")))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(AppCommandError::network(format!(
+            "Pet asset returned HTTP {status}"
+        )));
+    }
+    let mime = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(';').next().unwrap_or(s).trim().to_string())
+        .filter(|m| m.starts_with("image/"))
+        .unwrap_or_else(|| "image/webp".to_string());
+    let bytes = read_capped_response(response, MAX_ASSET_BYTES, "Pet asset").await?;
+    Ok((mime, bytes))
 }
 
 fn install_from_zip_bytes(

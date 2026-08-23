@@ -1223,6 +1223,11 @@ mod unix_tests {
         // A read-only parent makes unlink fail with EACCES. That must be an
         // error, not a silent success — the caller drops the DB row on success
         // and would otherwise strand a symlink the UI can no longer manage.
+        // Root can unlink from a mode-0500 directory, so this permission-based
+        // fixture cannot express the intended failure in that environment.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().expect("root");
         let linked = tempfile::tempdir().expect("linked");
@@ -1364,6 +1369,12 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn a_failed_unlink_keeps_the_record_instead_of_reporting_success() {
         use std::os::unix::fs::PermissionsExt;
+
+        // Root bypasses directory write permissions; skip this EACCES fixture
+        // rather than asserting a failure the kernel will not produce.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
 
         let root = tempfile::tempdir().expect("root");
         let linked = tempfile::tempdir().expect("linked");

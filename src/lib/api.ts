@@ -8,18 +8,8 @@ import {
 } from "./transport"
 import { getWebAuthToken } from "./transport/web-auth"
 import { notifyWebUnauthorized } from "./transport/web-connection-store"
-import {
-  isPsPath,
-  psCreateEntry,
-  psDeleteEntry,
-  psGetFileTree,
-  psReadFileBase64,
-  psReadFileForEdit,
-  psReadFilePreview,
-  psReadWorkspaceFileBase64,
-  psSaveFileContent,
-} from "@/workbench/space-fs"
 import { getCurrentEffectiveAppLocale } from "./i18n"
+import { DEFAULT_FORGE_PAGE_SIZE } from "./forge-list-prefs"
 import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
@@ -30,6 +20,16 @@ import type {
   Automation,
   AutomationRun,
   AutomationDraft,
+  ForgeCreateResult,
+  ForgeIssueList,
+  ForgeLabelList,
+  ForgePanelSettings,
+  ForgeRemote,
+  ForgeSettingsStore,
+  ForgeSort,
+  ForgeTab,
+  ForgeTaskDraftInput,
+  ForgeTaskLink,
   WorkTask,
   WorkTaskChangedFile,
   WorkTaskConfig,
@@ -39,6 +39,7 @@ import type {
   WorkTaskTemplate,
   ConversationSummary,
   ConversationDetail,
+  ConversationTurnsPage,
   DbConversationDetail,
   FolderInfo,
   AgentStats,
@@ -57,8 +58,8 @@ import type {
   CursorStructuredConfig,
   CursorAuthStatus,
   CursorModelsResult,
+  QoderAuthStatus,
   CodexModelInfo,
-  OpenCodeCatalogProvider,
   AgentSkillScope,
   AgentSkillLayout,
   AgentSkillItem,
@@ -80,6 +81,7 @@ import type {
   CreateChatConversationResult,
   CreateChatDirResult,
   WorktreeResolution,
+  GitWorktreeRemoval,
   DbConversationSummary,
   ImportResult,
   ImportSelectedResult,
@@ -120,6 +122,7 @@ import type {
   SystemLanguageSettings,
   SystemProxySettings,
   SystemRenderingSettings,
+  SystemAutostartSettings,
   SystemTerminalSettings,
   LogSettings,
   LogSettingsView,
@@ -144,6 +147,7 @@ import type {
   ModelProviderInfo,
   UpdateModelProviderResult,
   PluginCheckSummary,
+  OpenCodeCatalogProvider,
   QuickMessage,
   OfficecliInfo,
   OfficecliSkill,
@@ -319,6 +323,12 @@ export interface ForkResult {
 
 export async function acpFork(
   connectionId: string,
+  // Linkage for a conversation opened from history: its connection resumed via
+  // session_id but the row isn't bound to the connection until the first prompt
+  // fires, and a fork-send forks BEFORE that prompt. Passing these lets the
+  // backend adopt the row so the fork doesn't reject as unlinked. Ignored once
+  // the connection is already linked (a new-conversation-then-fork). See
+  // `ConnectionManager::fork_session`.
   conversationId?: number | null,
   folderId?: number | null
 ): Promise<ForkResult> {
@@ -470,20 +480,6 @@ export async function acpInstallUvTool(taskId: string): Promise<void> {
   )
 }
 
-/** Install the global Pi CLI used by the pi-acp adapter. */
-export async function acpInstallPiBinary(taskId: string): Promise<void> {
-  return getTransport().call(
-    "acp_install_pi_binary",
-    { taskId },
-    { timeoutMs: 600_000 }
-  )
-}
-
-/** Remove the global Pi CLI installed by HouHub. */
-export async function acpUninstallPiBinary(taskId: string): Promise<void> {
-  return getTransport().call("acp_uninstall_pi_binary", { taskId })
-}
-
 export async function acpDetectAgentLocalVersion(
   agentType: AgentType
 ): Promise<string | null> {
@@ -522,9 +518,6 @@ export async function acpUpdateAgentPreferences(
     opencode_auth_json?: string | null
     codex_auth_json?: string | null
     codex_config_toml?: string | null
-    codex_model_catalog?: string | null
-    grok_config_toml?: string | null
-    grok_structured?: GrokStructuredConfig | null
   }
 ): Promise<number> {
   return getTransport().call("acp_update_agent_preferences", {
@@ -535,9 +528,6 @@ export async function acpUpdateAgentPreferences(
     opencodeAuthJson: params.opencode_auth_json ?? null,
     codexAuthJson: params.codex_auth_json ?? null,
     codexConfigToml: params.codex_config_toml ?? null,
-    codexModelCatalog: params.codex_model_catalog ?? null,
-    grokConfigToml: params.grok_config_toml ?? null,
-    grokStructured: params.grok_structured ?? null,
   })
 }
 
@@ -600,6 +590,17 @@ export async function acpUpdateAgentConfig(
     cursorCliConfigJson: params.cursor_cli_config_json ?? null,
     cursorStructured: params.cursor_structured ?? null,
   })
+}
+
+/**
+ * Probe `qoder status -o json` for the Qoder auth card. The optional live
+ * personal access token lets the probe report on the credential that is on
+ * screen rather than a stale saved one.
+ */
+export async function acpQoderAuthStatus(
+  personalAccessToken?: string
+): Promise<QoderAuthStatus> {
+  return getTransport().call("acp_qoder_auth_status", { personalAccessToken })
 }
 
 /**
@@ -868,6 +869,26 @@ export async function acpPiListTrustEntries(): Promise<PiTrustEntry[]> {
 }
 
 /**
+ * Install the `pi` binary (`@earendil-works/pi-coding-agent`) globally via npm.
+ * This is the prerequisite pi-acp spawns as `pi --mode rpc` — distinct from the
+ * `pi-acp` adapter that `acpPrepareNpxAgent` installs. Progress streams on the
+ * shared `app://agent-install` topic; pass `taskId` to `useAgentInstallStream`
+ * (or `acpInstallStream`) to receive the log lines.
+ */
+export async function acpInstallPiBinary(taskId: string): Promise<void> {
+  return getTransport().call(
+    "acp_install_pi_binary",
+    { taskId },
+    { timeoutMs: 600_000 }
+  )
+}
+
+/** Uninstall the global `pi` binary. Streams on `app://agent-install` too. */
+export async function acpUninstallPiBinary(taskId: string): Promise<void> {
+  return getTransport().call("acp_uninstall_pi_binary", { taskId })
+}
+
+/**
  * Launch Hermes's interactive setup in the OS terminal (desktop only). `kind`
  * picks the flow; the backend constructs the exact command from the registry
  * recipe (no arbitrary shell text crosses the boundary).
@@ -948,6 +969,13 @@ export interface CustomAgentInfo {
   source: string
   /** Optional command that prints the locally installed version. */
   versionProbe: string | null
+  /**
+   * User declaration that the agent accepts MCP servers on the ACP wire —
+   * for a custom agent, houhub's built-in houhub-mcp companion. Off means the
+   * connection is made without it, for agents that fail `session/new` when
+   * any server is sent.
+   */
+  supportsMcp: boolean
   /** False when the definition cannot launch here (e.g. no build for this OS). */
   launchable: boolean
   problem: string | null
@@ -993,8 +1021,64 @@ export async function acpSaveCustomAgent(params: {
   source?: string
   /** Optional version-probe command; full-replace like the skills fields. */
   versionProbe?: string | null
+  /**
+   * MCP declaration. Omitted = the backend keeps the stored row's value (or
+   * on, for a new row) — the safe default here is what is already stored.
+   */
+  supportsMcp?: boolean
 }): Promise<void> {
   return getTransport().call("acp_save_custom_agent", { params })
+}
+
+/**
+ * Change ONE declaration on a stored custom-agent definition.
+ *
+ * `acp_save_custom_agent` is a full replace: a declaration the payload leaves
+ * out is cleared, not kept — so a caller that edits one field has to send every
+ * other field back. That makes the payload only as fresh as whatever the caller
+ * is holding, and the settings page renders several independent cards over the
+ * SAME definition, each loaded once on mount. Sending a card's own snapshot
+ * therefore lets it revert a save another card made after it mounted (turn MCP
+ * off in one card, flip a skills switch in the other, and MCP comes back on).
+ *
+ * So the definition is re-read here, immediately before the write, and the
+ * patch is applied to THAT. Callers pass only what they are actually changing,
+ * and a stale card cannot resurrect a value it never showed. The remaining
+ * window is read-to-write, which is as narrow as this gets without a
+ * compare-and-swap on the backend.
+ */
+export async function acpPatchCustomAgent(
+  registryId: string,
+  patch: Partial<
+    Pick<
+      CustomAgentInfo,
+      "skillsSharedStore" | "skillsDir" | "supportsMcp" | "versionProbe"
+    >
+  >
+): Promise<void> {
+  const current = (await acpListCustomAgents()).find(
+    (a) => a.registryId === registryId
+  )
+  if (!current) {
+    // Deleted from another window while this card was open. Failing is right:
+    // saving would re-create the definition the user just removed.
+    throw new Error(`Custom agent ${registryId} no longer exists`)
+  }
+  return acpSaveCustomAgent({
+    registryId: current.registryId,
+    name: current.name,
+    description: current.description,
+    version: current.version,
+    distributionKind: current.distributionKind as CustomDistributionKind,
+    spec: current.spec,
+    iconUrl: current.iconUrl,
+    source: current.source,
+    skillsSharedStore: current.skillsSharedStore,
+    skillsDir: current.skillsDir,
+    supportsMcp: current.supportsMcp,
+    versionProbe: current.versionProbe,
+    ...patch,
+  })
 }
 
 export async function acpDeleteCustomAgent(
@@ -1081,6 +1165,10 @@ export async function opencodeProviderCatalog(
   })
 }
 
+/** The official codex model catalog (full ModelInfo entries), sourced at runtime
+ *  from the codex houhub actually launches (cache + bundled fallback). Used for
+ *  the official list, "quick-add official", and as the clone template for custom
+ *  entries. Pass `forceRefresh` to bypass the cache and re-run codex. */
 export async function codexBundledCatalog(
   forceRefresh?: boolean
 ): Promise<CodexModelInfo[]> {
@@ -1365,9 +1453,12 @@ export async function officecliDetect(): Promise<OfficecliInfo> {
 }
 
 export async function officecliInstall(taskId: string): Promise<OfficecliInfo> {
-  // Keep the transport deadline above the backend's 600-second installer
-  // deadline so users receive the structured backend error while progress
-  // continues to stream on slow networks.
+  // The vendor installer downloads + extracts a multi-MB binary; allow well
+  // beyond the default 60s web-call timeout so slow networks don't surface a
+  // spurious timeout while progress is still streaming. Sits 30s ABOVE the
+  // backend's own 600s deadline so the backend's structured timeout error wins
+  // the race instead of a generic transport abort. `taskId` correlates the
+  // `app://officecli-install` stream the settings page subscribes to.
   return getTransport().call(
     "officecli_install",
     { taskId },
@@ -1512,6 +1603,16 @@ export async function updateSystemRenderingSettings(
   return getTransport().call("update_system_rendering_settings", { settings })
 }
 
+export async function getSystemAutostartSettings(): Promise<SystemAutostartSettings> {
+  return getTransport().call("get_system_autostart_settings")
+}
+
+export async function updateSystemAutostartSettings(
+  settings: SystemAutostartSettings
+): Promise<SystemAutostartSettings> {
+  return getTransport().call("update_system_autostart_settings", { settings })
+}
+
 // --- Logging ---
 
 /** Live-tail channel: one event per appended log record. */
@@ -1603,6 +1704,15 @@ export async function validateGitHubToken(
   token: string
 ): Promise<GitHubTokenValidation> {
   return getTransport().call("validate_github_token", { serverUrl, token })
+}
+
+/** Same answer shape as GitHub's, from `GET /api/v4/user` (+ the token's own
+ *  scopes, which GitLab reports on a separate endpoint). */
+export async function validateGitLabToken(
+  serverUrl: string,
+  token: string
+): Promise<GitHubTokenValidation> {
+  return getTransport().call("validate_gitlab_token", { serverUrl, token })
 }
 
 export async function updateGitHubAccounts(
@@ -1828,10 +1938,35 @@ export async function importSelectedSessions(
   return getTransport().call("import_selected_sessions", { selections })
 }
 
+/**
+ * Fetch a conversation's detail, optionally windowed:
+ * - `{ tailTurns }` — last N turns, start aligned to a user-round boundary
+ * - `{ fromIndex }` — exact slice `turns[fromIndex..]` (window refresh)
+ * No window → legacy full response (also what an old server returns for any
+ * request; the windowed fields are then absent).
+ */
 export async function getFolderConversation(
-  conversationId: number
+  conversationId: number,
+  window?: { tailTurns?: number; fromIndex?: number }
 ): Promise<DbConversationDetail> {
-  return getTransport().call("get_folder_conversation", { conversationId })
+  return getTransport().call("get_folder_conversation", {
+    conversationId,
+    ...(window?.tailTurns != null ? { tailTurns: window.tailTurns } : {}),
+    ...(window?.fromIndex != null ? { fromIndex: window.fromIndex } : {}),
+  })
+}
+
+/** Fetch one page of older history ending just before `beforeIndex`. */
+export async function getFolderConversationTurns(
+  conversationId: number,
+  beforeIndex: number,
+  limit: number
+): Promise<ConversationTurnsPage> {
+  return getTransport().call("get_folder_conversation_turns", {
+    conversationId,
+    beforeIndex,
+    limit,
+  })
 }
 
 export async function removeFolderFromHistory(path: string): Promise<void> {
@@ -2009,6 +2144,32 @@ export async function gitDeleteBranch(
   return getTransport().call("git_delete_branch", {
     path,
     branchName,
+    force,
+  })
+}
+
+/**
+ * Remove the worktree that has `branchName` checked out — the only way such a
+ * branch can be deleted, since git refuses `branch -d` while a worktree holds
+ * the ref. `deleteBranch` also takes the branch and the worktree's workspace
+ * folder (its sessions move to the repo folder); `force` discards uncommitted
+ * work in the worktree and force-deletes an unmerged branch.
+ *
+ * `sourceFolderId` is the folder the caller acts from — it only supplies the
+ * re-parent target when the worktree folder has no recorded root.
+ */
+export async function gitRemoveWorktree(
+  path: string,
+  branchName: string,
+  sourceFolderId: number,
+  deleteBranch: boolean,
+  force: boolean = false
+): Promise<GitWorktreeRemoval> {
+  return getTransport().call("git_remove_worktree", {
+    path,
+    branchName,
+    sourceFolderId,
+    deleteBranch,
     force,
   })
 }
@@ -2502,6 +2663,7 @@ export type SettingsSection =
   | "experts"
   | "science"
   | "office-tools"
+  | "version-control"
   | "shortcuts"
   | "system"
 
@@ -2843,7 +3005,7 @@ export async function tokenUsageStatus(): Promise<TokenUsageSyncStatus> {
 }
 
 /** `full` drops every stored fact and re-parses every transcript — the escape
- *  hatch for a session file the agent's own CLI grew behind HouHub's back. */
+ *  hatch for a session file the agent's own CLI grew behind houhub's back. */
 export async function tokenUsageSync(
   mode: "incremental" | "full" = "incremental"
 ): Promise<TokenUsageSyncResult> {
@@ -2933,17 +3095,48 @@ export async function workTaskEvents(
   return getTransport().call("work_task_events", { taskId, limit })
 }
 
+/**
+ * Drop an uploaded image's base64 from a task's blocks in every mode where the
+ * call leaves through an HTTP body, the same rule (and the same helper) a chat
+ * send follows: the bytes already live in the uploads dir, and the engine's
+ * dispatch re-inlines them from the uri (`acp::prompt_hydration`) when the task
+ * eventually runs.
+ */
+function stripUploadedTaskBlocks(
+  blocks: PromptInputBlock[] | null | undefined
+): PromptInputBlock[] {
+  if (!blocks || blocks.length === 0) return []
+  return stripUploadedImagePayloads(
+    blocks,
+    !isDesktop() || getActiveRemoteConnectionId() !== null
+  )
+}
+
 export async function workTaskCreate(draft: WorkTaskDraft): Promise<WorkTask> {
-  return getTransport().call("work_task_create", { draft })
+  return getTransport().call("work_task_create", {
+    draft: { ...draft, config: stripUploadedTaskConfig(draft.config) },
+  })
+}
+
+/** {@link stripUploadedTaskBlocks} over a whole task config. */
+function stripUploadedTaskConfig(config: WorkTaskConfig): WorkTaskConfig {
+  return {
+    ...config,
+    prompt_blocks: stripUploadedTaskBlocks(config.prompt_blocks),
+  }
 }
 
 export async function workTaskUpdate(
   id: number,
   draft: WorkTaskDraft
 ): Promise<WorkTask> {
-  return getTransport().call("work_task_update", { id, draft })
+  return getTransport().call("work_task_update", {
+    id,
+    draft: { ...draft, config: stripUploadedTaskConfig(draft.config) },
+  })
 }
 
+/** Persist the pending column's drag order (index → sort_order). */
 export async function workTaskReorder(
   folderId: number,
   orderedIds: number[]
@@ -2968,20 +3161,23 @@ export async function workTaskStartAll(
   return getTransport().call("work_task_start_all", { folderId })
 }
 
-/** Plan when a to-do task starts; pass null to clear the plan. */
-export async function workTaskSchedule(
-  id: number,
-  scheduledAt: string | null
-): Promise<void> {
-  return getTransport().call("work_task_schedule", { id, scheduledAt })
-}
-
-/** failed → queued. `note` (optional) reaches the retry prompt. */
+/**
+ * failed → queued. `note` (optional) reaches the retry prompt, and `blocks`
+ * carries whatever the note box attached out of band (images, pasted bytes) —
+ * stripped of uploaded payloads on the way out, exactly like a chat send.
+ */
 export async function workTaskRetry(
   id: number,
-  note?: string | null
+  note?: string | null,
+  blocks?: PromptInputBlock[] | null,
+  allowDuplicateSource?: boolean
 ): Promise<void> {
-  return getTransport().call("work_task_retry", { id, note: note ?? null })
+  return getTransport().call("work_task_retry", {
+    id,
+    note: note ?? null,
+    blocks: stripUploadedTaskBlocks(blocks),
+    allowDuplicateSource: allowDuplicateSource ?? false,
+  })
 }
 
 /**
@@ -2990,9 +3186,28 @@ export async function workTaskRetry(
  */
 export async function workTaskRequeue(
   id: number,
-  note?: string | null
+  note?: string | null,
+  blocks?: PromptInputBlock[] | null,
+  allowDuplicateSource?: boolean
 ): Promise<void> {
-  return getTransport().call("work_task_requeue", { id, note: note ?? null })
+  return getTransport().call("work_task_requeue", {
+    id,
+    note: note ?? null,
+    blocks: stripUploadedTaskBlocks(blocks),
+    allowDuplicateSource: allowDuplicateSource ?? false,
+  })
+}
+
+/**
+ * Plan when a to-do task starts (`scheduledAt` is an ISO instant; `null`
+ * clears the plan). The engine claims it at that time exactly as if the start
+ * button had been pressed — the folder's concurrency limit still applies.
+ */
+export async function workTaskSchedule(
+  id: number,
+  scheduledAt: string | null
+): Promise<void> {
+  return getTransport().call("work_task_schedule", { id, scheduledAt })
 }
 
 /**
@@ -3002,12 +3217,14 @@ export async function workTaskRequeue(
 export async function workTaskReturn(
   id: number,
   feedback: string,
-  intent?: FollowUpIntent
+  intent?: FollowUpIntent,
+  blocks?: PromptInputBlock[] | null
 ): Promise<void> {
   return getTransport().call("work_task_return", {
     id,
     feedback,
     intent: intent ?? null,
+    blocks: stripUploadedTaskBlocks(blocks),
   })
 }
 
@@ -3040,6 +3257,22 @@ export async function workTaskMerge(
   })
 }
 
+/** Accept a reviewed forge-sourced task by pushing it back: an issue's task
+ *  publishes its branch and opens (or adopts) a pull request, a pull request's
+ *  task pushes onto that pull request's own branch (where `title`/`draft` are
+ *  ignored — nothing is created). Resolves with the pull request URL.
+ *
+ *  Unlike the merge dispatch this awaits the WHOLE operation — no agent runs,
+ *  just a push and two REST calls — so a rejection is the real reason and the
+ *  task is already back in review by the time it surfaces. */
+export async function workTaskDeliverPr(
+  id: number,
+  prTitle: string | null,
+  draft: boolean
+): Promise<string> {
+  return getTransport().call("work_task_deliver_pr", { id, prTitle, draft })
+}
+
 /** Withdraw a merge waiting in the project's queue; the task stays in review. */
 export async function workTaskMergeUnqueue(id: number): Promise<void> {
   return getTransport().call("work_task_merge_unqueue", { id })
@@ -3061,10 +3294,12 @@ export async function workTaskArchive(
   return getTransport().call("work_task_archive", { id, archived })
 }
 
+/** Remove the task's worktree + branch (also retries a failed cleanup). */
 export async function workTaskCleanup(id: number): Promise<void> {
   return getTransport().call("work_task_cleanup", { id })
 }
 
+/** Unified diff of the worktree vs the task's recorded base. */
 export async function workTaskDiff(
   id: number,
   file?: string | null
@@ -3078,6 +3313,8 @@ export async function workTaskChangedFiles(
   return getTransport().call("work_task_changed_files", { id })
 }
 
+/** Effective settings after the folder → global → built-in fallback — what
+ *  the engine will actually use for this folder. */
 export async function workTaskSettingsEffective(
   folderId: number
 ): Promise<WorkTaskFolderSettings> {
@@ -3090,6 +3327,8 @@ export async function workTaskSettingsGet(
   return getTransport().call("work_task_settings_get", { folderId })
 }
 
+/** The folder's own settings row, or null when it follows the global
+ *  defaults — how the settings dialog tells the two apart. */
 export async function workTaskSettingsGetOwn(
   folderId: number
 ): Promise<WorkTaskFolderSettings | null> {
@@ -3103,6 +3342,7 @@ export async function workTaskSettingsSet(
   return getTransport().call("work_task_settings_set", { folderId, settings })
 }
 
+/** Drop the folder's own settings row — it reverts to the global defaults. */
 export async function workTaskSettingsDelete(folderId: number): Promise<void> {
   return getTransport().call("work_task_settings_delete", { folderId })
 }
@@ -3111,12 +3351,15 @@ export async function workTaskTemplateList(): Promise<WorkTaskTemplate[]> {
   return getTransport().call("work_task_template_list", {})
 }
 
+/** Upsert by exact name: an existing template of the same name is replaced. */
 export async function workTaskTemplateSave(draft: {
   name: string
   title: string
   config: WorkTaskConfig
 }): Promise<WorkTaskTemplate> {
-  return getTransport().call("work_task_template_save", { draft })
+  return getTransport().call("work_task_template_save", {
+    draft: { ...draft, config: stripUploadedTaskConfig(draft.config) },
+  })
 }
 
 export async function workTaskTemplateDelete(id: number): Promise<void> {
@@ -3714,9 +3957,6 @@ export async function getFileTree(
   path: string,
   maxDepth?: number
 ): Promise<FileTreeNode[]> {
-  if (isPsPath(path)) {
-    return psGetFileTree(path, maxDepth)
-  }
   return getTransport().call("get_file_tree", {
     path,
     maxDepth: maxDepth ?? null,
@@ -3768,9 +4008,6 @@ export async function readFileBase64(
   path: string,
   maxBytes?: number
 ): Promise<string> {
-  if (isPsPath(path)) {
-    return psReadFileBase64(path, maxBytes)
-  }
   return getTransport().call("read_file_base64", {
     path,
     maxBytes: maxBytes ?? null,
@@ -3785,9 +4022,6 @@ export async function readWorkspaceFileBase64(
   path: string,
   maxBytes?: number
 ): Promise<string> {
-  if (isPsPath(rootPath)) {
-    return psReadWorkspaceFileBase64(rootPath, path, maxBytes)
-  }
   return getTransport().call("read_workspace_file_base64", {
     rootPath,
     path,
@@ -3799,9 +4033,6 @@ export async function readFilePreview(
   rootPath: string,
   path: string
 ): Promise<FilePreviewContent> {
-  if (isPsPath(rootPath)) {
-    return psReadFilePreview(rootPath, path)
-  }
   return getTransport().call("read_file_preview", { rootPath, path })
 }
 
@@ -3809,9 +4040,6 @@ export async function readFileForEdit(
   rootPath: string,
   path: string
 ): Promise<FileEditContent> {
-  if (isPsPath(rootPath)) {
-    return psReadFileForEdit(rootPath, path)
-  }
   return getTransport().call("read_file_for_edit", { rootPath, path })
 }
 
@@ -3821,9 +4049,6 @@ export async function saveFileContent(
   content: string,
   expectedEtag?: string | null
 ): Promise<FileSaveResult> {
-  if (isPsPath(rootPath)) {
-    return psSaveFileContent(rootPath, path, content)
-  }
   return getTransport().call("save_file_content", {
     rootPath,
     path,
@@ -3849,9 +4074,6 @@ export async function renameFileTreeEntry(
   path: string,
   newName: string
 ): Promise<string> {
-  if (isPsPath(rootPath)) {
-    throw new Error("项目空间暂不支持重命名")
-  }
   return getTransport().call("rename_file_tree_entry", {
     rootPath,
     path,
@@ -3881,9 +4103,6 @@ export async function deleteFileTreeEntry(
   rootPath: string,
   path: string
 ): Promise<void> {
-  if (isPsPath(rootPath)) {
-    return psDeleteEntry(rootPath, path)
-  }
   return getTransport().call("delete_file_tree_entry", { rootPath, path })
 }
 
@@ -3893,9 +4112,6 @@ export async function createFileTreeEntry(
   name: string,
   kind: "file" | "dir"
 ): Promise<string> {
-  if (isPsPath(rootPath)) {
-    return psCreateEntry(rootPath, path, name, kind)
-  }
   return getTransport().call("create_file_tree_entry", {
     rootPath,
     path,
@@ -4224,16 +4440,16 @@ export async function createModelProvider(params: {
   name: string
   apiUrl: string
   apiKey: string
-  agentType: string
-  agentTypes?: string[] | null
+  agentType?: string
+  agentTypes?: string[]
   model?: string | null
-  models?: string[] | null
+  models?: string[]
 }): Promise<ModelProviderInfo> {
   return getTransport().call("create_model_provider", {
     name: params.name,
     apiUrl: params.apiUrl,
     apiKey: params.apiKey,
-    agentType: params.agentType,
+    agentType: params.agentType ?? null,
     agentTypes: params.agentTypes ?? null,
     model: params.model ?? null,
     models: params.models ?? null,
@@ -4264,84 +4480,6 @@ export async function updateModelProvider(params: {
 
 export async function deleteModelProvider(id: number): Promise<void> {
   return getTransport().call("delete_model_provider", { id })
-}
-
-export interface HouflowManagedGatewaySyncResult {
-  providers: ModelProviderInfo[]
-  boundAgentTypes: AgentType[]
-  skippedAgentTypes: AgentType[]
-}
-
-export async function syncHouflowManagedGateway(params: {
-  providerName?: string | null
-  providerType?: string | null
-  apiUrl: string
-  apiKey: string
-  defaultModel?: string | null
-  bindAgents?: boolean | null
-  models: string[]
-}): Promise<HouflowManagedGatewaySyncResult> {
-  const input = {
-    providerName: params.providerName ?? null,
-    providerType: params.providerType ?? null,
-    apiUrl: params.apiUrl,
-    apiKey: params.apiKey,
-    defaultModel: params.defaultModel ?? null,
-    bindAgents: params.bindAgents ?? null,
-    models: params.models,
-  }
-  return getTransport().call("houflow_sync_managed_gateway", input)
-}
-
-export interface HouflowConnectorLocalAgentSyncInput {
-  localAgentRef: string
-  provider: string
-  name: string
-  runtimeProvider?: string | null
-  runtimeRunner?: boolean | null
-  workingDirectory?: string | null
-  skillsDirectory?: string | null
-  useDefaultSkillsDirectory?: boolean | null
-  capabilities?: string[] | null
-}
-
-export interface HouflowConnectorSyncLocalAgentsResult {
-  agents: unknown[]
-  heartbeat: unknown | null
-  status: unknown
-}
-
-export interface HouflowConnectorStatusResult {
-  installed: boolean
-  executable: string | null
-  version: unknown | null
-  snapshot: unknown | null
-  diagnosis: unknown | null
-  error: string | null
-}
-
-export async function getHouflowConnectorStatus(): Promise<HouflowConnectorStatusResult> {
-  return getTransport().call("houflow_connector_status")
-}
-
-export async function startHouflowConnector(): Promise<unknown> {
-  return getTransport().call("houflow_connector_up", undefined, {
-    timeoutMs: 30_000,
-  })
-}
-
-export async function syncHouflowConnectorLocalAgents(params: {
-  agents: HouflowConnectorLocalAgentSyncInput[]
-  heartbeat?: boolean | null
-}): Promise<HouflowConnectorSyncLocalAgentsResult> {
-  return getTransport().call(
-    "houflow_connector_sync_local_agents",
-    {
-      agents: params.agents,
-      heartbeat: params.heartbeat ?? true,
-    },
-    { timeoutMs: 120_000 }
-  )
 }
 
 // ─── Delegation settings ───────────────────────────────────────────────
@@ -4434,8 +4572,11 @@ export async function setSessionInfoSettings(
   return getTransport().call("set_session_info_settings", { settings })
 }
 
-// Create-from-chat (chat authoring) settings
+// ─── Create-from-chat (chat authoring) settings ────────────────────────────
 
+/** Mirror of Rust `ChatAuthoringSettings`. Both default OFF — these tools write
+ * app state (and a scheduled automation goes on to spawn agents), so they are
+ * opt-in rather than on like the read-only lookups. */
 export interface ChatAuthoringSettings {
   automations_enabled: boolean
   work_tasks_enabled: boolean
@@ -4570,7 +4711,7 @@ export async function exportBackupDesktop(
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")
   const destPath = await save({
     defaultPath: `houhub-backup-${stamp}.${ext}`,
-    filters: [{ name: "Houhub backup", extensions: [ext] }],
+    filters: [{ name: "HouHub backup", extensions: [ext] }],
   })
   if (!destPath) return null
   return getTransport().call<BackupManifest>("backup_create", {
@@ -4742,4 +4883,219 @@ export async function scanExternalConflictsWeb(
     { uploadId, passphrase: passphrase ?? null },
     { timeoutMs: BACKUP_LONG_CALL_TIMEOUT_MS }
   )
+}
+
+// Houflow managed gateway and local connector integration.
+
+export interface HouflowManagedGatewaySyncResult {
+  providers: ModelProviderInfo[]
+  boundAgentTypes: AgentType[]
+  skippedAgentTypes: AgentType[]
+}
+
+export async function syncHouflowManagedGateway(params: {
+  providerName?: string | null
+  providerType?: string | null
+  apiUrl: string
+  apiKey: string
+  defaultModel?: string | null
+  bindAgents?: boolean | null
+  models: string[]
+}): Promise<HouflowManagedGatewaySyncResult> {
+  return getTransport().call("houflow_sync_managed_gateway", {
+    providerName: params.providerName ?? null,
+    providerType: params.providerType ?? null,
+    apiUrl: params.apiUrl,
+    apiKey: params.apiKey,
+    defaultModel: params.defaultModel ?? null,
+    bindAgents: params.bindAgents ?? null,
+    models: params.models,
+  })
+}
+
+export interface HouflowConnectorLocalAgentSyncInput {
+  localAgentRef: string
+  provider: string
+  name: string
+  runtimeProvider?: string | null
+  runtimeRunner?: boolean | null
+  workingDirectory?: string | null
+  skillsDirectory?: string | null
+  useDefaultSkillsDirectory?: boolean | null
+  capabilities?: string[] | null
+}
+
+export interface HouflowConnectorSyncLocalAgentsResult {
+  agents: unknown[]
+  heartbeat: unknown | null
+  status: unknown
+}
+
+export interface HouflowConnectorStatusResult {
+  installed: boolean
+  executable: string | null
+  version: unknown | null
+  snapshot: unknown | null
+  diagnosis: unknown | null
+  error: string | null
+}
+
+export async function getHouflowConnectorStatus(): Promise<HouflowConnectorStatusResult> {
+  return getTransport().call("houflow_connector_status")
+}
+
+export async function startHouflowConnector(): Promise<unknown> {
+  return getTransport().call("houflow_connector_up", undefined, {
+    timeoutMs: 30_000,
+  })
+}
+
+export async function syncHouflowConnectorLocalAgents(params: {
+  agents: HouflowConnectorLocalAgentSyncInput[]
+  heartbeat?: boolean | null
+}): Promise<HouflowConnectorSyncLocalAgentsResult> {
+  return getTransport().call(
+    "houflow_connector_sync_local_agents",
+    {
+      agents: params.agents,
+      heartbeat: params.heartbeat ?? true,
+    },
+    { timeoutMs: 120_000 }
+  )
+}
+
+// ── Forge workbench (Issues/PR) ────────────────────────────────────────────
+
+/** The folder's `origin` remote parsed into forge coordinates, if any. */
+export async function folderForgeRemote(
+  folderId: number
+): Promise<ForgeRemote | null> {
+  return getTransport().call("folder_forge_remote", { folderId })
+}
+
+/** Everything the client gets to decide about a list request. The REPOSITORY
+ *  is deliberately absent: the backend derives it from the folder's own remote,
+ *  so there is nothing here to claim (see `commands/forge.rs`). */
+export interface ForgeListQuery {
+  tab: ForgeTab
+  state?: "open" | "closed" | "all"
+  assignedMe?: boolean
+  /** Label names, ANDed by both forges. */
+  labels?: string[]
+  /** Free text over title and description. Treated as TEXT, not query syntax. */
+  search?: string | null
+  sort?: ForgeSort
+  /** 1-based. Both forges paginate by offset; the backend clamps. */
+  page?: number
+  perPage?: number
+  accountId?: string | null
+}
+
+export async function forgeListIssues(
+  folderId: number,
+  query: ForgeListQuery
+): Promise<ForgeIssueList> {
+  return getTransport().call("forge_list_issues", {
+    folderId,
+    query: {
+      tab: query.tab,
+      state: query.state ?? "open",
+      assignedMe: query.assignedMe ?? false,
+      labels: query.labels ?? [],
+      search: query.search ?? null,
+      sort: query.sort ?? "newest",
+      page: query.page ?? 1,
+      perPage: query.perPage ?? DEFAULT_FORGE_PAGE_SIZE,
+      accountId: query.accountId ?? null,
+    },
+  })
+}
+
+/** Everything a COUNT may be narrowed by. No page and no order: neither can
+ *  change the number, which is what lets the switcher survive a page turn
+ *  without spending a request. */
+export interface ForgeCountFilters {
+  state?: "open" | "closed" | "all"
+  assignedMe?: boolean
+  labels?: string[]
+  search?: string | null
+  accountId?: string | null
+}
+
+/** One tab's count — a badge on the workbench's switcher — or null when the
+ *  forge declines to count, the probe fails, or GitHub calls the search
+ *  incomplete.
+ *
+ *  Ask only for the tab you are NOT showing. The visible tab's count already
+ *  came back inside its own list response, and re-asking would make every
+ *  filter change cost three search calls against a quota of thirty a MINUTE. */
+export async function forgeTabCount(
+  folderId: number,
+  tab: ForgeTab,
+  filters: ForgeCountFilters = {}
+): Promise<number | null> {
+  return getTransport().call("forge_tab_count", {
+    folderId,
+    tab,
+    filters: {
+      state: filters.state ?? "open",
+      assignedMe: filters.assignedMe ?? false,
+      labels: filters.labels ?? [],
+      search: filters.search ?? null,
+      accountId: filters.accountId ?? null,
+    },
+  })
+}
+
+/** The repository's labels, for the workbench's label filter. Its own call
+ *  (and its own cache in the page): labels change far more slowly than the
+ *  list, and on GitHub this runs on the core quota rather than search's
+ *  30-per-minute one. */
+export async function forgeListLabels(
+  folderId: number,
+  accountId?: string | null
+): Promise<ForgeLabelList> {
+  return getTransport().call("forge_list_labels", {
+    folderId,
+    accountId: accountId ?? null,
+  })
+}
+
+/** Trigger a work task from an issue. Duplicate / folder-mismatch come back
+ *  as discriminated outcomes for the dialog to act on, not as errors. */
+export async function workTaskCreateFromForge(
+  draft: ForgeTaskDraftInput
+): Promise<ForgeCreateResult> {
+  return getTransport().call("work_task_create_from_forge", { draft })
+}
+
+/** Latest task per source key (any state) — drives the row chips. */
+export async function workTaskLookupBySource(
+  sourceKeys: string[]
+): Promise<ForgeTaskLink[]> {
+  return getTransport().call("work_task_lookup_by_source", { sourceKeys })
+}
+
+/** The repository panel's preferences, every scope at once. Read once per page
+ *  mount (and again after the settings dialog saves) rather than per trigger:
+ *  the trigger dialog opens from a row click and must not wait on a round trip
+ *  to draw. */
+export async function forgeSettingsGet(): Promise<ForgeSettingsStore> {
+  return getTransport().call("forge_settings_get", {})
+}
+
+/**
+ * Save ONE scope and get back every scope as stored — trimmed, with blank
+ * instructions dropped.
+ *
+ * `folderId = null` writes the global row. `settings = null` drops a folder's
+ * own row so it follows the global one again, which is how "use global
+ * defaults" saves (the global row itself cannot be dropped — there is nothing
+ * behind it).
+ */
+export async function forgeSettingsSet(
+  folderId: number | null,
+  settings: ForgePanelSettings | null
+): Promise<ForgeSettingsStore> {
+  return getTransport().call("forge_settings_set", { folderId, settings })
 }

@@ -175,7 +175,9 @@
       "panelOpacity": "Panel opacity",
       "panelOpacityHint": "How opaque the sidebar, panels and tab bars are. Lower lets more of the image show through.",
       "errorTooLarge": "Image is too large (max 16 MB).",
-      "errorUploadFailed": "Failed to set the background image."
+      "errorUploadFailed": "Failed to set the background image.",
+      "formatHint": "PNG, JPEG, WebP and GIF. Animated images play automatically.",
+      "errorUnsupportedFormat": "Unsupported image format. Choose a PNG, JPEG, WebP or GIF."
     },
     "customStyle": {
       "sectionTitle": "Custom Style",
@@ -305,7 +307,11 @@
       "downloadFailed": "Failed to download update package. Please try again later.",
       "installFailed": "Failed to install update. Please close the app and try again.",
       "unknown": "Update failed. Please try again later."
-    }
+    },
+    "autostartTitle": "Launch at login",
+    "autostartDescription": "Opens automatically after you sign in to this computer.",
+    "autostartSaveFailed": "Failed to save the launch-at-login setting: {message}",
+    "autostartUnavailable": "Could not read the startup entry on this computer: {message}"
   },
   "VersionControlSettings": {
     "loading": "Loading...",
@@ -374,7 +380,15 @@
       "serverRequired": "Server URL is required.",
       "usernameRequired": "Username is required.",
       "passwordRequired": "Password is required."
-    }
+    },
+    "gitlabTitle": "GitLab accounts",
+    "gitlabDescription": "Manage GitLab accounts for authentication. Tokens are stored locally.",
+    "gitlabTokenHint": "Create a personal access token with the api scope under GitLab → Preferences → Access tokens.",
+    "gitlabNoAccounts": "No GitLab account yet",
+    "updateToken": "Update token",
+    "updateTokenTitle": "Update this account's token",
+    "updateTokenDescription": "Replaces the token stored for {username}, keeping the account itself. Tasks triggered by this account keep working — a removed and re-added account is a new one to them.",
+    "updateTokenSubmit": "Validate and update"
   },
   "ShortcutSettings": {
     "sectionTitle": "Shortcuts",
@@ -1276,7 +1290,11 @@
       "providerDisconnected": "Disconnected {providerId}",
       "disconnectFailed": "Failed to disconnect {providerId}",
       "catalogRefreshed": "Catalog refreshed — {count} providers",
-      "catalogRefreshFailed": "Failed to refresh catalog"
+      "catalogRefreshFailed": "Failed to refresh catalog",
+      "qoderSaved": "Qoder config saved",
+      "saveQoderConfigFailed": "Failed to save Qoder config",
+      "antigravitySaved": "Antigravity config saved",
+      "saveAntigravityConfigFailed": "Failed to save Antigravity config"
     },
     "version": {
       "statusLabel": "Version Status",
@@ -1438,7 +1456,53 @@
       "missing": "HouHub drives agents over ACP and the {nativeLabel} does not speak ACP, so HouHub needs a separate adapter package, {adapterPackage}, maintained by the Agent Client Protocol project (originally Zed). It ships its own runtime, so the {nativeCmd} CLI is not required first; if you do have it, the two coexist and share the same {configDir} sign-in and settings. Install it below.",
       "readyWithNative": "Adapter {adapterCmd} is installed — that is what HouHub launches, not your own {nativeCmd} at {nativePath}. They are separate packages that coexist, and both read {configDir}, so sign-in and settings are shared.",
       "ready": "Adapter {adapterCmd} is installed — that is what HouHub launches. It ships its own runtime, so the {nativeLabel} is not required; install it later and the two coexist, sharing {configDir}."
-    }
+    },
+    "qoder": {
+      "configDescription": "Sign in to Qoder here. Everything else the CLI reads lives in one file — $QODER_CONFIG_DIR/settings.json (default ~/.qoder), shared with the qoder CLI — and is edited raw below. Model and reasoning effort are not here: Qoder reports them over ACP, so the composer's own selectors own them per session.",
+      "authTitle": "Account",
+      "authChecking": "Checking…",
+      "authNotInstalled": "qoder is not installed",
+      "authUnknown": "Status unavailable",
+      "authLoggedIn": "Signed in",
+      "authNotLoggedIn": "Not signed in",
+      "loginHint": "Run this in a terminal to sign in with your Qoder account (a browser window opens), then hit refresh:",
+      "authMethodLabel": "Auth method",
+      "tokenLabel": "Personal access token",
+      "tokenPlaceholder": "for headless / server machines",
+      "tokenHint": "QODER_PERSONAL_ACCESS_TOKEN — a non-interactive credential for machines where the browser sign-in can't run. Leave empty to use the qoder account login.",
+      "saveToken": "Save token",
+      "advancedToggle": "Advanced: raw settings.json",
+      "advancedHint": "The whole settings.json, written verbatim on save — which is also the only way to delete a key.",
+      "saveRawConfig": "Save file"
+    },
+    "antigravity": {
+      "configDescription": "Antigravity needs an authentication method before it can start a session. The choice is written to auth.type in $GEMINI_HOME/antigravity-acp/settings.json, which is the only place the ACP server looks — without it every new session fails with \"Authentication required\". Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",
+      "methodLabel": "Authentication method",
+      "methods": {
+        "oauth-personal": "Sign in with Google",
+        "oauth-business": "Gemini Enterprise",
+        "gemini-api-key": "Gemini API key",
+        "agent-platform": "Gemini Enterprise Agent Platform"
+      },
+      "methodHints": {
+        "oauth-personal": "Your Google account, on any Antigravity plan including the free tier. The first new session opens a browser to finish signing in; the token is then cached and reused.",
+        "oauth-business": "Your Gemini Enterprise account. Needs a GCP project and location, and the first new session opens a browser.",
+        "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
+        "agent-platform": "Formerly Vertex AI. Use an API key, or a project and location with Application Default Credentials (gcloud auth application-default login)."
+      },
+      "geminiApiKeyLabel": "Gemini API key",
+      "googleApiKeyLabel": "Google API key",
+      "googleApiKeyHint": "Optional. When set it is used on its own — the project and location below are ignored. Leave it empty to authenticate with Application Default Credentials instead.",
+      "gcpProjectLabel": "GCP project",
+      "gcpLocationLabel": "GCP location",
+      "missingGeminiApiKey": "Enter a Gemini API key, or pick a different authentication method — sessions will fail to start without it.",
+      "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
+      "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
+      "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
+      "save": "Save"
+    },
+    "customAgentMcpLabel": "MCP support",
+    "customAgentMcpHint": "Sends houhub's built-in MCP companion to this agent when a session starts — the channel behind delegation, live feedback and task tools. Turn it off for an agent that rejects MCP servers and fails to connect; the change applies to the next connection."
   },
   "SettingsPages": {
     "agentsLoading": "Loading agent settings...",
@@ -1629,8 +1693,11 @@
       "openFolder": "Open Folder",
       "searchPlaceholder": "Search conversations...",
       "viewOptions": "View options",
+      "listOptions": "Conversation list",
       "showCompleted": "Show completed conversations",
       "showWorktrees": "Show worktree folders",
+      "showRecent": "Show Recent group",
+      "navigationItems": "Navigation items",
       "moreOptions": "More options",
       "sortBy": "Sort by",
       "sortByCreatedAt": "Created time",
@@ -1698,7 +1765,15 @@
       "loadingSubsessions": "Loading sub-conversations…",
       "worktreeRemovedBadge": "Source worktree removed",
       "tasks": "Task Board",
-      "runningCountBadge": "{count, plural, one {# session running} other {# sessions running}}"
+      "runningCountBadge": "{count, plural, one {# session running} other {# sessions running}}",
+      "showRecent": "Show Recent group",
+      "sectionOrderMoveUp": "Move up",
+      "sectionOrderMoveDown": "Move down",
+      "sectionOrderItemLabel": "{name} — position {position} of {total}",
+      "sectionRecent": "Recent",
+      "noRecent": "No recent conversations",
+      "showMoreRecent": "Show more ({count})",
+      "forge": "Repository panel"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",
@@ -1791,7 +1866,8 @@
       "markCompleted": "Mark as completed",
       "reopen": "Reopen",
       "expandSubsessions": "Expand sub-conversations",
-      "collapseSubsessions": "Collapse sub-conversations"
+      "collapseSubsessions": "Collapse sub-conversations",
+      "attachToCurrentSession": "Add to session"
     },
     "search": {
       "dialogTitle": "Search",
@@ -1859,6 +1935,16 @@
         "cacheRead": "Cache Read",
         "cacheWrite": "Cache Write",
         "total": "Total"
+      },
+      "quickActions": {
+        "title": "Quick actions",
+        "groups": {
+          "workspace": "Workspace",
+          "sessions": "Sessions",
+          "navigation": "Navigation",
+          "more": "More"
+        },
+        "showPet": "Show pet"
       }
     },
     "auxPanel": {
@@ -2063,7 +2149,9 @@
         "stashChanges": "Stash changes",
         "stashPop": "Pop stash",
         "deleteBranch": "Delete branch {branchName}",
-        "updateBranch": "Update branch {branchName}"
+        "updateBranch": "Update branch {branchName}",
+        "removeWorktree": "Delete worktree for {branchName}",
+        "removeWorktreeAndBranch": "Delete worktree and branch {branchName}"
       },
       "confirm": {
         "mergeTitle": "Merge branch",
@@ -2075,7 +2163,15 @@
         "deleteTitle": "Delete branch",
         "deleteDescription": "Delete branch {branchName}? This action cannot be undone.",
         "forceDeleteTitle": "Force Delete Branch",
-        "forceDeleteDescription": "Branch {branchName} is not fully merged. Are you sure you want to force delete it? This action cannot be undone."
+        "forceDeleteDescription": "Branch {branchName} is not fully merged. Are you sure you want to force delete it? This action cannot be undone.",
+        "deleteWorktreeTitle": "Delete worktree",
+        "deleteWorktreeDescription": "Delete the worktree directory that has {branchName} checked out? The branch and its commits are kept.",
+        "forceDeleteWorktreeTitle": "Force delete worktree",
+        "forceDeleteWorktreeDescription": "The worktree for {branchName} has uncommitted or untracked files. Delete it anyway? Those changes cannot be recovered.",
+        "deleteWorktreeAndBranchTitle": "Delete worktree and branch",
+        "deleteWorktreeAndBranchDescription": "Delete the worktree for {branchName}, the branch itself, and its workspace folder? Its sessions move to the repository folder. This action cannot be undone.",
+        "forceDeleteWorktreeAndBranchTitle": "Force delete worktree and branch",
+        "forceDeleteWorktreeAndBranchDescription": "The worktree for {branchName} has uncommitted files, or the branch is not fully merged. Delete both anyway? This action cannot be undone."
       },
       "current": "Current",
       "switchToBranch": "Switch to this branch",
@@ -2152,7 +2248,9 @@
       "searchAriaLabel": "Search branches and actions",
       "branchListLabel": "Branches and actions",
       "noMatches": "No matches",
-      "pushBranch": "Push"
+      "pushBranch": "Push",
+      "deleteWorktree": "Delete worktree",
+      "deleteWorktreeAndBranch": "Delete worktree and branch"
     },
     "commitDialog": {
       "toasts": {
@@ -2625,7 +2723,8 @@
           "turnFailedEmpty": "{agent} ended the turn without producing any response.",
           "turnFailedEmptyProtocol": "{agent} produced output that houhub could not parse — the agent version may not match the protocol.",
           "turnFailedEmptyMetadata": "{agent} sent only status updates this turn (plan / mode / usage) and no reply.",
-          "detailsInAlerts": "Open Alerts in the status bar and expand the details to see the agent's output."
+          "detailsInAlerts": "Open Alerts in the status bar and expand the details to see the agent's output.",
+          "mcpRejectedByAgent": "{agent} refused the session while houhub’s MCP companion was attached: {message} If this agent does not support MCP, turn off “MCP support” for it in Settings and connect again."
         },
         "unableReadAgentConfig": "Unable to read Agent config: {message}",
         "connectFailedTitle": "{agent} connection failed",
@@ -2641,7 +2740,9 @@
           "nextRetryIn": "next in {seconds}s",
           "line": "{error}{status} · {retry}",
           "lineWithDelay": "{error}{status} · {retry}, {delay}",
-          "httpStatus": " (HTTP {status})"
+          "httpStatus": " (HTTP {status})",
+          "lineNoError": "{retry}",
+          "lineNoErrorWithDelay": "{retry}, {delay}"
         },
         "configOptionAdjusted": "{agent} set {option} to {actual} instead of {requested}"
       },
@@ -2728,7 +2829,10 @@
         "steerIntoTurn": "Insert into current turn",
         "steerQueuedInstead": "Queued instead — it will be sent with the next turn.",
         "steerFailed": "Couldn't insert into the current turn",
-        "steerAttachmentsUnsupported": "Text only — drafts with attachments go through the queue."
+        "steerAttachmentsUnsupported": "Text only — drafts with attachments go through the queue.",
+        "toggleOn": "On",
+        "toggleOff": "Off",
+        "slashLoading": "Loading commands…"
       },
       "messageQueue": {
         "addToQueue": "Queue message",
@@ -2967,7 +3071,18 @@
         "completedAt": "Completed at",
         "jumpToPreviousUserMessage": "Jump to user message",
         "showMore": "Show more",
-        "showLess": "Show less"
+        "showLess": "Show less",
+        "loadEarlier": "Load earlier messages",
+        "loadingEarlier": "Loading earlier messages…",
+        "selectionActions": "Selection actions",
+        "selectionCopy": "Copy Text",
+        "selectionCopied": "Copied",
+        "selectionCopyFailed": "Copy failed",
+        "selectionQuote": "Quote",
+        "copyImage": "Copy image",
+        "copiedImage": "Image copied",
+        "copyImageFailed": "Could not copy image: {message}",
+        "copyImageUnsupported": "Copying this image is not supported here"
       },
       "liveTurnStats": {
         "thinking": "Thinking...",
@@ -3369,6 +3484,25 @@
         "viewTree": "Show tree",
         "fields": "{count, plural, one {# field} other {# fields}}",
         "items": "{count, plural, one {# item} other {# items}}"
+      },
+      "houhubMcpTool": {
+        "getSessionInfo": "Reading session {session}",
+        "getSessionInfoNoId": "Reading a session",
+        "taskProgress": "Progress: {message}",
+        "taskProgressNoMessage": "Reporting task progress",
+        "taskComplete": "Task finished · {verdict}",
+        "taskCompleteWithSummary": "Task finished · {verdict}: {summary}",
+        "createAutomation": "Creating automation {name}",
+        "createAutomationNoName": "Creating an automation",
+        "createWorkTask": "Creating work task {title}",
+        "createWorkTaskNoTitle": "Creating a work task",
+        "promptLabel": "Prompt",
+        "verdict": {
+          "success": "success",
+          "needs_review": "needs review",
+          "blocked": "blocked",
+          "unknown": "unknown"
+        }
       }
     },
     "diffPreview": {
@@ -4934,7 +5068,40 @@
     "settingsWorktreeRootBrowse": "Choose the worktree directory",
     "settingsTabMerge": "Merge",
     "settingsTabWorktree": "Worktree",
-    "eventMergeQueued": "Queued to merge"
+    "eventMergeQueued": "Queued to merge",
+    "actionDeleteWorktree": "Delete worktree",
+    "restartDuplicateSource": "{task} is already active on the same work item — restarting this one would leave two live tasks on it.",
+    "restartDuplicateSourceAnon": "Another task",
+    "actionRestartAnyway": "Restart anyway",
+    "deleteWorktreeConfirmTitle": "Delete worktree?",
+    "deleteWorktreeConfirmBody": "The worktree directory and its work branch are deleted for good. The task stays on the board, and its conversation moves to the project folder.",
+    "eventForgeWriteback": "Commented on the issue",
+    "eventForgeWritebackFailed": "Comment on the issue failed",
+    "actionDeliverPr": "Open pull request",
+    "actionDeliverPrMr": "Open merge request",
+    "actionDeliverPrBack": "Push to the pull request",
+    "actionDeliverPrBackMr": "Push to the merge request",
+    "detailPullRequest": "Pull request",
+    "detailMergeRequest": "Merge request",
+    "deliverPrTitle": "Deliver as a pull request",
+    "deliverPrTitleMr": "Deliver as a merge request",
+    "deliverPrDescription": "Pushes this task's branch to {repo} and opens a pull request against {base}. The issue is linked automatically, so merging it closes the issue.",
+    "deliverPrDescriptionMr": "Pushes this task's branch to {repo} and opens a merge request against {base}. The issue is linked automatically, so merging it closes the issue.",
+    "deliverPrTitleLabel": "Pull request title",
+    "deliverPrTitleLabelMr": "Merge request title",
+    "deliverPrDraft": "Open as a draft",
+    "deliverPrSubmit": "Push and open",
+    "deliverPrSubmitting": "Pushing…",
+    "deliverPrDone": "Pull request opened",
+    "deliverPrDoneMr": "Merge request opened",
+    "deliverPrOpen": "View",
+    "deliverPrBackTitle": "Deliver back to the pull request",
+    "deliverPrBackTitleMr": "Deliver back to the merge request",
+    "deliverPrBackDescription": "Pushes this task's commits onto {branch}, the head branch of {repo}#{number}. Nothing new is opened — the review that is already there receives the work.",
+    "deliverPrBackDescriptionMr": "Pushes this task's commits onto {branch}, the source branch of {repo}!{number}. Nothing new is opened — the review that is already there receives the work.",
+    "deliverPrBackSubmit": "Push",
+    "deliverPrBackDone": "Pushed to the pull request",
+    "deliverPrBackDoneMr": "Pushed to the merge request"
   },
   "TokenUsage": {
     "title": "Token Usage",
@@ -5126,5 +5293,103 @@
     "tonePop": "Pop",
     "toneAlert": "Alert",
     "toneDescend": "Descending"
+  },
+  "Forge": {
+    "title": "Repository panel",
+    "pickFolder": "Pick a project folder",
+    "noRemote": "This folder has no recognizable forge remote (origin)",
+    "errors": {
+      "noAccount": "No {provider} account is configured for {host}. Add one under Settings → Version Control to load this repository."
+    },
+    "addAccount": "Add an account",
+    "empty": "Nothing here",
+    "refresh": "Refresh",
+    "searchPlaceholder": "Search title and description…",
+    "clearSearch": "Clear search",
+    "tabIssues": "Issues",
+    "tabPrs": "Pull requests",
+    "tabMrs": "Merge requests",
+    "countOpen": "{count} open",
+    "countClosed": "{count} closed",
+    "countAll": "{count} in total",
+    "stateOpen": "Open",
+    "stateClosed": "Closed",
+    "stateAll": "All",
+    "stateMerged": "Merged",
+    "stateDraft": "Draft",
+    "assignedMe": "Assigned to me",
+    "labelsFilter": "Labels",
+    "searchLabels": "Search labels…",
+    "noLabels": "No matching labels",
+    "clearLabels": "Clear labels",
+    "labelsTruncated": "Only the first 100 labels are listed.",
+    "sortBy": "Sort",
+    "sortNewest": "Newest",
+    "sortOldest": "Oldest",
+    "sortRecentlyUpdated": "Recently updated",
+    "sortLeastRecentlyUpdated": "Least recently updated",
+    "start": "Start",
+    "viewTask": "View the task on the board",
+    "retrigger": "re-trigger",
+    "commentCount": "{count} comments",
+    "pagination": "Pagination",
+    "previousPage": "Previous page",
+    "nextPage": "Next page",
+    "goToPage": "Go to page {page}",
+    "pageSize": "Per page",
+    "incompleteResults": "The search timed out, so this page may be missing matches.",
+    "reachableCap": "Only the first {count} matches can be paged through; narrow the filters to reach the rest.",
+    "openRepo": "Open the repository",
+    "stateFilter": "State",
+    "emptyPage": "Nothing on this page",
+    "dialogDescription": "Creates a to-do task in {repo}'s folder — the agent works in its own worktree, you review before anything lands.",
+    "dialogDescriptionPr": "Creates a to-do task in {repo}'s folder, with its worktree checked out at this pull request's head — the agent's commits go on top of it and are pushed back to the same pull request once you accept.",
+    "dialogDescriptionMr": "Creates a to-do task in {repo}'s folder, with its worktree checked out at this merge request's head — the agent's commits go on top of it and are pushed back to the same merge request once you accept.",
+    "instructionPlaceholder": "Optional extra instruction for the agent…",
+    "writebackLabel": "Comment the outcome back on this item",
+    "writebackHint": "When the task finishes, houhub posts one comment on this item: the outcome, the link and the diff counters.",
+    "previewToggle": "Preview the issue content the task will carry",
+    "previewEmpty": "(no description)",
+    "duplicateBody": "An active task already handles this item: {title} ({status}). Create another one anyway?",
+    "folderMismatch": "This folder's remote is {remote}, not this issue's repository — pick the matching folder.",
+    "cancel": "Cancel",
+    "create": "Create task",
+    "creating": "Creating…",
+    "createAnyway": "Create anyway",
+    "viewExisting": "View the existing task",
+    "scenarioLabel": "How to handle it",
+    "scenarioFix": "Fix / implement",
+    "scenarioFixHint": "The agent implements or fixes it in its worktree — you review the diff before anything lands.",
+    "scenarioInvestigate": "Investigate only",
+    "scenarioInvestigateHint": "Reproduce and diagnose without fixing; the findings come back as a report, and you can return the task to get the fix.",
+    "scenarioPlanFirst": "Plan first",
+    "scenarioPlanFirstHint": "The agent delivers an implementation plan and stops — approve it by returning the task for implementation.",
+    "scenarioReviewFix": "Review & fix",
+    "scenarioReviewFixHint": "Review the changes and fix problems on top; the commits go back to the branch once you accept.",
+    "scenarioReviewOnly": "Review only",
+    "scenarioReviewOnlyHint": "A review report with findings and suggestions, no commits — return the task if you want fixes applied.",
+    "settingsTitle": "Panel settings",
+    "settingsDescription": "How issues and changes in {folder} are handled.",
+    "settingsScope": "Scope",
+    "settingsScopeGlobal": "All folders (global defaults)",
+    "settingsScopeGlobalHint": "Folders without their own settings use these global defaults.",
+    "settingsSource": "Configuration",
+    "settingsSourceGlobal": "Global defaults",
+    "settingsSourceCustom": "Custom",
+    "settingsSourceCustomHint": "Saves this folder's own settings; it stops following the global defaults.",
+    "settingsSourceGlobalFollow": "Follows the global panel settings — changes there apply here automatically.",
+    "settingsIssueDefault": "Default for issues",
+    "settingsIssueDefaultHint": "Preselected when the handling dialog opens on an issue.",
+    "settingsPrDefault": "Default for pull / merge requests",
+    "settingsPrDefaultHint": "Preselected when the handling dialog opens on a pull or merge request.",
+    "settingsWritebackDefault": "Comment the outcome back by default",
+    "settingsWritebackDefaultHint": "The starting position of that switch in the handling dialog — still yours to change per item.",
+    "settingsPromptsIntro": "Standing instructions are appended after the built-in wording of the scenario you pick, and before whatever you type in the handling dialog — no need to restate the built-ins. They ride with the task's opening order; text you want on every turn belongs in the task settings' prompts.",
+    "settingsPromptsLabel": "Scenario",
+    "settingsPromptAll": "Every scenario",
+    "settingsPromptAllHint": "Sent with every task this panel creates, whatever the scenario.",
+    "settingsPromptScenarioHint": "Sent only with tasks created for this scenario.",
+    "settingsPromptPlaceholder": "e.g. Reply in English. Run the project's tests before you finish.",
+    "save": "Save"
   }
 }

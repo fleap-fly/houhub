@@ -227,11 +227,22 @@ function getAllowedExternalProtocol(rawUrl: string): string | null {
 }
 
 /**
- * True when the current window has no access to the Tauri opener plugin
- * (pure web, or a Tauri window bound to a remote houhub-server).
+ * True when `window.open` reaches a real browser tab. Tauri webviews, including
+ * remote-workspace windows, must route ordinary external links through the
+ * native opener plugin instead of relying on a popup that the webview cannot
+ * create.
+ */
+function windowOpenReachesABrowser(): boolean {
+  return !isDesktop()
+}
+
+/**
+ * OS-handler URLs are the one exception for a Tauri window: a synthetic anchor
+ * click is the reliable way to hand `mailto:`/`tel:` to the host OS without
+ * leaving an empty `about:blank` tab behind. Remote windows use the same path.
  */
 function isWebOpenerEnvironment(): boolean {
-  return !isDesktop() || getActiveRemoteConnectionId() !== null
+  return windowOpenReachesABrowser() || getActiveRemoteConnectionId() !== null
 }
 
 function shouldLetStreamdownOpenExternalUrl(rawUrl: string): boolean {
@@ -242,7 +253,7 @@ function shouldLetStreamdownOpenExternalUrl(rawUrl: string): boolean {
   // them via a synthetic anchor click — streamdown's `window.open(_, "_blank")`
   // would otherwise leave a blank tab behind.
   if (OS_HANDLER_PROTOCOLS.has(protocol)) return false
-  return isWebOpenerEnvironment()
+  return windowOpenReachesABrowser()
 }
 
 /**

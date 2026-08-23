@@ -216,6 +216,8 @@ pub enum AcpEvent {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         parent_tool_use_id: Option<String>,
     },
+    /// Agent-published session title from an ACP session-info update.
+    NativeSessionTitle { title: String },
     /// Backend has transitioned the conversation row's `status` column.
     /// Emitted by `send_prompt_linked` (`InProgress`) and the lifecycle
     /// subscriber on `TurnComplete` (`PendingReview`). The frontend mirrors
@@ -1080,6 +1082,21 @@ pub struct CursorAuthStatus {
     /// `"<binary_path>" login` command from it — the managed binary lives in
     /// HouHub's cache and is NOT on the user's PATH, so a bare `cursor-agent
     /// login` fails. `None` when no binary is installed.
+    pub binary_path: Option<String>,
+}
+
+/// Result of probing the optional Qoder CLI. Kept separate from Cursor's
+/// status shape because Qoder exposes account tier and BYOK capability.
+#[derive(Debug, Clone, Serialize)]
+pub struct QoderAuthStatus {
+    pub installed: bool,
+    pub logged_in: bool,
+    pub username: Option<String>,
+    pub email: Option<String>,
+    pub user_type: Option<String>,
+    pub version: Option<String>,
+    pub allow_byok: Option<bool>,
+    pub error: Option<String>,
     pub binary_path: Option<String>,
 }
 

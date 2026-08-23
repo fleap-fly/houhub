@@ -175,7 +175,9 @@
       "panelOpacity": "Opacidad de los paneles",
       "panelOpacityHint": "Cuán opacos son la barra lateral, los paneles y las barras de pestañas. Más bajo deja ver más la imagen.",
       "errorTooLarge": "La imagen es demasiado grande (máx. 16 MB).",
-      "errorUploadFailed": "No se pudo establecer la imagen de fondo."
+      "errorUploadFailed": "No se pudo establecer la imagen de fondo.",
+      "formatHint": "PNG, JPEG, WebP y GIF. Las imágenes animadas se reproducen automáticamente.",
+      "errorUnsupportedFormat": "Formato de imagen no admitido. Elige un PNG, JPEG, WebP o GIF."
     },
     "customStyle": {
       "sectionTitle": "Estilo personalizado",
@@ -305,7 +307,11 @@
       "downloadFailed": "No se pudo descargar el paquete de actualización. Inténtalo más tarde.",
       "installFailed": "No se pudo instalar la actualización. Cierra la app e inténtalo de nuevo.",
       "unknown": "La actualización falló. Inténtalo más tarde."
-    }
+    },
+    "autostartTitle": "Abrir al iniciar sesión",
+    "autostartDescription": "Se abre automáticamente después de que inicies sesión en este equipo.",
+    "autostartSaveFailed": "No se pudo guardar la configuración de inicio automático: {message}",
+    "autostartUnavailable": "No se pudo leer el registro de inicio de este equipo: {message}"
   },
   "VersionControlSettings": {
     "loading": "Cargando...",
@@ -374,7 +380,15 @@
       "serverRequired": "La URL del servidor es obligatoria.",
       "usernameRequired": "El nombre de usuario es obligatorio.",
       "passwordRequired": "La contraseña es obligatoria."
-    }
+    },
+    "gitlabTitle": "Cuentas de GitLab",
+    "gitlabDescription": "Gestiona las cuentas de GitLab para autenticación. Los tokens se almacenan localmente.",
+    "gitlabTokenHint": "Crea un token de acceso personal con el ámbito api en GitLab → Preferences → Access tokens.",
+    "gitlabNoAccounts": "Aún no hay ninguna cuenta de GitLab",
+    "updateToken": "Actualizar token",
+    "updateTokenTitle": "Actualizar el token de esta cuenta",
+    "updateTokenDescription": "Sustituye el token guardado para {username} y conserva la cuenta. Las tareas creadas con esta cuenta siguen funcionando: eliminarla y volver a añadirla crea otra distinta para ellas.",
+    "updateTokenSubmit": "Validar y actualizar"
   },
   "ShortcutSettings": {
     "sectionTitle": "Atajos",
@@ -1276,7 +1290,11 @@
       "providerDisconnected": "Desconectado {providerId}",
       "disconnectFailed": "Error al desconectar {providerId}",
       "catalogRefreshed": "Catálogo actualizado: {count} proveedores",
-      "catalogRefreshFailed": "Error al actualizar el catálogo"
+      "catalogRefreshFailed": "Error al actualizar el catálogo",
+      "qoderSaved": "Configuración de Qoder guardada",
+      "saveQoderConfigFailed": "No se pudo guardar la configuración de Qoder",
+      "antigravitySaved": "Antigravity config saved",
+      "saveAntigravityConfigFailed": "Failed to save Antigravity config"
     },
     "version": {
       "statusLabel": "Estado de versión",
@@ -1438,7 +1456,53 @@
       "missing": "HouHub habla con los agentes mediante ACP y la {nativeLabel} no habla ACP, así que HouHub necesita un paquete adaptador aparte, {adapterPackage}, mantenido por el proyecto Agent Client Protocol (originalmente Zed). Incluye su propio runtime, por lo que no hace falta instalar antes la CLI {nativeCmd}; si ya la tienes, ambas conviven y comparten la sesión y los ajustes de {configDir}. Instálalo abajo.",
       "readyWithNative": "El adaptador {adapterCmd} está instalado: es lo que HouHub ejecuta, no tu propio {nativeCmd} en {nativePath}. Son paquetes distintos que conviven y ambos leen {configDir}, así que la sesión y los ajustes son compartidos.",
       "ready": "El adaptador {adapterCmd} está instalado: es lo que HouHub ejecuta. Incluye su propio runtime, así que la {nativeLabel} no es necesaria; si la instalas después, ambas conviven y comparten {configDir}."
-    }
+    },
+    "qoder": {
+      "configDescription": "Inicia sesión en Qoder aquí. Todo lo demás que lee la CLI está en un único archivo, $QODER_CONFIG_DIR/settings.json (por defecto ~/.qoder), compartido con la CLI de qoder y editable tal cual más abajo. El modelo y el esfuerzo de razonamiento no están aquí: Qoder los anuncia por ACP, así que los selectores del compositor los deciden por sesión.",
+      "authTitle": "Cuenta",
+      "authChecking": "Comprobando…",
+      "authNotInstalled": "qoder no está instalado",
+      "authUnknown": "Estado no disponible",
+      "authLoggedIn": "Sesión iniciada",
+      "authNotLoggedIn": "Sin iniciar sesión",
+      "loginHint": "Ejecuta esto en una terminal para iniciar sesión con tu cuenta de Qoder (se abrirá el navegador) y luego pulsa actualizar:",
+      "authMethodLabel": "Método de autenticación",
+      "tokenLabel": "Token de acceso personal",
+      "tokenPlaceholder": "para equipos headless o servidores",
+      "tokenHint": "QODER_PERSONAL_ACCESS_TOKEN: credencial no interactiva para equipos donde no puede ejecutarse el inicio de sesión por navegador. Déjalo vacío para usar la cuenta de qoder.",
+      "saveToken": "Guardar token",
+      "advancedToggle": "Avanzado: settings.json en bruto",
+      "advancedHint": "El settings.json completo. Guardar escribe el archivo literalmente, y es además la única forma de borrar una clave.",
+      "saveRawConfig": "Guardar archivo"
+    },
+    "antigravity": {
+      "configDescription": "Antigravity needs an authentication method before it can start a session. The choice is written to auth.type in $GEMINI_HOME/antigravity-acp/settings.json, which is the only place the ACP server looks — without it every new session fails with \"Authentication required\". Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",
+      "methodLabel": "Authentication method",
+      "methods": {
+        "oauth-personal": "Sign in with Google",
+        "oauth-business": "Gemini Enterprise",
+        "gemini-api-key": "Gemini API key",
+        "agent-platform": "Gemini Enterprise Agent Platform"
+      },
+      "methodHints": {
+        "oauth-personal": "Your Google account, on any Antigravity plan including the free tier. The first new session opens a browser to finish signing in; the token is then cached and reused.",
+        "oauth-business": "Your Gemini Enterprise account. Needs a GCP project and location, and the first new session opens a browser.",
+        "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
+        "agent-platform": "Formerly Vertex AI. Use an API key, or a project and location with Application Default Credentials (gcloud auth application-default login)."
+      },
+      "geminiApiKeyLabel": "Gemini API key",
+      "googleApiKeyLabel": "Google API key",
+      "googleApiKeyHint": "Optional. When set it is used on its own — the project and location below are ignored. Leave it empty to authenticate with Application Default Credentials instead.",
+      "gcpProjectLabel": "GCP project",
+      "gcpLocationLabel": "GCP location",
+      "missingGeminiApiKey": "Enter a Gemini API key, or pick a different authentication method — sessions will fail to start without it.",
+      "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
+      "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
+      "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
+      "save": "Save"
+    },
+    "customAgentMcpLabel": "Compatibilidad con MCP",
+    "customAgentMcpHint": "Envía el complemento MCP integrado de houhub a este agente al iniciar la sesión: es el canal de la delegación, los comentarios en vivo y las herramientas de tareas. Desactívalo para un agente que rechaza servidores MCP y no llega a conectarse; el cambio se aplica en la próxima conexión."
   },
   "SettingsPages": {
     "agentsLoading": "Cargando configuración de agentes...",
@@ -1629,8 +1693,11 @@
       "openFolder": "Abrir carpeta",
       "searchPlaceholder": "Buscar conversaciones...",
       "viewOptions": "Opciones de visualización",
+      "listOptions": "Lista de conversaciones",
       "showCompleted": "Mostrar conversaciones completadas",
       "showWorktrees": "Mostrar carpetas de worktree",
+      "showRecent": "Mostrar grupo Recientes",
+      "navigationItems": "Elementos de navegación",
       "moreOptions": "Más opciones",
       "sortBy": "Ordenar por",
       "sortByCreatedAt": "Fecha de creación",
@@ -1698,7 +1765,15 @@
       "loadingSubsessions": "Cargando subconversaciones…",
       "worktreeRemovedBadge": "Worktree de origen eliminado",
       "tasks": "Tablero de tareas",
-      "runningCountBadge": "{count, plural, one {# sesión en ejecución} other {# sesiones en ejecución}}"
+      "runningCountBadge": "{count, plural, one {# sesión en ejecución} other {# sesiones en ejecución}}",
+      "showRecent": "Mostrar grupo Recientes",
+      "sectionOrderMoveUp": "Subir",
+      "sectionOrderMoveDown": "Bajar",
+      "sectionOrderItemLabel": "{name} — posición {position} de {total}",
+      "sectionRecent": "Recientes",
+      "noRecent": "Sin conversaciones recientes",
+      "showMoreRecent": "Mostrar más ({count})",
+      "forge": "Panel del repositorio"
     },
     "conversation": {
       "reloadFailed": "No se pudo recargar la conversación: {message}",
@@ -1791,7 +1866,8 @@
       "markCompleted": "Marcar como completada",
       "reopen": "Reabrir",
       "expandSubsessions": "Expandir subconversaciones",
-      "collapseSubsessions": "Contraer subconversaciones"
+      "collapseSubsessions": "Contraer subconversaciones",
+      "attachToCurrentSession": "Agregar a la sesión"
     },
     "search": {
       "dialogTitle": "Buscar",
@@ -1859,6 +1935,16 @@
         "cacheRead": "Lectura de caché",
         "cacheWrite": "Escritura de caché",
         "total": "Total de tokens"
+      },
+      "quickActions": {
+        "title": "Acciones rápidas",
+        "groups": {
+          "workspace": "Espacio de trabajo",
+          "sessions": "Sesiones",
+          "navigation": "Navegación",
+          "more": "Más"
+        },
+        "showPet": "Mostrar mascota"
       }
     },
     "auxPanel": {
@@ -2063,7 +2149,9 @@
         "stashChanges": "Guardar cambios en stash",
         "stashPop": "Aplicar stash",
         "deleteBranch": "Eliminar rama {branchName}",
-        "updateBranch": "Actualizar la rama {branchName}"
+        "updateBranch": "Actualizar la rama {branchName}",
+        "removeWorktree": "Eliminar el worktree de {branchName}",
+        "removeWorktreeAndBranch": "Eliminar el worktree y la rama {branchName}"
       },
       "confirm": {
         "mergeTitle": "Fusionar rama",
@@ -2075,7 +2163,15 @@
         "deleteTitle": "Eliminar rama",
         "deleteDescription": "¿Eliminar la rama {branchName}? Esta acción no se puede deshacer.",
         "forceDeleteTitle": "Forzar eliminación de rama",
-        "forceDeleteDescription": "La rama {branchName} no está completamente fusionada. ¿Estás seguro de que quieres forzar su eliminación? Esta acción no se puede deshacer."
+        "forceDeleteDescription": "La rama {branchName} no está completamente fusionada. ¿Estás seguro de que quieres forzar su eliminación? Esta acción no se puede deshacer.",
+        "deleteWorktreeTitle": "Eliminar worktree",
+        "deleteWorktreeDescription": "¿Eliminar el directorio del worktree que tiene {branchName} activa? La rama y sus commits se conservan.",
+        "forceDeleteWorktreeTitle": "Forzar la eliminación del worktree",
+        "forceDeleteWorktreeDescription": "El worktree de {branchName} tiene archivos sin confirmar o sin seguimiento. ¿Eliminarlo de todos modos? Esos cambios no se podrán recuperar.",
+        "deleteWorktreeAndBranchTitle": "Eliminar worktree y rama",
+        "deleteWorktreeAndBranchDescription": "¿Eliminar el worktree de {branchName}, la rama y su carpeta del espacio de trabajo? Sus sesiones pasan a la carpeta del repositorio. Esta acción no se puede deshacer.",
+        "forceDeleteWorktreeAndBranchTitle": "Forzar la eliminación del worktree y la rama",
+        "forceDeleteWorktreeAndBranchDescription": "El worktree de {branchName} tiene archivos sin confirmar, o la rama no está totalmente fusionada. ¿Eliminar ambos de todos modos? Esta acción no se puede deshacer."
       },
       "current": "Actual",
       "switchToBranch": "Cambiar a esta rama",
@@ -2152,7 +2248,9 @@
       "searchAriaLabel": "Buscar ramas y acciones",
       "branchListLabel": "Ramas y acciones",
       "noMatches": "Sin coincidencias",
-      "pushBranch": "Enviar"
+      "pushBranch": "Enviar",
+      "deleteWorktree": "Eliminar worktree",
+      "deleteWorktreeAndBranch": "Eliminar worktree y rama"
     },
     "commitDialog": {
       "toasts": {
@@ -2625,7 +2723,8 @@
           "turnFailedEmpty": "{agent} finalizó el turno sin producir ninguna respuesta.",
           "turnFailedEmptyProtocol": "{agent} produjo una salida que houhub no pudo analizar; la versión del agente podría no coincidir con el protocolo.",
           "turnFailedEmptyMetadata": "{agent} solo envió actualizaciones de estado en este turno (plan / modo / uso) y ninguna respuesta.",
-          "detailsInAlerts": "Abre Alertas en la barra de estado y despliega los detalles para ver la salida del agente."
+          "detailsInAlerts": "Abre Alertas en la barra de estado y despliega los detalles para ver la salida del agente.",
+          "mcpRejectedByAgent": "{agent} rechazó la sesión con el complemento MCP de houhub adjunto: {message} Si este agente no admite MCP, desactiva «Compatibilidad con MCP» en Ajustes y vuelve a conectar."
         },
         "unableReadAgentConfig": "No se puede leer la configuración del agente: {message}",
         "connectFailedTitle": "Falló la conexión de {agent}",
@@ -2641,7 +2740,9 @@
           "nextRetryIn": "siguiente en {seconds}s",
           "line": "{error}{status} · {retry}",
           "lineWithDelay": "{error}{status} · {retry}, {delay}",
-          "httpStatus": " (HTTP {status})"
+          "httpStatus": " (HTTP {status})",
+          "lineNoError": "{retry}",
+          "lineNoErrorWithDelay": "{retry}, {delay}"
         },
         "configOptionAdjusted": "{agent} estableció {option} en {actual} en lugar de {requested}"
       },
@@ -2728,7 +2829,10 @@
         "steerIntoTurn": "Insertar en el turno actual",
         "steerQueuedInstead": "Se puso en cola: se enviará con el siguiente turno.",
         "steerFailed": "No se pudo insertar en el turno actual",
-        "steerAttachmentsUnsupported": "Solo texto: los borradores con adjuntos pasan por la cola."
+        "steerAttachmentsUnsupported": "Solo texto: los borradores con adjuntos pasan por la cola.",
+        "toggleOn": "Activado",
+        "toggleOff": "Desactivado",
+        "slashLoading": "Cargando comandos…"
       },
       "messageQueue": {
         "addToQueue": "Agregar a la cola",
@@ -2957,7 +3061,18 @@
         "completedAt": "Completado a las",
         "jumpToPreviousUserMessage": "Ir al mensaje del usuario",
         "showMore": "Mostrar más",
-        "showLess": "Mostrar menos"
+        "showLess": "Mostrar menos",
+        "loadEarlier": "Cargar mensajes anteriores",
+        "loadingEarlier": "Cargando mensajes anteriores…",
+        "selectionActions": "Acciones de selección",
+        "selectionCopy": "Copiar texto",
+        "selectionCopied": "Copiado",
+        "selectionCopyFailed": "Error al copiar",
+        "selectionQuote": "Citar",
+        "copyImage": "Copiar imagen",
+        "copiedImage": "Imagen copiada",
+        "copyImageFailed": "No se pudo copiar la imagen: {message}",
+        "copyImageUnsupported": "Aquí no se puede copiar esta imagen"
       },
       "liveTurnStats": {
         "thinking": "Pensando...",
@@ -3369,6 +3484,25 @@
         "viewTree": "Ver árbol",
         "fields": "{count, plural, one {# campo} other {# campos}}",
         "items": "{count, plural, one {# elemento} other {# elementos}}"
+      },
+      "houhubMcpTool": {
+        "getSessionInfo": "Leyendo la sesión {session}",
+        "getSessionInfoNoId": "Leyendo una sesión",
+        "taskProgress": "Progreso: {message}",
+        "taskProgressNoMessage": "Informando el progreso de la tarea",
+        "taskComplete": "Tarea finalizada · {verdict}",
+        "taskCompleteWithSummary": "Tarea finalizada · {verdict}: {summary}",
+        "createAutomation": "Creando la automatización {name}",
+        "createAutomationNoName": "Creando una automatización",
+        "createWorkTask": "Creando la tarea de trabajo {title}",
+        "createWorkTaskNoTitle": "Creando una tarea de trabajo",
+        "promptLabel": "Instrucción",
+        "verdict": {
+          "success": "correcta",
+          "needs_review": "requiere revisión",
+          "blocked": "bloqueada",
+          "unknown": "desconocido"
+        }
       }
     },
     "diffPreview": {
@@ -4934,7 +5068,40 @@
     "settingsWorktreeRootBrowse": "Elegir el directorio de worktrees",
     "settingsTabMerge": "Fusión",
     "settingsTabWorktree": "Worktree",
-    "eventMergeQueued": "En cola para fusionar"
+    "eventMergeQueued": "En cola para fusionar",
+    "actionDeleteWorktree": "Eliminar worktree",
+    "restartDuplicateSource": "{task} ya está activa sobre el mismo elemento de trabajo: reiniciar esta dejaría dos tareas vivas sobre él.",
+    "restartDuplicateSourceAnon": "Otra tarea",
+    "actionRestartAnyway": "Reiniciar de todos modos",
+    "deleteWorktreeConfirmTitle": "¿Eliminar el worktree?",
+    "deleteWorktreeConfirmBody": "El directorio del worktree y su rama de trabajo se eliminan definitivamente. La tarea sigue en el tablero y su conversación pasa a la carpeta del proyecto.",
+    "eventForgeWriteback": "Comentario publicado en la incidencia",
+    "eventForgeWritebackFailed": "Fallo al comentar en la incidencia",
+    "actionDeliverPr": "Abrir pull request",
+    "actionDeliverPrMr": "Abrir merge request",
+    "actionDeliverPrBack": "Enviar al pull request",
+    "actionDeliverPrBackMr": "Enviar al merge request",
+    "detailPullRequest": "Pull request",
+    "detailMergeRequest": "Merge request",
+    "deliverPrTitle": "Entregar como pull request",
+    "deliverPrTitleMr": "Entregar como merge request",
+    "deliverPrDescription": "Envía la rama de esta tarea a {repo} y abre un pull request contra {base}. La incidencia se enlaza automáticamente, así que al fusionarlo se cierra.",
+    "deliverPrDescriptionMr": "Envía la rama de esta tarea a {repo} y abre un merge request contra {base}. La incidencia se enlaza automáticamente, así que al fusionarlo se cierra.",
+    "deliverPrTitleLabel": "Título del pull request",
+    "deliverPrTitleLabelMr": "Título del merge request",
+    "deliverPrDraft": "Abrir como borrador",
+    "deliverPrSubmit": "Enviar y abrir",
+    "deliverPrSubmitting": "Enviando…",
+    "deliverPrDone": "Pull request abierto",
+    "deliverPrDoneMr": "Merge request abierto",
+    "deliverPrOpen": "Ver",
+    "deliverPrBackTitle": "Devolver al pull request",
+    "deliverPrBackTitleMr": "Devolver al merge request",
+    "deliverPrBackDescription": "Envía los commits de esta tarea a {branch}, la rama principal de {repo}#{number}. No se abre nada nuevo: el trabajo llega a la revisión que ya existe.",
+    "deliverPrBackDescriptionMr": "Envía los commits de esta tarea a {branch}, la rama de origen de {repo}!{number}. No se abre nada nuevo: el trabajo llega a la revisión que ya existe.",
+    "deliverPrBackSubmit": "Enviar",
+    "deliverPrBackDone": "Enviado al pull request",
+    "deliverPrBackDoneMr": "Enviado al merge request"
   },
   "TokenUsage": {
     "title": "Uso de tokens",
@@ -5126,5 +5293,103 @@
     "tonePop": "Pop",
     "toneAlert": "Alerta",
     "toneDescend": "Descendente"
+  },
+  "Forge": {
+    "title": "Panel del repositorio",
+    "pickFolder": "Elige una carpeta de proyecto",
+    "noRemote": "Esta carpeta no tiene un remoto reconocible (origin)",
+    "errors": {
+      "noAccount": "No hay ninguna cuenta de {provider} configurada para {host}. Añade una en Configuración → Control de versiones para cargar este repositorio."
+    },
+    "addAccount": "Añadir una cuenta",
+    "empty": "No hay nada aquí",
+    "refresh": "Actualizar",
+    "searchPlaceholder": "Buscar en título y descripción…",
+    "clearSearch": "Borrar búsqueda",
+    "tabIssues": "Issues",
+    "tabPrs": "Pull requests",
+    "tabMrs": "Merge requests",
+    "countOpen": "{count} abiertos",
+    "countClosed": "{count} cerrados",
+    "countAll": "{count} en total",
+    "stateOpen": "Abiertos",
+    "stateClosed": "Cerrados",
+    "stateAll": "Todos",
+    "stateMerged": "Fusionada",
+    "stateDraft": "Borrador",
+    "assignedMe": "Asignados a mí",
+    "labelsFilter": "Etiquetas",
+    "searchLabels": "Buscar etiquetas…",
+    "noLabels": "No hay etiquetas coincidentes",
+    "clearLabels": "Borrar etiquetas",
+    "labelsTruncated": "Solo se muestran las primeras 100 etiquetas.",
+    "sortBy": "Orden",
+    "sortNewest": "Más recientes",
+    "sortOldest": "Más antiguos",
+    "sortRecentlyUpdated": "Actualizados recientemente",
+    "sortLeastRecentlyUpdated": "Actualizados hace más tiempo",
+    "start": "Procesar",
+    "viewTask": "Ver la tarea en el tablero",
+    "retrigger": "reprocesar",
+    "commentCount": "{count} comentarios",
+    "pagination": "Paginación",
+    "previousPage": "Página anterior",
+    "nextPage": "Página siguiente",
+    "goToPage": "Ir a la página {page}",
+    "pageSize": "Por página",
+    "incompleteResults": "La búsqueda agotó el tiempo de espera; esta página puede estar incompleta.",
+    "reachableCap": "Solo se pueden paginar las primeras {count} coincidencias; acota los filtros para ver el resto.",
+    "openRepo": "Abrir el repositorio",
+    "stateFilter": "Estado",
+    "emptyPage": "No hay nada en esta página",
+    "dialogDescription": "Crea una tarea pendiente en la carpeta de {repo}: el agente trabaja en su propio worktree y tú revisas antes de aplicar nada.",
+    "dialogDescriptionPr": "Crea una tarea pendiente en la carpeta de {repo}, con su worktree en el head de este pull request: los commits del agente se apilan encima y se envían al mismo pull request cuando lo aceptas.",
+    "dialogDescriptionMr": "Crea una tarea pendiente en la carpeta de {repo}, con su worktree en el head de este merge request: los commits del agente se apilan encima y se envían al mismo merge request cuando lo aceptas.",
+    "instructionPlaceholder": "Instrucción adicional para el agente (opcional)…",
+    "writebackLabel": "Comentar el resultado en este elemento",
+    "writebackHint": "Cuando la tarea termine, houhub publicará un comentario en este elemento: el resultado, el enlace y las cifras del diff.",
+    "previewToggle": "Vista previa del contenido del issue que llevará la tarea",
+    "previewEmpty": "(sin descripción)",
+    "duplicateBody": "Ya hay una tarea activa para este elemento: {title} ({status}). ¿Crear otra de todos modos?",
+    "folderMismatch": "El remoto de esta carpeta es {remote}, no el repositorio de este issue: elige la carpeta correcta.",
+    "cancel": "Cancelar",
+    "create": "Crear tarea",
+    "creating": "Creando…",
+    "createAnyway": "Crear de todos modos",
+    "viewExisting": "Ver la tarea existente",
+    "scenarioLabel": "Cómo tratarlo",
+    "scenarioFix": "Corregir / implementar",
+    "scenarioFixHint": "El agente lo implementa o corrige en su worktree — tú revisas el diff antes de aplicar nada.",
+    "scenarioInvestigate": "Solo analizar",
+    "scenarioInvestigateHint": "Reproducir y diagnosticar sin corregir; las conclusiones llegan como informe, y puedes devolver la tarea para obtener el arreglo.",
+    "scenarioPlanFirst": "Primero un plan",
+    "scenarioPlanFirstHint": "El agente entrega un plan de implementación y se detiene — apruébalo devolviendo la tarea para implementarlo.",
+    "scenarioReviewFix": "Revisar y corregir",
+    "scenarioReviewFixHint": "Revisa los cambios y corrige los problemas encima; al aceptar, los commits vuelven a la rama.",
+    "scenarioReviewOnly": "Solo revisar",
+    "scenarioReviewOnlyHint": "Un informe de revisión con hallazgos y sugerencias, sin commits — devuelve la tarea si quieres aplicar arreglos.",
+    "settingsTitle": "Ajustes del panel",
+    "settingsDescription": "Cómo se gestionan las incidencias y los cambios en {folder}.",
+    "settingsScope": "Ámbito",
+    "settingsScopeGlobal": "Todas las carpetas (valores globales)",
+    "settingsScopeGlobalHint": "Las carpetas sin configuración propia usan estos valores globales.",
+    "settingsSource": "Origen de configuración",
+    "settingsSourceGlobal": "Valores globales",
+    "settingsSourceCustom": "Personalizada",
+    "settingsSourceCustomHint": "Guarda configuración propia para esta carpeta y deja de seguir los valores globales.",
+    "settingsSourceGlobalFollow": "Sigue los ajustes globales del panel: los cambios allí se aplican aquí automáticamente.",
+    "settingsIssueDefault": "Predeterminado para incidencias",
+    "settingsIssueDefaultHint": "Lo que viene preseleccionado al abrir el diálogo sobre una incidencia.",
+    "settingsPrDefault": "Predeterminado para pull / merge requests",
+    "settingsPrDefaultHint": "Lo que viene preseleccionado al abrir el diálogo sobre un pull o merge request.",
+    "settingsWritebackDefault": "Comentar el resultado por defecto",
+    "settingsWritebackDefaultHint": "La posición inicial de ese interruptor en el diálogo; sigues pudiendo cambiarlo en cada elemento.",
+    "settingsPromptsIntro": "Las instrucciones permanentes se añaden después del texto integrado del escenario elegido y antes de lo que escribas en el diálogo; no hace falta repetir aquí el texto integrado. Viajan con el primer turno de la tarea: lo que quieras en cada turno va en los prompts de los ajustes de tareas.",
+    "settingsPromptsLabel": "Escenario",
+    "settingsPromptAll": "Todos los escenarios",
+    "settingsPromptAllHint": "Va en todas las tareas que crea este panel, sea cual sea el escenario.",
+    "settingsPromptScenarioHint": "Va solo en las tareas creadas con este escenario.",
+    "settingsPromptPlaceholder": "p. ej.: Responde en español. Ejecuta las pruebas del proyecto antes de terminar.",
+    "save": "Guardar"
   }
 }

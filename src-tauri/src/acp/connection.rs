@@ -10230,6 +10230,25 @@ async fn emit_conversation_update(
             .await;
         }
         SessionUpdate::SessionInfoUpdate(info) => {
+            // Adopt live ACP session titles immediately. The lifecycle worker
+            // persists the event and broadcasts the sidebar update; only emit
+            // when a bound session has a new, non-empty title.
+            if let Some(title) = crate::acp::session_title::native_title_from_session_info(
+                info.title.value().map(|value| value.as_str()),
+            ) {
+                let admit = {
+                    let mut state = state.write().await;
+                    let admit = state.conversation_id.is_some()
+                        && state.last_native_title.as_deref() != Some(title.as_str());
+                    if admit {
+                        state.last_native_title = Some(title.clone());
+                    }
+                    admit
+                };
+                if admit {
+                    emit_with_state(state, emitter, AcpEvent::NativeSessionTitle { title }).await;
+                }
+            }
             // codex-acp v1.1.0 (#263) reports `/goal` transitions as structured
             // session metadata instead of live "Goal updated (…)" agent text.
             // The goal object rides under ONE of two meta keys, selected per

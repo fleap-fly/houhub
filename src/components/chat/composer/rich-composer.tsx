@@ -9,11 +9,13 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type RefObject,
 } from "react"
 import { type Editor, type JSONContent } from "@tiptap/core"
 import { EditorContent, useEditor } from "@tiptap/react"
 import { exitSuggestion } from "@tiptap/suggestion"
 
+import { isImeCompositionKey } from "@/lib/ime-composition"
 import { matchShortcutEvent } from "@/lib/keyboard-shortcuts"
 import { cn } from "@/lib/utils"
 
@@ -145,6 +147,13 @@ export interface RichComposerProps {
    */
   tabLabels?: Record<ReferenceKind, string>
   /**
+   * Box the `@` panel lines up with: it adopts this element's width and left
+   * edge and opens above it. Point it at the composer's outer chrome so the
+   * panel matches the host's own `/` command menu; defaults to the editor's own
+   * root, which is the same box for a host that wraps nothing else around it.
+   */
+  mentionAnchorRef?: RefObject<HTMLElement | null>
+  /**
    * Key binding (matchShortcutEvent form) that sends the message. Default
    * `"enter"`. When set to a non-Enter binding, a plain Enter inserts a newline.
    */
@@ -214,6 +223,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       referenceSearch,
       mentionUiLabels,
       tabLabels,
+      mentionAnchorRef,
       submitShortcut,
       newlineShortcut,
       isExternalMenuOpen,
@@ -245,6 +255,8 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     // The live editor, captured for command access inside editorProps handlers
     // (which are created before `editor` is assigned in this closure).
     const editorInstanceRef = useRef<Editor | null>(null)
+    // Fallback anchor for the `@` panel when the host names no outer box.
+    const rootRef = useRef<HTMLDivElement>(null)
     useEffect(() => {
       onChangeRef.current = onChange
       onSubmitRef.current = onSubmit
@@ -294,6 +306,14 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       []
     )
 
+    // The placeholder is read through a ref rather than baked in, so a host
+    // that changes its hint (the task drawer swaps one per follow-up scenario)
+    // repaints instead of remounting the editor. A remount would take the
+    // document with it — including badges whose bytes live out of band and
+    // cannot be recovered from the serialized text.
+    const placeholderRef = useRef(placeholder)
+    const getPlaceholder = useCallback(() => placeholderRef.current ?? "", [])
+
     const editor = useEditor({
       // Static export / SSR safety: never render on the server.
       immediatelyRender: false,
@@ -304,7 +324,10 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       // render — the React Compiler lint can't prove that. Mirrors Tiptap's own
       // React suggestion pattern (render() → component.ref.onKeyDown).
       // eslint-disable-next-line react-hooks/refs
-      extensions: buildComposerExtensions({ placeholder, mentionController }),
+      extensions: buildComposerExtensions({
+        placeholder: getPlaceholder,
+        mentionController,
+      }),
       editable: !disabled,
       autofocus: autoFocus ? "end" : false,
       editorProps: {
@@ -315,6 +338,11 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
           ...(ariaLabel ? { "aria-label": ariaLabel } : {}),
         },
         handleKeyDown: (view, event) => {
+          // Mid-IME-composition every key belongs to the input method, so hand
+          // it straight back to the editor before any menu can claim it — the
+          // Enter that picks a CJK candidate must not select a slash command
+          // (`decideComposerKey` repeats this for the submit/newline path).
+          if (isImeCompositionKey(event) || view.composing) return false
           // The internal `@` panel's suggestion plugin owns its navigation keys;
           // never submit/break while it is open.
           if (mentionOpenRef.current) return false
@@ -421,6 +449,17 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     useEffect(() => {
       editor?.setEditable(!disabled, false)
     }, [editor, disabled])
+
+    useEffect(() => {
+      placeholderRef.current = placeholder
+      // Tiptap resolves the placeholder while building decorations, which only
+      // happens on a transaction — so an empty one is what makes a changed hint
+      // appear. Nothing is inserted, and it is skipped entirely on the first
+      // pass (the editor already painted this value at creation).
+      const view = editor?.view
+      if (!view) return
+      view.dispatch(view.state.tr)
+    }, [editor, placeholder])
 
     useImperativeHandle(
       ref,
@@ -547,6 +586,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
 
     return (
       <div
+        ref={rootRef}
         className={cn("houhub-composer flex min-h-0 flex-col", className)}
         style={style}
         data-disabled={disabled || undefined}
@@ -566,6 +606,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
             search={referenceSearch}
             onSelect={handleReferenceSelect}
             onClose={closeMention}
+            anchorRef={mentionAnchorRef ?? rootRef}
             onActiveOptionChange={handleActiveOptionChange}
             emptyLabel={mentionUiLabels?.empty}
             loadingLabel={mentionUiLabels?.loading}

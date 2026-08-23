@@ -10,8 +10,13 @@ import {
 } from "./model-config-groups"
 import type {
   SessionConfigOptionInfo,
+  SessionConfigSelectInfo,
   SessionConfigSelectOptionInfo,
 } from "@/lib/types"
+
+function selectKind(option: SessionConfigOptionInfo): SessionConfigSelectInfo {
+  return option.kind as SessionConfigSelectInfo
+}
 
 function modelOption(
   options: SessionConfigSelectOptionInfo[],
@@ -85,7 +90,7 @@ describe("deriveModelGroups", () => {
 
   it("respects server-provided groups verbatim (returns null)", () => {
     const option = modelOption([opt("anthropic/opus")])
-    option.kind.groups = [
+    selectKind(option).groups = [
       {
         group: "anthropic",
         name: "Anthropic",
@@ -307,7 +312,7 @@ describe("modelListGroups", () => {
     // The agent shipped its own grouping → derive returns null; the picker must
     // keep those groups, not collapse to one headerless bucket.
     const option = modelOption([])
-    option.kind.groups = [
+    selectKind(option).groups = [
       {
         group: "fast",
         name: "Fast",

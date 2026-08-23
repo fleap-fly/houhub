@@ -6,6 +6,7 @@
 //! commands live in `commands::windows::pet` to keep the Tauri-only code
 //! together.
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
@@ -324,6 +325,16 @@ pub async fn pet_marketplace_install_core(
     pets::marketplace::install(request).await
 }
 
+/// Proxy marketplace artwork through the backend and return the same payload
+/// shape as the local spritesheet reader.
+pub async fn pet_marketplace_asset_core(url: String) -> Result<PetSpriteAsset, AppCommandError> {
+    let (mime, bytes) = pets::marketplace::fetch_asset(&url).await?;
+    Ok(PetSpriteAsset {
+        mime,
+        data_base64: BASE64.encode(bytes),
+    })
+}
+
 // Tauri 2 looks up command parameters by their top-level name in the JSON
 // args object. The frontend `lib/pet/api.ts` ships flat objects (e.g.
 // `{ id, displayName, description, spritesheetBase64 }` for `pet_add`), so
@@ -442,6 +453,11 @@ pub async fn pet_marketplace_install(
         overwrite: overwrite.unwrap_or(false),
     })
     .await
+}
+
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn pet_marketplace_asset(url: String) -> Result<PetSpriteAsset, AppCommandError> {
+    pet_marketplace_asset_core(url).await
 }
 
 #[cfg(feature = "tauri-runtime")]

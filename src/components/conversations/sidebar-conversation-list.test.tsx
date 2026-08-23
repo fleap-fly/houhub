@@ -1011,3 +1011,197 @@ describe("SidebarConversationList — worktree grouping (Show worktrees)", () =>
     expect(probes.root).toBe(0)
   })
 })
+
+describe("SidebarConversationList — Recent section", () => {
+  function recentTree(showRecent: boolean) {
+    return (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted
+          showRecent={showRecent}
+          sortMode="created"
+        />
+      </NextIntlClientProvider>
+    )
+  }
+
+  const RECENT = enMessages.Folder.sidebar.sectionRecent
+
+  beforeEach(() => {
+    probes.card = 0
+    const folders = [folder(1, "Repo")]
+    store.activeTabId = null
+    store.tabSpec = []
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations: [
+        conv(11, 1),
+        // A folderless chat-mode conversation and a conversation whose folder
+        // is NOT open — Recent must take the first and drop the second.
+        conv(12, 99, { kind: "chat" }),
+        conv(13, 42),
+      ],
+    })
+  })
+
+  it("renders nothing for the section when showRecent is off", () => {
+    render(recentTree(false))
+    expect(document.body.textContent).not.toContain(RECENT)
+    // Each conversation renders exactly one card (no Recent duplicates).
+    expect(probes.card).toBe(2)
+  })
+
+  it("lists folder and chat conversations together, without duplicate React keys", () => {
+    // A duplicated key would make React drop one of the two rows and log an
+    // error; assert on the console as well as the card count.
+    const errors: unknown[][] = []
+    const spy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args: unknown[]) => {
+        errors.push(args)
+      })
+    try {
+      render(recentTree(true))
+      // 2 reachable conversations × (canonical row + Recent row) = 4 cards.
+      expect(probes.card).toBe(4)
+      expect(errors).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(document.body.textContent).toContain(RECENT)
+    // conv-13 lives in a folder that is not open, so it is unreachable in the
+    // Folders section and must stay out of Recent too.
+    expect(document.body.textContent).not.toContain("conv-13")
+  })
+
+  it("collapses independently of the other sections", () => {
+    render(recentTree(true))
+    const header = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent === RECENT
+    )
+    expect(header).toBeTruthy()
+    act(() => {
+      fireEvent.click(header!)
+    })
+    // Its rows are gone; the Folders section's copies remain.
+    expect(probes.card).toBe(4)
+    expect(document.body.textContent).toContain("conv-11")
+    expect(
+      Array.from(document.querySelectorAll("[data-conversation-id]"))
+    ).toHaveLength(2)
+  })
+})
+
+describe("SidebarConversationList — expand / collapse all", () => {
+  const SECTION_COLLAPSED_KEY = "workspace:sidebar-section-collapsed"
+  const FOLDER_EXPANDED_KEY = "workspace:sidebar-folder-expanded"
+  const { sectionPinned, sectionFolders, sectionChats, sectionRecent } =
+    enMessages.Folder.sidebar
+  const ALL_SECTIONS = [
+    sectionPinned,
+    sectionFolders,
+    sectionChats,
+    sectionRecent,
+  ]
+
+  // The section header's toggle carries the state under test; its textContent is
+  // exactly the label (the chevron is an svg).
+  const sectionHeader = (label: string) =>
+    Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent === label
+    )
+  const expandedOf = (label: string) =>
+    sectionHeader(label)?.getAttribute("aria-expanded")
+
+  function renderList() {
+    const ref = createRef<SidebarConversationListHandle>()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted
+          showRecent
+          sortMode="created"
+          ref={ref}
+        />
+      </NextIntlClientProvider>
+    )
+    return ref
+  }
+
+  beforeEach(() => {
+    localStorage.removeItem(SECTION_COLLAPSED_KEY)
+    localStorage.removeItem(FOLDER_EXPANDED_KEY)
+    const folders = [folder(1, "Repo")]
+    store.activeTabId = null
+    store.tabSpec = []
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations: [
+        // conv-11 is folder-bound (Folders + Recent), conv-12 is folderless
+        // chat mode (Chat + Recent only), conv-14 is pinned (Pinned only).
+        conv(11, 1),
+        conv(12, 99, { kind: "chat" }),
+        conv(14, 1, { pinned_at: new Date(FIXED).toISOString() }),
+      ],
+    })
+  })
+
+  afterEach(() => {
+    localStorage.removeItem(SECTION_COLLAPSED_KEY)
+    localStorage.removeItem(FOLDER_EXPANDED_KEY)
+  })
+
+  it("closes all four section headers, not just the folder groups", () => {
+    const ref = renderList()
+    for (const label of ALL_SECTIONS) expect(expandedOf(label)).toBe("true")
+
+    act(() => ref.current?.collapseAll())
+
+    for (const label of ALL_SECTIONS) expect(expandedOf(label)).toBe("false")
+    // Not just the header state — every row is actually gone. The three
+    // conversations cover the three ways a row can reach the list: conv-11 via
+    // a folder group, conv-12 (folderless chat mode) via Chat + Recent, conv-14
+    // via Pinned. What is left is four headers and nothing under them.
+    for (const title of ["conv-11", "conv-12", "conv-14"])
+      expect(document.body.textContent).not.toContain(title)
+    expect(document.querySelectorAll("[data-conversation-id]")).toHaveLength(0)
+    expect(
+      JSON.parse(localStorage.getItem(SECTION_COLLAPSED_KEY) ?? "{}")
+    ).toMatchObject({ pinned: true, folders: true, chats: true, recent: true })
+  })
+
+  it("re-opens every section AND the folder groups under them on expandAll", () => {
+    const ref = renderList()
+    act(() => ref.current?.collapseAll())
+    act(() => ref.current?.expandAll())
+
+    for (const label of ALL_SECTIONS) expect(expandedOf(label)).toBe("true")
+    // Section collapse and per-folder collapse are stored separately, so
+    // re-opening "Folders" is not enough on its own — conv-11 is only back if
+    // its folder group was restored too.
+    for (const title of ["conv-11", "conv-12", "conv-14"])
+      expect(document.body.textContent).toContain(title)
+    expect(
+      JSON.parse(localStorage.getItem(SECTION_COLLAPSED_KEY) ?? "{}")
+    ).toMatchObject({
+      pinned: false,
+      folders: false,
+      chats: false,
+      recent: false,
+    })
+  })
+
+  it("is idempotent — a second collapseAll writes nothing new", () => {
+    const ref = renderList()
+    act(() => ref.current?.collapseAll())
+    const afterFirst = localStorage.getItem(SECTION_COLLAPSED_KEY)
+
+    act(() => ref.current?.collapseAll())
+
+    expect(localStorage.getItem(SECTION_COLLAPSED_KEY)).toBe(afterFirst)
+    for (const label of ALL_SECTIONS) expect(expandedOf(label)).toBe("false")
+  })
+})

@@ -14,17 +14,25 @@ import { useEffect } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
-import type { RichComposerHandle } from "@/components/chat/composer/rich-composer"
 import type { WorkTask } from "@/lib/types"
 
 import { TaskDetailSheet } from "./task-detail-sheet"
-import type { TaskFollowUpComposerProps } from "./task-follow-up-composer"
+import type {
+  TaskMessageComposerHandle,
+  TaskMessageComposerProps,
+} from "./task-message-composer"
 
 const workTaskReturn = vi.fn().mockResolvedValue(undefined)
 const workTaskRetry = vi.fn().mockResolvedValue(undefined)
 const workTaskRequeue = vi.fn().mockResolvedValue(undefined)
 
 vi.mock("@/lib/api", () => ({
+  describeAgentOptions: vi.fn().mockResolvedValue([]),
+  expertsList: vi.fn().mockResolvedValue([]),
+  expertsListAllInstallStatuses: vi.fn().mockResolvedValue([]),
+  officecliSkillListAllInstallStatuses: vi.fn().mockResolvedValue([]),
+  scienceList: vi.fn().mockResolvedValue([]),
+  scienceListAllInstallStatuses: vi.fn().mockResolvedValue([]),
   workTaskArchive: vi.fn().mockResolvedValue(undefined),
   workTaskCancel: vi.fn().mockResolvedValue(undefined),
   getFolderConversation: vi.fn().mockRejectedValue(new Error("no transcript")),
@@ -39,6 +47,7 @@ vi.mock("@/lib/api", () => ({
   workTaskStart: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock("@/lib/platform", () => ({
+  isDesktop: () => false,
   subscribe: vi.fn().mockResolvedValue(() => {}),
   onTransportReconnect: vi.fn(() => () => {}),
 }))
@@ -58,6 +67,12 @@ vi.mock("@/components/ai-elements/message", () => ({
 vi.mock("@/components/diff/unified-diff-preview", () => ({
   UnifiedDiffPreview: () => <div />,
 }))
+// The nested session viewer the sheet now hosts. Never opened here, but its
+// module graph reaches the tab store, which reads the app-workspace store at
+// module scope — and that store is stubbed above down to a bare hook.
+vi.mock("./task-transcript-dialog", () => ({
+  TaskTranscriptDialog: () => null,
+}))
 
 /**
  * The composer, stubbed down to what the drawer talks to: a handle whose text
@@ -65,15 +80,25 @@ vi.mock("@/components/diff/unified-diff-preview", () => ({
  * caught up with) and the props the drawer passes in.
  */
 let editorText = ""
-let composerProps: TaskFollowUpComposerProps | null = null
-vi.mock("./task-follow-up-composer", () => ({
-  TaskFollowUpComposer: (props: TaskFollowUpComposerProps) => {
+let composerProps: TaskMessageComposerProps | null = null
+vi.mock("./task-message-composer", () => ({
+  TaskMessageComposer: (props: TaskMessageComposerProps) => {
     composerProps = props
-    const ref = props.editorRef
+    const ref = props.ref
     useEffect(() => {
-      if (ref) ref.current = { getText: () => editorText } as RichComposerHandle
+      if (ref && typeof ref === "object") {
+        ref.current = {
+          getText: () => editorText,
+          getEditor: () => null,
+          getPromptBlocks: () => [],
+          getAttachmentBlocks: () => [],
+          hasUploadingImage: () => false,
+          hasAttachments: () => false,
+          clear: () => {},
+        } satisfies TaskMessageComposerHandle
+      }
       return () => {
-        if (ref) ref.current = null
+        if (ref && typeof ref === "object") ref.current = null
       }
     }, [ref])
     return <div data-testid="follow-up-composer" />
@@ -106,9 +131,9 @@ function mount(row: WorkTask) {
         onOpenChange={() => {}}
         task={row}
         folderName="repo"
-        onViewSession={() => {}}
         onMerge={() => {}}
         onComplete={() => {}}
+        onDeliverPr={() => {}}
         onCancel={() => {}}
         onEdit={() => {}}
         onSchedule={() => {}}
@@ -141,7 +166,8 @@ describe("task drawer follow-up", () => {
     expect(workTaskReturn).toHaveBeenCalledWith(
       7,
       "look at [retry.ts](file:///repo/retry.ts) again",
-      "revise"
+      "revise",
+      []
     )
   })
 
@@ -183,7 +209,12 @@ describe("task drawer follow-up", () => {
     editorText = "run pnpm install first"
     await user.click(screen.getByRole("button", { name: /^send$/i }))
     await waitFor(() => expect(workTaskRetry).toHaveBeenCalledTimes(1))
-    expect(workTaskRetry).toHaveBeenCalledWith(7, "run pnpm install first")
+    expect(workTaskRetry).toHaveBeenCalledWith(
+      7,
+      "run pnpm install first",
+      [],
+      false
+    )
   })
 
   it.each([
@@ -225,6 +256,6 @@ describe("task drawer follow-up", () => {
     // An untouched box is the plain one-click restart it replaced.
     await user.click(screen.getByRole("button", { name: /^send$/i }))
     await waitFor(() => expect(workTaskRequeue).toHaveBeenCalledTimes(1))
-    expect(workTaskRequeue).toHaveBeenCalledWith(7, null)
+    expect(workTaskRequeue).toHaveBeenCalledWith(7, null, [], false)
   })
 })

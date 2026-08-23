@@ -651,6 +651,7 @@ mod tests {
                 avatar_url: None,
                 is_default: false,
                 created_at: String::new(),
+                provider: None,
             },
             GitHubAccount {
                 id: "2".into(),
@@ -660,6 +661,7 @@ mod tests {
                 avatar_url: None,
                 is_default: true,
                 created_at: String::new(),
+                provider: None,
             },
         ];
 
@@ -685,6 +687,7 @@ mod tests {
                 avatar_url: None,
                 is_default: false,
                 created_at: String::new(),
+                provider: None,
             },
             GitHubAccount {
                 id: "2".into(),
@@ -694,6 +697,7 @@ mod tests {
                 avatar_url: None,
                 is_default: true,
                 created_at: String::new(),
+                provider: None,
             },
         ];
 
@@ -982,6 +986,7 @@ mod tests {
                     avatar_url: None,
                     is_default: true,
                     created_at: String::new(),
+                    provider: None,
                 }],
             };
             let json = serde_json::to_string(&settings).expect("serialize settings");

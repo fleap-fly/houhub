@@ -1899,6 +1899,33 @@ fn annotate_npm_bootstrap_failure(package: &str, err: AcpError) -> AcpError {
 /// while omitting the native binary needed at launch.
 const NPM_INCLUDE_OPTIONAL: &str = "--include=optional";
 
+/// Name the proxy when npm refused to parse the proxy address itself.
+///
+/// npm resolves `HTTP(S)_PROXY` with WHATWG `new URL()`, where a scheme may not
+/// start with a digit, so a bare `127.0.0.1:7890` aborts the install with a
+/// context-free `ERR_INVALID_URL` before any network I/O — no mention of a
+/// proxy, no mention of which variable. HouHub normalizes the address it exports
+/// from Settings, so what reaches here is an externally-provided value (docker
+/// `-e`, a shell export) that the startup contract leaves untouched.
+fn annotate_npm_proxy_url_failure(err: AcpError) -> AcpError {
+    let AcpError::Protocol(message) = &err else {
+        return err;
+    };
+    if !message.contains("ERR_INVALID_URL") && !message.contains("Invalid URL") {
+        return err;
+    }
+    let offenders = crate::network::proxy::proxy_env_vars_missing_scheme();
+    if offenders.is_empty() {
+        return err;
+    }
+    AcpError::Protocol(format!(
+        "{message}\n\nnpm could not parse the proxy address in {} — it has no scheme. \
+         npm requires one (HouHub's own HTTP client does not, which is why updates still \
+         work). Set it to a full URL, e.g. `http://127.0.0.1:7890`.",
+        offenders.join(", ")
+    ))
+}
+
 /// Run an npm command with piped stdout/stderr, streaming each line as a log event.
 /// Returns (success: bool, collected_stderr: String) so callers can inspect errors.
 async fn run_npm_streaming(
@@ -1974,7 +2001,23 @@ async fn run_npm_streaming(
     Ok((status.success(), collected_stderr))
 }
 
+/// Install an npm package globally, streaming progress, with the proxy
+/// diagnostic attached to every failure.
+///
+/// The annotation lives here rather than at the call sites so it covers each
+/// entry point — the pinned npx agents and the `pi` binary prerequisite alike —
+/// and cannot be forgotten by the next one.
 async fn install_npm_global_package_streaming(
+    package: &str,
+    task_id: &str,
+    emitter: &EventEmitter,
+) -> Result<(), AcpError> {
+    install_npm_global_package_streaming_inner(package, task_id, emitter)
+        .await
+        .map_err(annotate_npm_proxy_url_failure)
+}
+
+async fn install_npm_global_package_streaming_inner(
     package: &str,
     task_id: &str,
     emitter: &EventEmitter,
@@ -6223,6 +6266,12 @@ const HERMES_PROVIDERS: &[HermesProvider] = &[
         needs_base_url: false,
         base_url_env_var: "NOVITA_BASE_URL",
     },
+    HermesProvider {
+        id: "ai-gateway",
+        key_env_var: "AI_GATEWAY_API_KEY",
+        needs_base_url: false,
+        base_url_env_var: "AI_GATEWAY_BASE_URL",
+    },
     // OAuth / external-process providers — credentials set via the terminal
     // `--setup` flow; no `.env` key var.
     HermesProvider {
@@ -6270,6 +6319,12 @@ const HERMES_PROVIDERS: &[HermesProvider] = &[
     // AWS Bedrock — credentials from the AWS SDK chain.
     HermesProvider {
         id: "bedrock",
+        key_env_var: "",
+        needs_base_url: false,
+        base_url_env_var: "",
+    },
+    HermesProvider {
+        id: "vertex",
         key_env_var: "",
         needs_base_url: false,
         base_url_env_var: "",
@@ -6573,7 +6628,7 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
             }
             package
         }
-        _ => "hermes-agent@0.20.1",
+        _ => "hermes-agent@0.20.5",
     };
     let build = |tail: &[&str]| -> Vec<String> {
         let mut argv = vec![
@@ -7434,6 +7489,17 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
             ],
             project_rel_dirs: vec![".dsh/skills", ".agents/skills"],
         }),
+        AgentType::Qoder => Some(SkillStorageSpec {
+            kind: SkillStorageKind::SkillDirectoryOnly,
+            global_dirs: vec![crate::parsers::qoder::resolve_qoder_home().join("skills")],
+            project_rel_dirs: vec![crate::parsers::qoder::qoder_project_skills_rel_dir()],
+        }),
+        AgentType::Antigravity => Some(SkillStorageSpec {
+            kind: SkillStorageKind::SkillDirectoryOnly,
+            global_dirs: vec![crate::parsers::antigravity::resolve_antigravity_cli_dir()
+                .join("skills")],
+            project_rel_dirs: vec![".antigravity/skills"],
+        }),
         // houhub cannot detect where an arbitrary ACP agent loads skills from,
         // so custom agents are gated on the user's own declaration: that the
         // agent reads the shared `.agents/skills` store (the cross-agent
@@ -8019,7 +8085,7 @@ fn resolve_cursor_binary() -> Option<PathBuf> {
     resolve_system_agent_binary("cursor-agent")
 }
 
-/// The Cursor agent's effective probe env: the saved env (env_json) with the
+/// The Cursor ACP process' effective probe env: the saved env (env_json) with the
 /// settings form's live API key applied on top, so `status` / `models` test
 /// exactly the credential on screen rather than a stale saved value.
 ///
@@ -8161,6 +8227,148 @@ pub(crate) async fn acp_cursor_auth_status_core(
     }
 }
 
+fn resolve_qoder_binary() -> Option<PathBuf> {
+    if let Ok(Some((path, _))) =
+        binary_cache::find_best_cached_binary_for_agent(AgentType::Qoder, "qoder")
+    {
+        return Some(path);
+    }
+    resolve_system_agent_binary("qoder")
+}
+
+/// The Qoder agent's effective probe env: the saved env with the settings
+/// form's live personal access token applied on top, so `status` reports on the
+/// credential that is on screen rather than a stale saved one.
+///
+/// `PAT` is always materialized (empty when unset) so `run_qoder_probe` makes
+/// an explicit set-or-remove decision — an inherited token from the user's dev
+/// shell must not make the card claim an account that a launch would not use.
+async fn qoder_probe_env(db: &AppDatabase, personal_access_token: Option<&str>) -> BTreeMap<String, String> {
+    let mut env: BTreeMap<String, String> =
+        agent_setting_service::get_by_agent_type(&db.conn, AgentType::Qoder)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|m| m.env_json)
+            .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
+            .unwrap_or_default();
+    if let Some(token) = personal_access_token {
+        env.insert(
+            "QODER_PERSONAL_ACCESS_TOKEN".to_string(),
+            token.trim().to_string(),
+        );
+    }
+    env.entry("QODER_PERSONAL_ACCESS_TOKEN".to_string())
+        .or_default();
+    env
+}
+
+/// Run a `qoder` subcommand with a timeout, capturing stdout.
+async fn run_qoder_probe(
+    args: &[&str],
+    timeout_secs: u64,
+    extra_env: &BTreeMap<String, String>,
+) -> Result<String, String> {
+    let bin = resolve_qoder_binary().ok_or_else(|| "qoder is not installed".to_string())?;
+    let mut cmd = crate::process::tokio_command(&bin);
+    cmd.args(args);
+    for (key, value) in extra_env {
+        if value.trim().is_empty() {
+            // This process's env is inherited by the child; an empty value means
+            // "ensure absent" so a stale inherited token can't leak in.
+            cmd.env_remove(key);
+        } else {
+            cmd.env(key, value);
+        }
+    }
+    let output = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output())
+        .await
+        .map_err(|_| format!("qoder {} timed out", args.join(" ")))?
+        .map_err(|e| format!("failed to run qoder: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if !output.status.success() && stdout.trim().is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("qoder {} failed: {}", args.join(" "), stderr.trim()));
+    }
+    Ok(stdout)
+}
+
+
+pub(crate) async fn acp_qoder_auth_status_core(
+    db: &AppDatabase,
+    personal_access_token: Option<String>,
+) -> crate::acp::types::QoderAuthStatus {
+    let binary_path = resolve_qoder_binary().map(|p| p.to_string_lossy().to_string());
+    if binary_path.is_none() {
+        return crate::acp::types::QoderAuthStatus {
+            installed: false,
+            logged_in: false,
+            username: None,
+            email: None,
+            user_type: None,
+            version: None,
+            allow_byok: None,
+            error: None,
+            binary_path: None,
+        };
+    }
+    let extra_env = qoder_probe_env(db, personal_access_token.as_deref()).await;
+    let failed = |error: Option<String>| crate::acp::types::QoderAuthStatus {
+        installed: true,
+        logged_in: false,
+        username: None,
+        email: None,
+        user_type: None,
+        version: None,
+        allow_byok: None,
+        error,
+        binary_path: binary_path.clone(),
+    };
+    match run_qoder_probe(&["status", "-o", "json"], 30, &extra_env).await {
+        Ok(stdout) => {
+            // Qoder may prefix the JSON with a notice; parse from the first
+            // object so the status card is not made dependent on CLI chatter.
+            let json_start = stdout.find('{').unwrap_or(0);
+            match serde_json::from_str::<serde_json::Value>(stdout[json_start..].trim()) {
+                Ok(value) => {
+                    let get_str = |key: &str| {
+                        value
+                            .get(key)
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                    };
+                    crate::acp::types::QoderAuthStatus {
+                        installed: true,
+                        logged_in: value
+                            .get("logged_in")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                        username: get_str("username"),
+                        email: get_str("email"),
+                        user_type: get_str("user_type"),
+                        version: get_str("version"),
+                        // Older Qoder CLIs emit this as 0/1; accept both forms.
+                        allow_byok: value.get("allow_byok").and_then(|raw| {
+                            raw.as_bool().or_else(|| raw.as_i64().map(|n| n != 0))
+                        }),
+                        error: None,
+                        binary_path: binary_path.clone(),
+                    }
+                }
+                Err(error) => crate::acp::types::QoderAuthStatus {
+                    error: Some(format!(
+                        "unexpected status output: {error}: {}",
+                        truncate_probe_output(&stdout)
+                    )),
+                    ..failed(None)
+                },
+            }
+        }
+        Err(error) => failed(Some(error)),
+    }
+}
+
 pub(crate) async fn acp_cursor_list_models_core(
     db: &AppDatabase,
     api_key: Option<String>,
@@ -8272,6 +8480,15 @@ pub async fn acp_cursor_auth_status(
     api_key: Option<String>,
 ) -> Result<crate::acp::types::CursorAuthStatus, AcpError> {
     Ok(acp_cursor_auth_status_core(&db, api_key).await)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_qoder_auth_status(
+    db: State<'_, AppDatabase>,
+    personal_access_token: Option<String>,
+) -> Result<crate::acp::types::QoderAuthStatus, AcpError> {
+    Ok(acp_qoder_auth_status_core(&db, personal_access_token).await)
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -8888,6 +9105,9 @@ fn cascade_update_agent_config(
             // as a runtime env var through the generic agent settings panel;
             // it has no houhub-managed config file and does not participate in
             // the model-provider credential cascade.
+        }
+        AgentType::Qoder | AgentType::Antigravity => {
+            // These agents own their authentication/configuration surfaces.
         }
         AgentType::Custom(_) => {
             // Custom agents are configuration-free. Their credentials remain in
@@ -16518,7 +16738,7 @@ wire_api = "chat"
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
                     argv.get(py_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.20.1")
+                    Some("hermes-agent@0.20.5")
                 );
                 assert_eq!(argv.get(py_idx + 2).map(String::as_str), Some("hermes"));
             } else {
@@ -16945,7 +17165,7 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.20.1", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.20.5", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
@@ -16957,9 +17177,29 @@ model = "gpt"
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.20.1",
+            "hermes-agent@0.20.5",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));
+    }
+
+    /// The proxy hint is keyed on npm's URL-parse failure, so every other way an
+    /// install can die has to pass through untouched. (The positive branch also
+    /// requires a scheme-less proxy in the process env; asserting that would
+    /// mean mutating env under a parallel test binary.)
+    #[test]
+    fn npm_proxy_url_hint_leaves_unrelated_failures_alone() {
+        for err in [
+            AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
+            AcpError::Protocol("failed to install npm package globally: ETIMEDOUT".to_string()),
+            AcpError::SdkNotInstalled("npm is not installed".to_string()),
+        ] {
+            let before = err.to_string();
+            assert_eq!(
+                annotate_npm_proxy_url_failure(err).to_string(),
+                before,
+                "only an ERR_INVALID_URL failure may be annotated"
+            );
+        }
     }
 }

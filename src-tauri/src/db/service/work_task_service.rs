@@ -81,6 +81,7 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
         additions: m.additions,
         deletions: m.deletions,
         merge_commit: m.merge_commit,
+        completion_kind: m.completion_kind,
         preflight: m
             .preflight
             .as_deref()
@@ -88,6 +89,12 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
         merge_queued: queued_merge(m.pending_merge.as_deref()),
         archived_at: m.archived_at,
         scheduled_at: m.scheduled_at,
+        source_kind: m.source_kind,
+        source_key: m.source_key,
+        source_meta: m
+            .source_meta
+            .as_deref()
+            .and_then(|raw| serde_json::from_str(raw).ok()),
         latest_progress: None,
         created_at: m.created_at,
         updated_at: m.updated_at,
@@ -480,9 +487,13 @@ pub async fn create(
         additions: Set(None),
         deletions: Set(None),
         merge_commit: Set(None),
+        completion_kind: Set(None),
         preflight: Set(None),
         archived_at: Set(None),
         scheduled_at: Set(None),
+        source_kind: Set(None),
+        source_key: Set(None),
+        source_meta: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
         started_at: Set(None),
@@ -494,6 +505,88 @@ pub async fn create(
     record_event(&txn, row.id, "created", "user", None).await?;
     txn.commit().await?;
     Ok(to_info(row))
+}
+
+/// Result of a forge trigger. An active task for the same source is a normal
+/// deduplication outcome, not a database error; the UI can focus that card.
+#[derive(Debug)]
+pub enum ForgeCreateOutcome {
+    Created(WorkTaskInfo),
+    Duplicate(WorkTaskInfo),
+}
+
+/// Create a task from a validated forge source and stamp its provenance in the
+/// database. Public task creation never accepts these columns, so forge
+/// callers remain the only code path that can mint them.
+pub async fn create_from_forge(
+    conn: &DatabaseConnection,
+    draft: WorkTaskDraft,
+    source: crate::models::WorkTaskSource,
+    force: bool,
+) -> Result<ForgeCreateOutcome, DbError> {
+    validate_draft(&draft)?;
+    if !force {
+        let active_statuses = vec![
+            WorkTaskStatus::Todo,
+            WorkTaskStatus::Queued,
+            WorkTaskStatus::Preparing,
+            WorkTaskStatus::Running,
+            WorkTaskStatus::AwaitingInput,
+            WorkTaskStatus::Review,
+            WorkTaskStatus::Merging,
+        ];
+        if let Some(existing) = work_task::Entity::find()
+            .filter(work_task::Column::SourceKey.eq(source.key.clone()))
+            .filter(work_task::Column::DeletedAt.is_null())
+            .filter(work_task::Column::Status.is_in(active_statuses))
+            .order_by_desc(work_task::Column::CreatedAt)
+            .one(conn)
+            .await?
+        {
+            return Ok(ForgeCreateOutcome::Duplicate(to_info(existing)));
+        }
+    }
+
+    let created = create(conn, draft).await?;
+    let row = work_task::Entity::find_by_id(created.id)
+        .one(conn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("work task {}", created.id)))?;
+    let mut active = row.into_active_model();
+    active.source_kind = Set(Some(source.kind));
+    active.source_key = Set(Some(source.key));
+    active.source_meta = Set(Some(
+        serde_json::to_string(&source.meta)
+            .map_err(|error| DbError::Validation(format!("source meta not serializable: {error}")))?,
+    ));
+    active.updated_at = Set(Utc::now());
+    let stamped = active.update(conn).await?;
+    Ok(ForgeCreateOutcome::Created(to_info(stamped)))
+}
+
+/// Return the newest task for each source key in one indexed query.
+pub async fn lookup_latest_by_source_keys(
+    conn: &DatabaseConnection,
+    keys: &[String],
+) -> Result<Vec<(String, work_task::Model)>, DbError> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = work_task::Entity::find()
+        .filter(work_task::Column::SourceKey.is_in(keys.iter().cloned()))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .order_by_desc(work_task::Column::CreatedAt)
+        .order_by_desc(work_task::Column::Id)
+        .all(conn)
+        .await?;
+    let mut seen = std::collections::HashSet::new();
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let key = row.source_key.clone()?;
+            seen.insert(key.clone()).then_some((key, row))
+        })
+        .collect())
 }
 
 /// Edit title/config. Only meaningful outside an active run: allowed in
@@ -1627,6 +1720,157 @@ pub async fn clear_queued_merge(
     Ok(res.rows_affected == 1)
 }
 
+/// review → merging for a DELIVERY (`op = deliver_pr`) — the engine pushing a
+/// branch and opening a pull request, with no agent generation behind it.
+///
+/// Mirrors [`begin_merge`]'s two protective writes for the same reasons, and
+/// deliberately differs in one: `verdict` is KEPT. A merge dispatch clears it
+/// because the agent is about to produce a new one; a delivery spawns nobody,
+/// so clearing it would just erase the review badge the user is looking at.
+pub async fn begin_delivery(
+    conn: &DatabaseConnection,
+    id: i32,
+    state: &WorkTaskMergeState,
+    expect_run_seq: i32,
+) -> Result<Option<i32>, DbError> {
+    let state_json = serde_json::to_string(state)
+        .map_err(|e| DbError::Validation(format!("merge state not serializable: {e}")))?;
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let res = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::Status,
+            Expr::value(status_str(WorkTaskStatus::Merging)),
+        )
+        // Bumped so events of the run that just settled cannot act on a row
+        // that is now delivering.
+        .col_expr(
+            work_task::Column::RunSeq,
+            Expr::col(work_task::Column::RunSeq).add(1),
+        )
+        // Cleared so crash recovery cannot mistake the settled run's still-open
+        // session for "a live generation owns this settle" and skip a delivery
+        // that died with the process. `conversation_id` (the history link the
+        // UI shows) is untouched.
+        .col_expr(work_task::Column::ConnectionId, Expr::value(None::<String>))
+        .col_expr(work_task::Column::MergeState, Expr::value(Some(state_json)))
+        .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
+        .filter(work_task::Column::RunSeq.eq(expect_run_seq))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(&txn)
+        .await?;
+    if res.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(None);
+    }
+    let run_seq = work_task::Entity::find_by_id(id)
+        .one(&txn)
+        .await?
+        .map(|m| m.run_seq)
+        .ok_or_else(|| DbError::NotFound(format!("work task {id}")))?;
+    record_event(
+        &txn,
+        id,
+        "deliver_attempt",
+        "user",
+        Some(serde_json::json!({
+            "remote_branch": state.remote_branch,
+            "expected_head": state.expected_head,
+        })),
+    )
+    .await?;
+    status_changed_event(
+        &txn,
+        id,
+        "user",
+        Some(WorkTaskStatus::Review),
+        WorkTaskStatus::Merging,
+        Some(serde_json::json!({ "reason": "delivering to a pull request" })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(Some(run_seq))
+}
+
+/// merging → done for a delivery: the pull request carrying this task is open
+/// (or already merged) and anchored to the commit we pushed.
+///
+/// `source_meta_json` is the row's provenance snapshot with `result_pr` filled
+/// in, serialized by the CALLER. That is not an accident of layering: the
+/// update below has to be the transaction's FIRST statement. A deferred SQLite
+/// transaction that reads before it writes cannot upgrade to a writer under
+/// WAL — it fails with `database is locked` instead of waiting — so any
+/// read-modify-write of `source_meta` happens outside, and the CAS filter is
+/// what makes a stale read harmless.
+pub async fn complete_delivered(
+    conn: &DatabaseConnection,
+    id: i32,
+    expect_run_seq: i32,
+    pr_url: &str,
+    source_meta_json: &str,
+) -> Result<bool, DbError> {
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let res = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::Status,
+            Expr::value(status_str(WorkTaskStatus::Done)),
+        )
+        .col_expr(
+            work_task::Column::CompletionKind,
+            Expr::value(Some(COMPLETION_DELIVERED_PR.to_string())),
+        )
+        .col_expr(
+            work_task::Column::SourceMeta,
+            Expr::value(Some(source_meta_json.to_string())),
+        )
+        .col_expr(work_task::Column::MergeState, Expr::value(None::<String>))
+        .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
+        .col_expr(work_task::Column::FinishedAt, Expr::value(Some(now)))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Merging))
+        .filter(work_task::Column::RunSeq.eq(expect_run_seq))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(&txn)
+        .await?;
+    if res.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    record_event(
+        &txn,
+        id,
+        "delivered_pr",
+        "engine",
+        Some(serde_json::json!({ "pr_url": pr_url })),
+    )
+    .await?;
+    status_changed_event(
+        &txn,
+        id,
+        "engine",
+        Some(WorkTaskStatus::Merging),
+        WorkTaskStatus::Done,
+        Some(serde_json::json!({ "pr_url": pr_url })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(true)
+}
+
+/// The three ways a task can be `done`, recorded in `completion_kind`.
+pub const COMPLETION_MERGED: &str = "merged";
+pub const COMPLETION_DELIVERED_PR: &str = "delivered_pr";
+/// Deliberately an umbrella rather than `no_changes`: [`complete_without_merge`]
+/// also accepts a task whose worktree is GONE, and that branch may still hold
+/// commits nobody landed. Claiming "no changes" there would be false evidence;
+/// the existing reason string still distinguishes the two situations.
+pub const COMPLETION_ACCEPTED_WITHOUT_MERGE: &str = "accepted_without_merge";
+
 /// merging → done. The merge path's writer of `done` (the other is
 /// [`complete_without_merge`]); never rolls back. Used both by the live merge
 /// path and by crash recovery back-filling a landed merge.
@@ -1645,6 +1889,10 @@ pub async fn merge_landed(
         .col_expr(
             work_task::Column::MergeCommit,
             Expr::value(Some(merge_commit.to_string())),
+        )
+        .col_expr(
+            work_task::Column::CompletionKind,
+            Expr::value(Some(COMPLETION_MERGED.to_string())),
         )
         .col_expr(work_task::Column::FinishedAt, Expr::value(Some(now)))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
@@ -1681,6 +1929,10 @@ pub async fn complete_without_merge(conn: &DatabaseConnection, id: i32) -> Resul
         .col_expr(
             work_task::Column::Status,
             Expr::value(status_str(WorkTaskStatus::Done)),
+        )
+        .col_expr(
+            work_task::Column::CompletionKind,
+            Expr::value(Some(COMPLETION_ACCEPTED_WITHOUT_MERGE.to_string())),
         )
         // A refused merge attempt leaves its reason on the row; the task is
         // finishing on purpose now, so that banner must not follow it.
@@ -2726,6 +2978,7 @@ mod tests {
             strategy: "squash".into(),
             delete_worktree: true,
             auto_message: false,
+            ..Default::default()
         };
         // The merge is a fresh agent generation: begin bumps run_seq and
         // clears the run-scoped fields.
@@ -2781,6 +3034,7 @@ mod tests {
             strategy: "squash".into(),
             delete_worktree: false,
             auto_message: false,
+            ..Default::default()
         };
         assert!(begin_merge(&db.conn, t.id, &state, seq, false, None)
             .await
@@ -2829,6 +3083,7 @@ mod tests {
             strategy: "squash".into(),
             delete_worktree: true,
             auto_message: true,
+            ..Default::default()
         };
         // An unattended dispatch never clears a banner — the failed row waits
         // for a human (the no-auto-retry latch) …
@@ -2900,6 +3155,7 @@ mod tests {
             strategy: "squash".into(),
             delete_worktree: true,
             auto_message: true,
+            ..Default::default()
         };
 
         // Sweep A dispatches generation `seq` and its launch fails: back to
@@ -3004,6 +3260,7 @@ mod tests {
             strategy: "squash".into(),
             delete_worktree: false,
             auto_message: true,
+            ..Default::default()
         };
         assert!(begin_merge(&db.conn, t.id, &state, seq, false, None)
             .await
@@ -3041,6 +3298,7 @@ mod tests {
             strategy: "squash".into(),
             delete_worktree: true,
             auto_message: true,
+            ..Default::default()
         };
         let intent = |secs: i64| WorkTaskQueuedMerge {
             message: Some(format!("feat: land it {secs}")),
@@ -3315,6 +3573,7 @@ mod tests {
             strategy: "squash".into(),
             delete_worktree: false,
             auto_message: false,
+            ..Default::default()
         };
         assert!(begin_merge(&db.conn, t.id, &state, seq, false, None)
             .await
@@ -3388,6 +3647,7 @@ mod tests {
                 strategy: "squash".into(),
                 delete_worktree: false,
                 auto_message: false,
+                ..Default::default()
             },
             seq,
             false,

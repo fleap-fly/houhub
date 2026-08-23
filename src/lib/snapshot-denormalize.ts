@@ -220,17 +220,31 @@ function denormalizeBlock(
   }
 }
 
+/**
+ * Rebuild the raw output text that a live tool-call event would carry from
+ * the backend's parsed output variant. Snapshot hydration has no chunk
+ * history, but downstream cards parse the agent's original text rather than
+ * the tagged storage envelope.
+ */
+function toolOutputRawText(output: ToolCallState["output"]): string | null {
+  if (output == null) return null
+  if (typeof output === "string") return output
+  if (output.kind === "text") return output.content
+  if (output.kind === "json") return JSON.stringify(output.value)
+  if (output.kind === "error") return JSON.stringify({ error: output.message })
+  return JSON.stringify(output)
+}
+
 function toolStateToInfo(tc: ToolCallState): ToolCallInfo {
   // Backend's structured output is collapsed into a single raw chunk for
   // hydration. Chunk history isn't recoverable from the snapshot — the
   // frontend's per-chunk delta tracking will resume from subsequent events.
   const outputChunks: string[] = []
   let outputBytes = 0
-  if (tc.output) {
-    const serialized =
-      typeof tc.output === "string" ? tc.output : JSON.stringify(tc.output)
-    outputChunks.push(serialized)
-    outputBytes = serialized.length
+  const rawOutput = toolOutputRawText(tc.output)
+  if (rawOutput !== null) {
+    outputChunks.push(rawOutput)
+    outputBytes = rawOutput.length
   }
   return {
     tool_call_id: tc.id,

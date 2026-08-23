@@ -17,6 +17,7 @@ pub mod file_io;
 pub mod folder_commands;
 pub mod folder_links;
 pub mod folders;
+pub mod forge;
 pub mod houflow;
 pub mod logging;
 pub mod mcp;
@@ -37,6 +38,7 @@ pub mod session_info;
 pub mod system_settings;
 pub mod terminal;
 pub mod token_usage;
+pub mod turn_window;
 pub mod version_control;
 #[cfg(feature = "tauri-runtime")]
 pub mod windows;
