@@ -1766,7 +1766,6 @@
       "worktreeRemovedBadge": "Worktree de origem removida",
       "tasks": "Quadro de tarefas",
       "runningCountBadge": "{count, plural, one {# sessão em execução} other {# sessões em execução}}",
-      "showRecent": "Mostrar grupo Recentes",
       "sectionOrderMoveUp": "Mover para cima",
       "sectionOrderMoveDown": "Mover para baixo",
       "sectionOrderItemLabel": "{name} — posição {position} de {total}",
@@ -3486,6 +3485,25 @@
         "items": "{count, plural, one {# item} other {# itens}}"
       },
       "houhubMcpTool": {
+        "getSessionInfo": "Lendo a sessão {session}",
+        "getSessionInfoNoId": "Lendo uma sessão",
+        "taskProgress": "Progresso: {message}",
+        "taskProgressNoMessage": "Relatando o progresso da tarefa",
+        "taskComplete": "Tarefa concluída · {verdict}",
+        "taskCompleteWithSummary": "Tarefa concluída · {verdict}: {summary}",
+        "createAutomation": "Criando a automação {name}",
+        "createAutomationNoName": "Criando uma automação",
+        "createWorkTask": "Criando a tarefa de trabalho {title}",
+        "createWorkTaskNoTitle": "Criando uma tarefa de trabalho",
+        "promptLabel": "Instrução",
+        "verdict": {
+          "success": "sucesso",
+          "needs_review": "requer revisão",
+          "blocked": "bloqueada",
+          "unknown": "desconhecido"
+        }
+      },
+      "codegMcpTool": {
         "getSessionInfo": "Lendo a sessão {session}",
         "getSessionInfoNoId": "Lendo uma sessão",
         "taskProgress": "Progresso: {message}",
@@ -5390,6 +5408,10 @@
     "settingsPromptAllHint": "Vai em toda tarefa que este painel cria, seja qual for o cenário.",
     "settingsPromptScenarioHint": "Vai só nas tarefas criadas com este cenário.",
     "settingsPromptPlaceholder": "ex.: Responda em português. Rode os testes do projeto antes de terminar.",
-    "save": "Salvar"
+    "save": "Salvar",
+    "openItem": "Abrir no navegador",
+    "detailDescription": "A descrição deste item e as ações disponíveis.",
+    "detailUpdated": "atualizado {time}",
+    "detailNoBody": "Sem descrição"
   }
 }

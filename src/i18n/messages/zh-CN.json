@@ -1766,7 +1766,6 @@
       "worktreeRemovedBadge": "源 worktree 已删除",
       "tasks": "任务看板",
       "runningCountBadge": "{count} 个会话进行中",
-      "showRecent": "显示「最近」分组",
       "sectionOrderMoveUp": "上移",
       "sectionOrderMoveDown": "下移",
       "sectionOrderItemLabel": "{name} — 第 {position} 位，共 {total} 位",
@@ -3486,6 +3485,25 @@
         "items": "{count} 项"
       },
       "houhubMcpTool": {
+        "getSessionInfo": "读取会话 {session}",
+        "getSessionInfoNoId": "读取会话",
+        "taskProgress": "进度：{message}",
+        "taskProgressNoMessage": "上报任务进度",
+        "taskComplete": "任务结束 · {verdict}",
+        "taskCompleteWithSummary": "任务结束 · {verdict}：{summary}",
+        "createAutomation": "创建自动化 {name}",
+        "createAutomationNoName": "创建自动化",
+        "createWorkTask": "创建待办任务 {title}",
+        "createWorkTaskNoTitle": "创建待办任务",
+        "promptLabel": "指令",
+        "verdict": {
+          "success": "成功",
+          "needs_review": "待复核",
+          "blocked": "受阻",
+          "unknown": "未知"
+        }
+      },
+      "codegMcpTool": {
         "getSessionInfo": "读取会话 {session}",
         "getSessionInfoNoId": "读取会话",
         "taskProgress": "进度：{message}",
@@ -5390,6 +5408,10 @@
     "settingsPromptAllHint": "这个面板创建的每个任务都会带上，不分场景。",
     "settingsPromptScenarioHint": "只有这个场景创建的任务才会带上。",
     "settingsPromptPlaceholder": "例如：用中文回复；完成前先跑一遍项目的测试。",
-    "save": "保存"
+    "save": "保存",
+    "openItem": "在浏览器中打开",
+    "detailDescription": "该条目的描述，以及可以对它执行的操作。",
+    "detailUpdated": "更新于 {time}",
+    "detailNoBody": "没有描述"
   }
 }

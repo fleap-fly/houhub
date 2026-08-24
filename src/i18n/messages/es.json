@@ -1766,7 +1766,6 @@
       "worktreeRemovedBadge": "Worktree de origen eliminado",
       "tasks": "Tablero de tareas",
       "runningCountBadge": "{count, plural, one {# sesión en ejecución} other {# sesiones en ejecución}}",
-      "showRecent": "Mostrar grupo Recientes",
       "sectionOrderMoveUp": "Subir",
       "sectionOrderMoveDown": "Bajar",
       "sectionOrderItemLabel": "{name} — posición {position} de {total}",
@@ -3486,6 +3485,25 @@
         "items": "{count, plural, one {# elemento} other {# elementos}}"
       },
       "houhubMcpTool": {
+        "getSessionInfo": "Leyendo la sesión {session}",
+        "getSessionInfoNoId": "Leyendo una sesión",
+        "taskProgress": "Progreso: {message}",
+        "taskProgressNoMessage": "Informando el progreso de la tarea",
+        "taskComplete": "Tarea finalizada · {verdict}",
+        "taskCompleteWithSummary": "Tarea finalizada · {verdict}: {summary}",
+        "createAutomation": "Creando la automatización {name}",
+        "createAutomationNoName": "Creando una automatización",
+        "createWorkTask": "Creando la tarea de trabajo {title}",
+        "createWorkTaskNoTitle": "Creando una tarea de trabajo",
+        "promptLabel": "Instrucción",
+        "verdict": {
+          "success": "correcta",
+          "needs_review": "requiere revisión",
+          "blocked": "bloqueada",
+          "unknown": "desconocido"
+        }
+      },
+      "codegMcpTool": {
         "getSessionInfo": "Leyendo la sesión {session}",
         "getSessionInfoNoId": "Leyendo una sesión",
         "taskProgress": "Progreso: {message}",
@@ -5390,6 +5408,10 @@
     "settingsPromptAllHint": "Va en todas las tareas que crea este panel, sea cual sea el escenario.",
     "settingsPromptScenarioHint": "Va solo en las tareas creadas con este escenario.",
     "settingsPromptPlaceholder": "p. ej.: Responde en español. Ejecuta las pruebas del proyecto antes de terminar.",
-    "save": "Guardar"
+    "save": "Guardar",
+    "openItem": "Abrir en el navegador",
+    "detailDescription": "La descripción de este elemento y las acciones disponibles.",
+    "detailUpdated": "actualizado {time}",
+    "detailNoBody": "Sin descripción"
   }
 }

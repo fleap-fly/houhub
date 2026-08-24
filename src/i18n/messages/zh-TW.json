@@ -1766,7 +1766,6 @@
       "worktreeRemovedBadge": "來源 worktree 已刪除",
       "tasks": "任務看板",
       "runningCountBadge": "{count} 個會話進行中",
-      "showRecent": "顯示「最近」分組",
       "sectionOrderMoveUp": "上移",
       "sectionOrderMoveDown": "下移",
       "sectionOrderItemLabel": "{name} — 第 {position} 位，共 {total} 位",
@@ -3486,6 +3485,25 @@
         "items": "{count} 項"
       },
       "houhubMcpTool": {
+        "getSessionInfo": "讀取會話 {session}",
+        "getSessionInfoNoId": "讀取會話",
+        "taskProgress": "進度：{message}",
+        "taskProgressNoMessage": "回報任務進度",
+        "taskComplete": "任務結束 · {verdict}",
+        "taskCompleteWithSummary": "任務結束 · {verdict}：{summary}",
+        "createAutomation": "建立自動化 {name}",
+        "createAutomationNoName": "建立自動化",
+        "createWorkTask": "建立待辦任務 {title}",
+        "createWorkTaskNoTitle": "建立待辦任務",
+        "promptLabel": "指令",
+        "verdict": {
+          "success": "成功",
+          "needs_review": "待複核",
+          "blocked": "受阻",
+          "unknown": "未知"
+        }
+      },
+      "codegMcpTool": {
         "getSessionInfo": "讀取會話 {session}",
         "getSessionInfoNoId": "讀取會話",
         "taskProgress": "進度：{message}",
@@ -5390,6 +5408,10 @@
     "settingsPromptAllHint": "這個面板建立的每個任務都會帶上，不分情境。",
     "settingsPromptScenarioHint": "只有這個情境建立的任務才會帶上。",
     "settingsPromptPlaceholder": "例如：用繁體中文回覆；完成前先跑一次專案的測試。",
-    "save": "儲存"
+    "save": "儲存",
+    "openItem": "在瀏覽器中開啟",
+    "detailDescription": "該項目的描述，以及可以對它執行的操作。",
+    "detailUpdated": "更新於 {time}",
+    "detailNoBody": "沒有描述"
   }
 }

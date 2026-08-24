@@ -1766,7 +1766,6 @@
       "worktreeRemovedBadge": "تمت إزالة شجرة العمل الأصلية",
       "tasks": "لوحة المهام",
       "runningCountBadge": "{count} جلسة قيد التشغيل",
-      "showRecent": "عرض مجموعة الأحدث",
       "sectionOrderMoveUp": "تحريك لأعلى",
       "sectionOrderMoveDown": "تحريك لأسفل",
       "sectionOrderItemLabel": "{name} — الموضع {position} من {total}",
@@ -3486,6 +3485,25 @@
         "items": "{count, plural, zero {لا عناصر} one {عنصر واحد} two {عنصران} few {# عناصر} many {# عنصرًا} other {# عنصر}}"
       },
       "houhubMcpTool": {
+        "getSessionInfo": "قراءة المحادثة {session}",
+        "getSessionInfoNoId": "قراءة محادثة",
+        "taskProgress": "التقدم: {message}",
+        "taskProgressNoMessage": "الإبلاغ عن تقدم المهمة",
+        "taskComplete": "انتهت المهمة · {verdict}",
+        "taskCompleteWithSummary": "انتهت المهمة · {verdict}: {summary}",
+        "createAutomation": "إنشاء الأتمتة {name}",
+        "createAutomationNoName": "إنشاء أتمتة",
+        "createWorkTask": "إنشاء مهمة العمل {title}",
+        "createWorkTaskNoTitle": "إنشاء مهمة عمل",
+        "promptLabel": "التعليمات",
+        "verdict": {
+          "success": "ناجحة",
+          "needs_review": "بحاجة إلى مراجعة",
+          "blocked": "متوقفة",
+          "unknown": "غير معروف"
+        }
+      },
+      "codegMcpTool": {
         "getSessionInfo": "قراءة المحادثة {session}",
         "getSessionInfoNoId": "قراءة محادثة",
         "taskProgress": "التقدم: {message}",
@@ -5390,6 +5408,10 @@
     "settingsPromptAllHint": "تُرسل مع كل مهمة تنشئها هذه اللوحة، مهما كان السيناريو.",
     "settingsPromptScenarioHint": "تُرسل فقط مع المهام المنشأة بهذا السيناريو.",
     "settingsPromptPlaceholder": "مثال: أجب بالعربية. شغّل اختبارات المشروع قبل الإنهاء.",
-    "save": "حفظ"
+    "save": "حفظ",
+    "openItem": "فتح في المتصفح",
+    "detailDescription": "وصف هذا العنصر والإجراءات المتاحة له.",
+    "detailUpdated": "حُدِّث {time}",
+    "detailNoBody": "بدون وصف"
   }
 }

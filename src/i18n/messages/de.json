@@ -1766,7 +1766,6 @@
       "worktreeRemovedBadge": "Quell-Worktree entfernt",
       "tasks": "Aufgabenboard",
       "runningCountBadge": "{count, plural, one {# laufende Sitzung} other {# laufende Sitzungen}}",
-      "showRecent": "Gruppe „Zuletzt“ anzeigen",
       "sectionOrderMoveUp": "Nach oben",
       "sectionOrderMoveDown": "Nach unten",
       "sectionOrderItemLabel": "{name} — Position {position} von {total}",
@@ -3486,6 +3485,25 @@
         "items": "{count, plural, one {# Eintrag} other {# Einträge}}"
       },
       "houhubMcpTool": {
+        "getSessionInfo": "Sitzung {session} wird gelesen",
+        "getSessionInfoNoId": "Sitzung wird gelesen",
+        "taskProgress": "Fortschritt: {message}",
+        "taskProgressNoMessage": "Aufgabenfortschritt wird gemeldet",
+        "taskComplete": "Aufgabe beendet · {verdict}",
+        "taskCompleteWithSummary": "Aufgabe beendet · {verdict}: {summary}",
+        "createAutomation": "Automatisierung {name} wird erstellt",
+        "createAutomationNoName": "Automatisierung wird erstellt",
+        "createWorkTask": "Arbeitsaufgabe {title} wird erstellt",
+        "createWorkTaskNoTitle": "Arbeitsaufgabe wird erstellt",
+        "promptLabel": "Anweisung",
+        "verdict": {
+          "success": "erfolgreich",
+          "needs_review": "Prüfung nötig",
+          "blocked": "blockiert",
+          "unknown": "unbekannt"
+        }
+      },
+      "codegMcpTool": {
         "getSessionInfo": "Sitzung {session} wird gelesen",
         "getSessionInfoNoId": "Sitzung wird gelesen",
         "taskProgress": "Fortschritt: {message}",
@@ -5390,6 +5408,10 @@
     "settingsPromptAllHint": "Geht an jede Aufgabe, die dieses Panel erstellt — unabhängig vom Szenario.",
     "settingsPromptScenarioHint": "Geht nur an Aufgaben, die mit diesem Szenario erstellt wurden.",
     "settingsPromptPlaceholder": "z. B.: Antworte auf Deutsch. Führe vor dem Abschluss die Tests des Projekts aus.",
-    "save": "Speichern"
+    "save": "Speichern",
+    "openItem": "Im Browser öffnen",
+    "detailDescription": "Die Beschreibung dieses Eintrags und die verfügbaren Aktionen.",
+    "detailUpdated": "aktualisiert {time}",
+    "detailNoBody": "Keine Beschreibung"
   }
 }

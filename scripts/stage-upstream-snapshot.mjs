@@ -35,6 +35,7 @@ async function main() {
   const archiveUrl = `https://github.com/${args.repo}/archive/${encodeURIComponent(args.ref)}.tar.gz`
 
   await download(archiveUrl, archivePath)
+  mkdirSync(extractDir, { recursive: true })
   run("tar", ["-xzf", archivePath, "-C", extractDir])
 
   const sourceRoot = firstExtractedDirectory(extractDir)

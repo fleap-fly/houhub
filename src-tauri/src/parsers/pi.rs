@@ -556,17 +556,36 @@ fn tool_arguments_preview(arguments: Option<&Value>) -> Option<String> {
     Some(truncate_str(&serialized, 4000))
 }
 
-/// A tool result's `content` is usually a string; a rich result (array/object)
-/// is serialized as a fallback. `None` for a missing / null / empty value.
+/// Flatten a pi tool-result `content` value into the text pi itself displays.
+///
+/// Pi writes tool results as MCP-shaped text blocks; a plain string is accepted
+/// defensively for older transcripts. Non-text blocks do not contribute output.
+pub(crate) fn tool_result_content_text(content: &Value) -> Option<String> {
+    if let Some(text) = content.as_str() {
+        return (!text.is_empty()).then(|| text.to_string());
+    }
+    let mut output = String::new();
+    for item in content.as_array()? {
+        if item.get("type").and_then(Value::as_str) == Some("text") {
+            if let Some(text) = item.get("text").and_then(Value::as_str) {
+                output.push_str(text);
+            }
+        }
+    }
+    (!output.is_empty()).then_some(output)
+}
+
+/// A tool result's `content` is normally an MCP block array. Unknown rich
+/// values retain the JSON fallback so a future shape remains visible.
 fn content_to_text(content: Option<&Value>) -> Option<String> {
     let content = content?;
-    if let Some(text) = content.as_str() {
-        (!text.is_empty()).then(|| text.to_string())
-    } else if content.is_null() {
-        None
-    } else {
-        serde_json::to_string(content).ok()
+    if let Some(text) = tool_result_content_text(content) {
+        return Some(text);
     }
+    if content.is_null() || content.is_string() {
+        return None;
+    }
+    serde_json::to_string(content).ok()
 }
 
 /// Map a `usage` object (`{input,output,cacheRead,cacheWrite,…}`) onto

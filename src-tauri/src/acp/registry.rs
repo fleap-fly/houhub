@@ -131,6 +131,20 @@ impl AcpAgentMeta {
     }
 }
 
+/// Launch args for Google Antigravity's ACP server, resolved at compile time.
+///
+/// The ACP registry publishes `--uid=` for the two Linux targets and for
+/// nothing else, and that asymmetry is deliberate: the flag comes from the
+/// binary's linked-in absl `InitGoogle`, which — when the process runs as root
+/// — drops privileges to `nobody` unless told otherwise. Passing it everywhere
+/// would risk a hard "unknown flag" startup error on the Windows build, which
+/// need not link the same initializer.
+const ANTIGRAVITY_LAUNCH_ARGS: &[&str] = if cfg!(target_os = "linux") {
+    &["--uid="]
+} else {
+    &[]
+};
+
 pub fn current_platform() -> &'static str {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
@@ -267,12 +281,6 @@ pub fn acp_adapter_relation(agent_type: AgentType) -> Option<AcpAdapterRelation>
 
 const ACP_ADAPTER_DOCS_URL: &str =
     "https://docs.houshanai.com/guide/supported-agents#acp-adapters";
-
-const ANTIGRAVITY_LAUNCH_ARGS: &[&str] = if cfg!(target_os = "linux") {
-    &["--uid="]
-} else {
-    &[]
-};
 
 /// Minimum adapter version whose `_session/steering` honors the
 /// `_meta.steering.idleBehavior = "promptRequired"` opt-in — one of the three
@@ -1035,7 +1043,65 @@ mod tests {
         }
     }
 
-    // Cursor is the only dir-tree binary agent: the archive must be kept
+    // Google Antigravity's archive is FLAT but holds two executables — the
+    // server and the `localharness_external` binary it spawns — so it must
+    // use whole-tree extraction (the single-file copy-out would strand the
+    // harness and the server would log "Localharness not found."). The Linux
+    // targets, and only those, carry the absl `--uid=` flag.
+    #[test]
+    fn antigravity_pins_dir_tree_binary_and_linux_only_uid_flag() {
+        let meta = get_agent_meta(AgentType::Antigravity);
+        assert!(meta.supports_mcp);
+        assert_eq!(registry_id_for(AgentType::Antigravity), "antigravity-acp");
+        match meta.distribution {
+            AgentDistribution::Binary {
+                version,
+                cmd,
+                args,
+                platforms,
+                dir_entry,
+                ..
+            } => {
+                assert_eq!(version, "1.0.0");
+                assert_eq!(cmd, "agy_acp_server");
+                let entry = dir_entry.expect("antigravity must use dir-tree extraction");
+                assert_eq!(entry.unix, "agy_acp_server.par");
+                assert_eq!(entry.windows, "agy_acp_server.exe");
+                // Five targets: upstream publishes no Intel macOS build.
+                assert_eq!(platforms.len(), 5);
+                assert!(!platforms.iter().any(|p| p.platform == "darwin-x86_64"));
+                for platform in platforms {
+                    assert!(
+                        platform
+                            .url
+                            .contains("agy_acp_server_20260818_01_RC01"),
+                        "{} URL lost the build id: {}",
+                        platform.platform,
+                        platform.url
+                    );
+                }
+                if cfg!(target_os = "linux") {
+                    assert_eq!(args, &["--uid="]);
+                } else {
+                    assert!(args.is_empty(), "--uid= is a Linux-only absl flag");
+                }
+                // The harness must be REQUIRED, not merely chmod'd. It is what
+                // stops a stale single-file cache — which a pre-integration
+                // CUSTOM `antigravity-acp` entry would have written under the
+                // same key, because the archive is flat — from being adopted
+                // and launched without it.
+                let required = entry.required_siblings.for_current_platform();
+                assert_eq!(required.len(), 1);
+                assert!(
+                    required[0].starts_with("localharness_external"),
+                    "unexpected required sibling: {required:?}"
+                );
+            }
+            other => panic!("expected binary distribution for Antigravity, got {other:?}"),
+        }
+    }
+
+    // Cursor is one of two dir-tree binary agents: the archive must be kept
     // intact (bundled Node runtime) and launched via the in-tree entry
     // script, never copied out as a single file.
     #[test]
@@ -1090,6 +1156,7 @@ mod tests {
             AgentType::Gemini,
             AgentType::OpenClaw,
             AgentType::Grok,
+            AgentType::Antigravity,
             AgentType::Custom("acme"),
         ] {
             assert_eq!(steering_prompt_required_min_version(agent), None);
@@ -1109,6 +1176,7 @@ mod tests {
             AgentType::Gemini,
             AgentType::OpenClaw,
             AgentType::Grok,
+            AgentType::Antigravity,
             AgentType::Custom("acme"),
         ] {
             assert!(!goal_control_is_out_of_band(agent));

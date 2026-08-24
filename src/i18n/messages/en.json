@@ -1766,7 +1766,6 @@
       "worktreeRemovedBadge": "Source worktree removed",
       "tasks": "Task Board",
       "runningCountBadge": "{count, plural, one {# session running} other {# sessions running}}",
-      "showRecent": "Show Recent group",
       "sectionOrderMoveUp": "Move up",
       "sectionOrderMoveDown": "Move down",
       "sectionOrderItemLabel": "{name} — position {position} of {total}",
@@ -3486,6 +3485,25 @@
         "items": "{count, plural, one {# item} other {# items}}"
       },
       "houhubMcpTool": {
+        "getSessionInfo": "Reading session {session}",
+        "getSessionInfoNoId": "Reading a session",
+        "taskProgress": "Progress: {message}",
+        "taskProgressNoMessage": "Reporting task progress",
+        "taskComplete": "Task finished · {verdict}",
+        "taskCompleteWithSummary": "Task finished · {verdict}: {summary}",
+        "createAutomation": "Creating automation {name}",
+        "createAutomationNoName": "Creating an automation",
+        "createWorkTask": "Creating work task {title}",
+        "createWorkTaskNoTitle": "Creating a work task",
+        "promptLabel": "Prompt",
+        "verdict": {
+          "success": "success",
+          "needs_review": "needs review",
+          "blocked": "blocked",
+          "unknown": "unknown"
+        }
+      },
+      "codegMcpTool": {
         "getSessionInfo": "Reading session {session}",
         "getSessionInfoNoId": "Reading a session",
         "taskProgress": "Progress: {message}",
@@ -5390,6 +5408,10 @@
     "settingsPromptAllHint": "Sent with every task this panel creates, whatever the scenario.",
     "settingsPromptScenarioHint": "Sent only with tasks created for this scenario.",
     "settingsPromptPlaceholder": "e.g. Reply in English. Run the project's tests before you finish.",
-    "save": "Save"
+    "save": "Save",
+    "openItem": "Open in browser",
+    "detailDescription": "This item's description, and the actions available for it.",
+    "detailUpdated": "updated {time}",
+    "detailNoBody": "No description"
   }
 }

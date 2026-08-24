@@ -1766,7 +1766,6 @@
       "worktreeRemovedBadge": "元の worktree は削除済み",
       "tasks": "タスクボード",
       "runningCountBadge": "{count} 件の会話が実行中",
-      "showRecent": "「最近」グループを表示",
       "sectionOrderMoveUp": "上へ移動",
       "sectionOrderMoveDown": "下へ移動",
       "sectionOrderItemLabel": "{name} — {total} 件中 {position} 番目",
@@ -3486,6 +3485,25 @@
         "items": "{count} 件"
       },
       "houhubMcpTool": {
+        "getSessionInfo": "セッション {session} を読み取り中",
+        "getSessionInfoNoId": "セッションを読み取り中",
+        "taskProgress": "進捗: {message}",
+        "taskProgressNoMessage": "タスクの進捗を報告",
+        "taskComplete": "タスク終了 · {verdict}",
+        "taskCompleteWithSummary": "タスク終了 · {verdict}: {summary}",
+        "createAutomation": "自動化 {name} を作成中",
+        "createAutomationNoName": "自動化を作成中",
+        "createWorkTask": "作業タスク {title} を作成中",
+        "createWorkTaskNoTitle": "作業タスクを作成中",
+        "promptLabel": "プロンプト",
+        "verdict": {
+          "success": "成功",
+          "needs_review": "要確認",
+          "blocked": "ブロック",
+          "unknown": "不明"
+        }
+      },
+      "codegMcpTool": {
         "getSessionInfo": "セッション {session} を読み取り中",
         "getSessionInfoNoId": "セッションを読み取り中",
         "taskProgress": "進捗: {message}",
@@ -5390,6 +5408,10 @@
     "settingsPromptAllHint": "シナリオを問わず、このパネルが作るすべてのタスクに付きます。",
     "settingsPromptScenarioHint": "このシナリオで作られたタスクにだけ付きます。",
     "settingsPromptPlaceholder": "例：日本語で回答する。終了前にプロジェクトのテストを実行する。",
-    "save": "保存"
+    "save": "保存",
+    "openItem": "ブラウザーで開く",
+    "detailDescription": "この項目の説明と、実行できる操作。",
+    "detailUpdated": "更新 {time}",
+    "detailNoBody": "説明はありません"
   }
 }
