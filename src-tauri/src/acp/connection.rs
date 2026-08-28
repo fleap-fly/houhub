@@ -257,9 +257,11 @@ fn antigravity_env_vars_for_method(method: &str) -> &'static [&'static str] {
 /// Antigravity's launch credential policy, in the spirit of
 /// [`apply_cursor_env_policy`] but strictly stronger.
 ///
-/// Once the panel has recorded a method, every credential var the OTHER methods
-/// use is cleared — an empty value tells the spawn layer (vendored sacp-tokio)
-/// to `env_remove` the inherited one.
+/// Once the panel has recorded a method, the panel OWNS all four credential
+/// vars: a value survives into the child only if the chosen method reads it AND
+/// the panel actually stored one. Everything else is cleared — an empty value
+/// tells the spawn layer (vendored sacp-tokio) to `env_remove` the inherited
+/// one.
 ///
 /// UNCONDITIONALLY, unlike Cursor's version, which skips a key the caller's own
 /// `runtime_env` already set to a non-empty value. That guard makes sense when
@@ -269,6 +271,25 @@ fn antigravity_env_vars_for_method(method: &str) -> &'static [&'static str] {
 /// shell/container export — and in both cases honoring it authenticates as
 /// something other than what the user picked, silently. Keeping it would also
 /// disagree with the `auth.type` this same launch writes to settings.json.
+///
+/// The non-empty half is what makes "reads it" insufficient on its own, and it
+/// is not hypothetical — it is the Agent Platform panel's central choice. That
+/// method takes EITHER a `GOOGLE_API_KEY` or a project + location, and the
+/// server suppresses the pair whenever the key is set (its `_vertex_config`
+/// logs "project and location suppressed by the key"); the panel encodes that
+/// by hiding the project/location fields while a key is typed and DELETING
+/// `GOOGLE_API_KEY` from the stored row when it is not. Leaving the key merely
+/// "allowed" therefore let an inherited one — a dev shell, a CI container —
+/// override the project the user explicitly filled in, sending the session to
+/// another account and another billing target with nothing on screen to say so.
+/// The same reasoning covers an inherited `GOOGLE_CLOUD_PROJECT`, which would
+/// otherwise outrank the `gcp` block in the settings file HouHub just wrote.
+///
+/// The cost is that a credential supplied ONLY by the surrounding environment
+/// stops working once a method is recorded — but the panel already warns about
+/// exactly that state (`missingGeminiApiKey`, `missingAgentPlatformConfig`), so
+/// this makes the launch agree with what the user was told rather than quietly
+/// contradict it.
 ///
 /// Legacy rows with no recorded method — and any unrecognized value — are left
 /// completely untouched, so nothing changes for a config houhub does not
@@ -287,7 +308,11 @@ fn apply_antigravity_env_policy(
     };
     let keep = antigravity_env_vars_for_method(method);
     for key in ANTIGRAVITY_CREDENTIAL_ENV_VARS {
-        if keep.contains(key) {
+        let kept = keep.contains(key)
+            && merged
+                .iter()
+                .any(|(k, v)| k == key && !v.trim().is_empty());
+        if kept {
             continue;
         }
         merged.retain(|(k, _)| k != key);
@@ -322,27 +347,29 @@ fn apply_antigravity_env_policy(
 /// Every failure is a warning, never a spawn failure: an `auth.type` already in
 /// the file (written by hand, by an earlier launch, or by the server's own auth
 /// picker) may well still be valid.
-fn sync_antigravity_settings_file(
-    merged_env: &[(String, String)],
-    runtime_env: &BTreeMap<String, String>,
-) {
+///
+/// It RETURNS what happened rather than only logging it, because a silent skip
+/// here is indistinguishable from success at the only moment the user is
+/// looking. The settings panel saves the env row and says "saved" — but the row
+/// is not what authenticates the agent, this file is, and when the file cannot
+/// be rewritten the two disagree from that moment on. Switching methods is the
+/// sharp edge: the launch scrubs the credential vars for the NEW method
+/// ([`apply_antigravity_env_policy`]) while the server keeps reading the OLD
+/// `auth.type`, so the next session fails with no credential for the method it
+/// thinks it is using. The panel calls this on save and reports the answer.
+fn sync_antigravity_settings_file(runtime_env: &BTreeMap<String, String>) -> AntigravitySyncReport {
     let recorded = runtime_env
         .get(ANTIGRAVITY_AUTH_METHOD_ENV)
         .map(String::as_str)
         .map(str::trim)
         .filter(|method| ANTIGRAVITY_AUTH_METHODS.contains(method));
 
-    // Honor a `GEMINI_HOME` the launch env relocates the tree with, so houhub
-    // writes the settings file the spawned process will actually read.
-    let home_override = merged_env
-        .iter()
-        .find(|(k, _)| k == "GEMINI_HOME")
-        .map(|(_, v)| v.trim())
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from);
-    let acp_dir = match home_override {
-        Some(home) => home.join("antigravity-acp"),
-        None => crate::parsers::antigravity::resolve_antigravity_acp_dir(),
+    let acp_dir = match antigravity_acp_dir_for_env(runtime_env) {
+        Ok(dir) => dir,
+        Err(reason) => {
+            tracing::warn!("[ACP][Antigravity] not editing settings.json: {reason}.");
+            return AntigravitySyncReport::skipped(Path::new("<unknown>"), reason);
+        }
     };
     let path = acp_dir.join("settings.json");
 
@@ -354,7 +381,7 @@ fn sync_antigravity_settings_file(
                  Set `auth.type` in it yourself, or move it aside.",
                 path.display()
             );
-            return;
+            return AntigravitySyncReport::skipped(&path, reason);
         }
     };
 
@@ -373,48 +400,283 @@ fn sync_antigravity_settings_file(
         .filter(|value| !value.is_empty());
     let method = match (recorded, existing_auth_type) {
         (Some(method), _) => method,
-        (None, Some(_)) => return,
+        (None, Some(_)) => return AntigravitySyncReport::current(&path),
         (None, None) => "oauth-personal",
     };
 
     // Gemini Enterprise reads project/location from this file ONLY (never the
-    // environment), so the panel's values ride along for that path.
-    let gcp_project = runtime_env
-        .get("GOOGLE_CLOUD_PROJECT")
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|v| !v.is_empty());
-    let gcp_location = runtime_env
-        .get("GOOGLE_CLOUD_LOCATION")
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|v| !v.is_empty());
+    // environment), so the panel's values ride along for that path — including
+    // their ABSENCE, for the methods the panel owns them for.
+    let gcp_project = antigravity_gcp_field(runtime_env, recorded, "GOOGLE_CLOUD_PROJECT");
+    let gcp_location = antigravity_gcp_field(runtime_env, recorded, "GOOGLE_CLOUD_LOCATION");
 
     let updated = match merge_antigravity_settings(existing, method, gcp_project, gcp_location) {
         Ok(Some(updated)) => updated,
         // Already says exactly this; skip the write so a running server's file
         // is not needlessly rewritten.
-        Ok(None) => return,
+        Ok(None) => return AntigravitySyncReport::current(&path),
         Err(reason) => {
             tracing::warn!(
                 "[ACP][Antigravity] not editing {}: {reason}. \
                  Set `auth.type` in it yourself, or move it aside.",
                 path.display()
             );
-            return;
+            return AntigravitySyncReport::skipped(&path, reason);
         }
     };
 
     match write_antigravity_settings(&acp_dir, &path, &updated) {
-        Ok(()) => tracing::info!(
-            "[ACP][Antigravity] auth.type={method} recorded in {}",
-            path.display()
-        ),
-        Err(err) => tracing::warn!(
-            "[ACP][Antigravity] cannot write {}: {err}",
-            path.display()
-        ),
+        Ok(()) => {
+            tracing::info!(
+                "[ACP][Antigravity] auth.type={method} recorded in {}",
+                path.display()
+            );
+            AntigravitySyncReport::written(&path)
+        }
+        Err(err) => {
+            tracing::warn!("[ACP][Antigravity] cannot write {}: {err}", path.display());
+            AntigravitySyncReport::skipped(&path, format!("HouHub could not write it ({err})"))
+        }
     }
+}
+
+/// `<GEMINI_HOME>/antigravity-acp` for a launch carrying `runtime_env`.
+///
+/// Resolved through the agent's OWN rules ([`crate::parsers::antigravity`]), not
+/// a local `PathBuf::from`, because `GEMINI_HOME` is one of the variables whose
+/// upstream runs `os.path.expanduser`. Building the path by hand made
+/// `GEMINI_HOME=~/somewhere` mean two different directories: the server read
+/// `$HOME/somewhere`, while HouHub created a folder literally named `~` under
+/// whatever directory it happened to be launched from — and wrote the
+/// `auth.type` there, so `session/new` still failed with `Authentication
+/// required` no matter how many times the panel was saved.
+///
+/// `runtime_env` alone is enough even though the launch also merges registry,
+/// proxy and PATH entries on top: none of them sets `GEMINI_HOME`
+/// (Antigravity's registry entry declares `env: &[]`), and `merge_agent_env`
+/// gives `runtime_env` the highest precedence regardless. Taking one map rather
+/// than the merged pair is what lets the settings panel call this before any
+/// launch has been composed.
+///
+/// `Err` when the directory cannot be named at all — which happens exactly when
+/// the answer depends on the child's home and that home is unknowable (the
+/// launch removes `HOME`, or sets it to a relative path). Writing anyway would
+/// mean guessing, and a guess here creates a stray tree AND leaves the real
+/// `auth.type` unwritten, so the sync reports the skip instead.
+fn antigravity_acp_dir_for_env(runtime_env: &BTreeMap<String, String>) -> Result<PathBuf, String> {
+    antigravity_acp_dir_with_inherited(runtime_env, std::env::var_os("GEMINI_HOME"))
+}
+
+/// [`antigravity_acp_dir_for_env`] with HouHub's own `GEMINI_HOME` handed in.
+///
+/// Split out so the three-state resolution can be tested without mutating the
+/// process environment. A `temp_env` writer would race every other test that
+/// reads `GEMINI_HOME` — `resolve_antigravity_acp_dir` does, one assertion away
+/// in this same module — and that race is silent: the writer's value simply
+/// leaks into the reader's expectation.
+fn antigravity_acp_dir_with_inherited(
+    runtime_env: &BTreeMap<String, String>,
+    inherited: Option<std::ffi::OsString>,
+) -> Result<PathBuf, String> {
+    // Three states, and they are NOT interchangeable — the same distinction
+    // [`crate::acp::file_system_runtime::child_home_dir`] spells out for `HOME`,
+    // for the same reason. `merge_agent_env` names only the variables a launch
+    // SETS, so an ABSENT key means the child inherits HouHub's value, and a
+    // container that relocates the tree does exactly that: `GEMINI_HOME` in the
+    // image's own environment, nothing in the per-agent row. Reading only the
+    // row made HouHub write `auth.type` — and name the token file — under
+    // `~/.gemini` (i.e. `/root/.gemini`) while the agent used the relocated
+    // one, so the file the panel talked about was never the file the session
+    // read.
+    let configured = match runtime_env.get("GEMINI_HOME") {
+        // Explicitly removed (blank ⇒ `env_remove`): the child sees no
+        // `GEMINI_HOME` at all and falls back to `~/.gemini`.
+        Some(value) if value.is_empty() => None,
+        // Overridden. NOT trimmed: the spawn layer's "is this var removed" test
+        // is an exact empty-string check
+        // (`vendor/sacp-tokio/src/acp_agent.rs`), so a whitespace-only value
+        // reaches the child verbatim and trimming here would name a directory
+        // it never opens.
+        Some(value) => Some(std::ffi::OsString::from(value)),
+        // Absent: the child inherits HouHub's environment, so HouHub's own answer
+        // is exact. Empty is filtered because the server's `paths.py` treats an
+        // empty `GEMINI_HOME` as unset (`if not home`).
+        None => inherited.filter(|value| !value.is_empty()),
+    };
+
+    // The CHILD's home, not HouHub's. `merge_agent_env` copies `HOME` into the
+    // child like any other variable, so a launch that relocates it moves both
+    // the `~/.gemini` default and any `~` in `GEMINI_HOME` with it — and the
+    // server, running `os.path.expanduser` in that environment, resolves them
+    // there. Only a value that is already absolute is independent of it.
+    let needs_home = configured.as_ref().is_none_or(|value| {
+        let value = value.to_string_lossy();
+        value == "~" || value.starts_with("~/") || value.starts_with("~\\")
+    });
+    let home = crate::acp::file_system_runtime::child_home_dir(runtime_env);
+    if needs_home && home.is_none() {
+        return Err(
+            "HouHub cannot tell which home directory the agent will use (this launch removes \
+             HOME, or points it somewhere relative), so it cannot tell where the file is"
+                .to_string(),
+        );
+    }
+
+    Ok(
+        crate::parsers::antigravity::resolve_gemini_home_from_value(configured, home)
+            .join(ANTIGRAVITY_ACP_SUBDIR),
+    )
+}
+
+/// `<GEMINI_HOME>/antigravity-acp`, the ACP server's private subtree.
+const ANTIGRAVITY_ACP_SUBDIR: &str = "antigravity-acp";
+
+/// What the panel is saying about one `gcp` field.
+///
+/// The distinction the two-state `Option` could not carry: "the panel does not
+/// manage this field" and "the panel manages it and the user cleared it" both
+/// arrived as `None`, and the merge treated both as leave-alone. So clearing
+/// the project and location in the panel and saving left the values already on
+/// disk in force forever — for `oauth-business` they are the ONLY place the
+/// project comes from, so the session kept authenticating against a project the
+/// UI no longer showed anywhere.
+///
+/// Ownership follows the recorded METHOD, not the value: `oauth-business` and
+/// `agent-platform` are the two the panel renders the project/location inputs
+/// for, so for those an empty value is a deletion. For every other method — and
+/// for a legacy row with no recorded method at all — the panel never showed the
+/// fields, so whatever is in the file was hand-written and is left untouched.
+enum GcpField<'a> {
+    /// Not the panel's to touch.
+    Keep,
+    Set(&'a str),
+    /// The panel owns it and it is empty: remove the key.
+    Clear,
+}
+
+fn antigravity_gcp_field<'a>(
+    runtime_env: &'a BTreeMap<String, String>,
+    recorded_method: Option<&str>,
+    key: &str,
+) -> GcpField<'a> {
+    let value = runtime_env
+        .get(key)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    match value {
+        Some(value) => GcpField::Set(value),
+        None if matches!(recorded_method, Some("oauth-business" | "agent-platform")) => {
+            GcpField::Clear
+        }
+        None => GcpField::Keep,
+    }
+}
+
+/// The outcome of one [`sync_antigravity_settings_file`] pass, for the panel.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AntigravitySyncReport {
+    /// The file this was about, shown alongside the reason so the user can go
+    /// and set `auth.type` by hand.
+    pub path: String,
+    pub status: AntigravitySyncStatus,
+    /// Present only for `skipped`, in the words the log uses.
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AntigravitySyncStatus {
+    /// The file now declares the chosen method.
+    Written,
+    /// It already did; nothing to write.
+    AlreadyCurrent,
+    /// Left untouched. The agent's auth is NOT what the panel shows.
+    Skipped,
+}
+
+impl AntigravitySyncReport {
+    fn written(path: &Path) -> Self {
+        Self {
+            path: path.display().to_string(),
+            status: AntigravitySyncStatus::Written,
+            reason: None,
+        }
+    }
+
+    fn current(path: &Path) -> Self {
+        Self {
+            path: path.display().to_string(),
+            status: AntigravitySyncStatus::AlreadyCurrent,
+            reason: None,
+        }
+    }
+
+    fn skipped(path: &Path, reason: impl Into<String>) -> Self {
+        Self {
+            path: path.display().to_string(),
+            status: AntigravitySyncStatus::Skipped,
+            reason: Some(reason.into()),
+        }
+    }
+}
+
+/// Run the settings-file sync for an agent's STORED environment.
+///
+/// The panel's half of the launch-time call: same function, same rules, run at
+/// save time so the answer can be shown while the user is still looking at the
+/// form they just submitted.
+pub fn sync_antigravity_settings_for_env(
+    runtime_env: &BTreeMap<String, String>,
+) -> AntigravitySyncReport {
+    sync_antigravity_settings_file(runtime_env)
+}
+
+/// The environment a real Antigravity launch hands the agent process.
+///
+/// Factored out of [`build_agent`]'s `Binary` branch so the browser-free
+/// sign-in flow ([`crate::acp::antigravity_login`]) can spawn the SAME binary
+/// with the SAME environment. That identity is the whole point: the sign-in
+/// child is the one that writes the OAuth token, and the token's location is
+/// decided by `GEMINI_HOME` (via `paths.py`) and its storage backend by
+/// `AGY_ACP_FORCE_FILE_STORAGE` — so a child launched with a different
+/// environment would faithfully sign the user in and then leave the credential
+/// somewhere no session ever reads.
+///
+/// Deliberately does NOT run [`sync_antigravity_settings_file`]: this returns a
+/// value and that writes a file, and the sign-in path wants the report rather
+/// than a silently dropped one. Callers run the sync themselves.
+pub fn antigravity_launch_env(runtime_env: &BTreeMap<String, String>) -> Vec<(String, String)> {
+    let registry_env: &[(&'static str, &'static str)] =
+        match registry::get_agent_meta(AgentType::Antigravity).distribution {
+            AgentDistribution::Binary { env, .. } => env,
+            // Unreachable while the registry entry stays `Binary`; an empty
+            // base is the correct answer for every other shape anyway, since
+            // `runtime_env` carries everything the panel owns.
+            _ => &[],
+        };
+    let mut merged = merge_agent_env(registry_env, runtime_env);
+    apply_antigravity_env_policy(&mut merged, runtime_env);
+    merged
+}
+
+/// The `auth.type` values Antigravity accepts, for callers that must validate a
+/// method id before acting on it.
+pub fn is_antigravity_auth_method(method_id: &str) -> bool {
+    ANTIGRAVITY_AUTH_METHODS.contains(&method_id)
+}
+
+/// `<GEMINI_HOME>/antigravity-acp` for a launch carrying `runtime_env`, for
+/// callers outside this module that need to name a file the agent keeps there
+/// (its OAuth token, alongside the `settings.json` this module writes).
+///
+/// Same resolution, same `Err` contract as the private original: see
+/// [`antigravity_acp_dir_for_env`].
+pub fn antigravity_acp_dir_for_runtime_env(
+    runtime_env: &BTreeMap<String, String>,
+) -> Result<PathBuf, String> {
+    antigravity_acp_dir_for_env(runtime_env)
 }
 
 /// Read `settings.json` for editing.
@@ -475,8 +737,8 @@ fn write_antigravity_settings(
 fn merge_antigravity_settings(
     existing: Option<serde_json::Value>,
     method: &str,
-    gcp_project: Option<&str>,
-    gcp_location: Option<&str>,
+    gcp_project: GcpField<'_>,
+    gcp_location: GcpField<'_>,
 ) -> Result<Option<serde_json::Value>, String> {
     let mut root = match existing {
         Some(serde_json::Value::Object(map)) => serde_json::Value::Object(map),
@@ -502,12 +764,30 @@ fn merge_antigravity_settings(
             .ok_or_else(|| "`auth` is not an object".to_string())?
             .insert("type".into(), serde_json::Value::String(method.to_string()));
 
-        // Only touch the `gcp` block when the panel actually has a value:
-        // clearing a field the user typed straight into the file would be a
-        // surprise, and a partial config is still meaningful to Agent Platform.
-        // With nothing to write, a strange `gcp` is left alone rather than
-        // blocking an `auth.type` update that does not depend on it.
-        if gcp_project.is_some() || gcp_location.is_some() {
+        // Only touch the `gcp` block when the panel has something to say about
+        // it. `Keep` on both means it is not the panel's — a field the user
+        // typed straight into the file, or a method that does not render the
+        // inputs at all — so a strange `gcp` is left alone rather than blocking
+        // an `auth.type` update that does not depend on it.
+        //
+        // `Clear` is the case the old two-state signature could not express,
+        // and it has to be honored on a block that may not exist yet only in
+        // the sense of "there is then nothing to remove": a clear NEVER creates
+        // the block.
+        let writes =
+            matches!(gcp_project, GcpField::Set(_)) || matches!(gcp_location, GcpField::Set(_));
+        let clears =
+            matches!(gcp_project, GcpField::Clear) || matches!(gcp_location, GcpField::Clear);
+        // A clear on a block that is not an object has nothing to remove, so it
+        // must not be the thing that REFUSES the write: the same reasoning that
+        // keeps a strange `gcp` from blocking an `auth.type` update when there
+        // is nothing to say about it at all. Only a `Set` — which really would
+        // have to replace that value — earns the refusal.
+        let clearable = clears
+            && obj
+                .get("gcp")
+                .is_some_and(serde_json::Value::is_object);
+        if writes || clearable {
             match obj.get("gcp") {
                 None | Some(serde_json::Value::Null) => {
                     obj.insert("gcp".into(), serde_json::json!({}));
@@ -519,14 +799,21 @@ fn merge_antigravity_settings(
                 .get_mut("gcp")
                 .and_then(serde_json::Value::as_object_mut)
                 .ok_or_else(|| "`gcp` is not an object".to_string())?;
-            if let Some(project) = gcp_project {
-                gcp.insert("project".into(), serde_json::Value::String(project.to_string()));
+            for (name, field) in [("project", &gcp_project), ("location", &gcp_location)] {
+                match field {
+                    GcpField::Set(value) => {
+                        gcp.insert(name.into(), serde_json::Value::String((*value).to_string()));
+                    }
+                    GcpField::Clear => {
+                        gcp.remove(name);
+                    }
+                    GcpField::Keep => {}
+                }
             }
-            if let Some(location) = gcp_location {
-                gcp.insert(
-                    "location".into(),
-                    serde_json::Value::String(location.to_string()),
-                );
+            // An empty block left behind by a clear says nothing; drop it so
+            // the file reads the way a fresh one would.
+            if gcp.is_empty() {
+                obj.remove("gcp");
             }
         }
     }
@@ -1381,7 +1668,11 @@ async fn build_agent(
                 // server's settings.json. It has to happen before the spawn —
                 // the file is read during `session/new`, and without it that
                 // call fails with `Authentication required`.
-                sync_antigravity_settings_file(&merged_env, runtime_env);
+                //
+                // The report is for the settings panel, which runs the same
+                // sync at save time; here it is already in the log and must
+                // never block a launch, so it is deliberately dropped.
+                let _ = sync_antigravity_settings_file(runtime_env);
             }
             let env_key_list: Vec<&str> = merged_env.iter().map(|(k, _)| k.as_str()).collect();
             if !merged_env.is_empty() {
@@ -2389,52 +2680,6 @@ fn filter_pi_bound_model_options(
     }
 }
 
-/// Codex-acp sometimes omits the "mode" (approval preset) config option when
-/// the loaded sandbox policy does not exactly match one of the three built-in
-/// presets (commonly because `writable_roots` was injected during config
-/// loading).  When that happens, synthesize the option so the user can still
-/// pick a preset.  codex-acp's `set_config_option` handler always accepts
-/// `config_id = "mode"` regardless of whether it was advertised.
-fn ensure_codex_mode_option(options: &mut Vec<SessionConfigOptionInfo>) {
-    if options.iter().any(|o| o.id == "mode") {
-        return;
-    }
-    options.insert(
-        0,
-        SessionConfigOptionInfo {
-            id: "mode".to_string(),
-            name: "Approval Preset".to_string(),
-            description: Some(
-                "Choose an approval and sandboxing preset for your session".to_string(),
-            ),
-            category: Some("mode".to_string()),
-            kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
-                current_value: "auto".to_string(),
-                options: vec![
-                    SessionConfigSelectOptionInfo {
-                        value: "read-only".to_string(),
-                        name: "Read Only".to_string(),
-                        description: Some("Codex can only read files".to_string()),
-                    },
-                    SessionConfigSelectOptionInfo {
-                        value: "auto".to_string(),
-                        name: "Default".to_string(),
-                        description: Some(
-                            "Codex can edit files, but asks before running commands".to_string(),
-                        ),
-                    },
-                    SessionConfigSelectOptionInfo {
-                        value: "full-access".to_string(),
-                        name: "Full Access".to_string(),
-                        description: Some("Codex runs without asking for approval".to_string()),
-                    },
-                ],
-                groups: vec![],
-            }),
-        },
-    );
-}
-
 async fn emit_session_config_options_values(
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
@@ -2442,9 +2687,6 @@ async fn emit_session_config_options_values(
     config_options: Vec<SessionConfigOption>,
 ) {
     let mut mapped = map_session_config_options(&config_options);
-    if agent_type == AgentType::Codex {
-        ensure_codex_mode_option(&mut mapped);
-    }
     if agent_type == AgentType::Pi {
         let (provider, model) = {
             let session = state.read().await;
@@ -2459,7 +2701,7 @@ async fn emit_session_config_options_values(
         state,
         emitter,
         AcpEvent::SessionConfigOptions {
-            config_options: mapped,
+            config_options: map_session_config_options(&config_options),
         },
     )
     .await;
@@ -3409,6 +3651,21 @@ fn build_client_capabilities(
     // with no filesystem watcher; houhub is not one. Nothing else in either
     // release depends on it, and both adapters no-op without the
     // advertisement, so staying out costs us nothing.
+    //
+    // codex-acp 1.7.0 added a third, "nativeSubagentSessions" (the draft ACP
+    // subagent RFD; the canonical gate is a `clientCapabilities.subagents: {}`
+    // field, with this AIR key as the fallback for SDKs that strip it). It must
+    // stay out for a harder reason than cost: `agent-client-protocol-schema`
+    // 0.11.7 cannot RECEIVE the result. Its `SessionUpdate` is an
+    // internally-tagged enum with no catch-all arm, so the `subagent_spawned` /
+    // `subagent_state_update` notifications would fail to deserialize — and
+    // since the adapter switches child messages, thoughts, tools and
+    // permissions onto a child session id announced only in that first
+    // notification, opting in would make subagent work vanish from the timeline
+    // rather than render better. Without the advertisement the lifecycle stays
+    // the legacy `subAgentActivity` tool call HouHub already renders, whose
+    // shape is unchanged from 1.4.0. Revisit when the schema crate ships both
+    // the capability field and the update variants.
     if matches!(agent_type, AgentType::ClaudeCode | AgentType::Codex) {
         meta.insert(
             "jetbrains".to_string(),
@@ -5700,6 +5957,8 @@ async fn handle_permission_request(
         }
     }
 
+    hoist_request_permission_meta(&mut tool_call_value, req.meta.as_ref());
+
     admit_permission(
         perms,
         state,
@@ -5998,9 +6257,13 @@ async fn apply_preferred_session_options(
     let mut options = initial_config_options;
     for (config_id, value_id) in preferred_config_values {
         // Skip the round-trip when the agent's current value already matches.
-        // Note: Codex omits "mode" from its advertised options but accepts
-        // `set_config_option` for it (see `ensure_codex_mode_option`), so we
-        // do NOT skip on "config_id not in options" — let the agent decide.
+        // Note: codex-acp advertises "mode" as a config option (so the match
+        // check below normally fires), but we still do NOT skip when a
+        // requested config_id is absent from the advertised options — an agent
+        // may accept `set_config_option` for an id it never advertised. codex
+        // does: its `applySessionConfigOption` switches on `configId` alone,
+        // with no advertised-list check (verified in the 1.7.0 bundle). So let
+        // the agent decide.
         let advertised = options.iter().find(|o| o.id.to_string() == *config_id);
         let already_matches = advertised
             .is_some_and(|option| config_option_already_holds(option, value_id.as_str()));
@@ -8667,6 +8930,54 @@ fn pi_result_content_is_stringify_noise(
             .is_some_and(pi_result_is_empty_announcement)
 }
 
+/// Resolve the live `raw_output` string for an OpenCode tool call.
+///
+/// OpenCode's ACP adapter reports a finished tool on BOTH channels: the clean
+/// result text on `content[]`, and the envelope `{output, metadata?,
+/// attachments?}` — wrapping that very same string — on `rawOutput` (a failure
+/// sends `{error, metadata?}` beside the error text). Stringifying the envelope
+/// shadows the clean text, because the live renderer's `raw_output_chunks` win
+/// over `content` (`conversation-runtime-store.ts`), so every card that parses
+/// the result ITSELF is handed JSON source instead of the result.
+///
+/// Verified against opencode 1.18.23 (driven over real ACP with a stub MCP
+/// server): a HouHub-mcp `ask_user_question` completes as
+///   content:   [{"type":"content","content":{"type":"text","text":"The user
+///               answered your question(s):\n1. [框架] …\n   → 选项 A\n"}}]
+///   rawOutput: {"output":"<that same text>","metadata":{"truncated":false}}
+/// OpenCode drops the MCP `structuredContent` entirely, so the human-readable
+/// lines ARE the whole record — and `AskQuestionResultCard`, seeing only the
+/// one-line JSON blob, matched neither the structured envelope nor the text
+/// fallback and rendered an answered question as "no selection", while the
+/// history parser (which reads the same `state.output` bare) rendered it fine.
+///
+/// Same parity rule as Grok and pi (see [`grok_live_tool_output`]): whenever
+/// `content` carries anything, it IS OpenCode's own rendering of this result —
+/// return `None` and let it render. Only with no `content` is the envelope
+/// unwrapped, mirroring `parsers/opencode.rs`: `output`, else the failure
+/// `error`, else `metadata.output` (a command writing only to stderr leaves
+/// `state.output` empty while the combined stream stays in the metadata). An
+/// unrecognized payload still stringifies as before, so no result is ever lost.
+fn opencode_live_tool_output(
+    content: &Option<String>,
+    raw_output: &Option<serde_json::Value>,
+) -> Option<String> {
+    if content.as_deref().is_some_and(|c| !c.trim().is_empty()) {
+        return None;
+    }
+    let raw = raw_output.as_ref()?;
+    fn text(value: Option<&serde_json::Value>) -> Option<&str> {
+        value
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+    }
+    text(raw.get("output"))
+        .or_else(|| text(raw.get("error")))
+        .or_else(|| text(raw.pointer("/metadata/output")))
+        .map(structurize_live_output)
+        .or_else(|| json_value_to_text(raw_output).map(|t| structurize_live_output(&t)))
+}
+
 /// What a pi `agent_message_chunk` actually IS (issue #525).
 ///
 /// pi-acp puts the assistant's prose AND its own lifecycle announcements on the
@@ -9272,6 +9583,53 @@ fn is_codex_plan_review(
         .and_then(|codex| codex.get("kind"))
         .and_then(serde_json::Value::as_str)
         == Some("plan_review")
+}
+
+/// Copy a permission request's REQUEST-level `_meta.permission` onto the card's
+/// tool call, where the dialog can reach it.
+///
+/// `session/request_permission` carries presentation data at two levels: on each
+/// option (`PermissionOptionInfo.meta`, already forwarded verbatim) and on the
+/// request itself. Only the tool call and the options reach the frontend —
+/// `AcpEvent::PermissionRequest` has no request-meta field — so without this the
+/// request level is dropped on the floor.
+///
+/// That became load-bearing in codex-acp 1.7.0, which moved Codex's own reason
+/// for asking out of `toolCall.title` (1.4.0 sent
+/// `params.reason ?? "Permissions Request"`) into
+/// `_meta.permission = {version: 1, title, description?}`. The title is now one
+/// of four fixed strings and the reason lives only in `description`, so a card
+/// built from the tool call alone would read "Edit files" where it used to
+/// explain WHY the edit needs approval. claude-agent-acp does not send this
+/// block; nothing changes for it.
+///
+/// Hoisting rather than adding an event field is deliberate: the tool call is
+/// already the card's payload end-to-end (`PendingPermissionState.tool_call`,
+/// the snapshot, the WebSocket envelope, `parsePermissionToolCall`), so the
+/// reason survives a reconnect and a snapshot restore for free. `_meta` is
+/// namespaced by producer, and `permission` is unclaimed at tool-call level —
+/// codex's permission tool calls carry no `_meta` at all, and claude's carries
+/// only `claudeCode`. An existing `_meta.permission` is therefore never
+/// overwritten: the insert is skipped if the key is already present.
+fn hoist_request_permission_meta(
+    tool_call: &mut serde_json::Value,
+    request_meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) {
+    let Some(permission) = request_meta.and_then(|m| m.get("permission")) else {
+        return;
+    };
+    let Some(obj) = tool_call.as_object_mut() else {
+        return;
+    };
+    let meta = obj
+        .entry("_meta")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let Some(meta) = meta.as_object_mut() else {
+        // A non-object `_meta` is malformed; leave it exactly as the agent sent
+        // it rather than replacing content the card may still be parsing.
+        return;
+    };
+    meta.entry("permission").or_insert_with(|| permission.clone());
 }
 
 /// True when an `initialize` response advertises the ACP steering extension —
@@ -10688,6 +11046,11 @@ async fn emit_conversation_update(
                 grok_live_tool_output(&content, &tc.raw_output)
             } else if matches!(agent_type, AgentType::Pi) {
                 pi_live_tool_output(&content, &tc.raw_output)
+            } else if matches!(agent_type, AgentType::OpenCode) {
+                // OpenCode's rawOutput is the `{output, metadata}` envelope
+                // around the SAME text `content` already carries; shipping it
+                // shadows the clean text (see opencode_live_tool_output).
+                opencode_live_tool_output(&content, &tc.raw_output)
             } else {
                 json_value_to_text(&tc.raw_output)
                     .map(|text| unwrap_codebuddy_deferred_output(agent_type, &text).unwrap_or(text))
@@ -10880,6 +11243,11 @@ async fn emit_conversation_update(
                 grok_live_tool_output(&content, &tcu.fields.raw_output)
             } else if matches!(agent_type, AgentType::Pi) {
                 pi_live_tool_output(&content, &tcu.fields.raw_output)
+            } else if matches!(agent_type, AgentType::OpenCode) {
+                // Symmetric with the ToolCall arm — and the arm that matters:
+                // OpenCode delivers every result on the completion update (see
+                // opencode_live_tool_output).
+                opencode_live_tool_output(&content, &tcu.fields.raw_output)
             } else {
                 json_value_to_text(&tcu.fields.raw_output)
                     .map(|text| unwrap_codebuddy_deferred_output(agent_type, &text).unwrap_or(text))
@@ -11098,26 +11466,10 @@ async fn emit_conversation_update(
             if let Some(title) = crate::acp::session_title::native_title_from_session_info(
                 info.title.value().map(|s| s.as_str()),
             ) {
-                // Test and set under ONE write lock. Nothing can interleave
-                // here today — a session's notifications are handled serially,
-                // and the only other writer of `last_native_title` is the
-                // `ConversationLinked` arm, which is emitted ONLY while the row
-                // is still unbound and therefore can never race a title this
-                // admits. That safety currently rests on two guards in
-                // different files agreeing; keeping the halves in one critical
-                // section makes it hold by construction instead.
-                let admit = {
-                    let mut s = state.write().await;
-                    let admit = s.conversation_id.is_some()
-                        && s.last_native_title.as_deref() != Some(title.as_str());
-                    if admit {
-                        s.last_native_title = Some(title.clone());
-                    }
-                    admit
-                };
-                if admit {
-                    emit_with_state(state, emitter, AcpEvent::NativeSessionTitle { title }).await;
-                }
+                // Shared with the transcript watcher's title path so the
+                // skip-cache and the unbound-row drop have exactly one
+                // spelling — see `session_title::publish_native_title`.
+                crate::acp::session_title::publish_native_title(state, emitter, title).await;
             }
             let neutral_goal_channel = state.read().await.neutral_goal_channel;
             if let Some(goal) =
@@ -12118,12 +12470,16 @@ mod tests {
             assert!(capabilities
                 .iter()
                 .any(|v| v.as_str() == Some("sessionFailure")));
-            // And nothing else. Adding a capability here is not free: it is
-            // what turns a per-prompt request on, and "agentFileChangeReport"
+            // And nothing else. Adding a capability here is not free — it is
+            // what turns the corresponding behavior on, and neither of the two
+            // that exist is wanted: "agentFileChangeReport"
             // (claude-agent-acp 0.69.0 / codex-acp 1.4.0) buys an extra model
             // round-trip per turn for a clamped, self-reported subset of what
-            // the `workspace_state` watcher already sees. See the reasoning at
-            // the advertisement site before relaxing this.
+            // the `workspace_state` watcher already sees, and
+            // "nativeSubagentSessions" (codex-acp 1.7.0) would move subagent
+            // output onto child session ids carried by `SessionUpdate` variants
+            // `agent-client-protocol-schema` 0.11.7 cannot deserialize at all.
+            // See the reasoning at the advertisement site before relaxing this.
             assert_eq!(
                 capabilities,
                 &vec![serde_json::Value::String("sessionFailure".to_string())],
@@ -12257,6 +12613,76 @@ mod tests {
         assert!(parse_steer_outcome(&serde_json::json!({"outcome": "queued"})).is_err());
         assert!(parse_steer_outcome(&serde_json::json!({})).is_err());
         assert!(parse_steer_outcome(&serde_json::json!({"outcome": 1})).is_err());
+    }
+
+    #[test]
+    fn hoist_request_permission_meta_carries_the_codex_reason_onto_the_card() {
+        // codex-acp 1.7.0: the title is a fixed string and the REASON only
+        // exists at request level, so the card is built from a tool call that
+        // does not explain itself until this hoist runs.
+        let mut tool_call = serde_json::json!({
+            "toolCallId": "command-7",
+            "kind": "execute",
+            "status": "pending",
+            "title": "Run command",
+            "rawInput": { "command": "npm test", "cwd": "/workspace" }
+        });
+        let request_meta = meta_map(serde_json::json!({
+            "permission": {
+                "version": 1,
+                "title": "Run command?",
+                "description": "The test suite needs to run outside the current sandbox."
+            }
+        }));
+        hoist_request_permission_meta(&mut tool_call, Some(&request_meta));
+        assert_eq!(
+            tool_call["_meta"]["permission"]["description"],
+            serde_json::json!("The test suite needs to run outside the current sandbox.")
+        );
+        // Untouched otherwise — the standard fields stay the authority.
+        assert_eq!(tool_call["title"], serde_json::json!("Run command"));
+    }
+
+    #[test]
+    fn hoist_request_permission_meta_preserves_existing_tool_call_meta() {
+        // An agent-supplied `_meta` must survive: claude puts `claudeCode.title`
+        // there and the dialog prefers it over the raw title. And a tool call
+        // that already carried `permission` wins over the request level — it is
+        // the more specific of the two.
+        let mut tool_call = serde_json::json!({
+            "toolCallId": "t1",
+            "_meta": { "claudeCode": { "title": "Run the test suite" },
+                       "permission": { "version": 1, "description": "from the tool call" } }
+        });
+        let request_meta = meta_map(serde_json::json!({
+            "permission": { "version": 1, "description": "from the request" }
+        }));
+        hoist_request_permission_meta(&mut tool_call, Some(&request_meta));
+        assert_eq!(
+            tool_call["_meta"]["claudeCode"]["title"],
+            serde_json::json!("Run the test suite")
+        );
+        assert_eq!(
+            tool_call["_meta"]["permission"]["description"],
+            serde_json::json!("from the tool call")
+        );
+    }
+
+    #[test]
+    fn hoist_request_permission_meta_is_a_noop_without_a_permission_block() {
+        // Every agent but codex ≥1.7.0 sends no request-level `permission`, and
+        // codex's own plan-review request sends `codex` instead. Neither may
+        // grow a stray `_meta` key.
+        for request_meta in [
+            None,
+            Some(meta_map(serde_json::json!({
+                "codex": { "kind": "plan_review", "planItemId": "p1" }
+            }))),
+        ] {
+            let mut tool_call = serde_json::json!({ "toolCallId": "t1" });
+            hoist_request_permission_meta(&mut tool_call, request_meta.as_ref());
+            assert_eq!(tool_call, serde_json::json!({ "toolCallId": "t1" }));
+        }
     }
 
     #[test]
@@ -12542,6 +12968,50 @@ mod tests {
         assert!(env.iter().any(|(k, v)| k == "GEMINI_API_KEY" && v.is_empty()));
     }
 
+    /// A var the method READS but the panel did not store must still be cleared.
+    ///
+    /// This is the whole Agent Platform choice: the method takes either a
+    /// `GOOGLE_API_KEY` or a project + location, and the server suppresses the
+    /// pair whenever the key is set — so the panel deletes `GOOGLE_API_KEY`
+    /// from the row when the field is left empty. A policy that only asked
+    /// "does this method read the var" left the slot open, and an inherited key
+    /// walked into it and outranked the project the user typed.
+    ///
+    /// Note the shape this needs: the earlier cases all put the var IN `merged`
+    /// first, which is the one arrangement that cannot catch this — the bug was
+    /// about the var being absent.
+    #[test]
+    fn antigravity_env_policy_clears_a_kept_var_the_panel_left_empty() {
+        // Exactly what the panel persists for "Agent Platform, no API key".
+        let mut env = vec![
+            ("GOOGLE_CLOUD_PROJECT".to_string(), "mine".to_string()),
+            ("GOOGLE_CLOUD_LOCATION".to_string(), "global".to_string()),
+        ];
+        apply_antigravity_env_policy(&mut env, &antigravity_runtime("agent-platform"));
+        let google_api_key: Vec<_> = env
+            .iter()
+            .filter(|(k, _)| k == "GOOGLE_API_KEY")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(
+            google_api_key,
+            vec![""],
+            "an inherited GOOGLE_API_KEY would suppress the project the user filled in"
+        );
+        // The credentials the panel DID store are untouched.
+        assert!(env.iter().any(|(k, v)| k == "GOOGLE_CLOUD_PROJECT" && v == "mine"));
+        assert!(env
+            .iter()
+            .any(|(k, v)| k == "GOOGLE_CLOUD_LOCATION" && v == "global"));
+
+        // Same rule for the API-key method with an empty key field, and for a
+        // whitespace-only value — the panel trims before storing, so a blank
+        // here is a leftover rather than a credential.
+        let mut env = vec![("GEMINI_API_KEY".to_string(), "   ".to_string())];
+        apply_antigravity_env_policy(&mut env, &antigravity_runtime("gemini-api-key"));
+        assert!(env.iter().any(|(k, v)| k == "GEMINI_API_KEY" && v.is_empty()));
+    }
+
     #[test]
     fn antigravity_env_policy_leaves_unrecorded_and_unknown_methods_alone() {
         // Legacy rows (no recorded method) and a garbage value must not have
@@ -12594,12 +13064,17 @@ mod tests {
         let original = "{\n  // hand written\n  \"gcp\": { \"project\": \"mine\" },\n}\n";
         std::fs::write(&path, original).unwrap();
 
-        let merged = vec![(
+        let mut runtime = antigravity_runtime("oauth-business");
+        runtime.insert(
             "GEMINI_HOME".to_string(),
             dir.path().to_string_lossy().to_string(),
-        )];
-        let runtime = antigravity_runtime("oauth-business");
-        sync_antigravity_settings_file(&merged, &runtime);
+        );
+        let report = sync_antigravity_settings_file(&runtime);
+
+        // The panel must be able to SAY this: the row now claims
+        // `oauth-business` while the file still says nothing at all.
+        assert_eq!(report.status, AntigravitySyncStatus::Skipped);
+        assert!(report.reason.is_some_and(|r| r.contains("strict JSON")));
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
@@ -12608,22 +13083,24 @@ mod tests {
     fn antigravity_settings_sync_writes_through_gemini_home_and_defaults_the_method() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("antigravity-acp").join("settings.json");
-        let merged = vec![(
-            "GEMINI_HOME".to_string(),
-            dir.path().to_string_lossy().to_string(),
-        )];
+        let home = || {
+            BTreeMap::from([(
+                "GEMINI_HOME".to_string(),
+                dir.path().to_string_lossy().to_string(),
+            )])
+        };
 
         // No recorded method and no file: fall back to the method the panel
         // DISPLAYS as selected, so a user who never opened it still gets a
         // session instead of `Authentication required`.
-        sync_antigravity_settings_file(&merged, &BTreeMap::new());
+        sync_antigravity_settings_file(&home());
         let written: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(written["auth"]["type"], "oauth-personal");
 
         // An `auth.type` already on disk is NEVER overridden by that fallback.
         std::fs::write(&path, r#"{"auth":{"type":"gemini-api-key"},"keep":7}"#).unwrap();
-        sync_antigravity_settings_file(&merged, &BTreeMap::new());
+        sync_antigravity_settings_file(&home());
         let held: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(held["auth"]["type"], "gemini-api-key");
@@ -12631,9 +13108,10 @@ mod tests {
 
         // An explicit panel choice does override it, and keeps foreign keys.
         let mut runtime = antigravity_runtime("oauth-business");
+        runtime.extend(home());
         runtime.insert("GOOGLE_CLOUD_PROJECT".to_string(), "acme".to_string());
         runtime.insert("GOOGLE_CLOUD_LOCATION".to_string(), "eu".to_string());
-        sync_antigravity_settings_file(&merged, &runtime);
+        sync_antigravity_settings_file(&runtime);
         let updated: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(updated["auth"]["type"], "oauth-business");
@@ -12652,7 +13130,12 @@ mod tests {
             "gcp": { "project": "hand-written", "location": "eu" },
             "someFutureKey": { "nested": [1, 2, 3] }
         });
-        let merged = merge_antigravity_settings(Some(existing.clone()), "oauth-business", None, None)
+        let merged = merge_antigravity_settings(
+            Some(existing.clone()),
+            "oauth-business",
+            GcpField::Keep,
+            GcpField::Keep,
+        )
             .expect("editable")
             .expect("auth.type changed, so this is a real write");
         assert_eq!(merged["auth"]["type"], "oauth-business");
@@ -12663,7 +13146,12 @@ mod tests {
 
         // Panel values overwrite only the fields they carry.
         let merged =
-            merge_antigravity_settings(Some(existing.clone()), "oauth-business", Some("proj"), None)
+            merge_antigravity_settings(
+                Some(existing.clone()),
+                "oauth-business",
+                GcpField::Set("proj"),
+                GcpField::Keep,
+            )
                 .expect("editable")
                 .expect("changed");
         assert_eq!(merged["gcp"]["project"], "proj");
@@ -12671,14 +13159,14 @@ mod tests {
 
         // Already says exactly this ⇒ no write.
         assert!(
-            merge_antigravity_settings(Some(existing), "gemini-api-key", None, None)
+            merge_antigravity_settings(Some(existing), "gemini-api-key", GcpField::Keep, GcpField::Keep)
                 .expect("editable")
                 .is_none()
         );
 
         // No file at all: created from scratch. (A non-object ROOT never gets
         // here — the read side already refused it.)
-        let created = merge_antigravity_settings(None, "oauth-personal", Some("p"), Some("global"))
+        let created = merge_antigravity_settings(None, "oauth-personal", GcpField::Set("p"), GcpField::Set("global"))
             .expect("editable")
             .expect("created");
         assert_eq!(created["auth"]["type"], "oauth-personal");
@@ -12692,17 +13180,22 @@ mod tests {
         // an object" and gives up. Replacing that value with an object would
         // delete whatever the user meant by it, so houhub refuses too.
         let odd_auth = serde_json::json!({ "auth": "managed-elsewhere", "keep": 1 });
-        assert!(merge_antigravity_settings(Some(odd_auth), "oauth-personal", None, None).is_err());
+        assert!(merge_antigravity_settings(Some(odd_auth), "oauth-personal", GcpField::Keep, GcpField::Keep).is_err());
 
         // Same for `gcp` — but ONLY when there is actually something to write
         // into it. With no project or location supplied, a strange `gcp` is
         // none of houhub's business and must not block the `auth.type` update.
         let odd_gcp = serde_json::json!({ "gcp": ["not", "an", "object"] });
         assert!(
-            merge_antigravity_settings(Some(odd_gcp.clone()), "oauth-personal", Some("p"), None)
+            merge_antigravity_settings(
+                Some(odd_gcp.clone()),
+                "oauth-personal",
+                GcpField::Set("p"),
+                GcpField::Keep,
+            )
                 .is_err()
         );
-        let untouched = merge_antigravity_settings(Some(odd_gcp), "oauth-personal", None, None)
+        let untouched = merge_antigravity_settings(Some(odd_gcp), "oauth-personal", GcpField::Keep, GcpField::Keep)
             .expect("editable")
             .expect("auth.type still written");
         assert_eq!(untouched["auth"]["type"], "oauth-personal");
@@ -12710,11 +13203,262 @@ mod tests {
 
         // An explicit JSON null reads as absent, not as a foreign shape.
         let null_auth = serde_json::json!({ "auth": null, "keep": 2 });
-        let filled = merge_antigravity_settings(Some(null_auth), "gemini-api-key", None, None)
+        let filled = merge_antigravity_settings(
+            Some(null_auth),
+            "gemini-api-key",
+            GcpField::Keep,
+            GcpField::Keep,
+        )
             .expect("editable")
             .expect("changed");
         assert_eq!(filled["auth"]["type"], "gemini-api-key");
         assert_eq!(filled["keep"], 2);
+    }
+
+    /// Clearing the project and location in the panel has to REACH the file.
+    ///
+    /// The old signature could not say it: "the panel does not manage this
+    /// field" and "the panel manages it and the user emptied it" both arrived
+    /// as `None`, and the merge left the block alone for both. So the values
+    /// written by an earlier save stayed in force forever — and for
+    /// `oauth-business` that file is the ONLY place the project comes from, so
+    /// the agent kept authenticating against a project the UI showed nowhere.
+    #[test]
+    fn antigravity_settings_gcp_fields_can_be_cleared_by_the_panel() {
+        let existing = || {
+            serde_json::json!({
+                "auth": { "type": "oauth-business" },
+                "gcp": { "project": "stale", "location": "eu" },
+                "keep": 1
+            })
+        };
+
+        // The panel owns both fields for this method and both are now empty.
+        let cleared =
+            merge_antigravity_settings(Some(existing()), "oauth-business", GcpField::Clear, GcpField::Clear)
+                .expect("editable")
+                .expect("the gcp block changed, so this is a real write");
+        assert!(
+            cleared.get("gcp").is_none(),
+            "an emptied block should go rather than linger as {{}}: {cleared}"
+        );
+        assert_eq!(cleared["auth"]["type"], "oauth-business");
+        assert_eq!(cleared["keep"], 1, "foreign keys still survive a clear");
+
+        // One cleared, one set.
+        let partial =
+            merge_antigravity_settings(Some(existing()), "oauth-business", GcpField::Set("new"), GcpField::Clear)
+                .expect("editable")
+                .expect("changed");
+        assert_eq!(partial["gcp"]["project"], "new");
+        assert!(partial["gcp"].get("location").is_none());
+
+        // A clear with nothing on disk to clear is not a write — otherwise
+        // every launch would rewrite a running server's file for nothing.
+        assert!(merge_antigravity_settings(
+            Some(serde_json::json!({ "auth": { "type": "oauth-business" } })),
+            "oauth-business",
+            GcpField::Clear,
+            GcpField::Clear,
+        )
+        .expect("editable")
+        .is_none());
+
+        // And a clear against a `gcp` that is not an object must not REFUSE the
+        // edit: there is nothing there to remove, so it is the same "none of
+        // HouHub's business" case as having nothing to say, and blocking would
+        // take the `auth.type` update down with it — the one part of this file
+        // the agent cannot start without.
+        let odd = serde_json::json!({ "gcp": ["not", "an", "object"] });
+        let still_written =
+            merge_antigravity_settings(Some(odd), "oauth-business", GcpField::Clear, GcpField::Clear)
+                .expect("a clear must not refuse a block it cannot edit")
+                .expect("auth.type still written");
+        assert_eq!(still_written["auth"]["type"], "oauth-business");
+        assert_eq!(
+            still_written["gcp"],
+            serde_json::json!(["not", "an", "object"])
+        );
+    }
+
+    /// Which fields count as the panel's is decided by the METHOD, so a
+    /// hand-written block under a method that never renders those inputs is
+    /// still none of HouHub's business.
+    #[test]
+    fn antigravity_gcp_ownership_follows_the_recorded_method() {
+        let empty = BTreeMap::new();
+        for method in ["oauth-business", "agent-platform"] {
+            assert!(matches!(
+                antigravity_gcp_field(&empty, Some(method), "GOOGLE_CLOUD_PROJECT"),
+                GcpField::Clear
+            ));
+        }
+        // The two methods with no project/location inputs, and a legacy row
+        // with no recorded method at all.
+        for method in [Some("oauth-personal"), Some("gemini-api-key"), None] {
+            assert!(matches!(
+                antigravity_gcp_field(&empty, method, "GOOGLE_CLOUD_PROJECT"),
+                GcpField::Keep
+            ));
+        }
+        // A value present is always a write, whoever recorded it.
+        let filled = BTreeMap::from([("GOOGLE_CLOUD_PROJECT".to_string(), " p ".to_string())]);
+        assert!(matches!(
+            antigravity_gcp_field(&filled, Some("oauth-business"), "GOOGLE_CLOUD_PROJECT"),
+            GcpField::Set("p")
+        ));
+    }
+
+    /// A `GEMINI_HOME` that only HouHub's OWN environment carries still names
+    /// the directory the agent uses.
+    ///
+    /// `merge_agent_env` lists the variables a launch SETS; anything absent is
+    /// inherited, and relocating the tree from a container's environment
+    /// (`GEMINI_HOME=/data/gemini` in the image, nothing in the per-agent row)
+    /// is exactly that shape. Treating "absent" as "unset" sent HouHub to
+    /// `~/.gemini` — so on a Docker deployment it wrote `auth.type` into
+    /// `/root/.gemini` while the agent read the relocated file, and the panel
+    /// named a token path that was never written. The same three-state
+    /// distinction `child_home_dir` makes for `HOME`, for the same reason.
+    #[test]
+    fn antigravity_settings_path_follows_a_gemini_home_houhub_only_inherits() {
+        // Platform-native, and HOME is pinned in the row rather than read from
+        // the process: other tests relocate the real one through `temp_env`,
+        // and a read here would race them. HouHub's own `GEMINI_HOME` is
+        // injected for the same reason — see
+        // [`antigravity_acp_dir_with_inherited`].
+        #[cfg(windows)]
+        let (home_key, child_home, inherited, from_row) = (
+            "USERPROFILE",
+            "C:\\srv\\agy",
+            "C:\\data\\gemini",
+            "C:\\srv\\row",
+        );
+        #[cfg(not(windows))]
+        let (home_key, child_home, inherited, from_row) =
+            ("HOME", "/srv/agy", "/data/gemini", "/srv/row");
+        let base = || BTreeMap::from([(home_key.to_string(), child_home.to_string())]);
+
+        let houhubs_own = || Some(std::ffi::OsString::from(inherited));
+
+        // ABSENT from the row: the child inherits HouHub's, so HouHub's own value
+        // is the exact answer.
+        assert_eq!(
+            antigravity_acp_dir_with_inherited(&base(), houhubs_own()).expect("nameable"),
+            PathBuf::from(inherited).join(ANTIGRAVITY_ACP_SUBDIR)
+        );
+
+        // Present in the row: that is what the child is launched with, so it
+        // outranks the inherited one.
+        let mut overridden = base();
+        overridden.insert("GEMINI_HOME".to_string(), from_row.to_string());
+        assert_eq!(
+            antigravity_acp_dir_with_inherited(&overridden, houhubs_own()).expect("nameable"),
+            PathBuf::from(from_row).join(ANTIGRAVITY_ACP_SUBDIR)
+        );
+
+        // Present but EMPTY is a removal (the spawn layer reads a blank as
+        // `env_remove`), and a removal is NOT the same as absent: the child then
+        // sees no `GEMINI_HOME` at all and falls back to `~/.gemini` under its
+        // own home. Collapsing the two would send HouHub to the inherited value
+        // for a launch that deliberately took it away.
+        let mut removed = base();
+        removed.insert("GEMINI_HOME".to_string(), String::new());
+        assert_eq!(
+            antigravity_acp_dir_with_inherited(&removed, houhubs_own()).expect("nameable"),
+            PathBuf::from(child_home)
+                .join(".gemini")
+                .join(ANTIGRAVITY_ACP_SUBDIR)
+        );
+
+        // And HouHub having none either is the plain default.
+        assert_eq!(
+            antigravity_acp_dir_with_inherited(&base(), None).expect("nameable"),
+            PathBuf::from(child_home)
+                .join(".gemini")
+                .join(ANTIGRAVITY_ACP_SUBDIR)
+        );
+    }
+
+    /// `GEMINI_HOME=~/x` names `$HOME/x` to the server, so it has to name the
+    /// same thing here.
+    ///
+    /// Antigravity runs `os.path.expanduser` on the value
+    /// (`acp_server/paths.py`). HouHub built the path with a bare
+    /// `PathBuf::from`, so it created a directory literally named `~` under its
+    /// own working directory and wrote `auth.type` into THAT — leaving
+    /// `session/new` failing with `Authentication required` no matter how many
+    /// times the panel was saved.
+    #[test]
+    fn antigravity_settings_path_expands_a_tilde_home_the_way_the_server_does() {
+        let home = dirs::home_dir().expect("home dir");
+        let runtime = BTreeMap::from([("GEMINI_HOME".to_string(), "~/agy-test".to_string())]);
+        assert_eq!(
+            antigravity_acp_dir_for_env(&runtime).expect("nameable"),
+            home.join("agy-test").join("antigravity-acp")
+        );
+
+        // …and against the CHILD's home when the launch relocates it, since the
+        // server runs its `expanduser` in that environment. Resolving against
+        // HouHub's home wrote the auth file into a tree the agent never opens.
+        // Platform-native fixture: `child_home_dir` refuses a home that is not
+        // absolute, and a unix-style `/srv/agy` has no drive prefix so Windows
+        // does not consider it absolute. A shared literal would pass on unix
+        // and fail in the Windows server CI cell, which runs these for real.
+        #[cfg(windows)]
+        let (home_key, child_home) = ("USERPROFILE", "C:\\srv\\agy");
+        #[cfg(not(windows))]
+        let (home_key, child_home) = ("HOME", "/srv/agy");
+
+        let relocated = BTreeMap::from([
+            (home_key.to_string(), child_home.to_string()),
+            ("GEMINI_HOME".to_string(), "~/profile".to_string()),
+        ]);
+        assert_eq!(
+            antigravity_acp_dir_for_env(&relocated).expect("nameable"),
+            PathBuf::from(child_home)
+                .join("profile")
+                .join("antigravity-acp")
+        );
+        // The `~/.gemini` default follows it too.
+        let default_under_child =
+            BTreeMap::from([(home_key.to_string(), child_home.to_string())]);
+        assert_eq!(
+            antigravity_acp_dir_for_env(&default_under_child).expect("nameable"),
+            PathBuf::from(child_home)
+                .join(".gemini")
+                .join("antigravity-acp")
+        );
+        // With the home REMOVED for the child there is no honest answer, and a
+        // guess would both strand a tree and leave auth.type unwritten.
+        let no_home = BTreeMap::from([
+            (home_key.to_string(), String::new()),
+            ("GEMINI_HOME".to_string(), "~/profile".to_string()),
+        ]);
+        assert!(antigravity_acp_dir_for_env(&no_home).is_err());
+        // …unless the value is absolute, which does not depend on a home at all.
+        let no_home_absolute = BTreeMap::from([
+            (home_key.to_string(), String::new()),
+            ("GEMINI_HOME".to_string(), "/srv/gemini".to_string()),
+        ]);
+        assert_eq!(
+            antigravity_acp_dir_for_env(&no_home_absolute).expect("nameable"),
+            PathBuf::from("/srv/gemini").join("antigravity-acp")
+        );
+
+        // An absolute value is still taken verbatim, and an EXACTLY empty one
+        // means the spawn layer removed the var, so the child falls back to its
+        // own default rather than to HouHub's cwd.
+        let absolute = BTreeMap::from([("GEMINI_HOME".to_string(), "/srv/gemini".to_string())]);
+        assert_eq!(
+            antigravity_acp_dir_for_env(&absolute).expect("nameable"),
+            PathBuf::from("/srv/gemini").join("antigravity-acp")
+        );
+        let removed = BTreeMap::from([("GEMINI_HOME".to_string(), String::new())]);
+        assert_eq!(
+            antigravity_acp_dir_for_env(&removed).expect("nameable"),
+            crate::parsers::antigravity::resolve_antigravity_acp_dir()
+        );
     }
 
     #[test]
@@ -12727,13 +13471,15 @@ mod tests {
         let original = r#"{"auth":"managed-elsewhere","keep":1}"#;
         std::fs::write(&path, original).unwrap();
 
-        let merged = vec![(
+        let mut runtime = antigravity_runtime("oauth-personal");
+        runtime.insert(
             "GEMINI_HOME".to_string(),
             dir.path().to_string_lossy().to_string(),
-        )];
-        sync_antigravity_settings_file(&merged, &antigravity_runtime("oauth-personal"));
+        );
+        let report = sync_antigravity_settings_file(&runtime);
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(report.status, AntigravitySyncStatus::Skipped);
     }
 
     #[test]
@@ -14817,6 +15563,169 @@ mod tests {
         assert_eq!(grok_live_tool_output(&None, &None), None);
     }
 
+    /// The captured opencode 1.18.23 completion envelope for a HouHub-mcp
+    /// `ask_user_question` — the clean answer text on both channels, the
+    /// `rawOutput` one wrapped in `{output, metadata}`.
+    fn opencode_ask_raw_output() -> serde_json::Value {
+        serde_json::json!({
+            "output": "The user answered your question(s):\n1. [框架] 选一个前端框架\n   → 选项 A\n",
+            "metadata": {"truncated": false},
+        })
+    }
+
+    /// The envelope must never shadow `content`: it wraps the very same string,
+    /// and the JSON blob is what made an answered question render "no selection".
+    #[test]
+    fn opencode_live_tool_output_prefers_content() {
+        let content = Some(
+            "The user answered your question(s):\n1. [框架] 选一个前端框架\n   → 选项 A\n"
+                .to_string(),
+        );
+        assert_eq!(
+            opencode_live_tool_output(&content, &Some(opencode_ask_raw_output())),
+            None
+        );
+    }
+
+    /// With no `content` the envelope is unwrapped to the bare result text —
+    /// never the stringified object. Whitespace-only content counts as none.
+    #[test]
+    fn opencode_live_tool_output_unwraps_output_when_content_empty() {
+        let raw = Some(opencode_ask_raw_output());
+        let expected =
+            "The user answered your question(s):\n1. [框架] 选一个前端框架\n   → 选项 A\n";
+        assert_eq!(
+            opencode_live_tool_output(&None, &raw).as_deref(),
+            Some(expected)
+        );
+        assert_eq!(
+            opencode_live_tool_output(&Some("   ".to_string()), &raw).as_deref(),
+            Some(expected)
+        );
+    }
+
+    /// Failures send `{error, metadata}`, and a command that writes only to
+    /// stderr leaves `output` empty while the combined stream stays in
+    /// `metadata.output` — both mirror `parsers/opencode.rs`.
+    #[test]
+    fn opencode_live_tool_output_falls_back_to_error_and_metadata_output() {
+        let failed = Some(serde_json::json!({
+            "error": "The tool call was aborted",
+            "metadata": {},
+        }));
+        assert_eq!(
+            opencode_live_tool_output(&None, &failed).as_deref(),
+            Some("The tool call was aborted")
+        );
+
+        let stderr_only = Some(serde_json::json!({
+            "output": "",
+            "metadata": {"output": "boom\n", "exit": 1},
+        }));
+        assert_eq!(
+            opencode_live_tool_output(&None, &stderr_only).as_deref(),
+            Some("boom\n")
+        );
+    }
+
+    /// An unrecognized payload still stringifies exactly as before — the fix
+    /// unwraps a known envelope, it never drops a result on the floor.
+    #[test]
+    fn opencode_live_tool_output_keeps_unknown_payloads() {
+        let unknown = Some(serde_json::json!({"weird": {"shape": 1}}));
+        assert_eq!(
+            opencode_live_tool_output(&None, &unknown).as_deref(),
+            Some(r#"{"weird":{"shape":1}}"#)
+        );
+        assert_eq!(opencode_live_tool_output(&None, &None), None);
+    }
+
+    /// End-to-end over the frames opencode 1.18.23 actually put on the wire for a
+    /// HouHub-mcp `ask_user_question` (captured by driving `opencode acp` against a
+    /// stub MCP server). The card reconstructs the answer from the result TEXT —
+    /// opencode drops the MCP `structuredContent` — so the completion must hand
+    /// the frontend that text, not the `{output, metadata}` blob that shadows it
+    /// and made an answered question render "no selection" while streaming.
+    #[tokio::test]
+    async fn opencode_ask_question_completion_emits_the_answer_text() {
+        let mut cache = ToolCallOutputCache::default();
+        let mut cb = CodeBuddyLiveState::default();
+
+        let (_, _, opening_output, _) = pi_emit(
+            AgentType::OpenCode,
+            &mut cache,
+            &mut cb,
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "call_probe_1",
+                "title": "HouHub-mcp_ask_user_question",
+                "kind": "other",
+                "status": "pending",
+                "locations": [],
+                "rawInput": {},
+            }),
+        )
+        .await;
+        assert!(
+            opening_output.is_none(),
+            "the pending frame carries no result: {opening_output:?}"
+        );
+
+        let (content, _, raw_output, _) = pi_emit(
+            AgentType::OpenCode,
+            &mut cache,
+            &mut cb,
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "call_probe_1",
+                "status": "completed",
+                "content": [{
+                    "type": "content",
+                    "content": {
+                        "type": "text",
+                        "text": "The user answered your question(s):\n1. [框架] 选一个前端框架\n   → 选项 A\n",
+                    },
+                }],
+                "rawOutput": opencode_ask_raw_output(),
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            content.as_deref(),
+            Some("The user answered your question(s):\n1. [框架] 选一个前端框架\n   → 选项 A\n"),
+            "the clean answer text reaches the card"
+        );
+        assert!(
+            raw_output.is_none(),
+            "the envelope must not shadow it: {raw_output:?}"
+        );
+    }
+
+    /// The unwrap is agent-gated: every other agent keeps the existing
+    /// `json_value_to_text` behavior for an object `rawOutput`.
+    #[tokio::test]
+    async fn non_opencode_keeps_the_stringified_envelope() {
+        let mut cache = ToolCallOutputCache::default();
+        let mut cb = CodeBuddyLiveState::default();
+        let (_, _, raw_output, _) = pi_emit(
+            AgentType::ClaudeCode,
+            &mut cache,
+            &mut cb,
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "call-1",
+                "status": "completed",
+                "rawOutput": {"output": "hi", "metadata": {"truncated": false}},
+            }),
+        )
+        .await;
+        assert_eq!(
+            raw_output.as_deref(),
+            Some(r#"{"metadata":{"truncated":false},"output":"hi"}"#)
+        );
+    }
+
     /// A finished Grok terminal `tool_call_update` carries the readable output in
     /// BOTH the `content[]` channel and a structured `rawOutput` object (its
     /// `output` field a byte array, text only under `output_for_prompt`).
@@ -14936,6 +15845,67 @@ mod tests {
             raw_output.is_some(),
             "non-Grok agents keep the existing json_value_to_text behavior"
         );
+    }
+
+    /// Drive one `SessionUpdate` through `emit_conversation_update` and return
+    /// the tool-call event fields the Pi bridge tests assert on. Shared so each
+    /// case reads as wire-in / card-out.
+    async fn pi_emit(
+        agent_type: AgentType,
+        cache: &mut ToolCallOutputCache,
+        cb: &mut CodeBuddyLiveState,
+        wire: serde_json::Value,
+    ) -> (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<bool>,
+    ) {
+        let st = SessionState::new(
+            "conn-pi".to_string(),
+            agent_type,
+            None,
+            "win".to_string(),
+            None,
+        );
+        let state = Arc::new(RwLock::new(st));
+        let emitter = EventEmitter::Noop;
+        let update: SessionUpdate =
+            serde_json::from_value(wire).expect("valid tool-call wire shape");
+
+        emit_conversation_update(&state, &emitter, agent_type, update, None, cache, cb).await;
+
+        let guard = state.read().await;
+        let events = guard.recent_events_after(0).expect("events recorded");
+        events
+            .iter()
+            .find_map(|e| match &e.payload {
+                AcpEvent::ToolCall {
+                    content,
+                    raw_input,
+                    raw_output,
+                    ..
+                } => Some((
+                    content.clone(),
+                    raw_input.clone(),
+                    raw_output.clone(),
+                    None,
+                )),
+                AcpEvent::ToolCallUpdate {
+                    content,
+                    raw_input,
+                    raw_output,
+                    raw_output_append,
+                    ..
+                } => Some((
+                    content.clone(),
+                    raw_input.clone(),
+                    raw_output.clone(),
+                    *raw_output_append,
+                )),
+                _ => None,
+            })
+            .expect("a tool-call event is emitted")
     }
 
     // ---- #525: pi's lifecycle announcements ride the prose channel ----------

@@ -13,6 +13,7 @@ import {
   mergeChildrenById,
   nextHeaderAfter,
   pointerYToTargetIndex,
+  RECENT_PAGE_SIZE,
   reuseSelected,
   reuseSet,
   selectChatConversationsWithReuse,

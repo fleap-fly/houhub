@@ -129,6 +129,39 @@ impl AcpAgentMeta {
             | AgentDistribution::Uvx { version, .. } => Some(*version),
         }
     }
+
+    /// Whether asking for a version other than the pinned one can actually
+    /// FETCH that version on this machine.
+    ///
+    /// Having a `registry_version` does not imply it: a binary agent's custom
+    /// install works by substituting the requested version into the pinned
+    /// download URL (`apply_custom_version_to_url`), which only produces a
+    /// different URL when the pinned version is a substring of it. Antigravity
+    /// is the counter-example — its `version` is the ACP registry's `1.0.0`
+    /// while its URLs carry Google's build id
+    /// (`agy_acp_server_20260818_01_RC01`), so the substitution is a no-op and
+    /// the "install 1.2.3" the user asked for would download the SAME bytes
+    /// and cache them under the new number. That is worse than refusing:
+    /// `installed_version` then reports a build that was never fetched.
+    ///
+    /// Judged per-platform, because only the current platform's URL is ever
+    /// downloaded and a future agent may template one target but not another.
+    /// An unsupported platform answers `false` — there is nothing to install.
+    ///
+    /// Uvx pins its version inside the package spec and the download path
+    /// rejects it outright, so it is `false` rather than "ignored silently".
+    pub fn supports_custom_version(&self) -> bool {
+        match &self.distribution {
+            AgentDistribution::Npx { .. } => true,
+            AgentDistribution::Uvx { .. } => false,
+            AgentDistribution::Binary {
+                version, platforms, ..
+            } => platforms
+                .iter()
+                .find(|p| p.platform == current_platform())
+                .is_some_and(|p| p.url.contains(version)),
+        }
+    }
 }
 
 /// Launch args for Google Antigravity's ACP server, resolved at compile time.
@@ -458,7 +491,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // string literals in `acp-agent.js` are "collecting",
             // "notReported", "providerError", plus the new
             // `dist/file-change-audit.js`) — the AIR `agentFileChangeReport`
-            // capability, shipped in lockstep with codex-acp 1.4.0. It is
+            // capability, shipped in lockstep with codex-acp 1.7.0. It is
             // OFF unless the client asks for it twice, and houhub deliberately
             // asks for neither; see `build_client_capabilities` in
             // connection.rs for the reasoning. The only ambient change is that
@@ -582,21 +615,14 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // opt-in (tarball grep: zero hits ⇒ the arm below stays None) and
             // still declares no `engines.node`, so the 20.0.0 floor is
             // retained.
-            // 1.4.0 is the codex half of the same AIR `agentFileChangeReport`
-            // release as claude-agent-acp 0.69.0 and carries nothing else
-            // (tarball-diffed: the only new string literals are that feature's
-            // plus the `thread/fork` app-server method it is built on;
-            // `@openai/codex` stays ^0.147.0, so the CLI and its native
-            // team-of-agents surface are unchanged). codex implements the
-            // audit by forking the thread (`approvalPolicy: "never"`,
-            // `sandbox: "read-only"`, `ephemeral: true`) and running an extra
-            // turn on the fork; claude uses a Stop hook plus a hidden
-            // continuation. Either way it is an extra model round-trip per
-            // prompt, and it is gated on a client advertisement houhub does not
-            // make — see `build_client_capabilities` in connection.rs.
+            // Codex ACP 1.7.0 refreshes the permission protocol and approval
+            // presets. The request-level permission metadata is hoisted onto
+            // the tool card by `connection.rs`; native ACP subagent sessions
+            // remain deliberately unadvertised until the vendored schema can
+            // decode their update variants.
             distribution: AgentDistribution::Npx {
-                version: "1.4.0",
-                package: "@agentclientprotocol/codex-acp@1.4.0",
+                version: "1.7.0",
+                package: "@agentclientprotocol/codex-acp@1.7.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -637,8 +663,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "Cline",
             description: "Autonomous coding agent CLI",
             distribution: AgentDistribution::Npx {
-                version: "3.0.56",
-                package: "cline@3.0.56",
+                version: "3.0.60",
+                package: "cline@3.0.60",
                 cmd: "cline",
                 args: &["--acp"],
                 env: &[],
@@ -651,39 +677,39 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "OpenCode",
             description: "The open source coding agent",
             distribution: AgentDistribution::Binary {
-                version: "1.18.20",
+                version: "1.18.23",
                 cmd: "opencode",
                 args: &["acp"],
                 env: &[],
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.20/opencode-darwin-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.23/opencode-darwin-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.20/opencode-darwin-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.23/opencode-darwin-x64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.20/opencode-linux-arm64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.23/opencode-linux-arm64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.20/opencode-linux-x64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.23/opencode-linux-x64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.20/opencode-windows-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.23/opencode-windows-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.20/opencode-windows-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.23/opencode-windows-x64.zip",
                         sha256: None,
                     },
                 ],
@@ -735,8 +761,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "CodeBuddy",
             description: "Tencent Cloud's official AI coding assistant (ACP)",
             distribution: AgentDistribution::Npx {
-                version: "2.137.1",
-                package: "@tencent-ai/codebuddy-code@2.137.1",
+                version: "2.139.0",
+                package: "@tencent-ai/codebuddy-code@2.139.0",
                 cmd: "codebuddy",
                 args: &["--acp"],
                 env: &[],
@@ -748,9 +774,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             supports_mcp: true,
             name: "Kimi Code",
             description: "Moonshot AI's official CLI coding assistant (ACP)",
+            // 0.37.x-0.38.x rejected stdio MCP entries without a runtime
+            // identity. 0.39.0 restores that path and preserves Kimi-owned
+            // MCP fields during cross-agent synchronization.
             distribution: AgentDistribution::Npx {
-                version: "0.36.1",
-                package: "@moonshot-ai/kimi-code@0.36.1",
+                version: "0.39.0",
+                package: "@moonshot-ai/kimi-code@0.39.0",
                 cmd: "kimi",
                 args: &["acp"],
                 env: &[],
@@ -911,8 +940,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // and, since 0.2.0, `--setup` terminal auth for storing the key in
             // `$DSH_HOME/.credentials.yaml`.
             distribution: AgentDistribution::Npx {
-                version: "0.6.0",
-                package: "deepseek-acp@0.6.0",
+                version: "0.7.0",
+                package: "deepseek-acp@0.7.0",
                 cmd: "deepseek-acp",
                 args: &[],
                 env: &[],
@@ -926,8 +955,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "Qoder",
             description: "Qoder coding agent CLI (native ACP)",
             distribution: AgentDistribution::Npx {
-                version: "1.1.28",
-                package: "@qoder-ai/qodercli@1.1.28",
+                version: "1.1.31",
+                package: "@qoder-ai/qodercli@1.1.31",
                 cmd: "qoder",
                 args: &["--acp"],
                 env: &[],
@@ -1101,6 +1130,29 @@ mod tests {
         }
     }
 
+    /// The URL is what decides whether a custom version can be installed, not
+    /// the presence of a `version`.
+    ///
+    /// Antigravity has both a registry version (`1.0.0`) and download URLs that
+    /// never mention it — they carry Google's build id — so substituting a
+    /// requested version into the URL is a no-op: the same archive comes down
+    /// and gets cached under whatever number was typed, leaving
+    /// `installed_version` describing a build that was never fetched. The
+    /// settings page used to offer the control to every binary agent with a
+    /// version, which is exactly that inference.
+    #[test]
+    fn custom_version_install_follows_the_url_not_the_version_field() {
+        assert!(
+            !get_agent_meta(AgentType::Antigravity).supports_custom_version(),
+            "antigravity's URLs carry a build id, so a version cannot be templated in"
+        );
+        // Cursor is the control: a binary agent whose release path IS its
+        // pinned version, so the substitution genuinely selects a build.
+        assert!(get_agent_meta(AgentType::Cursor).supports_custom_version());
+        // npx installs `<package>@<version>` directly — no URL involved.
+        assert!(get_agent_meta(AgentType::Codex).supports_custom_version());
+    }
+
     // Cursor is one of two dir-tree binary agents: the archive must be kept
     // intact (bundled Node runtime) and launched via the in-tree entry
     // script, never copied out as a single file.
@@ -1205,26 +1257,26 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Cline,
-            "3.0.56",
-            "cline@3.0.56",
+            "3.0.60",
+            "cline@3.0.60",
             Some("22.0.0"),
         );
         assert_npx_version(
             AgentType::CodeBuddy,
-            "2.137.1",
-            "@tencent-ai/codebuddy-code@2.137.1",
+            "2.139.0",
+            "@tencent-ai/codebuddy-code@2.139.0",
             Some("22.0.0"),
         );
         assert_npx_version(
             AgentType::KimiCode,
-            "0.36.1",
-            "@moonshot-ai/kimi-code@0.36.1",
+            "0.39.0",
+            "@moonshot-ai/kimi-code@0.39.0",
             Some("22.19.0"),
         );
         assert_npx_version(
             AgentType::Codex,
-            "1.4.0",
-            "@agentclientprotocol/codex-acp@1.4.0",
+            "1.7.0",
+            "@agentclientprotocol/codex-acp@1.7.0",
             Some("20.0.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.33", "pi-acp@0.0.33", Some("22.0.0"));
@@ -1236,11 +1288,11 @@ mod tests {
         );
         assert_npx_version(
             AgentType::DeepSeek,
-            "0.6.0",
-            "deepseek-acp@0.6.0",
+            "0.7.0",
+            "deepseek-acp@0.7.0",
             Some("22.0.0"),
         );
-        assert_binary_version(AgentType::OpenCode, "1.18.20", "/releases/download/v1.18.20/");
+        assert_binary_version(AgentType::OpenCode, "1.18.23", "/releases/download/v1.18.23/");
         // Hermes rides the community npm bridge (upstream retired its PyPI
         // channel at 0.19.0; see the registry entry). The npm package version
         // tracks the upstream version 1:1, and the pin must stay EXACT — the

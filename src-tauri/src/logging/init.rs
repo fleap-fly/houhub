@@ -19,6 +19,7 @@ use std::path::Path;
 
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_appender::rolling::Rotation;
+use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::{fmt, prelude::*, reload, EnvFilter, Registry};
 
 use crate::logging::hub::LogHub;
@@ -54,6 +55,12 @@ pub struct LogGuard {
 ///   (cross-thread feedback-loop backstop; the layer's thread-local guard
 ///   handles the same-thread case).
 const TARGET_BACKSTOPS: &str = "kill_tree=warn,houhub_lib::logging=off";
+
+/// Drop tungstenite's serialized credential-bearing client handshake before
+/// level filtering can expose it through a custom log directive.
+fn is_credential_dump_target(target: &str) -> bool {
+    target == "tungstenite::handshake::client"
+}
 
 /// Directive string for an explicit env-override level `s`, with the standing
 /// [`TARGET_BACKSTOPS`] appended. Extracted so the backstop application on the
@@ -208,6 +215,9 @@ fn build_subscriber(
         Some((non_blocking, guard)) => {
             Registry::default()
                 .with(filter_layer)
+                // A second global filter: an event must clear BOTH, so this one
+                // cannot be argued with by any `EnvFilter` directive.
+                .with(filter_fn(|meta| !is_credential_dump_target(meta.target())))
                 .with(fmt::layer().with_writer(std::io::stderr))
                 .with(BufferEmitLayer)
                 .with(fmt::layer().json().with_writer(non_blocking))
@@ -217,6 +227,9 @@ fn build_subscriber(
         None => {
             Registry::default()
                 .with(filter_layer)
+                // A second global filter: an event must clear BOTH, so this one
+                // cannot be argued with by any `EnvFilter` directive.
+                .with(filter_fn(|meta| !is_credential_dump_target(meta.target())))
                 .with(fmt::layer().with_writer(std::io::stderr))
                 .with(BufferEmitLayer)
                 .init();
