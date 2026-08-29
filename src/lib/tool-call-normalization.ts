@@ -99,7 +99,7 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   // houhub multi-agent delegation MCP tools (server prefix varies by host)
   delegate_to_agent: "delegate_to_agent",
   "mcp__houhub-mcp__delegate_to_agent": "delegate_to_agent",
-  "mcp__houhub_mcp__delegate_to_agent": "delegate_to_agent",
+  mcp__houhub_mcp__delegate_to_agent: "delegate_to_agent",
   "mcp__houhub-delegate__delegate_to_agent": "delegate_to_agent",
   mcp__houhub__delegate_to_agent: "delegate_to_agent",
   get_delegation_status: "get_delegation_status",
@@ -117,7 +117,7 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   // the bare `check_user_feedback` name, dropping the `mcp__houhub_mcp` namespace.
   check_user_feedback: "check_user_feedback",
   "mcp__houhub-mcp__check_user_feedback": "check_user_feedback",
-  "mcp__houhub_mcp__check_user_feedback": "check_user_feedback",
+  mcp__houhub_mcp__check_user_feedback: "check_user_feedback",
   mcp__houhub__check_user_feedback: "check_user_feedback",
   // OpenCode
   delegate_task: "task",
@@ -134,7 +134,7 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   // houhub-mcp ask-user-question companion tool (server prefix varies by host;
   // the suffix rule in `normalizeToolName` covers the other separators)
   "mcp__houhub-mcp__ask_user_question": "question",
-  "mcp__houhub_mcp__ask_user_question": "question",
+  mcp__houhub_mcp__ask_user_question: "question",
   lsp_diagnostics: "lsp",
   lsp_document_symbols: "lsp",
   lsp_goto_definition: "lsp",
@@ -435,8 +435,7 @@ export function normalizeToolName(toolName: string): string {
   if (/[^a-z0-9]get_session_info$/.test(canonical)) return "get_session_info"
   if (/[^a-z0-9]task_progress$/.test(canonical)) return "task_progress"
   if (/[^a-z0-9]task_complete$/.test(canonical)) return "task_complete"
-  if (/[^a-z0-9]create_automation$/.test(canonical))
-    return "create_automation"
+  if (/[^a-z0-9]create_automation$/.test(canonical)) return "create_automation"
   if (/[^a-z0-9]create_work_task$/.test(canonical)) return "create_work_task"
   if (/[^a-z0-9]create_goal$/.test(canonical)) return "create_goal"
   if (/[^a-z0-9]update_goal$/.test(canonical)) return "update_goal"

@@ -42,6 +42,8 @@ export type BranchLeafAction =
   | "push"
   | "delete"
   | "deleteRemote"
+  | "deleteWorktree"
+  | "deleteWorktreeAndBranch"
 
 export type BranchRow =
   | {
@@ -403,4 +405,24 @@ export function buildBranchRows(input: BuildBranchRowsInput): BranchRow[] {
 /** Row kinds the keyboard cursor can land on (skips separators + empty rows). */
 export function isNavigableRow(row: BranchRow): boolean {
   return row.kind !== "separator" && row.kind !== "empty"
+}
+
+/** Per-branch actions, including the safe worktree removal choices. */
+export function branchLeafActions({
+  isRemote,
+  isTracking,
+  isWorktree,
+  isMainWorktree = false,
+}: Pick<
+  Extract<BranchRow, { kind: "leaf" }>,
+  "isRemote" | "isTracking" | "isWorktree"
+> & { isMainWorktree?: boolean }): BranchLeafAction[] {
+  const actions: BranchLeafAction[] = ["switch", "merge", "rebase", "pull"]
+  if (!isRemote) actions.push("push")
+  if (isTracking) return actions
+  if (isRemote) actions.push("deleteRemote")
+  else if (isMainWorktree) return actions
+  else if (isWorktree) actions.push("deleteWorktree", "deleteWorktreeAndBranch")
+  else actions.push("delete")
+  return actions
 }

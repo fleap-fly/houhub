@@ -127,9 +127,11 @@ export function AgentToolsSettingsSection() {
 
       const next = { ...DEFAULTS }
       const failures: string[] = []
-      if (feedback.status === "fulfilled") next.feedback = feedback.value.enabled
+      if (feedback.status === "fulfilled")
+        next.feedback = feedback.value.enabled
       else failures.push(toErrorMessage(feedback.reason))
-      if (question.status === "fulfilled") next.question = question.value.enabled
+      if (question.status === "fulfilled")
+        next.question = question.value.enabled
       else failures.push(toErrorMessage(question.reason))
       if (sessionInfo.status === "fulfilled") {
         next.sessionInfo = sessionInfo.value.enabled

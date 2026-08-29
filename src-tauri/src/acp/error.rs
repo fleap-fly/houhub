@@ -54,6 +54,11 @@ pub enum AcpError {
     InitializeTimeout,
     #[error("Agent did not publish its configurable options within 60 seconds. The probe was aborted; the agent may be slow, idle, or not ACP-compliant — try again or check the agent binary.")]
     ProbeTimedOut,
+    /// `session/new` failed after HouHub forwarded MCP servers to a custom
+    /// agent that may not support the wire field. This is a hint rather than a
+    /// diagnosis; the original protocol message is preserved for the user.
+    #[error("{0}")]
+    McpRejectedByAgent(String),
 }
 
 impl AcpError {
@@ -92,8 +97,15 @@ impl AcpError {
             Self::SpawnFailed(_) => Some("spawn_failed"),
             Self::DownloadFailed(_) => Some("download_failed"),
             Self::ConnectionNotFound(_) => Some("connection_not_found"),
+            Self::McpRejectedByAgent(_) => Some("mcp_rejected_by_agent"),
             Self::Protocol(_) => None,
         }
+    }
+
+    /// Construct an MCP rejection with the same path redaction used by normal
+    /// protocol errors.
+    pub fn mcp_rejected(raw: impl Into<String>) -> Self {
+        Self::McpRejectedByAgent(sanitize_protocol_message(&raw.into()))
     }
 }
 

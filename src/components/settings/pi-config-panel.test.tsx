@@ -3,7 +3,11 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
-import { loadPiConfig, acpUpdatePiConfig, acpValidatePiCommand } from "@/lib/api"
+import {
+  loadPiConfig,
+  acpUpdatePiConfig,
+  acpValidatePiCommand,
+} from "@/lib/api"
 import type { AcpAgentInfo, ModelProviderInfo } from "@/lib/types"
 import { PiConfigPanel } from "./pi-config-panel"
 

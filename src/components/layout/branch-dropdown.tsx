@@ -44,6 +44,7 @@ import {
   gitRebase,
   gitDeleteBranch,
   gitDeleteRemoteBranch,
+  gitRemoveWorktree,
 } from "@/lib/api"
 import { subscribe } from "@/lib/platform"
 import { DirectoryPathInput } from "@/components/shared/directory-path-input"
@@ -60,6 +61,7 @@ import type {
 } from "@/lib/branch-selector-rows"
 import { useScrollbarSafeDismiss } from "@/hooks/use-scrollbar-safe-dismiss"
 import { useGitQuickActions } from "@/hooks/use-git-quick-actions"
+import { useImeGuard } from "@/hooks/use-ime-guard"
 import type { FolderDetail, GitBranchList } from "@/lib/types"
 import { fsBaseName, siblingFsPath } from "@/lib/path-utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -68,9 +70,45 @@ import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useGitCredential } from "@/contexts/git-credential-context"
 
 type ConfirmAction = {
-  type: "merge" | "rebase" | "delete" | "forceDelete" | "deleteRemote"
+  type:
+    | "merge"
+    | "rebase"
+    | "delete"
+    | "forceDelete"
+    | "deleteRemote"
+    | "deleteWorktree"
+    | "forceDeleteWorktree"
+    | "deleteWorktreeAndBranch"
+    | "forceDeleteWorktreeAndBranch"
   branchName: string
 }
+
+// Confirmations whose action can't be undone — their confirm button goes red.
+const DESTRUCTIVE_CONFIRMS: ReadonlySet<ConfirmAction["type"]> = new Set([
+  "delete",
+  "forceDelete",
+  "deleteRemote",
+  "deleteWorktree",
+  "forceDeleteWorktree",
+  "deleteWorktreeAndBranch",
+  "forceDeleteWorktreeAndBranch",
+])
+
+// Git's way of saying "this would throw work away — ask again with --force":
+// a worktree with uncommitted or untracked files, or a branch whose commits
+// aren't merged anywhere. Both escalate to the matching force confirm rather
+// than surfacing a raw git error the user can do nothing about.
+const FORCE_REQUIRED_RE = /--force|not fully merged/i
+
+// The four worktree-removal confirmations, decoded into the two flags the one
+// backend call takes: whether the branch (and the worktree's workspace folder)
+// goes with the directory, and whether to discard work standing in the way.
+const WORKTREE_REMOVALS = {
+  deleteWorktree: { withBranch: false, force: false },
+  deleteWorktreeAndBranch: { withBranch: true, force: false },
+  forceDeleteWorktree: { withBranch: false, force: true },
+  forceDeleteWorktreeAndBranch: { withBranch: true, force: true },
+} as const
 
 interface GitCommitSucceededEventPayload {
   folder_id: number
@@ -96,6 +134,7 @@ interface BranchDropdownProps {
 // machinery (git event subscriptions + dialogs).
 export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
   const t = useTranslations("Folder.branchDropdown")
+  const ime = useImeGuard()
   const tCommon = useTranslations("Folder.common")
   const activeFolder = folder
   const refreshFolder = useAppWorkspaceStore((s) => s.refreshFolder)
@@ -132,6 +171,7 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
     local: [],
     remote: [],
     worktree_branches: [],
+    main_worktree_branch: null,
   })
   const [newBranchOpen, setNewBranchOpen] = useState(false)
   const [newBranchName, setNewBranchName] = useState("")
@@ -401,6 +441,40 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
           gitDeleteBranch(folderPath, branchName, true)
         )
         break
+      // All four worktree removals are the same backend call under different
+      // flags. Without --force it re-asks rather than failing, the same way
+      // `delete` escalates to `forceDelete`.
+      case "deleteWorktree":
+      case "deleteWorktreeAndBranch":
+      case "forceDeleteWorktree":
+      case "forceDeleteWorktreeAndBranch": {
+        const { withBranch, force } = WORKTREE_REMOVALS[type]
+        await runGitTask(
+          withBranch
+            ? t("tasks.removeWorktreeAndBranch", { branchName })
+            : t("tasks.removeWorktree", { branchName }),
+          () =>
+            gitRemoveWorktree(
+              folderPath,
+              branchName,
+              folderId,
+              withBranch,
+              force
+            ),
+          undefined,
+          (errorMsg) => {
+            if (force || !FORCE_REQUIRED_RE.test(errorMsg)) return false
+            setConfirmAction({
+              type: withBranch
+                ? "forceDeleteWorktreeAndBranch"
+                : "forceDeleteWorktree",
+              branchName,
+            })
+            return true
+          }
+        )
+        break
+      }
       case "deleteRemote": {
         const idx = branchName.indexOf("/")
         const remote = branchName.substring(0, idx)
@@ -429,6 +503,14 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
         return t("confirm.forceDeleteTitle")
       case "deleteRemote":
         return t("confirm.deleteRemoteTitle")
+      case "deleteWorktree":
+        return t("confirm.deleteWorktreeTitle")
+      case "forceDeleteWorktree":
+        return t("confirm.forceDeleteWorktreeTitle")
+      case "deleteWorktreeAndBranch":
+        return t("confirm.deleteWorktreeAndBranchTitle")
+      case "forceDeleteWorktreeAndBranch":
+        return t("confirm.forceDeleteWorktreeAndBranchTitle")
     }
   }
 
@@ -455,6 +537,22 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
         })
       case "deleteRemote":
         return t("confirm.deleteRemoteDescription", {
+          branchName: confirmAction.branchName,
+        })
+      case "deleteWorktree":
+        return t("confirm.deleteWorktreeDescription", {
+          branchName: confirmAction.branchName,
+        })
+      case "forceDeleteWorktree":
+        return t("confirm.forceDeleteWorktreeDescription", {
+          branchName: confirmAction.branchName,
+        })
+      case "deleteWorktreeAndBranch":
+        return t("confirm.deleteWorktreeAndBranchDescription", {
+          branchName: confirmAction.branchName,
+        })
+      case "forceDeleteWorktreeAndBranch":
+        return t("confirm.forceDeleteWorktreeAndBranchDescription", {
           branchName: confirmAction.branchName,
         })
     }
@@ -530,7 +628,7 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
             className="flex h-6 min-w-0 items-center gap-1.5 rounded-full px-2 text-xs text-muted-foreground outline-none transition-colors hover:bg-foreground/10 hover:text-foreground"
           >
             <GitFork className="size-3 shrink-0" />
-            <span className="max-w-[160px] truncate">{t("noBranch")}</span>
+            <span className="max-w-[10rem] truncate">{t("noBranch")}</span>
           </button>
         </PopoverTrigger>
         <PopoverContent side="top" align="start" className="w-64 p-1">
@@ -572,21 +670,28 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
             ) : (
               <GitBranch className="size-3 shrink-0 text-muted-foreground" />
             )}
-            <span className="max-w-[160px] truncate">
+            <span className="max-w-[10rem] truncate">
               {branch ?? head?.branch ?? head?.short_sha ?? t("noBranch")}
             </span>
             <ChevronDown className="size-3 shrink-0 text-muted-foreground/60" />
           </Button>
         </PopoverTrigger>
         {/* No `overflow-hidden`: the list's inner shell clips to the rounding so
-            the right-side action bubble can overflow past this edge. */}
+            the right-side action bubble can overflow past this edge.
+            `max-h-(--radix-popover-content-available-height)` is the vertical twin
+            of the `max-w` guard: the trigger sits in the status bar, so the popup
+            opens upward and its own cap (`MAX_LIST_HEIGHT_REM`, 30rem) is a rem —
+            at 250% zoom that is 1200px, taller than the space above the trigger,
+            and the top of the list ran off the window. Radix publishes the room it
+            actually has on that side; the list below is flex-shrinkable so it
+            gives way to this cap instead of overflowing it. */}
         <PopoverContent
           ref={contentRef}
           side="top"
           align="start"
           onPointerDownOutside={onPointerDownOutside}
           onFocusOutside={onFocusOutside}
-          className="w-[22rem] max-w-[calc(100vw-1rem)] p-0"
+          className="max-h-(--radix-popover-content-available-height) w-[22rem] max-w-[calc(100vw-1rem)] p-0"
         >
           <BranchSelectorList
             operations={operations}
@@ -596,6 +701,7 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
             remoteCount={branchList.remote.length}
             branch={branch}
             worktreeBranchSet={worktreeBranchSet}
+            mainWorktreeBranch={branchList.main_worktree_branch ?? null}
             branchLoading={branchLoading}
             loading={loading}
             onRunOperation={runOperation}
@@ -621,9 +727,7 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
             <AlertDialogCancel>{tCommon("cancel")}</AlertDialogCancel>
             <AlertDialogAction
               variant={
-                confirmAction?.type === "delete" ||
-                confirmAction?.type === "forceDelete" ||
-                confirmAction?.type === "deleteRemote"
+                confirmAction && DESTRUCTIVE_CONFIRMS.has(confirmAction.type)
                   ? "destructive"
                   : "default"
               }
@@ -647,6 +751,7 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
             placeholder={t("dialogs.branchNamePlaceholder")}
             value={newBranchName}
             onChange={(e) => setNewBranchName(e.target.value)}
+            {...ime.props}
             onKeyDown={(e) => {
               if (e.nativeEvent.isComposing || e.key === "Process") return
               if (e.key === "Enter") handleNewBranch()
@@ -683,6 +788,7 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
                 placeholder={t("dialogs.branchNamePlaceholder")}
                 value={worktreeBranchName}
                 onChange={(e) => setWorktreeBranchName(e.target.value)}
+                {...ime.props}
                 onKeyDown={(e) => {
                   if (e.nativeEvent.isComposing || e.key === "Process") return
                   if (e.key === "Enter") handleNewWorktree()

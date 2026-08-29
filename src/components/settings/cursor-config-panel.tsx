@@ -482,14 +482,14 @@ export function CursorConfigPanel({
     <div className="space-y-3 rounded-md border bg-muted/10 p-3">
       <div>
         <label className="text-xs font-medium">{t("configManagement")}</label>
-        <p className="mt-1 text-[11px] text-muted-foreground">
+        <p className="mt-1 text-2xs text-muted-foreground">
           {t("cursor.configDescription")}
         </p>
       </div>
 
       {/* ---- Authentication method ---- */}
       <div className="space-y-1.5">
-        <label className="text-[11px] text-muted-foreground">
+        <label className="text-2xs text-muted-foreground">
           {t("cursor.authMode")}
         </label>
         <Select
@@ -506,7 +506,7 @@ export function CursorConfigPanel({
             <SelectItem value="custom">{t("cursor.authModeApiKey")}</SelectItem>
           </SelectContent>
         </Select>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           {mode === "subscription"
             ? t("cursor.subscriptionHint")
             : t("cursor.authModeApiKeyHint")}
@@ -516,9 +516,7 @@ export function CursorConfigPanel({
       {/* ---- Credential card: shared auth status + method-specific body ---- */}
       <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] font-medium">
-            {t("cursor.authTitle")}
-          </span>
+          <span className="text-2xs font-medium">{t("cursor.authTitle")}</span>
           <div className="flex items-center gap-1.5">
             <span
               className={cn(
@@ -530,7 +528,7 @@ export function CursorConfigPanel({
                   "bg-muted-foreground/40 animate-pulse"
               )}
             />
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-2xs text-muted-foreground">
               {authState === "loading"
                 ? t("cursor.authChecking")
                 : authState === "missing"
@@ -540,7 +538,7 @@ export function CursorConfigPanel({
                     : t("cursor.authNotLoggedIn")}
             </span>
             {authState === "ok" && auth?.membership ? (
-              <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
+              <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-3xs text-emerald-600 dark:text-emerald-400">
                 {auth.membership}
               </span>
             ) : null}
@@ -562,11 +560,11 @@ export function CursorConfigPanel({
         {/* Subscription: runnable login command when not signed in. */}
         {mode === "subscription" && authState === "unauthenticated" ? (
           <div className="space-y-1.5">
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("cursor.loginHint")}
             </p>
             <div className="flex items-center gap-1.5">
-              <code className="flex-1 break-all rounded bg-muted px-2 py-1 font-mono text-[11px]">
+              <code className="flex-1 break-all rounded bg-muted px-2 py-1 font-mono text-2xs">
                 {loginCommand}
               </code>
               <Button
@@ -589,7 +587,7 @@ export function CursorConfigPanel({
         {/* API key mode: the Cursor Dashboard account key. */}
         {mode === "custom" ? (
           <div className="space-y-1">
-            <label className="text-[11px] text-muted-foreground">
+            <label className="text-2xs text-muted-foreground">
               {t("cursor.apiKeyLabel")}
             </label>
             <div className="flex items-center gap-1.5">
@@ -614,14 +612,14 @@ export function CursorConfigPanel({
                 )}
               </Button>
             </div>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-3xs text-muted-foreground">
               {t("cursor.apiKeyHint")}
             </p>
           </div>
         ) : null}
 
         {auth?.error ? (
-          <p className="text-[11px] text-destructive">{auth.error}</p>
+          <p className="text-2xs text-destructive">{auth.error}</p>
         ) : null}
 
         {/* No model list yet (not signed in / empty): tell the user why the
@@ -629,7 +627,7 @@ export function CursorConfigPanel({
         {authState !== "missing" &&
         authState !== "loading" &&
         models.length === 0 ? (
-          <p className="text-[10px] text-muted-foreground">
+          <p className="text-3xs text-muted-foreground">
             {t("cursor.modelsNeedAuth")}
           </p>
         ) : null}
@@ -639,11 +637,11 @@ export function CursorConfigPanel({
       {models.length > 0 ? (
         <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] font-medium">
+            <span className="text-2xs font-medium">
               {t("cursor.modelTitle")}
             </span>
             <Button
-              className="h-6 gap-1 px-2 text-[11px]"
+              className="h-6 gap-1 px-2 text-2xs"
               disabled={modelsLoading}
               onClick={() => void loadModels()}
               size="sm"
@@ -682,9 +680,9 @@ export function CursorConfigPanel({
                     value={item}
                   >
                     <span className="truncate">{item.label}</span>
-                    <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 font-mono text-[10px] text-muted-foreground">
+                    <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 font-mono text-3xs text-muted-foreground">
                       {item.isDefault ? (
-                        <span className="rounded bg-muted px-1 py-0.5 font-sans text-[9px] text-foreground/70">
+                        <span className="rounded bg-muted px-1 py-0.5 font-sans text-[0.5625rem] text-foreground/70">
                           {t("cursor.modelDefaultBadge")}
                         </span>
                       ) : null}
@@ -697,11 +695,11 @@ export function CursorConfigPanel({
             </ComboboxContent>
           </Combobox>
           {modelsError ? (
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-3xs text-muted-foreground">
               {t("cursor.modelsUnavailable")}: {modelsError}
             </p>
           ) : null}
-          <p className="text-[10px] text-muted-foreground">
+          <p className="text-3xs text-muted-foreground">
             {t("cursor.modelHint")}
           </p>
         </div>
@@ -711,17 +709,17 @@ export function CursorConfigPanel({
       <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
         <div className="flex items-center gap-1.5">
           <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-[11px] font-medium">
+          <span className="text-2xs font-medium">
             {t("cursor.permissionsTitle")}
           </span>
         </div>
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-3xs text-muted-foreground">
           {t("cursor.permissionsDescription")}
         </p>
 
         <div className="grid gap-2 md:grid-cols-2">
           <div className="space-y-1">
-            <label className="text-[11px] text-muted-foreground">
+            <label className="text-2xs text-muted-foreground">
               {t("cursor.permissionModeLabel")}
             </label>
             <Select
@@ -742,7 +740,7 @@ export function CursorConfigPanel({
             </Select>
           </div>
           <div className="space-y-1">
-            <label className="text-[11px] text-muted-foreground">
+            <label className="text-2xs text-muted-foreground">
               {t("cursor.sandboxLabel")}
             </label>
             <Select
@@ -768,13 +766,13 @@ export function CursorConfigPanel({
             </Select>
           </div>
         </div>
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-3xs text-muted-foreground">
           {t("cursor.permissionModeHint")}
         </p>
 
         <div className="grid gap-3 md:grid-cols-2">
           <div className="space-y-1">
-            <label className="text-[11px] text-muted-foreground">
+            <label className="text-2xs text-muted-foreground">
               {t("cursor.allowRulesLabel")}
             </label>
             <RuleListEditor
@@ -787,7 +785,7 @@ export function CursorConfigPanel({
             />
           </div>
           <div className="space-y-1">
-            <label className="text-[11px] text-muted-foreground">
+            <label className="text-2xs text-muted-foreground">
               {t("cursor.denyRulesLabel")}
             </label>
             <RuleListEditor
@@ -800,7 +798,7 @@ export function CursorConfigPanel({
             />
           </div>
         </div>
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-3xs text-muted-foreground">
           {t("cursor.rulesSyntaxHint")}
         </p>
       </div>
@@ -826,7 +824,7 @@ export function CursorConfigPanel({
       {/* ---- Advanced: raw cli-config.json ---- */}
       <div className="space-y-2">
         <button
-          className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+          className="flex items-center gap-1 text-2xs text-muted-foreground hover:text-foreground"
           onClick={() => setAdvancedOpen((v) => !v)}
           type="button"
         >
@@ -839,11 +837,11 @@ export function CursorConfigPanel({
         </button>
         {advancedOpen ? (
           <div className="space-y-1.5">
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-3xs text-muted-foreground">
               {t("cursor.advancedHint")}
             </p>
             <Textarea
-              className="min-h-40 font-mono text-[11px]"
+              className="min-h-40 font-mono text-2xs"
               onChange={(e) => setRawConfig(e.target.value)}
               spellCheck={false}
               value={rawConfig}

@@ -635,8 +635,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "Gemini CLI",
             description: "Google's official CLI for Gemini",
             distribution: AgentDistribution::Npx {
-                version: "0.55.1",
-                package: "@google/gemini-cli@0.55.1",
+                version: "0.57.0",
+                package: "@google/gemini-cli@0.57.0",
                 cmd: "gemini",
                 args: &["--acp", "--skip-trust"],
                 env: &[],
@@ -677,39 +677,39 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "OpenCode",
             description: "The open source coding agent",
             distribution: AgentDistribution::Binary {
-                version: "1.18.23",
+                version: "1.18.25",
                 cmd: "opencode",
                 args: &["acp"],
                 env: &[],
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.23/opencode-darwin-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.25/opencode-darwin-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.23/opencode-darwin-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.25/opencode-darwin-x64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.23/opencode-linux-arm64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.25/opencode-linux-arm64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.23/opencode-linux-x64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.25/opencode-linux-x64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.23/opencode-windows-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.25/opencode-windows-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.23/opencode-windows-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.18.25/opencode-windows-x64.zip",
                         sha256: None,
                     },
                 ],
@@ -747,8 +747,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // naturally outranks the npm-managed copy; the npm global install
             // is the managed/one-click channel houhub's Install button drives.
             distribution: AgentDistribution::Npx {
-                version: "0.20.5",
-                package: "hermes-agent@0.20.5",
+                version: "0.20.6",
+                package: "hermes-agent@0.20.6",
                 cmd: "hermes",
                 args: &["acp"],
                 env: &[],
@@ -761,8 +761,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "CodeBuddy",
             description: "Tencent Cloud's official AI coding assistant (ACP)",
             distribution: AgentDistribution::Npx {
-                version: "2.139.0",
-                package: "@tencent-ai/codebuddy-code@2.139.0",
+                version: "2.141.0",
+                package: "@tencent-ai/codebuddy-code@2.141.0",
                 cmd: "codebuddy",
                 args: &["--acp"],
                 env: &[],
@@ -778,8 +778,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // identity. 0.39.0 restores that path and preserves Kimi-owned
             // MCP fields during cross-agent synchronization.
             distribution: AgentDistribution::Npx {
-                version: "0.39.0",
-                package: "@moonshot-ai/kimi-code@0.39.0",
+                version: "0.39.1",
+                package: "@moonshot-ai/kimi-code@0.39.1",
                 cmd: "kimi",
                 args: &["acp"],
                 env: &[],
@@ -955,8 +955,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "Qoder",
             description: "Qoder coding agent CLI (native ACP)",
             distribution: AgentDistribution::Npx {
-                version: "1.1.31",
-                package: "@qoder-ai/qodercli@1.1.31",
+                version: "1.1.33",
+                package: "@qoder-ai/qodercli@1.1.33",
                 cmd: "qoder",
                 args: &["--acp"],
                 env: &[],
@@ -1245,8 +1245,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Gemini,
-            "0.55.1",
-            "@google/gemini-cli@0.55.1",
+            "0.57.0",
+            "@google/gemini-cli@0.57.0",
             Some("20.0.0"),
         );
         assert_npx_version(
@@ -1263,14 +1263,14 @@ mod tests {
         );
         assert_npx_version(
             AgentType::CodeBuddy,
-            "2.139.0",
-            "@tencent-ai/codebuddy-code@2.139.0",
+            "2.141.0",
+            "@tencent-ai/codebuddy-code@2.141.0",
             Some("22.0.0"),
         );
         assert_npx_version(
             AgentType::KimiCode,
-            "0.39.0",
-            "@moonshot-ai/kimi-code@0.39.0",
+            "0.39.1",
+            "@moonshot-ai/kimi-code@0.39.1",
             Some("22.19.0"),
         );
         assert_npx_version(
@@ -1292,15 +1292,15 @@ mod tests {
             "deepseek-acp@0.7.0",
             Some("22.0.0"),
         );
-        assert_binary_version(AgentType::OpenCode, "1.18.23", "/releases/download/v1.18.23/");
+        assert_binary_version(AgentType::OpenCode, "1.18.25", "/releases/download/v1.18.25/");
         // Hermes rides the community npm bridge (upstream retired its PyPI
         // channel at 0.19.0; see the registry entry). The npm package version
         // tracks the upstream version 1:1, and the pin must stay EXACT — the
         // audited wrapper code is only what the pinned version ships.
         assert_npx_version(
             AgentType::Hermes,
-            "0.20.5",
-            "hermes-agent@0.20.5",
+            "0.20.6",
+            "hermes-agent@0.20.6",
             Some("20.0.0"),
         );
     }

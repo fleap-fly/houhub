@@ -7,7 +7,7 @@ use sacp::schema::{
     CreateTerminalRequest, CreateTerminalResponse, ElicitationCapabilities,
     ElicitationFormCapabilities, EmbeddedResource, EmbeddedResourceResource,
     FileSystemCapabilities, ImageContent, InitializeRequest, KillTerminalRequest,
-    KillTerminalResponse, LoadSessionRequest, NewSessionRequest, NewSessionResponse,
+    KillTerminalResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
     PermissionOptionKind, Plan, PlanEntryPriority, PlanEntryStatus, PromptRequest, ProtocolVersion,
     ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, ResourceLink,
@@ -43,13 +43,14 @@ use crate::acp::terminal_runtime::TerminalShellRuntimeConfig;
 use crate::acp::types::{
     AcpEvent, AvailableCommandInfo, ConnectionInfo, ConnectionStatus, GrokEffortSpec,
     PermissionOptionInfo, PlanEntryInfo, PromptCapabilitiesInfo, PromptInputBlock,
-    SessionConfigKindInfo, SessionConfigOptionInfo,
+    SessionConfigBooleanInfo, SessionConfigKindInfo, SessionConfigOptionInfo,
     SessionConfigSelectGroupInfo, SessionConfigSelectInfo, SessionConfigSelectOptionInfo,
     SessionFailureRecord, SessionModeInfo, SessionModeStateInfo, ToolCallImageInfo,
     UserMessageBlock,
 };
 use crate::models::agent::AgentType;
 use crate::network::proxy;
+use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
 use crate::web::event_bridge::{emit_with_state, EventEmitter};
 
 const DEFAULT_COMMAND_COLOR_ENV: [(&str, &str); 1] = [("CLICOLOR_FORCE", "1")];
@@ -1038,6 +1039,29 @@ pub enum ConnectionCommand {
 /// by the outer `.map_err(...)` in `run_connection`.
 const INIT_TIMEOUT_SENTINEL: &str = "__houhub_init_timeout__";
 
+/// Mark a session/new failure when user MCP servers were forwarded to a custom
+/// agent. The outer connection error can then give a useful `supports_mcp`
+/// hint instead of exposing an opaque protocol failure. Built-in agents have a
+/// fixed, verified MCP contract and are deliberately excluded.
+const MCP_SUSPECT_SENTINEL: &str = "__houhub_mcp_suspect__";
+
+fn tag_mcp_suspect(
+    err: sacp::Error,
+    agent_type: AgentType,
+    mcp_servers: &[McpServer],
+) -> sacp::Error {
+    if mcp_servers.is_empty() || !matches!(agent_type, AgentType::Custom(_)) {
+        return err;
+    }
+    tracing::warn!(
+        "[ACP][{}] session/new failed with {} MCP server(s) attached; if this agent does not accept MCP, disable MCP support: {}",
+        agent_type,
+        mcp_servers.len(),
+        err
+    );
+    sacp::util::internal_error(format!("{err}{MCP_SUSPECT_SENTINEL}"))
+}
+
 /// RAII guard that removes the `AgentConnection` entry from the manager
 /// map when dropped. Runs on both normal task exit AND task panic, so a
 /// panic inside `run_connection` can't leak a stale map entry.
@@ -1161,7 +1185,7 @@ fn transcript_dir_for(agent_type: AgentType) -> Option<&'static str> {
 /// built-ins, and idempotent per session (a reconnect keeps the original
 /// header, so the session's original cwd/start time survive).
 fn record_transcript_header(agent_type: AgentType, session_id: &str, cwd: &str) {
-    record_transcript_header_continuing(agent_type, session_id, cwd, None);
+    drop(queue_transcript_header(agent_type, session_id, cwd, None));
 }
 
 /// [`record_transcript_header`] for a session that carries an existing
@@ -1171,15 +1195,27 @@ fn record_transcript_header(agent_type: AgentType, session_id: &str, cwd: &str) 
 /// agent session for the same conversation: the earlier turns stay where they
 /// are and this header links back to them, so the reader still sees one
 /// history. See [`crate::acp_transcript::TranscriptHeader::continues_from`].
-fn record_transcript_header_continuing(
+async fn record_transcript_header_continuing(
     agent_type: AgentType,
     session_id: &str,
     cwd: &str,
     continues_from: Option<&str>,
 ) {
-    let Some(dir) = transcript_dir_for(agent_type) else {
+    let Some(ack) = queue_transcript_header(agent_type, session_id, cwd, continues_from) else {
         return;
     };
+    if continues_from.is_some() {
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(2000), ack).await;
+    }
+}
+
+fn queue_transcript_header(
+    agent_type: AgentType,
+    session_id: &str,
+    cwd: &str,
+    continues_from: Option<&str>,
+) -> Option<tokio::sync::oneshot::Receiver<()>> {
+    let dir = transcript_dir_for(agent_type)?;
     let mut header = crate::acp_transcript::TranscriptHeader::new(
         &agent_type.as_wire(),
         session_id,
@@ -1189,7 +1225,7 @@ fn record_transcript_header_continuing(
     if let Some(previous) = continues_from.filter(|p| !p.is_empty() && *p != session_id) {
         header = header.continuing(previous);
     }
-    drop(crate::acp_transcript::record_header(dir, &header));
+    Some(crate::acp_transcript::record_header(dir, &header))
 }
 
 /// Record an outgoing prompt for a custom agent, and wait (briefly) for it to
@@ -2583,8 +2619,49 @@ fn map_session_config_option(option: &SessionConfigOption) -> Option<SessionConf
                 }),
             })
         }
+        SessionConfigKind::Boolean(toggle) => Some(SessionConfigOptionInfo {
+            id: option.id.to_string(),
+            name: option.name.clone(),
+            description: option.description.clone(),
+            category: option.category.as_ref().map(map_session_config_category),
+            kind: SessionConfigKindInfo::Boolean(SessionConfigBooleanInfo {
+                current_value: toggle.current_value,
+            }),
+        }),
         _ => None,
     }
+}
+
+/// The schema is extensible, but older `sacp` builds cannot decode newly added
+/// config-option kinds. Strip only explicitly unknown `type` values from raw
+/// session responses so one unsupported selector does not take down the whole
+/// agent session. Malformed entries without a discriminator are left intact so
+/// serde still reports the useful protocol error.
+const KNOWN_CONFIG_OPTION_KINDS: &[&str] = &["select", "boolean"];
+
+fn strip_unknown_config_options(raw: &mut serde_json::Value, method: &str) {
+    let Some(options) = raw
+        .get_mut("configOptions")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    options.retain(|option| {
+        let Some(kind) = option.get("type").and_then(serde_json::Value::as_str) else {
+            return true;
+        };
+        if KNOWN_CONFIG_OPTION_KINDS.contains(&kind) {
+            return true;
+        }
+        tracing::warn!(
+            "[ACP] {method}: dropping config option '{}' with unsupported kind '{kind}'",
+            option
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<no id>")
+        );
+        false
+    });
 }
 
 fn map_session_config_options(
@@ -2701,7 +2778,7 @@ async fn emit_session_config_options_values(
         state,
         emitter,
         AcpEvent::SessionConfigOptions {
-            config_options: map_session_config_options(&config_options),
+            config_options: mapped,
         },
     )
     .await;
@@ -3734,8 +3811,9 @@ async fn send_resume_session(
     let untyped_req = UntypedMessage::new("session/resume", req)
         .map_err(|e| sacp::util::internal_error(format!("Failed to build resume request: {e}")))?;
 
-    let raw_response = cx.send_request_to(Agent, untyped_req).block_task().await?;
+    let mut raw_response = cx.send_request_to(Agent, untyped_req).block_task().await?;
     let models = raw_response.get("models").cloned();
+    strip_unknown_config_options(&mut raw_response, "session/resume");
     let response = serde_json::from_value(raw_response)
         .map_err(|e| sacp::util::internal_error(format!("Failed to parse resume response: {e}")))?;
     Ok((response, models))
@@ -3748,19 +3826,35 @@ async fn send_new_session_capturing_models(
     agent_type: AgentType,
     req: NewSessionRequest,
 ) -> Result<(NewSessionResponse, Option<serde_json::Value>), sacp::Error> {
-    if agent_type != AgentType::Grok {
-        return Ok((cx.send_request_to(Agent, req).block_task().await?, None));
-    }
-
     let untyped_req = UntypedMessage::new("session/new", req).map_err(|e| {
         sacp::util::internal_error(format!("Failed to build new_session request: {e}"))
     })?;
-    let raw_response = cx.send_request_to(Agent, untyped_req).block_task().await?;
-    let models = raw_response.get("models").cloned();
+    let mut raw_response = cx.send_request_to(Agent, untyped_req).block_task().await?;
+    let models = (agent_type == AgentType::Grok)
+        .then(|| raw_response.get("models").cloned())
+        .flatten();
+    strip_unknown_config_options(&mut raw_response, "session/new");
     let response = serde_json::from_value(raw_response).map_err(|e| {
         sacp::util::internal_error(format!("Failed to parse new_session response: {e}"))
     })?;
     Ok((response, models))
+}
+
+/// Send `session/load` through the raw JSON path so newer/unknown config
+/// option kinds cannot make deserialization of the whole response fail. The
+/// request and JSON-RPC error surface stay identical to the typed send.
+async fn send_load_session(
+    cx: &ConnectionTo<Agent>,
+    req: LoadSessionRequest,
+) -> Result<LoadSessionResponse, sacp::Error> {
+    let untyped_req = UntypedMessage::new("session/load", req).map_err(|e| {
+        sacp::util::internal_error(format!("Failed to build load_session request: {e}"))
+    })?;
+    let mut raw_response = cx.send_request_to(Agent, untyped_req).block_task().await?;
+    strip_unknown_config_options(&mut raw_response, "session/load");
+    serde_json::from_value(raw_response).map_err(|e| {
+        sacp::util::internal_error(format!("Failed to parse load_session response: {e}"))
+    })
 }
 
 /// Load MCP servers configured for `agent_type` and convert them into the
@@ -4982,7 +5076,7 @@ async fn run_connection(
                         &cwd,
                         mcp_servers.clone(),
                     );
-                    cx.send_request_to(Agent, load_req).block_task().await
+                    send_load_session(&cx, load_req).await
                 } else {
                     Err(sacp::Error::method_not_found()
                         .data("agent does not advertise the loadSession capability"))
@@ -5269,7 +5363,8 @@ async fn run_connection(
                             agent_type,
                             build_new_session_request(agent_type, &cwd, mcp_servers.clone()),
                         )
-                        .await?;
+                        .await
+                        .map_err(|e| tag_mcp_suspect(e, agent_type, &mcp_servers))?;
                         let fallback_sid = new_resp.session_id.0.to_string();
                         let initial_config_options = new_resp.config_options.clone();
                         let grok_meta = if agent_type == AgentType::Grok {
@@ -5288,7 +5383,8 @@ async fn run_connection(
                             &fallback_sid,
                             &cwd.to_string_lossy(),
                             Some(sid.as_str()),
-                        );
+                        )
+                        .await;
                         emit_with_state(
                             &state,
                             &emitter_clone,
@@ -5358,7 +5454,8 @@ async fn run_connection(
                     agent_type,
                     build_new_session_request(agent_type, &cwd, mcp_servers.clone()),
                 )
-                .await?;
+                .await
+                .map_err(|e| tag_mcp_suspect(e, agent_type, &mcp_servers))?;
                 let sid = new_resp.session_id.0.to_string();
                 let initial_config_options = new_resp.config_options.clone();
                 let grok_meta = if agent_type == AgentType::Grok {
@@ -5435,6 +5532,8 @@ async fn run_connection(
             let raw = e.to_string();
             if raw.contains(INIT_TIMEOUT_SENTINEL) {
                 AcpError::InitializeTimeout
+            } else if raw.contains(MCP_SUSPECT_SENTINEL) {
+                AcpError::mcp_rejected(raw.replace(MCP_SUSPECT_SENTINEL, ""))
             } else {
                 AcpError::protocol(raw)
             }
@@ -6156,7 +6255,8 @@ async fn set_session_config_option_inner(
         sacp::util::internal_error(format!("Failed to build config option request: {e}"))
     })?;
 
-    let raw_response = cx.send_request_to(Agent, untyped_req).block_task().await?;
+    let mut raw_response = cx.send_request_to(Agent, untyped_req).block_task().await?;
+    strip_unknown_config_options(&mut raw_response, "session/set_config_option");
     let response: SetSessionConfigOptionResponse =
         serde_json::from_value(raw_response).map_err(|e| {
             sacp::util::internal_error(format!("Failed to parse config option response: {e}"))
@@ -7177,6 +7277,13 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// same `SessionLoadFailed` banner (Reload / New conversation) instead of a raw
 /// protocol error.
 ///
+/// A third case is archived rather than lost: `codex archive <id>` parks a
+/// rollout, and a later `session/load` answers -32603 with a body naming both
+/// the session and the command that brings it back. That one is a *recoverable*
+/// state, so it earns its own code — the banner can name the fix — but it takes
+/// the same banner rather than the silent `session/new` fallback, which would
+/// orphan a history the user is one command away from restoring.
+///
 /// Returns `None` for failures that must keep the existing behavior:
 /// "Method not found" (agent lacks resume → silent `session/new` fallback),
 /// "Authentication required" (silent stop), and any other error (emit
@@ -7187,6 +7294,14 @@ fn classify_session_load_failure(
 ) -> Option<&'static str> {
     if matches!(code, sacp::schema::ErrorCode::ResourceNotFound) {
         return Some("resource_not_found");
+    }
+    // codex-acp on an archived rollout: the -32603 body reads
+    // "session <id> is archived. Run `codex unarchive <id>` …". Matched on the
+    // wire message for the same reason as the family below — the code is a
+    // generic Internal error. Checked BEFORE that family so the more specific
+    // (and recoverable) verdict wins if a body ever carries both signals.
+    if message.contains("is archived") {
+        return Some("session_archived");
     }
     // Upstream signals for an unrecoverable session (claude-agent-acp 0.58.1):
     //  - "process exited"    → "Claude Code process exited with code 1",
@@ -7314,6 +7429,41 @@ impl DropSite {
             DropSite::Decode => "decode",
             DropSite::Dispatch => "dispatch",
         }
+    }
+}
+
+/// Keep protocol/schema drift visible without turning one malformed streaming
+/// update per token into a log firehose. The first drop is emitted immediately;
+/// subsequent drops are summarized once the shared ten-second window elapses.
+const DROPPED_UPDATE_LOG_WINDOW: std::time::Duration = LAG_LOG_WINDOW;
+
+fn dropped_update_log_line(
+    where_: &str,
+    error: &impl std::fmt::Display,
+    coalesced: u64,
+) -> String {
+    let head = format!("[ACP] Ignoring unreadable session update ({where_}): {error}");
+    if coalesced <= 1 {
+        head
+    } else {
+        format!(
+            "{head} (+{} more in the last {}s)",
+            coalesced - 1,
+            DROPPED_UPDATE_LOG_WINDOW.as_secs()
+        )
+    }
+}
+
+fn log_dropped_update(
+    throttle: &mut LagLogThrottle,
+    where_: &str,
+    error: &impl std::fmt::Display,
+) {
+    if let Some(summary) = throttle.record(1) {
+        tracing::warn!(
+            "{}",
+            dropped_update_log_line(where_, error, summary.occurrences)
+        );
     }
 }
 
@@ -7570,6 +7720,10 @@ async fn run_conversation_loop<'a>(
     // prompt turn, journaled or not, so consecutive ordinals prove adjacent
     // turns to the reader.
     let mut cursor_turn_ord: u64 = 0;
+    // One connection-scoped throttle covers idle decode and active-turn
+    // protocol drops. A malformed stream should remain observable without
+    // emitting one warning per token.
+    let mut drop_log_throttle = LagLogThrottle::new(DROPPED_UPDATE_LOG_WINDOW);
     loop {
         // Wait for either a user command or a session update (e.g. available_commands_update)
         let cmd = loop {
@@ -7606,7 +7760,7 @@ async fn run_conversation_loop<'a>(
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            tracing::warn!("[ACP] Ignoring unrecognized session update in idle loop: {e}");
+                            log_dropped_update(&mut drop_log_throttle, "idle", &e);
                         }
                     }
                 }
@@ -7785,7 +7939,11 @@ async fn run_conversation_loop<'a>(
                                 Ok(u) => u,
                                 Err(e) => {
                                     probe.note_dropped(DropSite::Decode, &e);
-                                    tracing::warn!("[ACP] Ignoring unrecognized session update: {e}");
+                                    log_dropped_update(
+                                        &mut drop_log_throttle,
+                                        DropSite::Decode.label(),
+                                        &e,
+                                    );
                                     continue;
                                 }
                             };
@@ -7853,7 +8011,11 @@ async fn run_conversation_loop<'a>(
                                         .await
                                     {
                                         probe.note_dropped(DropSite::Dispatch, &e);
-                                        tracing::warn!("[ACP] Ignoring dispatch parse error: {e}");
+                                        log_dropped_update(
+                                            &mut drop_log_throttle,
+                                            DropSite::Dispatch.label(),
+                                            &e,
+                                        );
                                     }
                                 }
                                 SessionMessage::StopReason(reason) => {
@@ -12785,6 +12947,46 @@ mod tests {
             ),
             Some("session_unavailable"),
         );
+    }
+
+    #[test]
+    fn classify_load_failure_names_an_archived_session() {
+        // The reported case: `codex archive <id>`, then reopen the conversation.
+        // codex-acp answers session/load with a generic -32603 whose data names
+        // the session and the command that restores it.
+        let archived = "Internal error: {\n  \"details\": \"session \
+             019bf0c4-4d1a-7c3e-9f21-6a0e5b8d2c47 is archived. Run `codex \
+             unarchive 019bf0c4-4d1a-7c3e-9f21-6a0e5b8d2c47` to restore it.\"\n}";
+        assert_eq!(
+            classify_session_load_failure(sacp::schema::ErrorCode::InternalError, archived),
+            Some("session_archived"),
+        );
+
+        // Archived is the more specific verdict: a body carrying both signals
+        // must not degrade into the generic "unavailable" family, which offers
+        // the user no way back.
+        assert_eq!(
+            classify_session_load_failure(
+                sacp::schema::ErrorCode::InternalError,
+                "Session not found: session abc is archived.",
+            ),
+            Some("session_archived"),
+        );
+
+        // Codex reads history back out of its own rollout store, so an archived
+        // session must stop with the banner — silently opening a new session
+        // would orphan history that one command restores.
+        assert!(!recovers_load_failure_locally(
+            AgentType::Codex,
+            Some("session_archived")
+        ));
+        // A custom agent's history is HouHub's own transcript, so it keeps the
+        // silent local recovery it has for the other classified failures.
+        let custom = AgentType::custom("glm-acp-agent").expect("valid id");
+        assert!(recovers_load_failure_locally(
+            custom,
+            Some("session_archived")
+        ));
     }
 
     #[test]

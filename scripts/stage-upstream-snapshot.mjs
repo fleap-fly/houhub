@@ -91,7 +91,9 @@ function firstExtractedDirectory(rootPath) {
     .map((name) => join(rootPath, name))
     .filter((candidate) => statSync(candidate).isDirectory())
   if (directories.length !== 1) {
-    throw new Error(`Expected one extracted source directory, found ${directories.length}`)
+    throw new Error(
+      `Expected one extracted source directory, found ${directories.length}`
+    )
   }
   return directories[0]
 }

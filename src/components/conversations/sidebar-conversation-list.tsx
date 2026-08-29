@@ -48,8 +48,10 @@ import { useTerminalContext } from "@/contexts/terminal-context"
 import { useThemeColor, useZoomLevel } from "@/hooks/use-appearance"
 import { useSortedAvailableAgents } from "@/hooks/use-sorted-available-agents"
 import { useImeGuard } from "@/hooks/use-ime-guard"
+import { OpenInSubContent } from "@/components/layout/open-in-menu"
 import {
   openImportSessionsWindow,
+  openInCode,
   openProjectBootWindow,
   updateConversationTitle,
   updateConversationStatus,
@@ -200,6 +202,7 @@ const FolderHeader = memo(function FolderHeader({
   onSetDefaultAgent,
   onOpenInSystemExplorer,
   onOpenInTerminal,
+  onOpenInCode,
   isDragging,
   onGripPointerDown,
   suppressed = false,
@@ -244,6 +247,7 @@ const FolderHeader = memo(function FolderHeader({
   onSetDefaultAgent: (folderId: number, agentType: AgentType | null) => void
   onOpenInSystemExplorer: (folderId: number) => void
   onOpenInTerminal: (folderId: number) => void
+  onOpenInCode: (folderId: number) => void
   isDragging?: boolean
   /**
    * Starts a folder reorder gesture from the header's grip. Omitted on the drag
@@ -543,17 +547,15 @@ const FolderHeader = memo(function FolderHeader({
               <ExternalLink className="h-4 w-4" />
               {tFileTree("openIn")}
             </ContextMenuSubTrigger>
-            <ContextMenuSubContent>
-              <ContextMenuItem
-                disabled={!isDesktopMode}
-                onSelect={() => onOpenInSystemExplorer(folderId)}
-              >
-                {systemExplorerLabel}
-              </ContextMenuItem>
-              <ContextMenuItem onSelect={() => onOpenInTerminal(folderId)}>
-                {tFileTree("openInTerminal")}
-              </ContextMenuItem>
-            </ContextMenuSubContent>
+            <OpenInSubContent
+              explorerLabel={systemExplorerLabel}
+              terminalLabel={tFileTree("openInTerminal")}
+              codeLabel={tFileTree("openInCode")}
+              explorerDisabled={!isDesktopMode}
+              onOpenExplorer={() => onOpenInSystemExplorer(folderId)}
+              onOpenTerminal={() => onOpenInTerminal(folderId)}
+              onOpenCode={() => onOpenInCode(folderId)}
+            />
           </ContextMenuSub>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => onManageConversations(folderId)}>
@@ -767,7 +769,7 @@ export function SidebarConversationList({
   const { resolvedTheme } = useTheme()
   const { themeColor: appThemeColor } = useThemeColor()
   const { createTerminalInDirectory } = useTerminalContext()
-  useZoomLevel()
+  const { zoomLevel } = useZoomLevel()
   const folders = useAppWorkspaceStore((s) => s.folders)
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const conversations = useAppWorkspaceStore((s) => s.conversations)
@@ -992,16 +994,13 @@ export function SidebarConversationList({
     setConversationExpanded(new Set(loadConversationExpanded()))
   }, [])
 
-  const toggleSection = useCallback(
-    (section: SidebarSectionKey) => {
-      setSectionCollapsed((prev) => {
-        const next = { ...prev, [section]: !prev[section] }
-        saveSectionCollapsed(next)
-        return next
-      })
-    },
-    []
-  )
+  const toggleSection = useCallback((section: SidebarSectionKey) => {
+    setSectionCollapsed((prev) => {
+      const next = { ...prev, [section]: !prev[section] }
+      saveSectionCollapsed(next)
+      return next
+    })
+  }, [])
 
   /** Drive every top-level section header at once, for expand/collapse-all.
    *  Bails out (same object → no re-render, no write) when they already all
@@ -1080,6 +1079,19 @@ export function SidebarConversationList({
       }
     },
     [folderIndex, createTerminalInDirectory, tFileTree]
+  )
+
+  const handleOpenFolderInCode = useCallback(
+    (folderId: number) => {
+      const folder = folderIndex.get(folderId)
+      if (!folder) return
+      void openInCode(folder.path).catch((error) => {
+        toast.error(tFileTree("toasts.openInCodeFailed"), {
+          description: toErrorMessage(error),
+        })
+      })
+    },
+    [folderIndex, tFileTree]
   )
 
   // virtua binds to the real OverlayScrollbars viewport element (surfaced via
@@ -1878,12 +1890,7 @@ export function SidebarConversationList({
       return
     }
     openNewConversationTab(activeFolder.id, activeFolder.path)
-  }, [
-    activeFolder,
-    openChatModeTab,
-    openNewConversationTab,
-    openConversations,
-  ])
+  }, [activeFolder, openChatModeTab, openNewConversationTab, openConversations])
 
   const handleNewConversationForFolder = useCallback(
     (folderId: number) => {
@@ -1954,10 +1961,14 @@ export function SidebarConversationList({
   }, [persistReorder])
 
   // ── Custom folder-drag gesture ────────────────────────────────────────────
-  // Fixed height of one folder header row (Tailwind `h-[2rem]`); the drag
-  // surface collapses every folder to just its header so the target slot is a
-  // simple `floor(pointerY / FOLDER_ROW_HEIGHT)`.
-  const FOLDER_ROW_HEIGHT = 32
+  // Height of one folder header row (Tailwind `h-[2rem]`); the drag surface
+  // collapses every folder to just its header so the target slot is a simple
+  // `floor(pointerY / FOLDER_ROW_HEIGHT)`.
+  //
+  // Read off the zoom level rather than pinned at 32: the row is 2 *rem*, so it
+  // is 48px at 150%, and a fixed 32 would map the pointer to a slot a third too
+  // far down — a drop the gesture then persists as the new folder order.
+  const FOLDER_ROW_HEIGHT = 2 * ((16 * zoomLevel) / 100)
   const DRAG_THRESHOLD_PX = 6
   const AUTOSCROLL_EDGE_PX = 28
   const AUTOSCROLL_STEP_PX = 12
@@ -2010,7 +2021,7 @@ export function SidebarConversationList({
       if (fromIndex < 0 || fromIndex === targetIndex) return
       handleReorder(applyReorder(order, fromIndex, targetIndex))
     },
-    [handleReorder]
+    [handleReorder, FOLDER_ROW_HEIGHT]
   )
 
   // While the pointer rests near a viewport edge, scroll and keep retargeting so
@@ -2269,6 +2280,7 @@ export function SidebarConversationList({
         onSetDefaultAgent={handleChangeFolderDefaultAgent}
         onOpenInSystemExplorer={handleOpenFolderInSystemExplorer}
         onOpenInTerminal={handleOpenFolderInTerminal}
+        onOpenInCode={handleOpenFolderInCode}
         isDragging={opts.dragging}
         onGripPointerDown={opts.grip ? beginFolderDrag : undefined}
         suppressed={opts.suppressed ?? false}

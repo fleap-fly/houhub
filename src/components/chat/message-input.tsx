@@ -1199,7 +1199,12 @@ export function MessageInput({
       detectSlashTriggerRef.current?.()
     })
     return () => cancelAnimationFrame(raf)
-  }, [composerReady, detectSlashTrigger, slashCommands.length, availableSkills.length])
+  }, [
+    composerReady,
+    detectSlashTrigger,
+    slashCommands.length,
+    availableSkills.length,
+  ])
 
   // Insert one inline file reference badge per item, matching `@`-file mentions.
   // A genuine `file://` item uses its uri directly (deduped against the document);
@@ -2688,7 +2693,9 @@ export function MessageInput({
     // `embedded_context: true` still receives the bytes it accepts.
     for (const attachment of attachments) {
       if (attachment.type === "image") {
-        blocks.push(imageAttachmentToPromptBlock(attachment, promptCapabilities))
+        blocks.push(
+          imageAttachmentToPromptBlock(attachment, promptCapabilities)
+        )
       }
     }
 

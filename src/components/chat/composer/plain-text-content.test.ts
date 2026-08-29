@@ -167,7 +167,9 @@ describe("textToSeededInlineContent", () => {
   it("keeps an embedded-attachment link literal (it would be dropped on send)", () => {
     expect(
       textToSeededInlineContent("see [report.pdf](houhub://embedded/abc-123)")
-    ).toEqual(textToInlineContent("see [report.pdf](houhub://embedded/abc-123)"))
+    ).toEqual(
+      textToInlineContent("see [report.pdf](houhub://embedded/abc-123)")
+    )
   })
 })
 

@@ -646,7 +646,7 @@ function MobileFolderWorkspaceShell({
       >
         <DrawerContent
           showCloseButton={false}
-          className="w-[85%] max-w-[360px] p-0"
+          className="w-[85%] max-w-[22.5rem] p-0"
         >
           <DrawerTitle className="sr-only">Sidebar</DrawerTitle>
           <Sidebar />
@@ -665,7 +665,7 @@ function MobileFolderWorkspaceShell({
       >
         <DrawerContent
           showCloseButton={false}
-          className="w-[85%] max-w-[360px] p-0"
+          className="w-[85%] max-w-[22.5rem] p-0"
         >
           <DrawerTitle className="sr-only">Panel</DrawerTitle>
           <AuxPanel />

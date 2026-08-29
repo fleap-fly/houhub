@@ -17,8 +17,9 @@ const violations = output
   .split("\n")
   .filter(Boolean)
   .map((line) => line.split(separator))
-  .filter(([, , authorEmail, , committerEmail]) =>
-    blockedEmails.has(authorEmail) || blockedEmails.has(committerEmail)
+  .filter(
+    ([, , authorEmail, , committerEmail]) =>
+      blockedEmails.has(authorEmail) || blockedEmails.has(committerEmail)
   )
   .map(([commit, authorName, authorEmail, committerName, committerEmail]) => ({
     commit,

@@ -11,6 +11,7 @@ import {
 } from "react"
 import {
   AlertCircle,
+  Check,
   Copy,
   Download,
   FileCode,
@@ -37,7 +38,12 @@ import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { groupOfTab, isReparentUnmount } from "@/stores/tab-store"
 import { computeRects, leafIds } from "@/lib/tab-group-layout"
 import { useTaskContext } from "@/contexts/task-context"
-import { cn, copyTextFromMenu, randomUUID } from "@/lib/utils"
+import {
+  cn,
+  copyTextFromMenu,
+  copyTextToClipboard,
+  randomUUID,
+} from "@/lib/utils"
 import { buildAskPrompt, buildQuotedMarkdown } from "@/lib/message-quote"
 import {
   ASK_SELECTION_PARKED_EVENT,
@@ -1689,6 +1695,28 @@ const ConversationTabView = memo(function ConversationTabView({
     closeTab(tabId)
   }, [closeTab, folder, openNewConversationTab, tabId, workingDirForConnection])
 
+  // Some load failures include a shell command that restores the archived
+  // session (currently `codex unarchive <id>`). Keep that exact command
+  // copyable even when the conversation/folder is no longer available for the
+  // other recovery actions.
+  const recoveryCommand = conn.loadErrorCommand
+  const [commandCopied, setCommandCopied] = useState(false)
+  const copiedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (copiedResetRef.current) clearTimeout(copiedResetRef.current)
+    },
+    []
+  )
+  const handleCopyRecoveryCommand = useCallback(async () => {
+    if (!recoveryCommand) return
+    const ok = await copyTextToClipboard(recoveryCommand)
+    if (!ok) return
+    setCommandCopied(true)
+    if (copiedResetRef.current) clearTimeout(copiedResetRef.current)
+    copiedResetRef.current = setTimeout(() => setCommandCopied(false), 1500)
+  }, [recoveryCommand])
+
   // A failed `session/load` must leave the local transcript readable while
   // making the unavailable composer actionable. The recovery controls live in
   // the same dock as the input, so Reload/New conversation never hide history.
@@ -1696,15 +1724,32 @@ const ConversationTabView = memo(function ConversationTabView({
     hasPersistedConversation && acpLoadError ? (
       <div
         role="alert"
-        className="flex w-full items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+        className="flex w-full flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
       >
         <AlertCircle aria-hidden="true" className="h-4 w-4 shrink-0" />
         <span
-          className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
+          className="min-w-40 flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
           title={acpLoadError}
         >
           {acpLoadError}
         </span>
+        {recoveryCommand && (
+          <button
+            type="button"
+            onClick={handleCopyRecoveryCommand}
+            title={recoveryCommand}
+            className="flex shrink-0 items-center gap-1 rounded border border-destructive/40 px-2 py-0.5 font-medium transition-colors hover:bg-destructive/10"
+          >
+            {commandCopied ? (
+              <Check aria-hidden="true" className="h-3 w-3" />
+            ) : (
+              <Copy aria-hidden="true" className="h-3 w-3" />
+            )}
+            {commandCopied
+              ? tMessageList("errorActionCommandCopied")
+              : tMessageList("errorActionCopyCommand")}
+          </button>
+        )}
         {canShowDetailErrorActions && (
           <>
             <button

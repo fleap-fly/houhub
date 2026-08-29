@@ -3,6 +3,8 @@
 import { useCallback, useId, useMemo, useRef, useState } from "react"
 import { Check, Search } from "lucide-react"
 import { Virtualizer, type VirtualizerHandle } from "virtua"
+import { useImeGuard } from "@/hooks/use-ime-guard"
+import { useZoomLevel } from "@/hooks/use-appearance"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { DropdownRadioItemContent } from "@/components/chat/dropdown-radio-item-content"
@@ -26,8 +28,13 @@ interface ModelOptionListProps {
 
 // Coarse per-row viewport estimate (headers are shorter, two-line options
 // taller) — only sizes the scroll window; virtua measures real rows itself.
-const ROW_ESTIMATE_PX = 44
-const MAX_LIST_HEIGHT_PX = 320
+// Both mirror CSS that is sized in rem (row padding + text), so they are kept in
+// rem and multiplied by the live root font size (`remPx` below). Pinned at their
+// 100% pixel values the scroll window would stay 320px tall while the rows inside
+// it grew with the zoom — at 250% the panel would show three models instead of
+// seven and stop growing with the window.
+const ROW_ESTIMATE_REM = 2.75 // 44px @100%
+const MAX_LIST_HEIGHT_REM = 20 // 320px @100%
 
 // Searchable, virtualized model list shared by both selector forms (the wide
 // popover and the collapsed cog panel). Deliberately NOT a Radix menu and NOT
@@ -48,6 +55,8 @@ export function ModelOptionList({
   emptyLabel,
   autoFocus = false,
 }: ModelOptionListProps) {
+  const ime = useImeGuard()
+  const { zoomLevel } = useZoomLevel()
   const [query, setQuery] = useState("")
   const [activeIndex, setActiveIndex] = useState(0)
   const virtualizerRef = useRef<VirtualizerHandle>(null)
@@ -151,9 +160,12 @@ export function ModelOptionList({
     ]
   )
 
+  // What a rem is worth right now: AppearanceProvider writes `16 * zoom / 100`
+  // px onto <html>, so every rem-sized measurement here has to go through it.
+  const remPx = (16 * zoomLevel) / 100
   const listHeight = Math.min(
-    MAX_LIST_HEIGHT_PX,
-    Math.max(rows.length, 1) * ROW_ESTIMATE_PX
+    MAX_LIST_HEIGHT_REM * remPx,
+    Math.max(rows.length, 1) * ROW_ESTIMATE_REM * remPx
   )
 
   // Always keep the active row mounted so `aria-activedescendant` resolves to a
@@ -161,8 +173,10 @@ export function ModelOptionList({
   const activeFlatIndex = optionRowIndices[activeIndexClamped]
 
   return (
-    <div className="flex min-w-0 flex-col">
-      <div className="flex items-center gap-2 border-b px-2.5 py-2">
+    <div className="flex min-h-0 min-w-0 flex-col">
+      {/* `shrink-0`: when the popover is capped to the room it has, the rows
+          below give way — the search box never does. */}
+      <div className="flex shrink-0 items-center gap-2 border-b px-2.5 py-2">
         <Search className="size-4 shrink-0 text-muted-foreground" />
         <input
           type="text"
@@ -182,6 +196,7 @@ export function ModelOptionList({
             setQuery(event.target.value)
             setActiveIndex(0)
           }}
+          {...ime.props}
           onKeyDown={handleKeyDown}
           className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
@@ -200,8 +215,16 @@ export function ModelOptionList({
         // `useScrollbarSafeDismiss` on the popover.) The `Virtualizer` scrolls the
         // OS viewport (bound via `scrollRef`) and mounts only once that viewport
         // exists (surfaced through `onViewportRef`).
-        <div style={{ height: listHeight }}>
-          <ScrollArea onViewportRef={handleViewportRef} className="h-full">
+        // `height` is the *wanted* height; the column below it distributes the
+        // height it actually gets. `min-h-0` lets this box shrink past that
+        // wanted height when the popover is capped to the available room, and
+        // the ScrollArea takes the shrunken height through `flex-1` rather than
+        // a percentage (`h-full` would resolve against the unshrunken value).
+        <div className="flex min-h-0 flex-col" style={{ height: listHeight }}>
+          <ScrollArea
+            onViewportRef={handleViewportRef}
+            className="min-h-0 flex-1"
+          >
             <div
               role="listbox"
               id={listId}

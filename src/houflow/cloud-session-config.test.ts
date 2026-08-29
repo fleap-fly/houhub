@@ -108,20 +108,17 @@ describe("Houflow cloud session config", () => {
       "model",
       "reasoning_effort",
     ])
-    expect(selectKind(options[0]).options.map((option) => option.value)).toEqual([
+    expect(
+      selectKind(options[0]).options.map((option) => option.value)
+    ).toEqual([
       "openai/gpt-5.6-sol",
       "openai/gpt-5.6-terra",
       "openai/gpt-5.6-luna",
       "anthropic/claude-opus-4.6",
     ])
-    expect(selectKind(options[1]).options.map((option) => option.value)).toEqual([
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-      "ultra",
-    ])
+    expect(
+      selectKind(options[1]).options.map((option) => option.value)
+    ).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"])
   })
 
   it("uses the control-plane capability profile for Terra and legacy models", () => {
@@ -155,13 +152,9 @@ describe("Houflow cloud session config", () => {
       labels,
       target({ provider: "openai/gpt-5.6-terra" })
     )
-    expect(selectKind(terraOptions[1]).options.map((option) => option.value)).toEqual([
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-    ])
+    expect(
+      selectKind(terraOptions[1]).options.map((option) => option.value)
+    ).toEqual(["low", "medium", "high", "xhigh", "max"])
 
     expect(legacy).toEqual({
       modelProviderId: "default",

@@ -8,11 +8,11 @@ import {
   buildGrokSaveOptions,
   buildGrokStructuredConfig,
   buildMergeConfigPayload,
+  buildAcpAdapterCheck,
   buildVersionCheck,
   configTextForClaudeSave,
   extractCodexImportantValues,
   getAgentChecks,
-  hasEffectiveGrokCredential,
   hostToolsAgentModeEnabled,
   importantEnvKeysByAgent,
   importantFieldsFor,
@@ -28,11 +28,11 @@ import {
   showsCodexReadOnlyAcpWarning,
 } from "./acp-agent-settings"
 import { parse as parseTomlDocument } from "smol-toml"
-import {
-  MODEL_PROVIDER_AGENT_TYPES,
-  type AcpAgentInfo,
-  type AgentType,
-  type PreflightResult,
+import type {
+  AcpAgentInfo,
+  AdapterInfo,
+  AgentType,
+  PreflightResult,
 } from "@/lib/types"
 
 function makeAgent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
@@ -46,6 +46,7 @@ function makeAgent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
     description: "",
     available: true,
     distribution_type: "uvx",
+    is_acp_adapter: false,
     custom_source: null,
     enabled: true,
     sort_order: 0,
@@ -65,7 +66,6 @@ function makeAgent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
     hermes_config_yaml: null,
     cursor_cli_config_json: null,
     cursor_settings: null,
-    is_acp_adapter: false,
     model_provider_id: null,
     icon_url: null,
     ...overrides,
@@ -459,31 +459,9 @@ describe("buildGrokStructuredConfig — Grok panel save payload", () => {
   })
 })
 
-describe("Grok shared model-provider integration", () => {
-  it("is available to shared model providers", () => {
-    expect(MODEL_PROVIDER_AGENT_TYPES).toContain("grok")
-  })
-
-  it("recognizes provider, env, and active custom-model credentials", () => {
-    expect(hasEffectiveGrokCredential({ providerApiKey: "gateway-key" })).toBe(
-      true
-    )
-    expect(hasEffectiveGrokCredential({ envApiKey: "xai-key" })).toBe(true)
-    expect(
-      hasEffectiveGrokCredential({
-        customModelId: "custom-grok",
-        customApiKey: "custom-key",
-      })
-    ).toBe(true)
-    expect(hasEffectiveGrokCredential({ customApiKey: "orphaned-key" })).toBe(
-      false
-    )
-  })
-})
-
 describe("buildGrokSaveOptions — one save persists both surfaces", () => {
   const base = grokDraft({
-    grokPermissionMode: "default",
+    grokPermissionMode: "ask",
     grokReasoningEffort: "high",
   })
 
@@ -497,7 +475,7 @@ describe("buildGrokSaveOptions — one save persists both surfaces", () => {
     )
     expect(opts.grokConfigTomlText).toBeUndefined()
     expect(opts.grokStructured).toEqual({
-      permissionMode: "default",
+      permissionMode: "ask",
       defaultReasoningEffort: "high",
       ...emptyCustoms,
     })
@@ -566,6 +544,137 @@ describe("inferGrokMode — Grok auth-method recognition", () => {
     expect(inferGrokMode({ XAI_API_KEY: "xai-1" }, true)).toBe("custom")
     // An explicit knob still wins over the custom-model flag.
     expect(inferGrokMode({ GROK_AUTH_MODE: "api_key" }, true)).toBe("api_key")
+  })
+})
+
+describe("buildAcpAdapterCheck", () => {
+  function makeAdapter(overrides: Partial<AdapterInfo> = {}): AdapterInfo {
+    return {
+      adapter_package: "@agentclientprotocol/claude-agent-acp@0.63.0",
+      adapter_cmd: "claude-agent-acp",
+      adapter_installed: false,
+      native_cmd: "claude",
+      native_label: "Claude Code CLI",
+      native_path: "/opt/homebrew/bin/claude",
+      shared_config_dir: "~/.claude",
+      docs_url: "https://docs.houhub.app/guide/supported-agents#acp-adapters",
+      ...overrides,
+    }
+  }
+
+  // Nothing for the ten agents whose registry command IS the vendor CLI, and
+  // nothing before preflight resolves — the card must never appear speculatively.
+  it("produces nothing for non-adapter agents or before preflight resolves", () => {
+    expect(buildAcpAdapterCheck(null)).toBeNull()
+    expect(buildAcpAdapterCheck(undefined)).toBeNull()
+  })
+
+  // The whole point of the card: the user has `claude`, we say so by path, and
+  // name the different thing we actually need.
+  it("names the detected CLI, the adapter package and the shared config dir", () => {
+    const check = buildAcpAdapterCheck(makeAdapter())
+    expect(check?.check_id).toBe("acp_adapter")
+    // warn, not fail: Version Status below already fails: this one explains.
+    expect(check?.status).toBe("warn")
+    expect(check?.message).toContain("/opt/homebrew/bin/claude")
+    expect(check?.message).toContain(
+      "@agentclientprotocol/claude-agent-acp@0.63.0"
+    )
+    expect(check?.message).toContain("~/.claude")
+  })
+
+  // Undetected vendor CLI is not a dead end — the explanation still stands, it
+  // just can't point at a path.
+  it("still explains the split when no vendor CLI was found", () => {
+    const check = buildAcpAdapterCheck(makeAdapter({ native_path: null }))
+    expect(check?.status).toBe("warn")
+    expect(check?.message).toContain(
+      "@agentclientprotocol/claude-agent-acp@0.63.0"
+    )
+    expect(check?.message).not.toContain("/opt/homebrew/bin/claude")
+  })
+
+  // Installed → pass, so renderCheck collapses it and a working setup isn't
+  // nagged by an explainer it no longer needs.
+  it("passes once the adapter is installed", () => {
+    const check = buildAcpAdapterCheck(makeAdapter({ adapter_installed: true }))
+    expect(check?.status).toBe("pass")
+    expect(check?.message).toContain("claude-agent-acp")
+  })
+
+  // Exactly one action, and it never duplicates the Install button that lives
+  // on the Version Status card directly below.
+  it("offers only a docs link, never a second install button", () => {
+    const check = buildAcpAdapterCheck(makeAdapter())
+    expect(check?.fixes).toHaveLength(1)
+    expect(check?.fixes[0].kind).toBe("open_url")
+    expect(check?.fixes[0].payload).toContain("#acp-adapters")
+  })
+})
+
+describe("getAgentChecks adapter ordering", () => {
+  // The explainer answers "why does this say not installed?" and must be read
+  // BEFORE the Version Status card that offers the fix.
+  it("puts the adapter card first, then version, then backend checks", () => {
+    const checks = getAgentChecks(
+      makeAgent({
+        agent_type: "claude_code" as AgentType,
+        distribution_type: "npx",
+        is_acp_adapter: true,
+        registry_version: "0.63.0",
+        installed_version: null,
+      }),
+      {
+        result: {
+          agent_type: "claude_code" as AgentType,
+          agent_name: "Claude Code",
+          passed: true,
+          checks: [
+            {
+              check_id: "node_available",
+              label: "Node.js",
+              status: "pass",
+              message: "Node.js v22.0.0 available",
+              fixes: [],
+            },
+          ],
+          adapter: {
+            adapter_package: "@agentclientprotocol/claude-agent-acp@0.63.0",
+            adapter_cmd: "claude-agent-acp",
+            adapter_installed: false,
+            native_cmd: "claude",
+            native_label: "Claude Code CLI",
+            native_path: "/usr/local/bin/claude",
+            shared_config_dir: "~/.claude",
+            docs_url:
+              "https://docs.houhub.app/guide/supported-agents#acp-adapters",
+          },
+        },
+      }
+    )
+
+    expect(checks.map((c) => c.check_id)).toEqual([
+      "acp_adapter",
+      "version_status",
+      "node_available",
+    ])
+  })
+
+  // A plain agent's list is byte-for-byte what it was before this feature.
+  it("adds nothing for an agent with no adapter relation", () => {
+    const checks = getAgentChecks(
+      makeAgent({ distribution_type: "npx", installed_version: "1.0.0" }),
+      {
+        result: {
+          agent_type: "gemini" as AgentType,
+          agent_name: "Gemini CLI",
+          passed: true,
+          checks: [],
+          adapter: null,
+        },
+      }
+    )
+    expect(checks.some((c) => c.check_id === "acp_adapter")).toBe(false)
   })
 })
 
@@ -725,7 +834,6 @@ describe("getAgentChecks uv gating", () => {
       agent_type: "hermes" as AgentType,
       agent_name: "Hermes Agent",
       passed: false,
-      adapter: null,
       checks: [
         {
           check_id: "uv_available",
@@ -735,6 +843,7 @@ describe("getAgentChecks uv gating", () => {
           fixes: [{ label: "Install uv", kind: "install_uv", payload: "" }],
         },
       ],
+      adapter: null,
     },
   }
 
@@ -776,74 +885,6 @@ describe("getAgentChecks uv gating", () => {
     )
     expect(installFix).toBeDefined()
     expect(fixDisabled(installFix!)).toBe(false)
-  })
-})
-
-describe("getAgentChecks Pi runtime gating", () => {
-  it("passes Pi runtime preflight checks through without adding settings-panel fixes", () => {
-    const checks = getAgentChecks(
-      makeAgent({
-        agent_type: "pi" as AgentType,
-        registry_id: "pi",
-        name: "Pi",
-        distribution_type: "npx",
-        installed_version: "0.1.13",
-      }),
-      {
-        result: {
-          agent_type: "pi" as AgentType,
-          agent_name: "Pi",
-          passed: false,
-          adapter: null,
-          checks: [
-            {
-              check_id: "sdk",
-              label: "SDK",
-              status: "fail",
-              message: "Pi is not installed: the pi command was not found.",
-              fixes: [],
-            },
-          ],
-        },
-      }
-    )
-
-    const sdkCheck = checks.find((check) => check.check_id === "sdk")
-    expect(sdkCheck?.status).toBe("fail")
-    expect(sdkCheck?.fixes).toEqual([])
-  })
-
-  it("keeps passing Pi runtime preflight checks unchanged", () => {
-    const checks = getAgentChecks(
-      makeAgent({
-        agent_type: "pi" as AgentType,
-        registry_id: "pi",
-        name: "Pi",
-        distribution_type: "npx",
-        installed_version: "0.0.31",
-      }),
-      {
-        result: {
-          agent_type: "pi" as AgentType,
-          agent_name: "Pi",
-          passed: true,
-          adapter: null,
-          checks: [
-            {
-              check_id: "sdk",
-              label: "SDK",
-              status: "pass",
-              message: "Pi is installed.",
-              fixes: [],
-            },
-          ],
-        },
-      }
-    )
-
-    const sdkCheck = checks.find((check) => check.check_id === "sdk")
-    expect(sdkCheck?.status).toBe("pass")
-    expect(sdkCheck?.fixes).toEqual([])
   })
 })
 
@@ -1180,7 +1221,7 @@ describe("materializeClaudeHardeningFlags — save-time toggle defaults", () => 
   })
 })
 
-describe("patchCodexConfigTomlText — HouHub's requires_openai_auth default", () => {
+describe("patchCodexConfigTomlText — houhub's requires_openai_auth default", () => {
   /** Read `model_providers.houhub.requires_openai_auth` back out of a result. */
   function authFlagOf(configTomlText: string): boolean | undefined {
     const parsed = parseTomlDocument(configTomlText) as {
@@ -1338,7 +1379,7 @@ describe("patchCodexConfigTomlText — HouHub's requires_openai_auth default", (
 
   // Regression (review round 1): `"http_headers.x-..." = "v"` is ONE literal
   // key, not an http_headers sub-table. Mistaking it for the nested path would
-  // suppress the default and break HouHub's own auth.json-based auth.
+  // suppress the default and break houhub's own auth.json-based auth.
   it("does not mistake a quoted dotted key for the header table", () => {
     const toml = [
       BOUND_PROVIDER,
@@ -1423,13 +1464,13 @@ describe("codex [features].default_mode_request_user_input toggle", () => {
       expect(readsBackAs(on)).toBe(true)
     })
 
-    // `features.x` under `[model_providers.HouHub]` is
-    // `model_providers.HouHub.features.x` — a key codex ignores. Reading it
+    // `features.x` under `[model_providers.houhub]` is
+    // `model_providers.houhub.features.x` — a key codex ignores. Reading it
     // would show a value no save could ever clear.
     it("ignores the same text nested inside another section", () => {
       expect(
         readsBackAs(
-          `model_provider = "HouHub"\n\n[model_providers.HouHub]\nfeatures.${KEY} = true\n`
+          `model_provider = "houhub"\n\n[model_providers.houhub]\nfeatures.${KEY} = true\n`
         )
       ).toBe(false)
     })
@@ -1482,7 +1523,7 @@ describe("codex [features].default_mode_request_user_input toggle", () => {
     })
 
     it("does not reach past one into another table's keys", () => {
-      const src = `model = "gpt-5"\n\n[model_providers.HouHub] # my gateway\nfeatures.${KEY} = true\n`
+      const src = `model = "gpt-5"\n\n[model_providers.houhub] # my gateway\nfeatures.${KEY} = true\n`
       // Nested, so the switch reads off — and switching it off must not go
       // delete the provider-local key it never owned.
       expect(readsBackAs(src)).toBe(false)
@@ -1534,9 +1575,9 @@ describe("codex [features].default_mode_request_user_input toggle", () => {
   // questions must not lose their WebSocket setting as a side effect.
   it("survives — and preserves — the websocket feature key", () => {
     const toml = [
-      'model_provider = "HouHub"',
+      'model_provider = "houhub"',
       "",
-      "[model_providers.HouHub]",
+      "[model_providers.houhub]",
       'base_url = "https://example.test/v1"',
       "supports_websockets = true",
     ].join("\n")
@@ -1565,7 +1606,7 @@ describe("codex WebSocket feature key survives unrelated toggles", () => {
   }
 
   // A config that declares WebSockets ONLY through the feature key: the reader
-  // falls back to it for the HouHub provider, so the panel shows the switch on.
+  // falls back to it for the houhub provider, so the panel shows the switch on.
   const FEATURE_ONLY = [
     'model = "gpt-5"',
     "",
@@ -1590,14 +1631,14 @@ describe("codex WebSocket feature key survives unrelated toggles", () => {
   }
 
   // The fallback reads the feature key, so a nested `features.…` line — which
-  // is really `model_providers.HouHub.features.…` and means nothing to codex —
+  // is really `model_providers.houhub.features.…` and means nothing to codex —
   // must not reach it. Otherwise any unrelated toggle would quietly promote a
   // provider-local key into a global WebSocket flag.
   it("is not conjured out of a nested dotted key", () => {
     const nested = [
-      'model_provider = "HouHub"',
+      'model_provider = "houhub"',
       "",
-      "[model_providers.HouHub]",
+      "[model_providers.houhub]",
       'base_url = "https://example.test/v1"',
       "features.responses_websockets_v2 = true",
     ].join("\n")
@@ -1615,9 +1656,9 @@ describe("codex WebSocket feature key survives unrelated toggles", () => {
   // WebSocket switch itself could never be turned off.
   it("still lets the WebSocket switch turn itself off", () => {
     const bound = [
-      'model_provider = "HouHub"',
+      'model_provider = "houhub"',
       "",
-      "[model_providers.HouHub]",
+      "[model_providers.houhub]",
       'base_url = "https://example.test/v1"',
       "supports_websockets = true",
       "",
@@ -1911,8 +1952,8 @@ describe("codex ACP preset disclosures", () => {
     expect(codexSandboxSeedsAcpPreset(true)).toBe(false)
   })
 
-  it("only warns about the lost read-only sandbox when HouHub really seeds read-only", () => {
-    // Unshadowed read-only: HouHub injects the `read-only` preset, which on
+  it("only warns about the lost read-only sandbox when houhub really seeds read-only", () => {
+    // Unshadowed read-only: houhub injects the `read-only` preset, which on
     // codex-acp >=1.7.0 is workspace-write with `approvalsReviewer: "user"`.
     // Both halves of the warning hold.
     expect(showsCodexReadOnlyAcpWarning("read-only", false)).toBe(true)

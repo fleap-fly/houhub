@@ -193,12 +193,13 @@ function checkBrandHygiene() {
     const text = buffer.toString("utf8")
     const lower = text.toLowerCase()
     for (const needle of needles) {
-      const match = needle instanceof RegExp
-        ? needle.exec(text)
-        : (() => {
-            const found = lower.indexOf(needle.toLowerCase())
-            return found === -1 ? null : { index: found }
-          })()
+      const match =
+        needle instanceof RegExp
+          ? needle.exec(text)
+          : (() => {
+              const found = lower.indexOf(needle.toLowerCase())
+              return found === -1 ? null : { index: found }
+            })()
       if (match) {
         const line = text.slice(0, match.index).split(/\r?\n/).length
         hits.push(`${file}:${line} contains forbidden upstream/contact marker`)

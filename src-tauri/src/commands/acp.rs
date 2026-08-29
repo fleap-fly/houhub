@@ -781,6 +781,19 @@ struct AgentDiag {
     detected_version: Option<String>,
     /// `agent_setting.installed_version` recorded in the DB.
     db_version: Option<String>,
+    /// Set only for ACP adapter agents (Claude Code, Codex): the vendor CLI
+    /// the user may already have installed. HouHub launches the adapter
+    /// package, so diagnostics should distinguish a missing adapter from a
+    /// missing vendor CLI instead of reporting a misleading generic state.
+    adapter: Option<AdapterProbe>,
+}
+
+#[derive(Default, Clone)]
+struct AdapterProbe {
+    native_cmd: String,
+    native_path: Option<String>,
+    native_version: Option<String>,
+    shared_config_dir: String,
 }
 
 #[derive(Default, Clone)]
@@ -973,6 +986,20 @@ async fn collect_agent_diag(
             .await
             .ok()
             .flatten();
+
+            if let Some(relation) = registry::acp_adapter_relation(agent_type) {
+                let native_path = resolve_vendor_cli(relation.native_cmd, relation.extra_dirs).await;
+                let native_version = match &native_path {
+                    Some(path) => diag_run(path, &["--version"]).await,
+                    None => None,
+                };
+                diag.adapter = Some(AdapterProbe {
+                    native_cmd: relation.native_cmd.to_string(),
+                    native_path: native_path.map(|path| path.to_string_lossy().to_string()),
+                    native_version,
+                    shared_config_dir: relation.shared_config_dir.to_string(),
+                });
+            }
         }
         registry::AgentDistribution::Binary { cmd, platforms, .. } => {
             diag.cmd = cmd.to_string();
@@ -1179,6 +1206,23 @@ fn compute_verdict(inp: &DiagInputs) -> DiagnosticsVerdict {
     }
 
     if agent.resolve_npx.is_none() {
+        if let Some(adapter) = &agent.adapter {
+            if agent.db_version.is_none() && agent.detected_version.is_none() {
+                return if adapter.native_path.is_some() {
+                    diag_verdict(
+                        DiagLevel::Info,
+                        "adapter_missing_native_present",
+                        "The vendor CLI is installed, but its ACP adapter is not installed yet.",
+                    )
+                } else {
+                    diag_verdict(
+                        DiagLevel::Info,
+                        "adapter_missing",
+                        "This agent uses a separate ACP adapter package, which is not installed.",
+                    )
+                };
+            }
+        }
         if agent.db_version.is_some() || agent.detected_version.is_some() {
             if agent.user_prefix_bin.is_some() {
                 return diag_verdict(
@@ -1346,6 +1390,26 @@ fn build_report(
                 a.detected_version.as_deref().unwrap_or("none"),
                 DiagLevel::Info,
                 Some("covers both prefixes — what the Settings badge uses"),
+            ));
+        }
+        if let Some(adapter) = &a.adapter {
+            checks.push(diag_check(
+                &format!("{} (your own CLI)", adapter.native_cmd),
+                &match (&adapter.native_path, &adapter.native_version) {
+                    (Some(path), Some(version)) => format!("{version}  ({path})"),
+                    (Some(path), None) => path.clone(),
+                    _ => "not found".to_string(),
+                },
+                DiagLevel::Info,
+                Some(
+                    "HouHub launches the ACP adapter above; both processes share this config directory",
+                ),
+            ));
+            checks.push(diag_check(
+                "shared config dir",
+                &adapter.shared_config_dir,
+                DiagLevel::Info,
+                Some("read by the vendor CLI and its ACP adapter"),
             ));
         }
         checks.push(diag_check(
@@ -1679,6 +1743,66 @@ mod diagnostics_tests {
         assert_eq!(compute_verdict(&missing).code, "not_installed");
     }
 
+    fn adapter_agent_never_installed(native_path: Option<&str>) -> AgentDiag {
+        AgentDiag {
+            name: "Codex CLI".to_string(),
+            cmd: "codex-acp".to_string(),
+            distribution: "npx",
+            adapter: Some(AdapterProbe {
+                native_cmd: "codex".to_string(),
+                native_path: native_path.map(str::to_string),
+                native_version: native_path.map(|_| "codex-cli 0.145.0".to_string()),
+                shared_config_dir: "~/.codex".to_string(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn verdict_adapter_missing_explains_present_vendor_cli() {
+        let mut inp = base_inputs();
+        inp.agent = Some(adapter_agent_never_installed(Some("/opt/homebrew/bin/codex")));
+        let verdict = compute_verdict(&inp);
+        assert_eq!(verdict.code, "adapter_missing_native_present");
+        assert_eq!(verdict.level, DiagLevel::Info);
+    }
+
+    #[test]
+    fn verdict_adapter_missing_without_vendor_cli_is_distinct() {
+        let mut inp = base_inputs();
+        inp.agent = Some(adapter_agent_never_installed(None));
+        assert_eq!(compute_verdict(&inp).code, "adapter_missing");
+    }
+
+    #[test]
+    fn verdict_node_missing_outranks_adapter_missing() {
+        let inp = DiagInputs {
+            agent: Some(adapter_agent_never_installed(Some("/opt/homebrew/bin/codex"))),
+            ..Default::default()
+        };
+        assert_eq!(compute_verdict(&inp).code, "node_missing");
+    }
+
+    #[test]
+    fn verdict_resolved_adapter_is_healthy() {
+        let mut inp = base_inputs();
+        let mut agent = adapter_agent_never_installed(Some("/opt/homebrew/bin/codex"));
+        agent.resolve_npx = Some("/usr/local/bin/codex-acp".to_string());
+        inp.agent = Some(agent);
+        assert_eq!(compute_verdict(&inp).code, "ok");
+    }
+
+    #[test]
+    fn report_names_adapter_cli_and_shared_config() {
+        let mut inp = base_inputs();
+        inp.agent = Some(adapter_agent_never_installed(Some("/opt/homebrew/bin/codex")));
+        let report = build_report(&inp, "FIXED-TS".to_string(), Some(AgentType::Codex));
+        assert!(report.plain_text.contains("codex (your own CLI)"));
+        assert!(report.plain_text.contains("/opt/homebrew/bin/codex"));
+        assert!(report.plain_text.contains("~/.codex"));
+        assert!(report.plain_text.contains("verdict [adapter_missing_native_present]"));
+    }
+
     #[test]
     fn build_report_is_deterministic_and_includes_plain_text() {
         let inp = base_inputs();
@@ -1899,6 +2023,22 @@ fn annotate_npm_bootstrap_failure(package: &str, err: AcpError) -> AcpError {
 /// while omitting the native binary needed at launch.
 const NPM_INCLUDE_OPTIONAL: &str = "--include=optional";
 
+/// npm hides lifecycle-script output by default. Hermes uses its postinstall
+/// script to bootstrap the runtime behind the `hermes` command, so its install
+/// must stream that work visibly instead of appearing hung. The flag is
+/// harmless for agents without lifecycle scripts.
+const NPM_FOREGROUND_SCRIPTS: &str = "--foreground-scripts";
+
+/// Explicitly enable lifecycle scripts for Hermes. A user-level
+/// `ignore-scripts=true` setting otherwise creates a broken shim while npm
+/// still reports a successful install. This override is scoped to the one
+/// package where postinstall is load-bearing.
+const NODE_ENV_PROXY_VAR: &str = "NODE_USE_ENV_PROXY";
+
+fn npm_package_requires_scripts(package: &str) -> bool {
+    package_name_from_spec(package) == "hermes-agent"
+}
+
 /// Name the proxy when npm refused to parse the proxy address itself.
 ///
 /// npm resolves `HTTP(S)_PROXY` with WHATWG `new URL()`, where a scheme may not
@@ -1938,6 +2078,9 @@ async fn run_npm_streaming(
     let mut cmd = crate::process::tokio_command("npm");
     for arg in args {
         cmd.arg(arg);
+    }
+    if std::env::var_os(NODE_ENV_PROXY_VAR).is_none() {
+        cmd.env(NODE_ENV_PROXY_VAR, "1");
     }
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -2023,6 +2166,7 @@ async fn install_npm_global_package_streaming_inner(
     emitter: &EventEmitter,
 ) -> Result<(), AcpError> {
     let registry_arg = format!("--registry={NPM_OFFICIAL_REGISTRY}");
+    let run_scripts = npm_package_requires_scripts(package);
 
     emit_agent_install_event(
         emitter,
@@ -2031,18 +2175,13 @@ async fn install_npm_global_package_streaming_inner(
         format!("$ npm install -g {NPM_INCLUDE_OPTIONAL} {package}"),
     );
 
-    let (success, stderr) = run_npm_streaming(
-        &[
-            "install",
-            "-g",
-            NPM_INCLUDE_OPTIONAL,
-            &registry_arg,
-            package,
-        ],
-        task_id,
-        emitter,
-    )
-    .await?;
+    let mut args = vec!["install", "-g", NPM_INCLUDE_OPTIONAL, NPM_FOREGROUND_SCRIPTS];
+    if run_scripts {
+        args.push(NPM_RUN_SCRIPTS_OVERRIDE);
+    }
+    args.push(&registry_arg);
+    args.push(package);
+    let (success, stderr) = run_npm_streaming(&args, task_id, emitter).await?;
 
     if !success {
         // EACCES: permission denied — retry with a user-local --prefix so
@@ -2066,19 +2205,20 @@ async fn install_npm_global_package_streaming_inner(
                 AgentInstallEventKind::Log,
                 "File conflict, retrying with --force...",
             );
-            let (retry_success, retry_stderr) = run_npm_streaming(
-                &[
-                    "install",
-                    "-g",
-                    "--force",
-                    NPM_INCLUDE_OPTIONAL,
-                    &registry_arg,
-                    package,
-                ],
-                task_id,
-                emitter,
-            )
-            .await?;
+            let mut retry_args = vec![
+                "install",
+                "-g",
+                "--force",
+                NPM_INCLUDE_OPTIONAL,
+                NPM_FOREGROUND_SCRIPTS,
+            ];
+            if run_scripts {
+                retry_args.push(NPM_RUN_SCRIPTS_OVERRIDE);
+            }
+            retry_args.push(&registry_arg);
+            retry_args.push(package);
+            let (retry_success, retry_stderr) =
+                run_npm_streaming(&retry_args, task_id, emitter).await?;
             if !retry_success {
                 if retry_stderr.contains("EACCES") {
                     emit_agent_install_event(
@@ -2142,6 +2282,7 @@ async fn install_npm_to_user_prefix_streaming(
     })?;
 
     let prefix_arg = format!("--prefix={}", prefix.display());
+    let run_scripts = npm_package_requires_scripts(package);
 
     emit_agent_install_event(
         emitter,
@@ -2153,19 +2294,14 @@ async fn install_npm_to_user_prefix_streaming(
         ),
     );
 
-    let (success, stderr) = run_npm_streaming(
-        &[
-            "install",
-            "-g",
-            NPM_INCLUDE_OPTIONAL,
-            &prefix_arg,
-            registry_arg,
-            package,
-        ],
-        task_id,
-        emitter,
-    )
-    .await?;
+    let mut args = vec!["install", "-g", NPM_INCLUDE_OPTIONAL, NPM_FOREGROUND_SCRIPTS];
+    if run_scripts {
+        args.push(NPM_RUN_SCRIPTS_OVERRIDE);
+    }
+    args.push(&prefix_arg);
+    args.push(registry_arg);
+    args.push(package);
+    let (success, stderr) = run_npm_streaming(&args, task_id, emitter).await?;
 
     if !success {
         // EEXIST in the user prefix: retry with --force to overwrite stale files
@@ -2177,20 +2313,21 @@ async fn install_npm_to_user_prefix_streaming(
                 AgentInstallEventKind::Log,
                 "File conflict in user prefix, retrying with --force...",
             );
-            let (force_success, force_stderr) = run_npm_streaming(
-                &[
-                    "install",
-                    "-g",
-                    "--force",
-                    NPM_INCLUDE_OPTIONAL,
-                    &prefix_arg,
-                    registry_arg,
-                    package,
-                ],
-                task_id,
-                emitter,
-            )
-            .await?;
+            let mut force_args = vec![
+                "install",
+                "-g",
+                "--force",
+                NPM_INCLUDE_OPTIONAL,
+                NPM_FOREGROUND_SCRIPTS,
+            ];
+            if run_scripts {
+                force_args.push(NPM_RUN_SCRIPTS_OVERRIDE);
+            }
+            force_args.push(&prefix_arg);
+            force_args.push(registry_arg);
+            force_args.push(package);
+            let (force_success, force_stderr) =
+                run_npm_streaming(&force_args, task_id, emitter).await?;
             if !force_success {
                 let err = force_stderr.trim().to_string();
                 let msg = if err.is_empty() {
@@ -2943,6 +3080,22 @@ fn codex_config_projection_from_toml(raw_toml: &str) -> serde_json::Map<String, 
         if !env_map.is_empty() {
             merged.insert("env".to_string(), serde_json::Value::Object(env_map));
         }
+    }
+
+    // Codex resolves this feature when a thread is created. Include the
+    // enabled flag in the launch fingerprint so changing it marks an existing
+    // session restart-required; the default/explicit-false shape remains
+    // absent so untouched configs retain their historical fingerprint.
+    if value
+        .get("features")
+        .and_then(|table| table.get("default_mode_request_user_input"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
+    {
+        merged.insert(
+            "defaultModeRequestUserInput".to_string(),
+            serde_json::Value::Bool(true),
+        );
     }
 
     // These settings are consumed when Codex creates a thread, not while a
@@ -6802,7 +6955,7 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
             }
             package
         }
-        _ => "hermes-agent@0.20.5",
+        _ => "hermes-agent@0.20.6",
     };
     let build = |tail: &[&str]| -> Vec<String> {
         let mut argv = vec![
@@ -10719,6 +10872,7 @@ async fn acp_update_agent_env_core_with_enabled_update(
         merged_env.remove(PI_BOUND_MODEL_ENV);
     }
     let mut codex_bound_model: Option<Option<String>> = None;
+    let mut codex_action = CodexModelAction::NoOp;
     // When a Claude provider is bound, capture the inputs to also rewrite the
     // on-disk config.env below. Claude's model fields live in config.env, which
     // the runtime overlays OVER db env_json (see `build_runtime_env_from_setting`),
@@ -10769,6 +10923,9 @@ async fn acp_update_agent_env_core_with_enabled_update(
         }
         if agent_type == AgentType::Codex && codex_catalog_enabled {
             codex_bound_model = Some(provider.model.clone());
+        }
+        if agent_type == AgentType::Codex {
+            codex_action = provider_codex_model_action(agent_type, provider.model.as_deref());
         }
         // Gemini's analogous config.env gap is pre-existing and out of scope
         // here. Only Claude needs the local-config cascade on bind.
@@ -10830,9 +10987,46 @@ async fn acp_update_agent_env_core_with_enabled_update(
     }
     if let Some(model) = codex_bound_model {
         apply_codex_catalog_and_model(model.as_deref())?;
+    } else if let Err(e) = apply_codex_root_model_action(&codex_action) {
+        tracing::error!("[acp_update_agent_env] apply_codex_root_model_action failed: {e}");
     }
 
     emit_acp_agents_updated(emitter, "env_updated", Some(agent_type));
+    Ok(())
+}
+
+/// Apply a provider-derived model action to Codex's root `model` field while
+/// preserving every other native config setting. This is the fallback for
+/// providers whose model value is not a structured Codex catalog.
+fn apply_codex_root_model_action(action: &CodexModelAction) -> Result<(), AcpError> {
+    if matches!(action, CodexModelAction::NoOp) {
+        return Ok(());
+    }
+    let config_path = codex_config_toml_path();
+    let mut toml_value = if config_path.exists() {
+        fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|raw| raw.parse::<toml::Value>().ok())
+            .filter(|value| value.is_table())
+            .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new()))
+    } else {
+        toml::Value::Table(toml::map::Map::new())
+    };
+    let table = toml_value
+        .as_table_mut()
+        .ok_or_else(|| AcpError::protocol("codex config root must be a TOML table"))?;
+    match action {
+        CodexModelAction::Set(model) => {
+            table.insert("model".to_string(), toml::Value::String(model.clone()));
+        }
+        CodexModelAction::Clear => {
+            table.remove("model");
+        }
+        CodexModelAction::NoOp => unreachable!(),
+    }
+    let toml_str =
+        toml::to_string_pretty(&toml_value).map_err(|e| AcpError::protocol(e.to_string()))?;
+    persist_codex_native_config_files(None, Some(&toml_str))?;
     Ok(())
 }
 
@@ -16972,6 +17166,7 @@ wire_api = "chat"
             ("tencent-tokenhub", "TOKENHUB_API_KEY"),
             ("ollama-cloud", "OLLAMA_API_KEY"),
             ("novita", "NOVITA_API_KEY"),
+            ("ai-gateway", "AI_GATEWAY_API_KEY"),
             // BYO OpenAI-compatible endpoint — key rides inline in config.yaml,
             // so it has no `.env` key var.
             ("custom", ""),
@@ -16983,6 +17178,7 @@ wire_api = "chat"
             ("google-gemini-cli", ""),
             ("copilot-acp", ""),
             ("bedrock", ""),
+            ("vertex", ""),
         ];
         assert_eq!(
             expected.len(),
@@ -17300,7 +17496,7 @@ wire_api = "chat"
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
                     argv.get(py_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.20.5")
+                    Some("hermes-agent@0.20.6")
                 );
                 assert_eq!(argv.get(py_idx + 2).map(String::as_str), Some("hermes"));
             } else {
@@ -17727,7 +17923,7 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.20.5", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.20.6", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
@@ -17739,7 +17935,7 @@ model = "gpt"
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.20.5",
+            "hermes-agent@0.20.6",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));

@@ -253,7 +253,7 @@ describe("AntigravityConfigPanel", () => {
    * Saving the row is only half of it, so "saved" is only half true.
    *
    * The choice is enforced by `auth.type` in the ACP server's settings.json,
-   * and that file is the user's — comments make it Hjson, which HouHub refuses
+   * and that file is the user's — comments make it Hjson, which houhub refuses
    * to rewrite rather than flatten. The launch skips it with a log line nobody
    * reads. Claiming success anyway is how switching methods becomes a mystery
    * failure hours later: the launch scrubs the credentials for the NEW method
@@ -263,7 +263,7 @@ describe("AntigravityConfigPanel", () => {
     vi.mocked(acpSyncAntigravitySettings).mockResolvedValue({
       path: "/home/u/.gemini/antigravity-acp/settings.json",
       status: "skipped",
-      reason: "it is not strict JSON HouHub can rewrite without losing content",
+      reason: "it is not strict JSON houhub can rewrite without losing content",
     })
     const onSaved = vi.fn()
     renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" }, onSaved })
@@ -277,7 +277,7 @@ describe("AntigravityConfigPanel", () => {
     expect(await screen.findByText(m.syncSkipped)).toBeInTheDocument()
     expect(
       screen.getByText(
-        "it is not strict JSON HouHub can rewrite without losing content"
+        "it is not strict JSON houhub can rewrite without losing content"
       )
     ).toBeInTheDocument()
     // The row itself DID save, so the panel still reports the save as done.
@@ -559,7 +559,7 @@ describe("AntigravityConfigPanel", () => {
       expect(screen.queryByText(started.authUrl)).not.toBeInTheDocument()
     })
 
-    /** The listener answers one request. Once HouHub has sent it, the link on
+    /** The listener answers one request. Once houhub has sent it, the link on
      *  screen is spent — offering the paste box again would only produce a
      *  second, unexplainable failure. */
     it("retires the link once the redirect has gone out", async () => {
@@ -584,12 +584,12 @@ describe("AntigravityConfigPanel", () => {
     })
 
     /**
-     * The opposite case, and the reason `retryable` exists: HouHub rejected the
+     * The opposite case, and the reason `retryable` exists: houhub rejected the
      * paste on its own, so the agent never saw it. The consent the user already
      * gave in their browser is still good and only the paste needs fixing —
      * sending them back through Google would be gratuitous.
      */
-    it("keeps the link usable when HouHub rejected the paste itself", async () => {
+    it("keeps the link usable when houhub rejected the paste itself", async () => {
       vi.mocked(acpAntigravityLoginFinish).mockResolvedValue({
         signedIn: false,
         message: "No authorization code found.",

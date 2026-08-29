@@ -26,7 +26,12 @@ describe("Personal Cloud store", () => {
       scopeRef: "pw://workspace/personal-1",
       activeRoute: "today",
     })
-    expect(JSON.parse(window.localStorage.getItem("houhub:personal-cloud-selection:v1") ?? "null")).toMatchObject({
+    expect(
+      JSON.parse(
+        window.localStorage.getItem("houhub:personal-cloud-selection:v1") ??
+          "null"
+      )
+    ).toMatchObject({
       workspaceId: "personal-1",
       scopeRef: "pw://workspace/personal-1",
     })

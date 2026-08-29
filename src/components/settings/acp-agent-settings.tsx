@@ -11,6 +11,7 @@ import {
 } from "react"
 import { Reorder, useDragControls } from "motion/react"
 import { useLocale, useTranslations } from "next-intl"
+import { useImeGuard } from "@/hooks/use-ime-guard"
 import { useSearchParams } from "next/navigation"
 import {
   AlertCircle,
@@ -1614,14 +1615,14 @@ function OpenCodeModelCombobox({
                         {model.reasoning && (
                           <Badge
                             variant="outline"
-                            className="px-1 text-[9px] font-normal"
+                            className="px-1 text-[0.5625rem] font-normal"
                           >
                             {acpText("openCode.reasoningBadge", "reasoning")}
                           </Badge>
                         )}
                         {contextLabel && (
                           <span
-                            className="text-[10px] text-muted-foreground"
+                            className="text-3xs text-muted-foreground"
                             title={acpText(
                               "openCode.contextWindow",
                               "Context window"
@@ -1951,7 +1952,6 @@ function firstRelativeWritableRoot(text: string): string | null {
 function codexWorkspaceWriteApplies(mode: CodexSandboxModeChoice): boolean {
   return mode === "workspace-write" || mode === CODEX_SANDBOX_UNSET
 }
-
 /**
  * Whether `default_permissions` leaves `sandbox_mode` able to seed the ACP
  * session's starting approval preset. False when it shadows the root keys:
@@ -1989,7 +1989,6 @@ export function showsCodexReadOnlyAcpWarning(
 ): boolean {
   return mode === "read-only" && codexSandboxSeedsAcpPreset(shadowed)
 }
-
 /** The draft slice the sandbox payload is derived from. */
 export type CodexSandboxDraftFields = {
   codexApprovalPolicy: CodexApprovalPolicyChoice
@@ -3822,7 +3821,6 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
     hermesModelCommand: hermesValues?.modelCommand ?? "",
   }
 }
-
 export function hasEffectiveGrokCredential(input: {
   providerApiKey?: string | null
   envApiKey?: string | null
@@ -4291,6 +4289,7 @@ function AgentReorderItem({
 }
 
 export function AcpAgentSettings() {
+  const ime = useImeGuard()
   const locale = useLocale()
   const t = useTranslations("AcpAgentSettings")
   const rawTranslator = t as unknown as AcpTranslator
@@ -5392,7 +5391,7 @@ export function AcpAgentSettings() {
             <span className="text-xs font-medium truncate">{check.label}</span>
           </div>
           <span
-            className={`text-[11px] font-semibold shrink-0 ${statusTone(check.status)}`}
+            className={`text-2xs font-semibold shrink-0 ${statusTone(check.status)}`}
           >
             {check.status.toUpperCase()}
           </span>
@@ -5400,11 +5399,11 @@ export function AcpAgentSettings() {
 
         {expanded && (
           <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0 text-[11px] text-muted-foreground break-words">
+            <div className="min-w-0 text-2xs text-muted-foreground break-words">
               {check.message}
             </div>
             {check.fixes.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 justify-end max-w-[220px] shrink-0">
+              <div className="flex flex-wrap gap-1.5 justify-end max-w-[13.75rem] shrink-0">
                 {check.fixes.map((fix, index) => {
                   const busyGated =
                     anyBinaryActionBusy &&
@@ -7749,7 +7748,7 @@ export function AcpAgentSettings() {
         </div>
       )}
 
-      <div className="flex-1 min-h-0 grid gap-3 lg:grid-cols-[minmax(240px,320px)_1fr]">
+      <div className="flex-1 min-h-0 grid gap-3 lg:grid-cols-[minmax(15rem,20rem)_1fr]">
         <div className="min-h-0 min-w-0 rounded-lg border bg-card flex flex-col overflow-hidden">
           <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
             {t("agentList")}
@@ -8014,7 +8013,7 @@ export function AcpAgentSettings() {
                     </div>
                   )}
                   <div className="flex items-center justify-between gap-2">
-                    <div className="text-[11px] text-muted-foreground flex items-center gap-1">
+                    <div className="text-2xs text-muted-foreground flex items-center gap-1">
                       <CheckCircle2 className="h-3 w-3" />
                       {t("preflight.count", { count: selectedChecks.length })}
                     </div>
@@ -8039,7 +8038,7 @@ export function AcpAgentSettings() {
                   )}
                   {installStream.status !== "idle" &&
                     streamAgentType === selectedAgent.agent_type && (
-                      <div className="mt-2 rounded-md border bg-muted/50 text-muted-foreground p-3 max-h-[200px] overflow-y-auto font-mono text-[11px] leading-relaxed">
+                      <div className="mt-2 rounded-md border bg-muted/50 text-muted-foreground p-3 max-h-[12.5rem] overflow-y-auto font-mono text-2xs leading-relaxed">
                         {installStream.logs.map((line, i) => (
                           <div
                             key={i}
@@ -8085,7 +8084,7 @@ export function AcpAgentSettings() {
                       <label className="text-xs font-medium">
                         {t("hostTools.label")}
                       </label>
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {t("hostTools.description")}
                       </p>
                     </div>
@@ -8150,13 +8149,13 @@ export function AcpAgentSettings() {
                       <label className="text-xs font-medium">
                         {t("configManagement")}
                       </label>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-1 text-2xs text-muted-foreground">
                         {t("codex.configDescription")}
                       </p>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         {t("codex.authMode")}
                       </label>
                       <Select
@@ -8184,7 +8183,7 @@ export function AcpAgentSettings() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {selectedDraft.codexAuthMode === "chatgpt_subscription"
                           ? t("codex.chatgptSubscriptionHint")
                           : selectedDraft.codexAuthMode === "model_provider"
@@ -8299,7 +8298,7 @@ export function AcpAgentSettings() {
 
                     {selectedDraft.codexAuthMode === "model_provider" && (
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("selectModelProvider")}
                         </label>
                         {selectedModelProviders.length > 0 ? (
@@ -8328,7 +8327,7 @@ export function AcpAgentSettings() {
                             </SelectContent>
                           </Select>
                         ) : (
-                          <p className="text-[11px] text-muted-foreground">
+                          <p className="text-2xs text-muted-foreground">
                             {t("noModelProviderAvailable")}
                           </p>
                         )}
@@ -8338,7 +8337,7 @@ export function AcpAgentSettings() {
                     {(selectedDraft.codexAuthMode === "api_key" ||
                       selectedDraft.codexAuthMode === "model_provider") && (
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           API URL
                         </label>
                         <Input
@@ -8360,7 +8359,7 @@ export function AcpAgentSettings() {
                     {(selectedDraft.codexAuthMode === "api_key" ||
                       selectedDraft.codexAuthMode === "model_provider") && (
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           API Key
                         </label>
                         <div className="flex items-center gap-2">
@@ -8423,7 +8422,7 @@ export function AcpAgentSettings() {
                     )}
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         Reasoning Effort
                       </label>
                       <Select
@@ -8448,7 +8447,7 @@ export function AcpAgentSettings() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {selectedCodexReasoningEffortOption?.description ??
                           "Greater reasoning depth for complex problems"}
                       </p>
@@ -8456,7 +8455,7 @@ export function AcpAgentSettings() {
 
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("codex.enableWebsocket")}
                         </label>
                         <Switch
@@ -8469,7 +8468,7 @@ export function AcpAgentSettings() {
 
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("codex.enableSkills")}
                         </label>
                         <Switch
@@ -8486,7 +8485,7 @@ export function AcpAgentSettings() {
                         appear in an ordinary turn (openai/codex#24750). */}
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("codex.enableDefaultModeRequestUserInput")}
                         </label>
                         <Switch
@@ -8501,14 +8500,14 @@ export function AcpAgentSettings() {
                           )}
                         />
                       </div>
-                      <p className="text-[10px] text-muted-foreground">
+                      <p className="text-3xs text-muted-foreground">
                         {t("codex.enableDefaultModeRequestUserInputHint")}
                       </p>
                     </div>
 
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("codex.enableFast")}
                         </label>
                         <Switch
@@ -8525,28 +8524,28 @@ export function AcpAgentSettings() {
                         preset's own policy per turn and ignore these keys. */}
                     <div className="space-y-2 rounded-md border px-3 py-2.5">
                       <div className="space-y-1">
-                        <p className="text-[11px] font-medium">
+                        <p className="text-2xs font-medium">
                           {t("codex.sandboxGroupTitle")}
                         </p>
-                        <p className="text-[10px] text-muted-foreground">
+                        <p className="text-3xs text-muted-foreground">
                           {t("codex.sandboxGroupHint")}
                         </p>
                       </div>
 
                       {selectedDraft.codexSandboxShadowed ? (
-                        <p className="text-[10px] text-yellow-500">
+                        <p className="text-3xs text-yellow-500">
                           {t("codex.sandboxShadowedWarning")}
                         </p>
                       ) : null}
                       {selectedDraft.codexSandboxHasPermissionsTable &&
                       !selectedDraft.codexSandboxShadowed ? (
-                        <p className="text-[10px] text-yellow-500">
+                        <p className="text-3xs text-yellow-500">
                           {t("codex.sandboxPermissionsTableWarning")}
                         </p>
                       ) : null}
 
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("codex.approvalPolicyLabel")}
                         </label>
                         <Select
@@ -8583,7 +8582,7 @@ export function AcpAgentSettings() {
                             (#442). Say so where the user picks it, rather than
                             letting it look effective. */}
                         {selectedDraft.codexApprovalPolicy === "untrusted" ? (
-                          <p className="text-[10px] text-yellow-500">
+                          <p className="text-3xs text-yellow-500">
                             {t("codex.approvalPolicyUntrustedAcpWarning")}
                           </p>
                         ) : null}
@@ -8591,7 +8590,7 @@ export function AcpAgentSettings() {
 
                       {selectedDraft.codexApprovalPolicy === "granular" ? (
                         <div className="space-y-1 rounded-md border border-dashed px-2.5 py-2">
-                          <p className="text-[10px] text-muted-foreground">
+                          <p className="text-3xs text-muted-foreground">
                             {t("codex.granularHint")}
                           </p>
                           {CODEX_GRANULAR_KEYS.map((key) => (
@@ -8599,7 +8598,7 @@ export function AcpAgentSettings() {
                               className="flex items-center justify-between gap-2 py-0.5"
                               key={key}
                             >
-                              <label className="text-[11px] text-muted-foreground">
+                              <label className="text-2xs text-muted-foreground">
                                 {t(`codex.granular_${key}`)}
                               </label>
                               <Switch
@@ -8621,7 +8620,7 @@ export function AcpAgentSettings() {
                       ) : null}
 
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("codex.sandboxModeLabel")}
                         </label>
                         <Select
@@ -8654,7 +8653,7 @@ export function AcpAgentSettings() {
                             ))}
                           </SelectContent>
                         </Select>
-                        <p className="text-[10px] text-muted-foreground">
+                        <p className="text-3xs text-muted-foreground">
                           {t("codex.sandboxModeHint")}
                         </p>
                         {/* Sandbox mode is what houhub maps onto the session's
@@ -8664,7 +8663,7 @@ export function AcpAgentSettings() {
                         {codexSandboxSeedsAcpPreset(
                           selectedDraft.codexSandboxShadowed
                         ) ? (
-                          <p className="text-[10px] text-muted-foreground">
+                          <p className="text-3xs text-muted-foreground">
                             {t("codex.sandboxModeSeedsPresetHint")}
                           </p>
                         ) : null}
@@ -8679,7 +8678,7 @@ export function AcpAgentSettings() {
                           selectedDraft.codexSandboxMode,
                           selectedDraft.codexSandboxShadowed
                         ) ? (
-                          <p className="text-[10px] text-yellow-500">
+                          <p className="text-3xs text-yellow-500">
                             {t("codex.sandboxModeReadOnlyAcpWarning")}
                           </p>
                         ) : null}
@@ -8690,11 +8689,11 @@ export function AcpAgentSettings() {
                       ) && !selectedDraft.codexSandboxShadowed ? (
                         <div className="space-y-2 rounded-md border border-dashed px-2.5 py-2">
                           <div className="space-y-1">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("codex.writableRootsLabel")}
                             </label>
                             <Textarea
-                              className="min-h-16 font-mono text-[11px]"
+                              className="min-h-16 font-mono text-2xs"
                               spellCheck={false}
                               value={selectedDraft.codexWritableRootsText}
                               onChange={(event) => {
@@ -8707,19 +8706,19 @@ export function AcpAgentSettings() {
                               placeholder={"/Users/me/shared\n/srv/cache"}
                             />
                             {codexRelativeWritableRoot ? (
-                              <p className="text-[10px] text-red-500">
+                              <p className="text-3xs text-red-500">
                                 {t("codex.sandboxRootsRelativeError", {
                                   path: codexRelativeWritableRoot,
                                 })}
                               </p>
                             ) : (
-                              <p className="text-[10px] text-muted-foreground">
+                              <p className="text-3xs text-muted-foreground">
                                 {t("codex.writableRootsHint")}
                               </p>
                             )}
                           </div>
                           <div className="flex items-center justify-between gap-2">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("codex.networkAccessLabel")}
                             </label>
                             <Switch
@@ -8734,7 +8733,7 @@ export function AcpAgentSettings() {
                             />
                           </div>
                           <div className="flex items-center justify-between gap-2">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("codex.excludeTmpdirLabel")}
                             </label>
                             <Switch
@@ -8749,7 +8748,7 @@ export function AcpAgentSettings() {
                             />
                           </div>
                           <div className="flex items-center justify-between gap-2">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("codex.excludeSlashTmpLabel")}
                             </label>
                             <Switch
@@ -8768,7 +8767,7 @@ export function AcpAgentSettings() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         {t("codex.configTomlNative")}
                       </label>
                       <Textarea
@@ -8879,13 +8878,13 @@ supports_websockets = true`}
                       <label className="text-xs font-medium">
                         {t("gemini.authConfig")}
                       </label>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-1 text-2xs text-muted-foreground">
                         {t("gemini.authConfigDescription")}
                       </p>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         {t("gemini.authMode")}
                       </label>
                       <Select
@@ -8911,14 +8910,14 @@ supports_websockets = true`}
                           ))}
                         </SelectContent>
                       </Select>
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {geminiAuthModeHint(selectedDraft.geminiAuthMode)}
                       </p>
                     </div>
 
                     {selectedDraft.geminiAuthMode === "model_provider" && (
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("selectModelProvider")}
                         </label>
                         {selectedModelProviders.length > 0 ? (
@@ -8947,7 +8946,7 @@ supports_websockets = true`}
                             </SelectContent>
                           </Select>
                         ) : (
-                          <p className="text-[11px] text-muted-foreground">
+                          <p className="text-2xs text-muted-foreground">
                             {t("noModelProviderAvailable")}
                           </p>
                         )}
@@ -8955,7 +8954,7 @@ supports_websockets = true`}
                     )}
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         Model
                       </label>
                       <Input
@@ -8968,7 +8967,7 @@ supports_websockets = true`}
                         }}
                         placeholder="gemini-3-pro-preview"
                       />
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {t("modelHintDefault")}
                       </p>
                     </div>
@@ -8976,7 +8975,7 @@ supports_websockets = true`}
                     {(selectedDraft.geminiAuthMode === "custom" ||
                       selectedDraft.geminiAuthMode === "model_provider") && (
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           GOOGLE_GEMINI_BASE_URL
                         </label>
                         <Input
@@ -9000,7 +8999,7 @@ supports_websockets = true`}
                       selectedDraft.geminiAuthMode === "model_provider" ||
                       selectedDraft.geminiAuthMode === "vertex_api_key") && (
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {selectedDraft.geminiAuthMode === "vertex_api_key"
                             ? "GOOGLE_API_KEY"
                             : "GEMINI_API_KEY"}
@@ -9071,7 +9070,7 @@ supports_websockets = true`}
                       selectedDraft.geminiAuthMode === "vertex_api_key") && (
                       <div className="grid gap-3 md:grid-cols-2">
                         <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
+                          <label className="text-2xs text-muted-foreground">
                             GOOGLE_CLOUD_PROJECT
                           </label>
                           <Input
@@ -9086,7 +9085,7 @@ supports_websockets = true`}
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
+                          <label className="text-2xs text-muted-foreground">
                             GOOGLE_CLOUD_LOCATION
                           </label>
                           <Input
@@ -9106,7 +9105,7 @@ supports_websockets = true`}
                     {selectedDraft.geminiAuthMode ===
                       "vertex_service_account" && (
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           GOOGLE_APPLICATION_CREDENTIALS
                         </label>
                         <Input
@@ -9197,14 +9196,14 @@ supports_websockets = true`}
                       <label className="text-xs font-medium">
                         {t("openCode.configManagement")}
                       </label>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-1 text-2xs text-muted-foreground">
                         {t("openCode.configDescription")}
                       </p>
                     </div>
 
                     <div className="grid gap-3 md:grid-cols-2">
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("openCode.mainModel")}
                         </label>
                         <OpenCodeModelCombobox
@@ -9217,7 +9216,7 @@ supports_websockets = true`}
                         />
                       </div>
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("openCode.smallModel")}
                         </label>
                         <OpenCodeModelCombobox
@@ -9233,10 +9232,10 @@ supports_websockets = true`}
 
                     <div className="space-y-2 rounded-md border bg-background/60 p-3">
                       <div className="flex items-center justify-between gap-2">
-                        <label className="text-[11px] font-medium">
+                        <label className="text-2xs font-medium">
                           {t("openCode.providerManagement")}
                         </label>
-                        <div className="text-[11px] text-muted-foreground">
+                        <div className="text-2xs text-muted-foreground">
                           {t("openCode.providerCount", {
                             count:
                               selectedOpenCodeConfig?.providerIds.length ?? 0,
@@ -9276,7 +9275,7 @@ supports_websockets = true`}
                         </Button>
                         {openCodeCatalogLoading &&
                           openCodeCatalog.length === 0 && (
-                            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                            <span className="inline-flex items-center gap-1 text-2xs text-muted-foreground">
                               <Loader2 className="h-3 w-3 animate-spin" />
                               {t("openCode.connect.loading")}
                             </span>
@@ -9284,12 +9283,12 @@ supports_websockets = true`}
                       </div>
 
                       {openCodeWellKnownConnected.length === 0 ? (
-                        <div className="text-[11px] text-muted-foreground">
+                        <div className="text-2xs text-muted-foreground">
                           {t("openCode.noConnectedProviders")}
                         </div>
                       ) : (
                         <div className="space-y-1.5">
-                          <label className="text-[11px] font-medium">
+                          <label className="text-2xs font-medium">
                             {t("openCode.connectedProviders")}
                           </label>
                           <div className="space-y-1.5">
@@ -9302,13 +9301,10 @@ supports_websockets = true`}
                                   <span className="truncate text-xs font-medium">
                                     {provider.name}
                                   </span>
-                                  <span className="text-[10px] text-muted-foreground">
+                                  <span className="text-3xs text-muted-foreground">
                                     {provider.id}
                                   </span>
-                                  <Badge
-                                    variant="outline"
-                                    className="text-[10px]"
-                                  >
+                                  <Badge variant="outline" className="text-3xs">
                                     {provider.authKind === "oauth"
                                       ? t("openCode.authKindOauth")
                                       : provider.authKind === "api"
@@ -9318,7 +9314,7 @@ supports_websockets = true`}
                                   {!provider.inCatalog && (
                                     <Badge
                                       variant="secondary"
-                                      className="text-[10px]"
+                                      className="text-3xs"
                                     >
                                       {t("openCode.customBadge")}
                                     </Badge>
@@ -9401,7 +9397,7 @@ supports_websockets = true`}
 
                       <div className="space-y-1 border-t pt-2">
                         <div className="flex items-center justify-between gap-2">
-                          <div className="text-[11px] font-medium text-muted-foreground">
+                          <div className="text-2xs font-medium text-muted-foreground">
                             {t("openCode.advancedProviderConfig")}
                           </div>
                           <Button
@@ -9422,13 +9418,13 @@ supports_websockets = true`}
                             {t("openCode.addCustomProvider")}
                           </Button>
                         </div>
-                        <p className="text-[10px] text-muted-foreground">
+                        <p className="text-3xs text-muted-foreground">
                           {t("openCode.customProviderConfigHint")}
                         </p>
                       </div>
 
                       {openCodeCustomProviderIds.length === 0 ? (
-                        <div className="text-[11px] text-muted-foreground">
+                        <div className="text-2xs text-muted-foreground">
                           {t("openCode.emptyProvider")}
                         </div>
                       ) : (
@@ -9478,12 +9474,12 @@ supports_websockets = true`}
                                       <span className="truncate text-xs font-medium">
                                         {providerId}
                                       </span>
-                                      <span className="text-[11px] text-muted-foreground">
+                                      <span className="text-2xs text-muted-foreground">
                                         models: {provider.modelCount}
                                       </span>
                                     </button>
                                     <div className="flex items-center gap-3">
-                                      <span className="text-[11px] text-muted-foreground">
+                                      <span className="text-2xs text-muted-foreground">
                                         {isDisabled
                                           ? t("status.disabled")
                                           : t("status.enabled")}
@@ -9528,7 +9524,7 @@ supports_websockets = true`}
                                   <CollapsibleContent className="px-2.5 pb-2.5">
                                     <div className="grid gap-3 border-t pt-2.5 md:grid-cols-2">
                                       <div className="space-y-1.5">
-                                        <label className="text-[11px] text-muted-foreground">
+                                        <label className="text-2xs text-muted-foreground">
                                           provider.name
                                         </label>
                                         <Input
@@ -9544,7 +9540,7 @@ supports_websockets = true`}
                                         />
                                       </div>
                                       <div className="space-y-1.5">
-                                        <label className="text-[11px] text-muted-foreground">
+                                        <label className="text-2xs text-muted-foreground">
                                           provider.npm
                                         </label>
                                         <Select
@@ -9584,7 +9580,7 @@ supports_websockets = true`}
                                         </Select>
                                       </div>
                                       <div className="space-y-1.5">
-                                        <label className="text-[11px] text-muted-foreground">
+                                        <label className="text-2xs text-muted-foreground">
                                           provider.api
                                         </label>
                                         <Input
@@ -9600,7 +9596,7 @@ supports_websockets = true`}
                                         />
                                       </div>
                                       <div className="space-y-1.5">
-                                        <label className="text-[11px] text-muted-foreground">
+                                        <label className="text-2xs text-muted-foreground">
                                           provider.options.baseURL
                                         </label>
                                         <Input
@@ -9616,7 +9612,7 @@ supports_websockets = true`}
                                         />
                                       </div>
                                       <div className="space-y-1.5 md:col-span-2">
-                                        <label className="text-[11px] text-muted-foreground">
+                                        <label className="text-2xs text-muted-foreground">
                                           provider.options.apiKey
                                         </label>
                                         <div className="flex items-center gap-2">
@@ -9705,18 +9701,18 @@ supports_websockets = true`}
                                                 ] && "rotate-180"
                                               )}
                                             />
-                                            <span className="text-[11px] font-medium">
+                                            <span className="text-2xs font-medium">
                                               {t("openCode.modelManagement")}
                                             </span>
                                           </div>
-                                          <span className="text-[11px] text-muted-foreground">
+                                          <span className="text-2xs text-muted-foreground">
                                             {t("openCode.modelCount", {
                                               count: provider.modelCount,
                                             })}
                                           </span>
                                         </button>
                                         <CollapsibleContent className="pt-2">
-                                          <p className="text-[11px] text-muted-foreground">
+                                          <p className="text-2xs text-muted-foreground">
                                             {t("openCode.modelDescription")}
                                           </p>
 
@@ -9733,7 +9729,7 @@ supports_websockets = true`}
                                                   event.target.value
                                                 )
                                               }}
-                                              className="w-[240px]"
+                                              className="w-[15rem]"
                                               placeholder="new-model-id"
                                             />
                                             <Button
@@ -9751,12 +9747,12 @@ supports_websockets = true`}
                                           </div>
 
                                           {provider.modelIds.length === 0 ? (
-                                            <div className="mt-2 text-[11px] text-muted-foreground">
+                                            <div className="mt-2 text-2xs text-muted-foreground">
                                               {t("openCode.emptyModel")}
                                             </div>
                                           ) : (
                                             <div className="mt-2 space-y-1">
-                                              <div className="flex items-center gap-2 px-1 text-[10px] text-muted-foreground">
+                                              <div className="flex items-center gap-2 px-1 text-3xs text-muted-foreground">
                                                 <div className="min-w-0 flex-1">
                                                   {t("openCode.modelId")}
                                                 </div>
@@ -9795,7 +9791,14 @@ supports_websockets = true`}
                                                             modelId
                                                           )
                                                         }}
+                                                        {...ime.props}
                                                         onKeyDown={(event) => {
+                                                          if (
+                                                            ime.isComposing(
+                                                              event
+                                                            )
+                                                          )
+                                                            return
                                                           if (
                                                             event.key ===
                                                             "Enter"
@@ -9960,7 +9963,7 @@ supports_websockets = true`}
                     />
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         {t("openCode.nativeJsonConfig")}
                       </label>
                       <Textarea
@@ -9982,7 +9985,7 @@ supports_websockets = true`}
                         className="min-h-44 max-h-96 overflow-y-auto font-mono text-xs"
                       />
                       {selectedConfigError && (
-                        <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-[11px] text-red-400">
+                        <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-2xs text-red-400">
                           {selectedConfigError}
                         </div>
                       )}
@@ -10036,13 +10039,13 @@ supports_websockets = true`}
                   <div className="space-y-3 rounded-md border bg-muted/10 p-3">
                     <div>
                       <label className="text-xs font-medium">Cline</label>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-1 text-2xs text-muted-foreground">
                         {t("cline.configDescription")}
                       </p>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         Provider
                       </label>
                       <Select
@@ -10065,7 +10068,7 @@ supports_websockets = true`}
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         API Key
                       </label>
                       <div className="flex items-center gap-2">
@@ -10111,7 +10114,7 @@ supports_websockets = true`}
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         Model
                       </label>
                       <Input
@@ -10127,7 +10130,7 @@ supports_websockets = true`}
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         API URL
                       </label>
                       <Input
@@ -10143,7 +10146,7 @@ supports_websockets = true`}
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         {t("nativeJsonConfig")} (config)
                       </label>
                       <Textarea
@@ -10159,7 +10162,7 @@ supports_websockets = true`}
 }`}
                       />
                       {selectedConfigError && (
-                        <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-[11px] text-red-400">
+                        <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-2xs text-red-400">
                           {selectedConfigError}
                         </div>
                       )}
@@ -10211,13 +10214,13 @@ supports_websockets = true`}
                       <label className="text-xs font-medium">
                         {t("openClaw.gatewayConfig")}
                       </label>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-1 text-2xs text-muted-foreground">
                         {t("openClaw.gatewayDescription")}
                       </p>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         Gateway URL
                       </label>
                       <Input
@@ -10230,13 +10233,13 @@ supports_websockets = true`}
                         }}
                         placeholder="wss://gateway-host:18789"
                       />
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {t("openClaw.gatewayUrlHint")}
                       </p>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         Gateway Token
                       </label>
                       <div className="flex items-center gap-2">
@@ -10279,13 +10282,13 @@ supports_websockets = true`}
                           )}
                         </Button>
                       </div>
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {t("openClaw.gatewayTokenHint")}
                       </p>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         Session Key
                       </label>
                       <Input
@@ -10298,7 +10301,7 @@ supports_websockets = true`}
                         }}
                         placeholder="agent:main:main"
                       />
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {t("openClaw.sessionKeyHint")}
                       </p>
                     </div>
@@ -10357,13 +10360,13 @@ supports_websockets = true`}
                       <label className="text-xs font-medium">
                         {t("hermes.configManagement")}
                       </label>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-1 text-2xs text-muted-foreground">
                         {t("hermes.configDescription")}
                       </p>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         {t("hermes.providerLabel")}
                       </label>
                       <Select
@@ -10415,14 +10418,14 @@ supports_websockets = true`}
                           })}
                         </SelectContent>
                       </Select>
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {t("hermes.providerHint")}
                       </p>
                     </div>
 
                     {selectedHermesProviderOption?.kind === "apiKey" && (
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           API Key
                         </label>
                         <div className="flex items-center gap-2">
@@ -10466,7 +10469,7 @@ supports_websockets = true`}
                             )}
                           </Button>
                         </div>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           {t("hermes.apiKeyHint")}
                         </p>
                       </div>
@@ -10474,7 +10477,7 @@ supports_websockets = true`}
 
                     {selectedHermesProviderOption?.needsBaseUrl && (
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           API URL
                         </label>
                         <Input
@@ -10492,7 +10495,7 @@ supports_websockets = true`}
                     )}
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         {t("hermes.modelName")}
                       </label>
                       <Input
@@ -10506,19 +10509,19 @@ supports_websockets = true`}
                     </div>
 
                     {selectedHermesProviderOption?.kind === "oauth" && (
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {t("hermes.oauthHint")}
                       </p>
                     )}
 
                     {selectedHermesProviderOption?.kind === "aws" && (
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {t("hermes.awsHint")}
                       </p>
                     )}
 
                     {!selectedHermesProviderOption && (
-                      <p className="text-[11px] text-amber-600 dark:text-amber-500">
+                      <p className="text-2xs text-amber-600 dark:text-amber-500">
                         {t("hermes.unsupportedProvider")}
                       </p>
                     )}
@@ -10548,10 +10551,10 @@ supports_websockets = true`}
 
                     <div className="space-y-2 rounded-md border p-3">
                       <div>
-                        <label className="text-[11px] font-medium">
+                        <label className="text-2xs font-medium">
                           {t("hermes.setupTitle")}
                         </label>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
+                        <p className="mt-1 text-2xs text-muted-foreground">
                           {t("hermes.setupHint")}
                         </p>
                       </div>
@@ -10593,7 +10596,7 @@ supports_websockets = true`}
                       )}
                       {selectedDraft.hermesSetupCommand && (
                         <div className="flex items-center gap-2">
-                          <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-[11px] font-mono whitespace-nowrap">
+                          <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-2xs font-mono whitespace-nowrap">
                             {selectedDraft.hermesSetupCommand}
                           </code>
                           <Button
@@ -10617,11 +10620,11 @@ supports_websockets = true`}
                     </div>
 
                     <details className="rounded-md border p-3">
-                      <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+                      <summary className="cursor-pointer text-2xs font-medium text-muted-foreground">
                         {t("hermes.advancedTitle")}
                       </summary>
                       <div className="mt-2 space-y-2">
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           {t("hermes.rawConfigHint")}
                         </p>
                         <Textarea
@@ -10679,8 +10682,8 @@ supports_websockets = true`}
                   />
                 ) : selectedAgent.agent_type === "pi" ? (
                   <PiConfigPanel
-                    agent={selectedAgent}
                     modelProviders={modelProviders}
+                    agent={selectedAgent}
                     saving={Boolean(savingEnv[selectedAgent.agent_type])}
                     onSaveEnv={(env, enabled, modelProviderId) =>
                       persistEnv(
@@ -10788,7 +10791,7 @@ supports_websockets = true`}
                       <label className="text-xs font-medium">
                         {t("configManagement")}
                       </label>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-1 text-2xs text-muted-foreground">
                         {t("grok.configDescription")}
                       </p>
                     </div>
@@ -10796,7 +10799,7 @@ supports_websockets = true`}
                     {/* Structured controls — mode + reasoning effort */}
                     <div className="grid gap-3 md:grid-cols-2">
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("grok.permissionModeLabel")}
                         </label>
                         <Select
@@ -10837,7 +10840,7 @@ supports_websockets = true`}
                       </div>
 
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("grok.reasoningEffortLabel")}
                         </label>
                         <Select
@@ -10886,7 +10889,7 @@ supports_websockets = true`}
                         on load via inferGrokMode and recorded as GROK_AUTH_MODE. */}
                     <div className="space-y-2.5 rounded-md border p-2.5">
                       <div className="space-y-1.5">
-                        <label className="text-[11px] font-medium">
+                        <label className="text-2xs font-medium">
                           {t("grok.authTitle")}
                         </label>
                         <Select
@@ -10914,7 +10917,7 @@ supports_websockets = true`}
                             </SelectItem>
                           </SelectContent>
                         </Select>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           {selectedDraft.grokAuthMode === "subscription"
                             ? t("grok.subscriptionHint")
                             : selectedDraft.grokAuthMode === "custom"
@@ -10928,11 +10931,11 @@ supports_websockets = true`}
                         // session lives in ~/.grok/auth.json (untouched here); the
                         // launch path strips any inherited XAI_API_KEY.
                         <div className="space-y-1.5">
-                          <p className="text-[11px] text-muted-foreground">
+                          <p className="text-2xs text-muted-foreground">
                             {t("grok.loginHint")}
                           </p>
                           <div className="flex items-center gap-2">
-                            <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-[11px] font-mono whitespace-nowrap">
+                            <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-2xs font-mono whitespace-nowrap">
                               {GROK_LOGIN_COMMAND}
                             </code>
                             <Button
@@ -10955,7 +10958,7 @@ supports_websockets = true`}
                       ) : selectedDraft.grokAuthMode === "api_key" ? (
                         // API key: the non-interactive XAI_API_KEY credential.
                         <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
+                          <label className="text-2xs text-muted-foreground">
                             XAI_API_KEY
                           </label>
                           <div className="flex items-center gap-2">
@@ -11009,7 +11012,7 @@ supports_websockets = true`}
                               )}
                             </Button>
                           </div>
-                          <p className="text-[11px] text-muted-foreground">
+                          <p className="text-2xs text-muted-foreground">
                             {selectedDraft.apiKey.trim()
                               ? t("grok.authKeyConfigured")
                               : t("grok.authKeyMissing")}
@@ -11025,16 +11028,16 @@ supports_websockets = true`}
                     {selectedDraft.grokAuthMode === "custom" ? (
                       <div className="space-y-2.5 rounded-md border p-2.5">
                         <div>
-                          <label className="text-[11px] font-medium">
+                          <label className="text-2xs font-medium">
                             {t("grok.customModelTitle")}
                           </label>
-                          <p className="mt-1 text-[11px] text-muted-foreground">
+                          <p className="mt-1 text-2xs text-muted-foreground">
                             {t("grok.customModelHint")}
                           </p>
                         </div>
 
                         <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
+                          <label className="text-2xs text-muted-foreground">
                             {t("grok.customModelIdLabel")}
                           </label>
                           <Input
@@ -11051,14 +11054,14 @@ supports_websockets = true`}
                             spellCheck={false}
                             disabled={grokSaving}
                           />
-                          <p className="text-[11px] text-muted-foreground">
+                          <p className="text-2xs text-muted-foreground">
                             {t("grok.customModelIdHint")}
                           </p>
                         </div>
 
                         <div className="grid gap-3 md:grid-cols-2">
                           <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("grok.customBaseUrlLabel")}
                             </label>
                             <Input
@@ -11077,7 +11080,7 @@ supports_websockets = true`}
                             />
                           </div>
                           <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("grok.customApiBackendLabel")}
                             </label>
                             <Select
@@ -11115,7 +11118,7 @@ supports_websockets = true`}
                         </div>
 
                         <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
+                          <label className="text-2xs text-muted-foreground">
                             {t("grok.customApiKeyLabel")}
                           </label>
                           <div className="flex items-center gap-2">
@@ -11161,13 +11164,13 @@ supports_websockets = true`}
                               )}
                             </Button>
                           </div>
-                          <p className="text-[11px] text-muted-foreground">
+                          <p className="text-2xs text-muted-foreground">
                             {t("grok.customApiKeyHint")}
                           </p>
                         </div>
 
                         <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
+                          <label className="text-2xs text-muted-foreground">
                             {t("grok.customContextWindowLabel")}
                           </label>
                           <Input
@@ -11184,7 +11187,7 @@ supports_websockets = true`}
                             aria-label={t("grok.customContextWindowLabel")}
                             disabled={grokSaving}
                           />
-                          <p className="text-[11px] text-muted-foreground">
+                          <p className="text-2xs text-muted-foreground">
                             {t("grok.customContextWindowHint")}
                           </p>
                         </div>
@@ -11193,7 +11196,7 @@ supports_websockets = true`}
 
                     {/* Compaction — session-global auto-compact threshold. */}
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         {t("grok.autoCompactLabel")}
                       </label>
                       <Input
@@ -11212,7 +11215,7 @@ supports_websockets = true`}
                         aria-label={t("grok.autoCompactLabel")}
                         disabled={grokSaving}
                       />
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {t("grok.autoCompactHint")}
                       </p>
                     </div>
@@ -11229,7 +11232,7 @@ supports_websockets = true`}
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="h-7 gap-1 px-1 text-[11px] text-muted-foreground"
+                          className="h-7 gap-1 px-1 text-2xs text-muted-foreground"
                         >
                           <ChevronRight
                             className={cn(
@@ -11241,7 +11244,7 @@ supports_websockets = true`}
                         </Button>
                       </CollapsibleTrigger>
                       <CollapsibleContent className="space-y-1.5 pt-2">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("grok.configTomlNative")}
                         </label>
                         <Textarea
@@ -11259,7 +11262,7 @@ supports_websockets = true`}
                           aria-label={t("grok.configTomlNative")}
                           disabled={grokSaving}
                         />
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           {t("grok.configTomlHint")}
                         </p>
                       </CollapsibleContent>
@@ -11354,6 +11357,10 @@ supports_websockets = true`}
                   // channel that works for every agent, so they are the whole
                   // surface — plus the skills declaration and removing the
                   // agent.
+                  // All four blocks share the settings-card vocabulary
+                  // (`SettingCard` / `SettingRow`, as in the task settings
+                  // dialog) so the panel reads as one stack of settings rather
+                  // than four differently-shaped boxes.
                   <>
                     <div className="space-y-3 rounded-md border bg-muted/10 p-3">
                       <div>
@@ -11411,7 +11418,7 @@ supports_websockets = true`}
                       <label className="text-xs font-medium">
                         {t("configManagement")}
                       </label>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-1 text-2xs text-muted-foreground">
                         {selectedAgent.agent_type === "claude_code"
                           ? t("generalConfigDescriptionClaude")
                           : t("generalConfigDescriptionDefault")}
@@ -11420,7 +11427,7 @@ supports_websockets = true`}
 
                     {selectedAgent.agent_type === "claude_code" && (
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
+                        <label className="text-2xs text-muted-foreground">
                           {t("claude.authMode")}
                         </label>
                         <Select
@@ -11452,7 +11459,7 @@ supports_websockets = true`}
                             </SelectItem>
                           </SelectContent>
                         </Select>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           {selectedDraft.claudeAuthMode ===
                           "official_subscription"
                             ? t("claude.officialSubscriptionHint")
@@ -11466,7 +11473,7 @@ supports_websockets = true`}
                     {selectedAgent.agent_type === "claude_code" &&
                       selectedDraft.claudeAuthMode === "model_provider" && (
                         <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
+                          <label className="text-2xs text-muted-foreground">
                             {t("selectModelProvider")}
                           </label>
                           {selectedModelProviders.length > 0 ? (
@@ -11495,7 +11502,7 @@ supports_websockets = true`}
                               </SelectContent>
                             </Select>
                           ) : (
-                            <p className="text-[11px] text-muted-foreground">
+                            <p className="text-2xs text-muted-foreground">
                               {t("noModelProviderAvailable")}
                             </p>
                           )}
@@ -11509,7 +11516,7 @@ supports_websockets = true`}
                         {importantFieldsFor(selectedAgent.agent_type)
                           .apiBaseUrl && (
                           <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               API URL
                             </label>
                             <Input
@@ -11533,7 +11540,7 @@ supports_websockets = true`}
                         {importantFieldsFor(selectedAgent.agent_type)
                           .apiKey && (
                           <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               API Key
                             </label>
                             <div className="flex items-center gap-2">
@@ -11590,7 +11597,7 @@ supports_websockets = true`}
                       <div className="space-y-2">
                         <div className="grid gap-3 md:grid-cols-2">
                           <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("claude.mainModel")}
                             </label>
                             <Input
@@ -11609,7 +11616,7 @@ supports_websockets = true`}
                             />
                           </div>
                           <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("claude.reasoningModel")}
                             </label>
                             <Input
@@ -11628,7 +11635,7 @@ supports_websockets = true`}
                             />
                           </div>
                           <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("claude.haikuDefaultModel")}
                             </label>
                             <Input
@@ -11647,7 +11654,7 @@ supports_websockets = true`}
                             />
                           </div>
                           <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("claude.sonnetDefaultModel")}
                             </label>
                             <Input
@@ -11666,7 +11673,7 @@ supports_websockets = true`}
                             />
                           </div>
                           <div className="space-y-1.5 md:col-span-2">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("claude.opusDefaultModel")}
                             </label>
                             <Input
@@ -11685,13 +11692,13 @@ supports_websockets = true`}
                             />
                           </div>
                         </div>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           {t("modelHintDefault")}
                         </p>
                         <div className="space-y-2 border-t border-border/60 pt-3">
                           <div className="grid gap-3 md:grid-cols-2">
                             <div className="space-y-1.5 md:col-span-2">
-                              <label className="text-[11px] text-muted-foreground">
+                              <label className="text-2xs text-muted-foreground">
                                 {t("claude.customModelOption")}
                               </label>
                               <Input
@@ -11710,7 +11717,7 @@ supports_websockets = true`}
                               />
                             </div>
                             <div className="space-y-1.5">
-                              <label className="text-[11px] text-muted-foreground">
+                              <label className="text-2xs text-muted-foreground">
                                 {t("claude.customModelOptionName")}
                               </label>
                               <Input
@@ -11731,7 +11738,7 @@ supports_websockets = true`}
                               />
                             </div>
                             <div className="space-y-1.5">
-                              <label className="text-[11px] text-muted-foreground">
+                              <label className="text-2xs text-muted-foreground">
                                 {t("claude.customModelOptionDescription")}
                               </label>
                               <Input
@@ -11752,12 +11759,12 @@ supports_websockets = true`}
                               />
                             </div>
                           </div>
-                          <p className="text-[11px] text-muted-foreground">
+                          <p className="text-2xs text-muted-foreground">
                             {t("claude.customModelOptionHint")}
                           </p>
                         </div>
                         <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
+                          <label className="text-2xs text-muted-foreground">
                             {t("claude.effortLevel")}
                           </label>
                           <Select
@@ -11789,7 +11796,7 @@ supports_websockets = true`}
                         </div>
                         <div className="space-y-1.5">
                           <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("claude.sendAttributionHeader")}
                             </label>
                             <Switch
@@ -11809,7 +11816,7 @@ supports_websockets = true`}
                         </div>
                         <div className="space-y-1.5">
                           <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                            <label className="text-[11px] text-muted-foreground">
+                            <label className="text-2xs text-muted-foreground">
                               {t("claude.disableNonessentialTraffic")}
                             </label>
                             <Switch
@@ -11833,7 +11840,7 @@ supports_websockets = true`}
                     ) : (
                       importantFieldsFor(selectedAgent.agent_type).model && (
                         <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
+                          <label className="text-2xs text-muted-foreground">
                             Model
                           </label>
                           <Input
@@ -11852,7 +11859,7 @@ supports_websockets = true`}
                     )}
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label className="text-2xs text-muted-foreground">
                         {t("nativeJsonConfig")}
                       </label>
                       <Textarea
@@ -11871,7 +11878,7 @@ supports_websockets = true`}
                         className="min-h-36 font-mono text-xs"
                       />
                       {selectedConfigError && (
-                        <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-[11px] text-red-400">
+                        <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-2xs text-red-400">
                           {selectedConfigError}
                         </div>
                       )}
@@ -12178,7 +12185,9 @@ supports_websockets = true`}
               value={customVersionInput}
               placeholder={customInstallAgent?.registry_version ?? "1.0.0"}
               onChange={(e) => setCustomVersionInput(e.target.value)}
+              {...ime.props}
               onKeyDown={(e) => {
+                if (ime.isComposing(e)) return
                 if (
                   e.key === "Enter" &&
                   isValidCustomVersion(customVersionInput)
@@ -12190,7 +12199,7 @@ supports_websockets = true`}
             />
             {customVersionInput.trim() !== "" &&
               !isValidCustomVersion(customVersionInput) && (
-                <p className="text-[11px] text-red-500">
+                <p className="text-2xs text-red-500">
                   {t("dialogs.customInstallInvalid")}
                 </p>
               )}

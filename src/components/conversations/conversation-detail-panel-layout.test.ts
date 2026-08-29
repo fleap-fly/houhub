@@ -24,16 +24,20 @@ const conversationShellSource = readFileSync(
   resolve(process.cwd(), "src/components/chat/conversation-shell.tsx"),
   "utf8"
 )
-const workspaceLayoutSource = readFileSync(
-  resolve(process.cwd(), "src/app/workspace/layout.tsx"),
-  "utf8"
-)
 const globalsCssSource = readFileSync(
   resolve(process.cwd(), "src/app/globals.css"),
   "utf8"
 )
+const workspaceLayoutSource = readFileSync(
+  resolve(process.cwd(), "src/app/workspace/layout.tsx"),
+  "utf8"
+)
 const tabBarSource = readFileSync(
   resolve(process.cwd(), "src/components/tabs/tab-bar.tsx"),
+  "utf8"
+)
+const messageListViewSource = readFileSync(
+  resolve(process.cwd(), "src/components/message/message-list-view.tsx"),
   "utf8"
 )
 
@@ -174,6 +178,8 @@ describe("ConversationDetailPanel new conversation layout", () => {
     const pickerStart = messageInputSource.indexOf(
       "{hasFolderBranchPicker && ("
     )
+    // The picker row is the last thing inside the composer wrapper; the
+    // server-file dialog that follows it sits outside, so it anchors the slice.
     const pickerEnd = messageInputSource.indexOf(
       "{hasContextLocation && (",
       pickerStart
@@ -437,6 +443,91 @@ describe("ConversationDetailPanel send-path hardening", () => {
     expect(catchBlock).toContain("saveMessageInputDraft(")
     expect(catchBlock).toContain(
       'setAgentConnectError(tWelcome("createConversationFailed"))'
+    )
+  })
+})
+
+describe("ConversationDetailPanel session-load failure surface", () => {
+  // When session/load fails on a conversation whose transcript already
+  // rendered (e.g. its folder was deleted), the history must STAY readable;
+  // the failure surfaces as a banner docked at the composer, not as a
+  // full-page error over the message area.
+  it("escalates the ACP load error to full-page only when nothing is renderable", () => {
+    expect(messageListViewSource).toContain(
+      "const blockingLoadError = hasRenderableContent ? null : (acpLoadError ?? null)"
+    )
+  })
+
+  it("docks the load error at the composer with the recovery actions", () => {
+    // The composer input stays hidden (a send can't reach the dead session)…
+    expect(source).toContain(
+      "hideInput={isWelcomeMode || Boolean(acpLoadError)}"
+    )
+    // …and the banner takes its place, explaining why and offering recovery.
+    expect(source).toContain("composerBanner={acpLoadErrorBanner}")
+    const bannerStart = source.indexOf("const acpLoadErrorBanner")
+    expect(bannerStart).toBeGreaterThan(-1)
+    const bannerEnd = source.indexOf("const goalControlValue", bannerStart)
+    expect(bannerEnd).toBeGreaterThan(bannerStart)
+    const banner = source.slice(bannerStart, bannerEnd)
+    expect(banner).toContain("hasPersistedConversation && acpLoadError")
+    expect(banner).toContain("handleReloadDetail")
+    expect(banner).toContain("handleOpenNewSession")
+    // A failure with a runnable fix (archived session → `codex unarchive
+    // <id>`) offers it as a copy action. The message itself renders in a
+    // one-line ellipsized strip, so a 36-char session id inside the prose is
+    // exactly what gets truncated away — the button is what makes the
+    // command reachable at all, and it must not show when there is no
+    // command to copy.
+    expect(banner).toContain("{recoveryCommand && (")
+    expect(banner).toContain("handleCopyRecoveryCommand")
+    expect(banner).toContain("flex w-full flex-wrap items-center")
+    expect(banner).toContain("min-w-40 flex-1 overflow-hidden")
+    // Every action is shrink-0 and the message is the only elastic child, so
+    // a third action has to be able to wrap. Without `flex-wrap` plus a floor
+    // under the message, the row silently pushes "New conversation" outside
+    // the banner at narrow widths (measured 34-172px past the edge at
+    // 320-384px) — i.e. adding a recovery action would break the two that
+    // were already there.
+    expect(banner).toContain("flex w-full flex-wrap items-center")
+    expect(banner).toContain("min-w-40 flex-1 overflow-hidden")
+    // The shell renders the banner inside the composer dock, constrained to
+    // the same message-column width as the input it replaces.
+    const dockIdx = conversationShellSource.indexOf("{composerBanner && (")
+    expect(dockIdx).toBeGreaterThan(-1)
+    const dock = conversationShellSource.slice(dockIdx, dockIdx + 200)
+    expect(dock).toContain("mx-auto w-full max-w-3xl")
+  })
+
+  it("never clears a resolved session id when the persisted detail is absent", () => {
+    // `externalId` is what gets handed to acp_connect, and it resolves from the
+    // persisted detail OR the runtime store value the connSessionId effect
+    // wrote. `detail` is null while any (re)fetch is in flight, so writing null
+    // to the store in that window discards a session id we already know — and a
+    // reconnect with no session id takes session/new, which is precisely how a
+    // conversation's history gets stranded (HouHub#500). The backend now refuses
+    // to destroy the history either way; this keeps the frontend from steering
+    // into it in the first place.
+    const effectStart = source.indexOf(
+      "if (effectiveConversationId <= 0) return"
+    )
+    expect(effectStart).toBeGreaterThan(-1)
+    const effectEnd = source.indexOf(
+      "}, [effectiveConversationId,",
+      effectStart
+    )
+    expect(effectEnd).toBeGreaterThan(effectStart)
+    const effect = source.slice(effectStart, effectEnd)
+
+    expect(effect).toContain("const persisted = detail?.summary.external_id")
+    expect(effect).toContain("if (!persisted) return")
+    expect(effect).toContain(
+      "setExternalId(effectiveConversationId, persisted)"
+    )
+    // The regression this guards: the old body passed `?? null` straight
+    // through, so an in-flight refetch wiped the id.
+    expect(effect).not.toContain(
+      "setExternalId(effectiveConversationId, detail?.summary.external_id ?? null)"
     )
   })
 })

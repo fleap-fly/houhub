@@ -17,6 +17,7 @@ import {
   Folder,
   FolderGit2,
   FolderOpen,
+  FolderX,
   GitBranch,
   GitBranchPlus,
   GitCommitHorizontal,
@@ -29,11 +30,14 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Virtualizer, type VirtualizerHandle } from "virtua"
+import { useImeGuard } from "@/hooks/use-ime-guard"
+import { useZoomLevel } from "@/hooks/use-appearance"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { branchRowPaddingLeft } from "@/components/layout/branch-tree-collapsible"
 import {
   buildBranchRows,
+  branchLeafActions,
   isNavigableRow,
   type BranchLeafAction,
   type BranchOperationMeta,
@@ -51,6 +55,8 @@ interface BranchSelectorListProps {
   remoteCount: number
   branch: string | null
   worktreeBranchSet: Set<string>
+  /** The repo's main working tree branch — see `branchLeafActions`. */
+  mainWorktreeBranch: string | null
   /** First-load fetch in flight and nothing cached yet — show a spinner. */
   branchLoading: boolean
   /** A git task is running — disable operation + branch-action rows. */
@@ -67,19 +73,25 @@ interface BranchSelectorListProps {
 // paint, before the real content height is measured (see `measuredHeight`). A
 // too-small estimate would otherwise leave a spurious scrollbar on a narrowed
 // list, a too-big one dead space; virtua measures real rows itself either way.
-const ROW_ESTIMATE_PX = 34
-const MAX_LIST_HEIGHT_PX = 480
-// Approximate width of the right-side action bubble (`w-56`) — used only to
-// decide whether to flip it to the left when the popover hugs the screen edge.
-const BUBBLE_WIDTH_PX = 224
-// Coarse per-action height + container padding, used to clamp the bubble's top
-// so a leaf near the bottom doesn't push its last actions past the list root.
-// Slightly over-estimated on purpose so the whole bubble always fits.
-const BUBBLE_ITEM_PX = 34
-const BUBBLE_PAD_PX = 8
+// All of these mirror CSS that is sized in rem, so they are kept in rem and
+// multiplied by the live root font size (`remPx` below). Pinned at their 100%
+// pixel values they would under-measure at every higher zoom level: the bubble
+// would stop flipping at the screen edge and stop clamping inside the list.
+const ROW_ESTIMATE_REM = 2.125
+const MAX_LIST_HEIGHT_REM = 30
+// Width of the right-side action bubble (`w-56`) — used only to decide whether
+// to flip it to the left when the popover hugs the screen edge.
+const BUBBLE_WIDTH_REM = 14
+// Coarse per-action height + container padding (`p-1`), used to clamp the
+// bubble's top so a leaf near the bottom doesn't push its last actions past the
+// list root. Slightly over-estimated on purpose so the whole bubble always fits.
+const BUBBLE_ITEM_REM = 2.125
+const BUBBLE_PAD_REM = 0.5
 // A group divider (`my-1 h-px`) between action groups — counted separately so a
-// bubble with dividers still clamps inside the list root.
-const BUBBLE_SEPARATOR_PX = 9
+// bubble with dividers still clamps inside the list root. The hairline itself is
+// a real pixel (`h-px`), so only the margins scale.
+const BUBBLE_SEPARATOR_REM = 0.5
+const BUBBLE_SEPARATOR_HAIRLINE_PX = 1
 
 const OP_ICONS: Record<string, LucideIcon> = {
   pull: CloudDownload,
@@ -99,25 +111,19 @@ const ACTION_ICONS: Record<BranchLeafAction, LucideIcon> = {
   push: CloudUpload,
   delete: Trash2,
   deleteRemote: Trash2,
+  deleteWorktree: FolderX,
+  deleteWorktreeAndBranch: Trash2,
 }
 
-// The per-branch actions shown in the right-side bubble, in three groups:
-// what this branch does to the CURRENT one (switch/merge/rebase), what it
-// syncs with its remote (pull/push — both in place, no checkout), and the
-// destructive tail. "push" is local-only: publishing `origin/x` is meaningless.
-// Delete is hidden for the remote branch the current local branch tracks
-// (deleting it is nonsensical).
-function leafActions(
-  isRemote: boolean,
-  isTracking: boolean
-): BranchLeafAction[] {
-  const actions: BranchLeafAction[] = ["switch", "merge", "rebase", "pull"]
-  if (!isRemote) actions.push("push")
-  if (!isTracking) actions.push(isRemote ? "deleteRemote" : "delete")
-  return actions
-}
+// Which actions read as destructive (styled red, and confirmed by the caller).
+const DESTRUCTIVE_ACTIONS: ReadonlySet<BranchLeafAction> = new Set([
+  "delete",
+  "deleteRemote",
+  "deleteWorktree",
+  "deleteWorktreeAndBranch",
+])
 
-// First action of each group above. A rule ("insert a divider before any group
+// First action of each group in `branchLeafActions`. A rule ("insert a divider before any group
 // starter that isn't the first row") rather than fixed indices, so a group that
 // drops out entirely — a remote leaf has no "push", a tracked remote no
 // "delete" — never leaves a dangling divider behind.
@@ -125,6 +131,7 @@ const BUBBLE_GROUP_STARTS: ReadonlySet<BranchLeafAction> = new Set([
   "pull",
   "delete",
   "deleteRemote",
+  "deleteWorktree",
 ])
 
 interface ActionBubble {
@@ -156,12 +163,18 @@ export function BranchSelectorList({
   remoteCount,
   branch,
   worktreeBranchSet,
+  mainWorktreeBranch,
   branchLoading,
   loading,
   onRunOperation,
   onLeafAction,
 }: BranchSelectorListProps) {
+  const ime = useImeGuard()
   const t = useTranslations("Folder.branchDropdown")
+  // What a rem is worth right now: AppearanceProvider writes `16 * zoom / 100`
+  // px onto <html>, so every rem-sized measurement below has to go through it.
+  const { zoomLevel } = useZoomLevel()
+  const remPx = (16 * zoomLevel) / 100
 
   const [query, setQuery] = useState("")
   // Prefix groups default to COLLAPSED, sections to OPEN. That's modeled as a
@@ -393,6 +406,10 @@ export function BranchSelectorList({
         case "delete":
         case "deleteRemote":
           return t("deleteBranch")
+        case "deleteWorktree":
+          return t("deleteWorktree")
+        case "deleteWorktreeAndBranch":
+          return t("deleteWorktreeAndBranch")
       }
     },
     [t, branch]
@@ -414,14 +431,18 @@ export function BranchSelectorList({
     if (!el || !root) return
     const rowRect = el.getBoundingClientRect()
     const rootRect = root.getBoundingClientRect()
-    const actions = leafActions(row.isRemote, row.isTracking)
+    const actions = branchLeafActions({
+      ...row,
+      isMainWorktree: !row.isRemote && row.fullName === mainWorktreeBranch,
+    })
     const separatorCount = actions.filter(
       (action, index) => index > 0 && BUBBLE_GROUP_STARTS.has(action)
     ).length
     const bubbleHeight =
-      actions.length * BUBBLE_ITEM_PX +
-      separatorCount * BUBBLE_SEPARATOR_PX +
-      BUBBLE_PAD_PX
+      actions.length * BUBBLE_ITEM_REM * remPx +
+      separatorCount *
+        (BUBBLE_SEPARATOR_REM * remPx + BUBBLE_SEPARATOR_HAIRLINE_PX) +
+      BUBBLE_PAD_REM * remPx
     const top = Math.min(
       rowRect.top - rootRect.top,
       Math.max(0, rootRect.height - bubbleHeight)
@@ -433,7 +454,8 @@ export function BranchSelectorList({
       actions,
       ownerNavIndex: navIndex,
       top,
-      flipLeft: rootRect.right + 8 + BUBBLE_WIDTH_PX > window.innerWidth,
+      flipLeft:
+        rootRect.right + 8 + BUBBLE_WIDTH_REM * remPx > window.innerWidth,
     })
     setBubbleActiveIndex(0)
     // Highlight the owner leaf (covers the keyboard path, where no hover fires).
@@ -540,8 +562,8 @@ export function BranchSelectorList({
   // Prefer the real measured content height; fall back to the coarse per-row
   // estimate only until the first measurement lands.
   const listHeight = Math.min(
-    MAX_LIST_HEIGHT_PX,
-    measuredHeight ?? Math.max(rows.length, 1) * ROW_ESTIMATE_PX
+    MAX_LIST_HEIGHT_REM * remPx,
+    measuredHeight ?? Math.max(rows.length, 1) * ROW_ESTIMATE_REM * remPx
   )
   const activeFlatIndex = navigableRowIndices[activeIndexClamped]
   const showSpinner = branchLoading && localCount === 0 && remoteCount === 0
@@ -679,14 +701,16 @@ export function BranchSelectorList({
   }
 
   return (
-    <div ref={rootRef} className="relative flex min-w-0 flex-col">
+    <div ref={rootRef} className="relative flex min-h-0 min-w-0 flex-col">
       {/* Inner shell clips content to the popover rounding; the action bubble is
           a sibling of it so it can overflow past the popover's right edge (the
           PopoverContent is overflow-visible). */}
-      <div className="flex min-w-0 flex-col overflow-hidden rounded-[inherit]">
+      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[inherit]">
         {/* pl-4 (16px) + size-3.5 icon + gap-2 puts the icon and input text at
-            the same x as the rows below (listbox p-1 + 0.75rem row padding). */}
-        <div className="flex items-center gap-2 border-b py-2 pl-4 pr-2.5">
+            the same x as the rows below (listbox p-1 + 0.75rem row padding).
+            `shrink-0`: when the popover is capped to the room it has, the rows
+            below give way — the search box never does. */}
+        <div className="flex shrink-0 items-center gap-2 border-b py-2 pl-4 pr-2.5">
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
           <input
             ref={inputRef}
@@ -708,6 +732,7 @@ export function BranchSelectorList({
               setActiveIndex(0)
               closeBubble()
             }}
+            {...ime.props}
             onKeyDown={handleKeyDown}
             className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
@@ -722,8 +747,16 @@ export function BranchSelectorList({
             {t("noMatches")}
           </div>
         ) : (
-          <div style={{ height: listHeight }}>
-            <ScrollArea onViewportRef={handleViewportRef} className="h-full">
+          // `height` is the *wanted* height; the column below it distributes the
+          // height it actually gets. `min-h-0` lets this box shrink past that
+          // wanted height when the popover is capped to the available room, and
+          // the ScrollArea takes the shrunken height through `flex-1` rather than
+          // a percentage (`h-full` would resolve against the unshrunken value).
+          <div className="flex min-h-0 flex-col" style={{ height: listHeight }}>
+            <ScrollArea
+              onViewportRef={handleViewportRef}
+              className="min-h-0 flex-1"
+            >
               <div
                 ref={listboxRef}
                 role="listbox"
@@ -765,7 +798,7 @@ export function BranchSelectorList({
         >
           {bubble.actions.map((action, index) => {
             const ActionIcon = ACTION_ICONS[action]
-            const destructive = action === "delete" || action === "deleteRemote"
+            const destructive = DESTRUCTIVE_ACTIONS.has(action)
             const bubbleActive = index === bubbleActiveIndex
             const startsGroup = index > 0 && BUBBLE_GROUP_STARTS.has(action)
             return (

@@ -748,7 +748,7 @@ export function KimiCodeConfigPanel({
   const fieldError = (field: KimiErrorField) => {
     const key = errors[field]
     if (!key) return null
-    return <p className="text-[11px] text-destructive">{errorText[key]}</p>
+    return <p className="text-2xs text-destructive">{errorText[key]}</p>
   }
 
   /** The endpoint field, shared by the non-kimi interfaces (inside the grid)
@@ -756,7 +756,7 @@ export function KimiCodeConfigPanel({
   const baseUrlField = (
     <div className="space-y-1">
       <label
-        className="text-[11px] text-muted-foreground"
+        className="text-2xs text-muted-foreground"
         htmlFor="kimi-base-url-input"
         title={t("kimiCode.baseUrlHint")}
       >
@@ -779,7 +779,7 @@ export function KimiCodeConfigPanel({
         <label className="text-xs font-medium">
           {t("kimiCode.configManagement")}
         </label>
-        <p className="mt-1 text-[11px] text-muted-foreground">
+        <p className="mt-1 text-2xs text-muted-foreground">
           {t("kimiCode.configDescription")}
         </p>
       </div>
@@ -798,7 +798,7 @@ export function KimiCodeConfigPanel({
             />
             {/* The label always describes DISK, never the form — the badge on
                 the right is what reports unsaved edits. */}
-            <span className="text-[11px] font-medium">
+            <span className="text-2xs font-medium">
               {status === "unconfigured"
                 ? t("kimiCode.statusUnconfigured")
                 : config.hasManagedBlock
@@ -807,14 +807,14 @@ export function KimiCodeConfigPanel({
             </span>
           </div>
           {dirty && (
-            <span className="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
+            <span className="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-3xs text-amber-700 dark:text-amber-400">
               {t("kimiCode.statusDirty")}
             </span>
           )}
         </div>
 
         {summary && (
-          <p className="text-[11px] break-all text-muted-foreground">
+          <p className="text-2xs break-all text-muted-foreground">
             <span className="font-medium">{t("kimiCode.summaryLabel")}</span>
             {": "}
             {summary}
@@ -823,12 +823,12 @@ export function KimiCodeConfigPanel({
 
         {configPath && (
           <div className="flex items-center gap-1.5">
-            <code className="flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-[10px]">
+            <code className="flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-3xs">
               {configPath}
             </code>
             {canReveal && (
               <Button
-                className="h-6 gap-1 px-2 text-[11px]"
+                className="h-6 gap-1 px-2 text-2xs"
                 onClick={() => void revealItemInDir(configPath)}
                 size="sm"
                 type="button"
@@ -842,7 +842,7 @@ export function KimiCodeConfigPanel({
         )}
 
         {overridingEnvKeys.length > 0 && (
-          <p className="flex items-start gap-1.5 text-[11px] text-amber-700 dark:text-amber-400">
+          <p className="flex items-start gap-1.5 text-2xs text-amber-700 dark:text-amber-400">
             <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
             <span>
               {t("kimiCode.envOverrideWarning", {
@@ -853,7 +853,7 @@ export function KimiCodeConfigPanel({
         )}
 
         {activeProbe?.kind === "ok" && (
-          <p className="flex items-start gap-1.5 text-[11px] text-emerald-700 dark:text-emerald-400">
+          <p className="flex items-start gap-1.5 text-2xs text-emerald-700 dark:text-emerald-400">
             <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0" />
             <span>
               {activeProbe.count > 0
@@ -863,7 +863,7 @@ export function KimiCodeConfigPanel({
           </p>
         )}
         {activeProbe?.kind === "error" && (
-          <p className="flex items-start gap-1.5 text-[11px] text-destructive">
+          <p className="flex items-start gap-1.5 text-2xs text-destructive">
             <XCircle className="mt-0.5 h-3 w-3 shrink-0" />
             <span className="break-all">
               {t("kimiCode.fetchModelsFailed")}: {activeProbe.message}
@@ -874,7 +874,7 @@ export function KimiCodeConfigPanel({
 
       {/* ---- Authentication method ---- */}
       <div className="space-y-1.5">
-        <label className="text-[11px] text-muted-foreground">
+        <label className="text-2xs text-muted-foreground">
           {t("kimiCode.authModeLabel")}
         </label>
         <Select
@@ -895,7 +895,7 @@ export function KimiCodeConfigPanel({
             <SelectItem value="login">{t("kimiCode.authModeLogin")}</SelectItem>
           </SelectContent>
         </Select>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           {draft.mode === "apikey"
             ? t("kimiCode.authModeApiKeyHint")
             : t("kimiCode.loginHint")}
@@ -906,14 +906,14 @@ export function KimiCodeConfigPanel({
         <>
           {/* ---- Credential card ---- */}
           <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
-            <span className="text-[11px] font-medium">
+            <span className="text-2xs font-medium">
               {t("kimiCode.credentialTitle")}
             </span>
 
             <div className="grid gap-2 md:grid-cols-2">
               <div className="space-y-1">
                 <label
-                  className="text-[11px] text-muted-foreground"
+                  className="text-2xs text-muted-foreground"
                   title={t("kimiCode.interfaceTypeHint")}
                 >
                   {t("kimiCode.interfaceTypeLabel")}
@@ -945,7 +945,7 @@ export function KimiCodeConfigPanel({
               {isKimi ? (
                 <div className="space-y-1">
                   <label
-                    className="text-[11px] text-muted-foreground"
+                    className="text-2xs text-muted-foreground"
                     title={t("kimiCode.endpointHint")}
                   >
                     {t("kimiCode.endpointLabel")}
@@ -987,7 +987,7 @@ export function KimiCodeConfigPanel({
             {meta.usesApiKey ? (
               <div className="space-y-1">
                 <label
-                  className="text-[11px] text-muted-foreground"
+                  className="text-2xs text-muted-foreground"
                   htmlFor="kimi-api-key-input"
                   title={t("kimiCode.apiKeyHint")}
                 >
@@ -1027,7 +1027,7 @@ export function KimiCodeConfigPanel({
               <div className="grid gap-2 md:grid-cols-2">
                 <div className="space-y-1">
                   <label
-                    className="text-[11px] text-muted-foreground"
+                    className="text-2xs text-muted-foreground"
                     htmlFor="kimi-vertex-project-input"
                   >
                     {t("kimiCode.vertexProjectLabel")}
@@ -1046,7 +1046,7 @@ export function KimiCodeConfigPanel({
                 </div>
                 <div className="space-y-1">
                   <label
-                    className="text-[11px] text-muted-foreground"
+                    className="text-2xs text-muted-foreground"
                     htmlFor="kimi-vertex-location-input"
                     title={t("kimiCode.vertexHint")}
                   >
@@ -1069,7 +1069,7 @@ export function KimiCodeConfigPanel({
           {/* ---- Model card ---- */}
           <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-medium">
+              <span className="text-2xs font-medium">
                 {t("kimiCode.modelTitle")}
               </span>
               {meta.usesApiKey && (
@@ -1079,7 +1079,7 @@ export function KimiCodeConfigPanel({
                   size="sm"
                   onClick={() => void handleFetchModels()}
                   disabled={saving || fetchingModels}
-                  className="h-6 shrink-0 gap-1 px-2 text-[11px]"
+                  className="h-6 shrink-0 gap-1 px-2 text-2xs"
                 >
                   {fetchingModels ? (
                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -1094,7 +1094,7 @@ export function KimiCodeConfigPanel({
             <div className="grid gap-2 md:grid-cols-2">
               <div className="space-y-1">
                 <label
-                  className="text-[11px] text-muted-foreground"
+                  className="text-2xs text-muted-foreground"
                   htmlFor="kimi-model-input"
                   title={t("kimiCode.modelHint")}
                 >
@@ -1122,7 +1122,7 @@ export function KimiCodeConfigPanel({
 
               <div className="space-y-1">
                 <label
-                  className="text-[11px] text-muted-foreground"
+                  className="text-2xs text-muted-foreground"
                   htmlFor="kimi-max-context-input"
                   title={t("kimiCode.maxContextHint")}
                 >
@@ -1146,7 +1146,7 @@ export function KimiCodeConfigPanel({
             </div>
 
             {modelUnlisted && (
-              <p className="flex items-start gap-1.5 text-[11px] text-amber-700 dark:text-amber-400">
+              <p className="flex items-start gap-1.5 text-2xs text-amber-700 dark:text-amber-400">
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                 <span>{t("kimiCode.modelNotInList")}</span>
               </p>
@@ -1159,10 +1159,10 @@ export function KimiCodeConfigPanel({
               `support_efforts`. Both are written from here. */}
           <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-medium">
+              <span className="text-2xs font-medium">
                 {t("kimiCode.reasoningTitle")}
               </span>
-              <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
+              <label className="flex cursor-pointer items-center gap-1.5 text-2xs text-muted-foreground">
                 <Switch
                   checked={draft.reasoningEnabled}
                   onCheckedChange={(checked) =>
@@ -1174,14 +1174,14 @@ export function KimiCodeConfigPanel({
                 {t("kimiCode.reasoningEnableLabel")}
               </label>
             </div>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-3xs text-muted-foreground">
               {t("kimiCode.reasoningDescription")}
             </p>
 
             {draft.reasoningEnabled && (
               <>
                 <div className="space-y-1">
-                  <label className="text-[11px] text-muted-foreground">
+                  <label className="text-2xs text-muted-foreground">
                     {t("kimiCode.effortsLabel")}
                   </label>
                   <div className="flex flex-wrap gap-1.5">
@@ -1195,7 +1195,7 @@ export function KimiCodeConfigPanel({
                           onClick={() => toggleEffort(effort)}
                           aria-pressed={active}
                           className={cn(
-                            "rounded-full border px-2 py-0.5 font-mono text-[11px] transition-colors",
+                            "rounded-full border px-2 py-0.5 font-mono text-2xs transition-colors",
                             active
                               ? "border-primary/40 bg-primary/10 text-foreground"
                               : "border-border text-muted-foreground hover:bg-muted"
@@ -1223,7 +1223,7 @@ export function KimiCodeConfigPanel({
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-7 shrink-0 gap-1 px-2 text-[11px]"
+                      className="h-7 shrink-0 gap-1 px-2 text-2xs"
                       onClick={addCustomEffort}
                       disabled={saving || !customEffort.trim()}
                     >
@@ -1231,7 +1231,7 @@ export function KimiCodeConfigPanel({
                       {t("kimiCode.effortsAdd")}
                     </Button>
                   </div>
-                  <p className="text-[10px] text-muted-foreground">
+                  <p className="text-3xs text-muted-foreground">
                     {draft.supportEfforts.length === 0
                       ? t("kimiCode.effortsEmptyHint")
                       : t("kimiCode.effortsHint")}
@@ -1240,7 +1240,7 @@ export function KimiCodeConfigPanel({
 
                 {draft.supportEfforts.length > 0 && (
                   <div className="space-y-1">
-                    <label className="text-[11px] text-muted-foreground">
+                    <label className="text-2xs text-muted-foreground">
                       {t("kimiCode.defaultEffortLabel")}
                     </label>
                     <Select
@@ -1274,7 +1274,7 @@ export function KimiCodeConfigPanel({
                   </div>
                 )}
 
-                <label className="flex cursor-pointer items-start gap-2 text-[11px] text-muted-foreground">
+                <label className="flex cursor-pointer items-start gap-2 text-2xs text-muted-foreground">
                   <Checkbox
                     checked={draft.alwaysThinking}
                     onCheckedChange={(checked) =>
@@ -1315,14 +1315,14 @@ export function KimiCodeConfigPanel({
 
       {/* ---- Advanced: credential placement + the raw config.toml hatch ---- */}
       <details className="rounded-md border bg-background/40 p-2">
-        <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+        <summary className="cursor-pointer text-2xs font-medium text-muted-foreground">
           {t("kimiCode.advancedTitle")}
         </summary>
         <div className="mt-2 space-y-3">
           {draft.mode === "apikey" && meta.usesApiKey && (
             <div className="space-y-1">
               <label
-                className="text-[11px] text-muted-foreground"
+                className="text-2xs text-muted-foreground"
                 title={t("kimiCode.authTypeHint")}
               >
                 {t("kimiCode.authTypeLabel")}
@@ -1353,17 +1353,17 @@ export function KimiCodeConfigPanel({
           )}
 
           <div className="space-y-1.5">
-            <label className="text-[11px] text-muted-foreground">
+            <label className="text-2xs text-muted-foreground">
               {t("kimiCode.rawEditorLabel")}
             </label>
             <Textarea
               value={rawConfig}
               onChange={(event) => setRawConfig(event.target.value)}
               placeholder={t("kimiCode.rawEditorPlaceholder")}
-              className="min-h-[140px] font-mono text-[11px]"
+              className="min-h-[8.75rem] font-mono text-2xs"
               disabled={saving}
             />
-            <p className="flex items-start gap-1.5 text-[11px] text-amber-700 dark:text-amber-400">
+            <p className="flex items-start gap-1.5 text-2xs text-amber-700 dark:text-amber-400">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
               <span>{t("kimiCode.rawEditorWarning")}</span>
             </p>

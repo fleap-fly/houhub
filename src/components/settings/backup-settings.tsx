@@ -386,7 +386,7 @@ export function BackupSettings() {
                 <Label className="text-xs font-medium">
                   {t("export.includeExternal")}
                 </Label>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   {t("export.includeExternalHint")}
                 </p>
               </div>
@@ -420,17 +420,17 @@ export function BackupSettings() {
                 />
               )}
               {passphraseMismatch && (
-                <p className="text-[11px] text-red-400">
+                <p className="text-2xs text-red-400">
                   {t("export.passphraseMismatch")}
                 </p>
               )}
               {passphrase.length === 0 ? (
-                <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-500">
+                <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
                   <ShieldAlert className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                   <span>{t("export.noPassphraseWarning")}</span>
                 </div>
               ) : (
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   {t("export.passphraseLossWarning")}
                 </p>
               )}
@@ -564,7 +564,7 @@ export function BackupSettings() {
                   <Label className="text-xs font-medium">
                     {t("restore.external.title")}
                   </Label>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-2xs text-muted-foreground">
                     {t("restore.external.hint")}
                   </p>
                 </div>
@@ -592,21 +592,21 @@ export function BackupSettings() {
                 {externalChoice === "original" && (
                   <div className="space-y-2">
                     {scanningConflicts ? (
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {t("restore.external.scanning")}
                       </p>
                     ) : conflicts && conflicts.length === 0 ? (
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-2xs text-muted-foreground">
                         {t("restore.external.noConflicts")}
                       </p>
                     ) : conflicts && conflicts.length > 0 ? (
                       <div className="space-y-1">
-                        <p className="text-[11px] text-amber-500">
+                        <p className="text-2xs text-amber-500">
                           {t("restore.external.conflictCount", {
                             count: conflicts.length,
                           })}
                         </p>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           {t("restore.external.conflictSkipNote")}
                         </p>
                       </div>
@@ -616,7 +616,7 @@ export function BackupSettings() {
                         <Label className="text-xs font-medium">
                           {t("restore.external.forceOverwrite")}
                         </Label>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           {t("restore.external.forceOverwriteHint")}
                         </p>
                       </div>
@@ -632,7 +632,7 @@ export function BackupSettings() {
             )}
 
             {preview?.manifest && (
-              <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-[11px] text-red-400">
+              <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-2xs text-red-400">
                 <ShieldAlert className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span>
                   {t("restore.replaceWarning")}
@@ -699,7 +699,7 @@ function ProgressLine({
       : null
   return (
     <div className="space-y-1">
-      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+      <div className="flex items-center justify-between text-2xs text-muted-foreground">
         <span>{label}</span>
         <span>{formatMb(progress.processedBytes)}</span>
       </div>

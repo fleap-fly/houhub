@@ -22,9 +22,10 @@ pub mod houflow;
 pub mod logging;
 pub mod mcp;
 pub mod model_provider;
+pub mod office_tools;
+pub mod open_in;
 #[cfg(feature = "tauri-runtime")]
 pub mod notification;
-pub mod office_tools;
 pub mod pet;
 pub mod project_boot;
 pub mod question;

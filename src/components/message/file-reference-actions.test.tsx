@@ -115,7 +115,9 @@ describe("resolveFileReferenceTarget", () => {
     expect(
       resolveFileReferenceTarget("https://example.com", "/repo")
     ).toBeNull()
-    expect(resolveFileReferenceTarget("houhub://embedded/x", "/repo")).toBeNull()
+    expect(
+      resolveFileReferenceTarget("houhub://embedded/x", "/repo")
+    ).toBeNull()
     // Relative with no active folder: nothing could be revealed or copied.
     expect(resolveFileReferenceTarget("./src/app.ts", null)).toBeNull()
   })

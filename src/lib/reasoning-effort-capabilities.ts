@@ -25,7 +25,7 @@ export function defaultCloudModelReasoningEffort(
   model: string | null | undefined
 ): ModelReasoningEffort | null {
   const supported = cloudModelReasoningEfforts(model)
-  return supported.length > 0 ? supported[supported.length - 1] ?? null : null
+  return supported.length > 0 ? (supported[supported.length - 1] ?? null) : null
 }
 
 export function modelReasoningEfforts(input: {

@@ -367,7 +367,11 @@ function isSpaceOrTab(code: number): boolean {
   return code === 32 || code === 9
 }
 
-function containerPrefixEnd(source: string, start: number, end: number): number {
+function containerPrefixEnd(
+  source: string,
+  start: number,
+  end: number
+): number {
   let i = start
   for (;;) {
     while (i < end && isSpaceOrTab(source.charCodeAt(i))) i += 1

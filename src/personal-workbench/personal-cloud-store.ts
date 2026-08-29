@@ -46,12 +46,19 @@ export const usePersonalCloudStore = create<PersonalCloudStoreState>()(
         set({
           status: "error",
           selection: null,
-          error: error instanceof Error ? error.message : "Invalid personal cloud selection",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Invalid personal cloud selection",
         })
       }
     },
 
-    selectWorkspace: ({ workspaceId, pwId = null, activeRoute = DEFAULT_ROUTE }) => {
+    selectWorkspace: ({
+      workspaceId,
+      pwId = null,
+      activeRoute = DEFAULT_ROUTE,
+    }) => {
       try {
         const selection = createSelection({ workspaceId, pwId, activeRoute })
         persist(selection)
@@ -59,7 +66,10 @@ export const usePersonalCloudStore = create<PersonalCloudStoreState>()(
       } catch (error) {
         set({
           status: "error",
-          error: error instanceof Error ? error.message : "Invalid personal cloud workspace",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Invalid personal cloud workspace",
         })
       }
     },
@@ -74,21 +84,28 @@ export const usePersonalCloudStore = create<PersonalCloudStoreState>()(
       } catch (error) {
         set({
           status: "error",
-          error: error instanceof Error ? error.message : "Invalid personal cloud route",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Invalid personal cloud route",
         })
       }
     },
 
     clear: () => {
-      if (typeof window !== "undefined") window.localStorage.removeItem(STORAGE_KEY)
+      if (typeof window !== "undefined")
+        window.localStorage.removeItem(STORAGE_KEY)
       set({ status: "ready", selection: null, error: null })
     },
   })
 )
 
-export function personalCloudScopeRef(workspaceId: string): `pw://workspace/${string}` {
+export function personalCloudScopeRef(
+  workspaceId: string
+): `pw://workspace/${string}` {
   const normalizedWorkspaceId = workspaceId.trim()
-  if (!normalizedWorkspaceId) throw new Error("Personal workspace id is required")
+  if (!normalizedWorkspaceId)
+    throw new Error("Personal workspace id is required")
   return `pw://workspace/${normalizedWorkspaceId}`
 }
 
@@ -129,7 +146,8 @@ function parseSelection(value: unknown): PersonalCloudSelection | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   return createPersonalCloudSelection({
-    workspaceId: typeof record.workspaceId === "string" ? record.workspaceId : "",
+    workspaceId:
+      typeof record.workspaceId === "string" ? record.workspaceId : "",
     pwId: typeof record.pwId === "string" ? record.pwId : null,
     scopeRef: typeof record.scopeRef === "string" ? record.scopeRef : undefined,
     activeRoute:

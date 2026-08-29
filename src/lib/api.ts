@@ -29,6 +29,7 @@ import type {
   ForgeComment,
   ForgeCreateResult,
   ForgeCommentList,
+  ForgeIdentity,
   ForgeIssueList,
   ForgeIssueRow,
   ForgeLabelList,
@@ -2751,6 +2752,11 @@ export async function openFolder(path: string): Promise<FolderDetail> {
   return getTransport().call("open_folder", { path })
 }
 
+/** Open a file or directory in Visual Studio Code on the workspace host. */
+export async function openInCode(path: string): Promise<void> {
+  return getTransport().call("open_in_code", { path })
+}
+
 /**
  * Open a freshly created git worktree directory as a folder, recording the root
  * folder it descends from (`sourceFolderId` is the folder the worktree was
@@ -5368,6 +5374,24 @@ export async function forgeChangeFiles(
       perPage: query.perPage ?? DEFAULT_FORGE_FILES_PAGE_SIZE,
       accountId: query.accountId ?? null,
     },
+  })
+}
+
+/** Who a comment on this folder's repository would be posted as.
+ *
+ *  The panel cannot work this out: which stored account serves a folder is
+ *  decided in the backend, from the origin remote's HOST and an optional
+ *  pinned account, so reading "the default account" out of the settings list
+ *  would name the wrong person on every folder that is not on it.
+ *
+ *  Local — it reads stored settings and sends nothing to the forge. */
+export async function forgeIdentity(
+  folderId: number,
+  accountId?: string | null
+): Promise<ForgeIdentity> {
+  return getTransport().call("forge_identity", {
+    folderId,
+    accountId: accountId ?? null,
   })
 }
 

@@ -289,26 +289,26 @@ export function GeneralSettings() {
                 onValueChange={onShellSelectChange}
                 disabled={savingTerminal || !availableShells}
               >
-              <SelectTrigger
-                id="terminal-default-shell"
-                className="w-full sm:w-64"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent align="start">
-                {availableShells?.options.map((opt) => (
-                  <SelectItem key={opt.id} value={opt.id}>
-                    <span className="flex items-center gap-2">
-                      <span>{tDynamic(opt.label_key)}</span>
-                      {!opt.exists && !opt.accepts_custom_path && (
-                        <span className="text-[10px] text-muted-foreground">
-                          ({t("terminalShellNotInstalled")})
-                        </span>
-                      )}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
+                <SelectTrigger
+                  id="terminal-default-shell"
+                  className="w-full sm:w-64"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="start">
+                  {availableShells?.options.map((opt) => (
+                    <SelectItem key={opt.id} value={opt.id}>
+                      <span className="flex items-center gap-2">
+                        <span>{tDynamic(opt.label_key)}</span>
+                        {!opt.exists && !opt.accepts_custom_path && (
+                          <span className="text-[10px] text-muted-foreground">
+                            ({t("terminalShellNotInstalled")})
+                          </span>
+                        )}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
               {selectedShellId === TERMINAL_SHELL_OPTION_CUSTOM && (
                 <div className="space-y-2 pt-2">
