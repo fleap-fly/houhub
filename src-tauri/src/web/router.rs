@@ -794,14 +794,6 @@ pub fn build_router(
             post(handlers::acp::acp_install_uv_tool),
         )
         .route(
-            "/acp_install_pi_binary",
-            post(handlers::acp::acp_install_pi_binary),
-        )
-        .route(
-            "/acp_uninstall_pi_binary",
-            post(handlers::acp::acp_uninstall_pi_binary),
-        )
-        .route(
             "/acp_detect_agent_local_version",
             post(handlers::acp::acp_detect_agent_local_version),
         )
