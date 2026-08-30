@@ -22,6 +22,7 @@ use tracing_appender::rolling::Rotation;
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::{fmt, prelude::*, reload, EnvFilter, Registry};
 
+use crate::logging::budget::{self, BudgetedWriter};
 use crate::logging::hub::LogHub;
 use crate::logging::layer::BufferEmitLayer;
 use crate::logging::{LogLevel, LogSettings, LOGGING_LEVEL_KEY};
@@ -175,7 +176,14 @@ fn init_file_writer(dir: &Path, prefix: &str) -> Option<(NonBlocking, WorkerGuar
             return None;
         }
     };
-    Some(tracing_appender::non_blocking(appender))
+    let (day, already_written) = budget::resume_point(dir, prefix, "log");
+    let budgeted = BudgetedWriter::resuming(
+        appender,
+        budget::configured_max_bytes_per_day(),
+        day,
+        already_written,
+    );
+    Some(tracing_appender::non_blocking(budgeted))
 }
 
 /// Build and install the subscriber. `file_dir` is `None` for `houhub-mcp`

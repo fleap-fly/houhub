@@ -12,6 +12,7 @@
 //! - [`layer`] is the custom `tracing` layer that converts events into
 //!   [`hub::LogRecord`]s.
 
+pub mod budget;
 pub mod hub;
 pub mod init;
 pub mod layer;
