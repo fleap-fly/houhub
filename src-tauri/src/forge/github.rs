@@ -124,7 +124,7 @@ impl RawIssue {
                 .into_iter()
                 .filter_map(|l| ForgeLabel::parse(l.name, l.color.as_deref()))
                 .collect(),
-            author: author,
+            author,
             author_avatar,
             updated_at: self.updated_at,
             html_url: self.html_url,

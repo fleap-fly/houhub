@@ -1,11 +1,12 @@
 //! Optional passphrase encryption for backup archives.
 //!
 //! When a passphrase is supplied, the plaintext ZIP payload is wrapped in a
-//! encrypted backup envelope: an unencrypted header (magic + KDF params + salt
-//! + nonce prefix) followed by the ZIP encrypted with AES-256-GCM in a chunked
-//! STREAM construction. The header is plaintext because the salt/nonce must be
-//! readable before the key can be derived; the GCM tag on the first chunk is
-//! what authenticates the passphrase (a wrong passphrase fails to decrypt).
+//! encrypted backup envelope: an unencrypted header containing KDF parameters,
+//! salt, and a nonce prefix, followed by the ZIP encrypted with AES-256-GCM in
+//! a chunked STREAM construction. The header is plaintext because the
+//! salt/nonce must be readable before the key can be derived; the GCM tag on
+//! the first chunk authenticates the passphrase (a wrong passphrase fails to
+//! decrypt).
 //!
 //! Streaming (64 KiB chunks) keeps memory bounded — backups can be large.
 

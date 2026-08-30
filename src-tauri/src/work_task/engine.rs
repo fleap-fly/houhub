@@ -25,7 +25,6 @@ use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::MissedTickBehavior;
-use fs2::FileExt;
 
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{AcpEvent, EventEnvelope, PromptCapabilitiesInfo, PromptInputBlock};
@@ -269,10 +268,10 @@ fn acquire_engine_ownership(data_dir: &Path) -> Ownership {
             return Ownership::Unavailable;
         }
     };
-    match file.try_lock_exclusive() {
+    match file.try_lock() {
         Ok(()) => Ownership::Exclusive(file),
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ownership::Taken,
-        Err(e) => {
+        Err(std::fs::TryLockError::WouldBlock) => Ownership::Taken,
+        Err(std::fs::TryLockError::Error(e)) => {
             tracing::warn!("[work_task] engine lock failed: {e}");
             Ownership::Unavailable
         }

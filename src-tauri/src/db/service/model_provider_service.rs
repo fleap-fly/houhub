@@ -70,6 +70,7 @@ pub async fn create_with_agent_types(
     Ok(active.insert(conn).await?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn update(
     conn: &DatabaseConnection,
     id: i32,

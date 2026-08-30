@@ -11445,6 +11445,7 @@ pub async fn acp_fetch_kimi_models(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[allow(clippy::too_many_arguments)]
 pub async fn acp_update_pi_config(
     provider: String,
     model: String,
@@ -14758,8 +14759,8 @@ base_url = \"https://example.test/v1\"
             agent_type: "pi".to_string(),
             model: Some(r#"{"main":"gpt-5.5"}"#.to_string()),
             models_json: r#"["gpt-5","gpt-5-mini"]"#.to_string(),
-            created_at: chrono::Utc::now().into(),
-            updated_at: chrono::Utc::now().into(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
         };
 
         let runtime_env = BTreeMap::new();
@@ -14778,8 +14779,8 @@ base_url = \"https://example.test/v1\"
             agent_type: "grok".to_string(),
             model: Some(r#"{"main":"grok-stale"}"#.to_string()),
             models_json: r#"["grok-4.5","grok-4.5-fast"]"#.to_string(),
-            created_at: chrono::Utc::now().into(),
-            updated_at: chrono::Utc::now().into(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
         };
 
         assert_eq!(

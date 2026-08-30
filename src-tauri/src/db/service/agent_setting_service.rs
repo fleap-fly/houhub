@@ -293,7 +293,7 @@ mod tests {
             registry_id: "codex".to_string(),
             default_sort_order: 0,
         };
-        ensure_defaults(&db.conn, &[default.clone()])
+        ensure_defaults(&db.conn, std::slice::from_ref(&default))
             .await
             .expect("defaults");
         update(

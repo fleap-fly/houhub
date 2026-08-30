@@ -131,5 +131,5 @@ pub fn workbench_set_active_project_core(
 
 pub fn workbench_sign_out_core() -> Result<(), AppCommandError> {
     crate::keyring_store::delete_workbench_session()
-        .map_err(|e| AppCommandError::task_execution_failed(e))
+        .map_err(AppCommandError::task_execution_failed)
 }

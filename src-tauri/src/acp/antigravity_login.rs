@@ -293,10 +293,10 @@ async fn claim_slot() -> Result<u64, AcpError> {
 ///
 /// `Err` hands the attempt back so the caller can reap the child it just
 /// spawned — the newer attempt is the one the user is looking at.
-async fn install(generation: u64, pending: Pending) -> Result<(), Pending> {
+async fn install(generation: u64, pending: Pending) -> Result<(), Box<Pending>> {
     let mut slot = pending_slot().lock().await;
     if slot.generation != generation {
-        return Err(pending);
+        return Err(Box::new(pending));
     }
     slot.state = SlotState::Waiting(Box::new(pending));
     Ok(())

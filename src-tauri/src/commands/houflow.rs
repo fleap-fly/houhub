@@ -738,6 +738,7 @@ pub async fn houflow_connector_sync_local_agents_core(
 
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn houflow_sync_managed_gateway(
     db: tauri::State<'_, AppDatabase>,
     manager: tauri::State<'_, ConnectionManager>,

@@ -15,5 +15,5 @@ pub(super) fn persist_stored(stored: &WorkbenchStored) -> Result<(), AppCommandE
         AppCommandError::external_command("failed to serialize workbench session", e.to_string())
     })?;
     crate::keyring_store::set_workbench_session(&raw)
-        .map_err(|e| AppCommandError::task_execution_failed(e))
+        .map_err(AppCommandError::task_execution_failed)
 }

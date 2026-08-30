@@ -897,6 +897,21 @@ fn sanitize_agent_env(agent_type: AgentType, env: Vec<(String, String)>) -> Vec<
     if agent_type != AgentType::Codex {
         return env;
     }
+    sanitize_agent_env_with_fallback(
+        agent_type,
+        env,
+        crate::commands::acp::default_codex_home_dir_for_launch(),
+    )
+}
+
+fn sanitize_agent_env_with_fallback(
+    agent_type: AgentType,
+    env: Vec<(String, String)>,
+    fallback_home: PathBuf,
+) -> Vec<(String, String)> {
+    if agent_type != AgentType::Codex {
+        return env;
+    }
 
     let mut saw_valid_codex_home = false;
     let mut cleaned = Vec::with_capacity(env.len() + 1);
@@ -920,11 +935,15 @@ fn sanitize_agent_env(agent_type: AgentType, env: Vec<(String, String)>) -> Vec<
         );
     });
     if !saw_valid_codex_home {
-        let home = crate::commands::acp::default_codex_home_dir_for_launch();
-        if let Err(err) = std::fs::create_dir_all(&home) {
-            tracing::warn!("[ACP][Codex] failed to create fallback CODEX_HOME {home:?}: {err}");
+        if let Err(err) = std::fs::create_dir_all(&fallback_home) {
+            tracing::warn!(
+                "[ACP][Codex] failed to create fallback CODEX_HOME {fallback_home:?}: {err}"
+            );
         } else {
-            cleaned.push(("CODEX_HOME".to_string(), home.display().to_string()));
+            cleaned.push((
+                "CODEX_HOME".to_string(),
+                fallback_home.display().to_string(),
+            ));
         }
     }
     cleaned
@@ -16872,12 +16891,13 @@ mod tests {
                 ("HOME", Some(fake_home.as_os_str())),
             ],
             || {
-                let env = sanitize_agent_env(
+                let env = sanitize_agent_env_with_fallback(
                     AgentType::Codex,
                     vec![
                         ("CODEX_HOME".to_string(), missing_home.display().to_string()),
                         ("OPENAI_API_KEY".to_string(), "sk-test".to_string()),
                     ],
+                    fallback_home.clone(),
                 );
 
                 assert!(

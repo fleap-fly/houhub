@@ -77,16 +77,14 @@ fn validate_model(agent_type: &str, model: Option<&str>) -> Result<(), AppComman
             "Model must be {max_len} characters or less"
         )));
     }
-    if agent_type == "claude_code" {
-        if raw.starts_with('{') {
-            let value: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
-                AppCommandError::invalid_input(format!("Invalid Claude model JSON: {e}"))
-            })?;
-            if !value.is_object() {
-                return Err(AppCommandError::invalid_input(
-                    "Claude model must be a JSON object",
-                ));
-            }
+    if agent_type == "claude_code" && raw.starts_with('{') {
+        let value: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
+            AppCommandError::invalid_input(format!("Invalid Claude model JSON: {e}"))
+        })?;
+        if !value.is_object() {
+            return Err(AppCommandError::invalid_input(
+                "Claude model must be a JSON object",
+            ));
         }
     }
     if agent_type == "codex" {
@@ -136,21 +134,19 @@ fn model_list_from_default_model(agent_type: &str, model: Option<&str>) -> Vec<S
     let Some(raw) = model.map(str::trim).filter(|item| !item.is_empty()) else {
         return Vec::new();
     };
-    if agent_type == "claude_code" {
-        if raw.starts_with('{') {
-            return serde_json::from_str::<serde_json::Value>(raw)
-                .ok()
-                .and_then(|value| value.as_object().cloned())
-                .map(|object| {
-                    object
-                        .values()
-                        .filter_map(|value| value.as_str())
-                        .map(str::to_string)
-                        .collect()
-                })
-                .map(normalize_model_list)
-                .unwrap_or_default();
-        }
+    if agent_type == "claude_code" && raw.starts_with('{') {
+        return serde_json::from_str::<serde_json::Value>(raw)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .map(|object| {
+                object
+                    .values()
+                    .filter_map(|value| value.as_str())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .map(normalize_model_list)
+            .unwrap_or_default();
     }
     if agent_type == "codex" {
         let config = crate::acp::codex_model_catalog::parse_model_config(Some(raw));
@@ -487,6 +483,7 @@ pub async fn list_model_providers(
 
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_model_provider(
     db: tauri::State<'_, AppDatabase>,
     name: String,
