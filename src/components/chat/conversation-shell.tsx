@@ -1,3 +1,4 @@
+import type { ConversationFolderPickerOverride } from "@/components/chat/conversation-context-bar"
 import { useMemo, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import type {
@@ -11,12 +12,14 @@ import type {
   PromptInputBlock,
   QuestionAnswer,
   SessionConfigOptionInfo,
+  AsyncTaskRecord,
   SessionFailureRecord,
   SessionModeInfo,
   AvailableCommandInfo,
 } from "@/lib/types"
 import type { SessionFailureAction } from "@/lib/session-failures"
 import { SessionFailureBanner } from "@/components/chat/session-failure-banner"
+import { AsyncTaskStrip } from "@/components/chat/async-task-strip"
 import type {
   PendingPermission,
   PendingQuestion,
@@ -51,6 +54,12 @@ interface ConversationShellProps {
    *  every surface with a live store — dismissing is client-local, so viewers
    *  get it too. */
   onSessionFailureDismiss?: (ids: string[]) => void
+  /** AIR async tasks for this connection. The strip filters to the live ones
+   *  itself; omit/empty renders nothing. */
+  asyncTasks?: AsyncTaskRecord[]
+  /** Stops one async task. Omitted for read-only surfaces — the stop buttons
+   *  are then hidden, which is right: a viewer has no connection to ask. */
+  onStopAsyncTask?: (taskId: string) => Promise<boolean>
   pendingPermission: PendingPermission | null
   pendingQuestion: PendingQuestion | null
   /** Awaiting-answer multiple-choice `ask_user_question`. */
@@ -82,6 +91,8 @@ interface ConversationShellProps {
   agentType?: AgentType | null
   availableCommands?: AvailableCommandInfo[] | null
   attachmentTabId?: string | null
+  /** Pass-through: see `MessageInput`. */
+  folderPickerOverride?: ConversationFolderPickerOverride
   draftStorageKey?: string | null
   hideInput?: boolean
   /** Optional banner rendered in the composer dock, where the input sits.
@@ -112,7 +123,6 @@ interface ConversationShellProps {
   isEditingQueueItem?: boolean
   onSaveQueueEdit?: (draft: PromptDraft) => void
   onCancelQueueEdit?: () => void
-  onForkSend?: (draft: PromptDraft, modeId?: string | null) => void
   /** Inject the draft's text into the RUNNING turn (native live-feedback
    *  steering). Present only for sessions on the native channel; threaded
    *  straight through to the composer. */
@@ -138,6 +148,8 @@ export function ConversationShell({
   sessionFailures,
   onSessionFailureAction,
   onSessionFailureDismiss,
+  asyncTasks,
+  onStopAsyncTask,
   pendingPermission,
   pendingQuestion,
   pendingAskQuestion,
@@ -161,6 +173,7 @@ export function ConversationShell({
   agentType,
   availableCommands,
   attachmentTabId,
+  folderPickerOverride,
   draftStorageKey,
   hideInput = false,
   composerBanner,
@@ -180,7 +193,6 @@ export function ConversationShell({
   isEditingQueueItem,
   onSaveQueueEdit,
   onCancelQueueEdit,
-  onForkSend,
   onSteer,
   topBanner,
   injectContent,
@@ -261,6 +273,16 @@ export function ConversationShell({
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       {topBanner}
+
+      {/* Above the transcript, not down in the composer dock: this is the state
+          of work running RIGHT NOW, and pinning it here keeps it still while the
+          messages scroll under it — the stop button doesn't move out from under
+          the pointer. The dock below is for things that come and go with the
+          turn (retry line, last error). */}
+      {asyncTasks && asyncTasks.length > 0 && (
+        <AsyncTaskStrip tasks={asyncTasks} onStop={onStopAsyncTask} />
+      )}
+
       <div className="flex-1 min-h-0">{children}</div>
 
       <PermissionDialog
@@ -326,6 +348,7 @@ export function ConversationShell({
               agentType={agentType}
               availableCommands={availableCommands}
               attachmentTabId={attachmentTabId}
+              folderPickerOverride={folderPickerOverride}
               draftStorageKey={draftStorageKey}
               isActive={isActive}
               showActiveFlow={showActiveFlow}
@@ -340,7 +363,6 @@ export function ConversationShell({
               isEditingQueueItem={isEditingQueueItem}
               onSaveQueueEdit={onSaveQueueEdit}
               onCancelQueueEdit={onCancelQueueEdit}
-              onForkSend={onForkSend}
               onSteer={onSteer}
               onAddFeedback={onAddFeedback}
               feedbackAddDisabled={feedbackAddDisabled}

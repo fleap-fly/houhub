@@ -13,6 +13,7 @@ use sea_orm::{
 use crate::acp::connection::{
     spawn_agent_connection, AgentConnection, ConnectionCommand, GoalControlAction, SteerOutcome,
 };
+use crate::acp::agent_mentions::strip_route_separator_from_prompt;
 use crate::acp::error::AcpError;
 use crate::acp::feedback::{
     bounded_feedback_batch, FeedbackItem, FeedbackStatus, PendingFeedback, SessionFeedbackAccess,
@@ -725,7 +726,7 @@ impl ConnectionManager {
     async fn send_prompt_inner(
         &self,
         conn_id: &str,
-        blocks: Vec<PromptInputBlock>,
+        mut blocks: Vec<PromptInputBlock>,
         user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)>,
     ) -> Result<(), AcpError> {
         // Reject an empty prompt BEFORE touching the concurrency gate. An empty
@@ -738,6 +739,11 @@ impl ConnectionManager {
             return Err(AcpError::protocol(
                 "prompt must contain at least one content block".to_string(),
             ));
+        }
+        if strip_route_separator_from_prompt(&mut blocks) {
+            tracing::debug!(
+                "[ACP][{conn_id}] removed the reserved routing separator from an outgoing prompt"
+            );
         }
         let (cmd_tx, state_arc) = {
             let connections = self.connections.lock().await;
@@ -878,6 +884,14 @@ impl ConnectionManager {
             return Err(AcpError::protocol(
                 "prompt must contain at least one content block".to_string(),
             ));
+        }
+        // Scrub the reserved separator HERE, before the conversation row, the
+        // optimistic broadcast, and the ledger all take their copy of `blocks`,
+        // so every persisted / displayed / on-the-wire copy is byte-identical.
+        if strip_route_separator_from_prompt(&mut blocks) {
+            tracing::debug!(
+                "[ACP][{conn_id}] removed the reserved routing separator from an outgoing prompt"
+            );
         }
         // Caller-supplied conversation_id requires folder_id (we include it in
         // the emitted ConversationLinked event so subscribers don't have to
@@ -1305,7 +1319,10 @@ impl ConnectionManager {
         // for a prompt that never reached the agent, so without this the
         // lifecycle subscriber's PendingReview write also never fires and the
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
-        match self.send_prompt_inner(conn_id, blocks, user_message).await {
+        match self
+            .send_prompt_inner(conn_id, blocks, user_message)
+            .await
+        {
             Ok(()) => {
                 // The prompt reached the agent: surface it to the chat-channel
                 // "user message" event feed. Notification-only — never gates the
@@ -1509,6 +1526,42 @@ impl ConnectionManager {
         self.cancel(db, conn_id).await
     }
 
+    /// Stop one AIR async task (`_session/async_task/stop`).
+    ///
+    /// Returns the adapter's own verdict, not "the request went through": it
+    /// answers `false` for a task it declines to stop. Unshielded, unlike
+    /// `submit_feedback_native` — there is nothing to persist on this path, so a
+    /// caller that disconnects mid-await leaves no half-written state, and the
+    /// user-visible result arrives on the session channel regardless of who is
+    /// still listening for the reply.
+    ///
+    /// The task id is NOT pre-validated against `SessionState.async_tasks`. The
+    /// adapter owns that table's real lifecycle (its `claimStop` already refuses
+    /// unknown, terminal, and already-stopping tasks), and a local check could
+    /// only ever be staler than the adapter's — it would turn a race into a
+    /// silent no-op rather than the `false` the caller can report.
+    pub async fn stop_async_task(&self, conn_id: &str, task_id: &str) -> Result<bool, AcpError> {
+        let cmd_tx = {
+            let connections = self.connections.lock().await;
+            connections
+                .get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?
+                .cmd_tx
+                .clone()
+        };
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        cmd_tx
+            .send(ConnectionCommand::StopAsyncTask {
+                task_id: task_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| AcpError::ProcessExited)?;
+        reply_rx
+            .await
+            .map_err(|_| AcpError::protocol("Async task stop reply channel closed".to_string()))?
+    }
+
     pub async fn cancel(&self, db: &DatabaseConnection, conn_id: &str) -> Result<(), AcpError> {
         let (cmd_tx, state_arc, emitter) = {
             let connections = self.connections.lock().await;
@@ -1602,6 +1655,11 @@ impl ConnectionManager {
         conn_id: &str,
         link_conversation_id: Option<i32>,
         link_folder_id: Option<i32>,
+        // Fork at this rendered turn instead of at the tail ("fork from here").
+        // Resolved to an agent-specific `ForkPoint` below; a turn this agent
+        // cannot name simply forks at the tail, which is what fork-send has
+        // always done.
+        fork_from_turn_id: Option<String>,
     ) -> Result<ForkResultInfo, AcpError> {
         let (state_arc, cmd_tx, emitter) = {
             let connections = self.connections.lock().await;
@@ -1653,6 +1711,49 @@ impl ConnectionManager {
             AcpError::protocol("fork_session requires a linked conversation row".to_string())
         })?;
 
+        // Resolve the fork point BEFORE the cancellation shield below: this is
+        // a read-only parse, so a caller that disappears here has changed
+        // nothing. Failing to resolve is not an error — it degrades to the tail
+        // fork rather than refusing the user's click.
+        let fork_point = match fork_from_turn_id {
+            None => None,
+            Some(turn_id) => {
+                let agent_type = state_arc.read().await.agent_type;
+                match crate::commands::conversations::get_folder_conversation_core(
+                    &db.conn,
+                    conversation_id,
+                )
+                .await
+                {
+                    Ok((detail, _)) => {
+                        let point = crate::acp::fork::resolve_fork_point(
+                            &detail.turns,
+                            &turn_id,
+                            agent_type,
+                        );
+                        if point.is_none() {
+                            tracing::info!(
+                                connection_id = %conn_id,
+                                turn_id = %turn_id,
+                                agent = %agent_type,
+                                "[ACP] no fork point for this turn; forking at the tail"
+                            );
+                        }
+                        point
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            connection_id = %conn_id,
+                            turn_id = %turn_id,
+                            "[ACP] could not read the conversation to resolve a fork point \
+                             ({e}); forking at the tail"
+                        );
+                        None
+                    }
+                }
+            }
+        };
+
         // Reject if a turn is already in flight. `prompt_lock` is FREE between a
         // prompt's enqueue and its `TurnComplete` (it is released the moment the
         // command is queued), so the lock alone can't catch a turn the loop is
@@ -1694,7 +1795,10 @@ impl ConnectionManager {
                 // Protocol-only round trip — no DB writes inside the loop.
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 cmd_tx
-                    .send(ConnectionCommand::Fork { reply: reply_tx })
+                    .send(ConnectionCommand::Fork {
+                        fork_point,
+                        reply: reply_tx,
+                    })
                     .await
                     .map_err(|_| AcpError::ProcessExited)?;
                 let protocol_result = reply_rx
@@ -3159,9 +3263,16 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
             })?
             .to_string_lossy()
             .to_string();
-        let folder = crate::db::service::folder_service::add_folder(&self.db.conn, &folder_path)
-            .await
-            .map_err(|e| SpawnerError::Send(format!("add_folder: {e}")))?;
+        // `ensure_folder_for_path`, NOT `add_folder`: the row exists to carry the
+        // child's `folder_id` and to resolve its cwd on resume, and neither of
+        // those reads `is_open`. Opening it would turn whatever `working_dir` the
+        // agent picked — a PR checkout under /tmp, a throwaway worktree — into a
+        // top-level project in the user's sidebar, and would silently reopen a
+        // folder the user had closed.
+        let folder =
+            crate::db::service::folder_service::ensure_folder_for_path(&self.db.conn, &folder_path)
+                .await
+                .map_err(|e| SpawnerError::Send(format!("ensure_folder_for_path: {e}")))?;
 
         let result = self
             .manager
@@ -3180,6 +3291,126 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
                 "send_prompt_linked succeeded but no conversation_id was bound".into(),
             )
         })
+    }
+
+    async fn spawn_for_resume(
+        &self,
+        parent_connection_id: &str,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        external_session_id: &str,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<crate::acp::delegation::spawner::ResumedSpawn, crate::acp::delegation::spawner::SpawnerError>
+    {
+        use crate::acp::delegation::spawner::{ResumedSpawn, SpawnerError};
+        // Same parent inheritance as `spawn` — a resumed child whose emitter is
+        // wired to a different broadcaster would stream to nobody.
+        let (emitter, owner_window, parent_working_dir) = {
+            let conns = self.manager.connections.lock().await;
+            let parent = conns.get(parent_connection_id).ok_or_else(|| {
+                SpawnerError::Spawn(format!(
+                    "parent connection {parent_connection_id} not found"
+                ))
+            })?;
+            let pwd = {
+                let s = parent.state.read().await;
+                s.working_dir
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+            };
+            (
+                parent.emitter.clone(),
+                parent.owner_window_label.clone(),
+                pwd,
+            )
+        };
+        let effective_working_dir = working_dir.or(parent_working_dir);
+
+        let runtime_env = crate::commands::acp::build_session_runtime_env(
+            &self.db,
+            agent_type,
+            None,
+            self.data_dir.as_path(),
+        )
+        .await
+        .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
+
+        // Detect dedup reuse BEFORE spawning, with the SAME lookup
+        // `spawn_agent` runs at its own entry: a live connection for this
+        // (agent, working_dir, session_id) — e.g. the user has the canceled
+        // child session open in a tab — makes `spawn_agent` return that
+        // connection instead of creating one. The broker must know, because
+        // its failure teardown may only disconnect a connection this call
+        // actually created. A connection appearing in the pre-check→spawn
+        // window is missed, but that window is milliseconds and a misfire
+        // additionally requires the send itself to fail.
+        let working_dir_path = effective_working_dir.as_ref().map(std::path::PathBuf::from);
+        let pre_existing = self
+            .manager
+            .find_connection_for_reuse(
+                agent_type,
+                working_dir_path.as_ref(),
+                Some(external_session_id),
+            )
+            .await;
+
+        // `session_id = Some(..)` is the whole difference vs `spawn`: the
+        // connection loads the child's prior agent session (and its context)
+        // instead of minting a fresh one.
+        let connection_id = self
+            .manager
+            .spawn_agent(
+                agent_type,
+                effective_working_dir,
+                Some(external_session_id.to_string()),
+                runtime_env,
+                owner_window,
+                emitter,
+                preferred_mode_id,
+                preferred_config_values,
+            )
+            .await
+            .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
+        let reused = pre_existing.as_deref() == Some(connection_id.as_str());
+        Ok(ResumedSpawn {
+            connection_id,
+            reused,
+        })
+    }
+
+    async fn send_resume_prompt(
+        &self,
+        conn_id: &str,
+        prompt: String,
+        folder_id: i32,
+        child_conversation_id: i32,
+    ) -> Result<(), crate::acp::delegation::spawner::SpawnerError> {
+        use crate::acp::delegation::spawner::SpawnerError;
+        // Adopt the child's EXISTING row (caller-supplied path) — no delegation
+        // link: the row already carries parent_id / parent_tool_use_id /
+        // delegation_call_id from the original delegation, and
+        // `send_prompt_linked` rejects a link combined with an explicit
+        // conversation_id precisely because adopted rows own their linkage.
+        self.manager
+            .send_prompt_linked(
+                &self.db,
+                conn_id,
+                vec![PromptInputBlock::Text { text: prompt }],
+                Some(folder_id),
+                Some(child_conversation_id),
+                None,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| SpawnerError::Send(e.to_string()))
+    }
+
+    async fn has_live_connection_for_conversation(&self, conversation_id: i32) -> bool {
+        self.manager
+            .find_connection_by_conversation_id(conversation_id)
+            .await
+            .is_some()
     }
 
     async fn cancel(
@@ -3890,6 +4121,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn linked_ui_prompt_leaves_the_user_blocks_untouched() {
+        use crate::db::test_helpers;
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/agent-routes").await;
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-agent-routes";
+        let mut cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::Codex,
+            Some(PathBuf::from("/tmp/agent-routes")),
+        )
+        .await;
+
+        mgr.send_prompt_linked_with_message_id(
+            &db,
+            conn_id,
+            vec![PromptInputBlock::Text {
+                text: "ask [@Antigravity](houhub://agent/antigravity) to review".into(),
+            }],
+            Some(folder_id),
+            None,
+            None,
+            Some("optimistic-route".into()),
+        )
+        .await
+        .unwrap();
+
+        let command = cmd_rx.try_recv().expect("one prompt command");
+        let ConnectionCommand::Prompt {
+            blocks,
+            user_message,
+        } = command
+        else {
+            panic!("expected prompt command");
+        };
+        // The routing frame is appended at the agent boundary in the connection
+        // loop, never here: what the manager enqueues, persists and broadcasts
+        // is exactly what the user typed.
+        assert!(matches!(
+            blocks.as_slice(),
+            [PromptInputBlock::Text { text }]
+                if text == "ask [@Antigravity](houhub://agent/antigravity) to review"
+        ));
+        let (message_id, user_blocks) = user_message.expect("root prompt is broadcast");
+        assert_eq!(message_id, "optimistic-route");
+        assert!(matches!(
+            user_blocks.as_slice(),
+            [crate::acp::types::UserMessageBlock::Text { text }]
+                if text == "ask [@Antigravity](houhub://agent/antigravity) to review"
+        ));
+    }
+
+    #[tokio::test]
+    async fn reserved_route_separator_is_scrubbed_not_rejected() {
+        // The separator is invisible and usually arrives inside content the user
+        // did not author — an attached file's bytes land in `Resource.text`.
+        // Rejecting made such a message permanently unsendable; the prompt must
+        // go through with the character removed from EVERY copy.
+        use crate::db::test_helpers;
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/route-separator").await;
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-route-separator";
+        let mut cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::Codex,
+            Some(PathBuf::from("/tmp/route-separator")),
+        )
+        .await;
+
+        mgr.send_prompt_linked_with_message_id(
+            &db,
+            conn_id,
+            vec![
+                PromptInputBlock::Text {
+                    text: "user\u{001e}frame".into(),
+                },
+                PromptInputBlock::Resource {
+                    uri: "file:///tmp/records.dat".into(),
+                    mime_type: Some("text/plain".into()),
+                    text: Some("row-a\u{001e}row-b".into()),
+                    blob: None,
+                },
+            ],
+            Some(folder_id),
+            None,
+            None,
+            Some("optimistic-reserved".into()),
+        )
+        .await
+        .expect("an invisible control character must not block the send");
+
+        let ConnectionCommand::Prompt {
+            blocks,
+            user_message,
+            ..
+        } = cmd_rx.try_recv().expect("the prompt still reaches the agent")
+        else {
+            panic!("expected prompt command");
+        };
+        assert!(matches!(
+            blocks.as_slice(),
+            [
+                PromptInputBlock::Text { text },
+                PromptInputBlock::Resource { text: Some(resource), .. },
+            ] if text == "userframe" && resource == "row-arow-b"
+        ));
+        // The broadcast copy is projected from the SAME scrubbed blocks, so the
+        // stored, displayed, and on-the-wire messages cannot drift apart.
+        let (_, user_blocks) = user_message.expect("root prompt is broadcast");
+        assert!(matches!(
+            user_blocks.first(),
+            Some(crate::acp::types::UserMessageBlock::Text { text }) if text == "userframe"
+        ));
+    }
+
+    #[tokio::test]
     async fn send_prompt_linked_preserves_history_when_the_session_was_re_minted() {
         // houhub#500, end to end, in the exact shape the reporter described:
         // an existing completed conversation, then a new session started in the
@@ -4322,7 +4674,7 @@ mod tests {
             s.turn_in_flight = true; // a turn is already running
         }
 
-        let res = mgr.fork_session(&db, conn_id, None, None).await;
+        let res = mgr.fork_session(&db, conn_id, None, None, None).await;
         assert!(
             matches!(res, Err(AcpError::TurnInProgress)),
             "fork must reject with TurnInProgress while a turn is in flight, got {res:?}"
@@ -4361,7 +4713,7 @@ mod tests {
             .await
             .conversation_id = Some(9);
 
-        let res = mgr.fork_session(&db, conn_id, None, None).await;
+        let res = mgr.fork_session(&db, conn_id, None, None, None).await;
         assert!(res.is_err(), "fork with a dead receiver must fail");
         assert!(
             !mgr.get_state(conn_id)
@@ -4442,7 +4794,7 @@ mod tests {
 
         let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
         let fake_loop = tokio::spawn(async move {
-            if let Some(ConnectionCommand::Fork { reply }) = rx.recv().await {
+            if let Some(ConnectionCommand::Fork { reply, .. }) = rx.recv().await {
                 go_rx.await.ok(); // withhold the reply until the test releases it
                 let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                     forked_session_id: "session-S2".into(),
@@ -4457,7 +4809,7 @@ mod tests {
         // DROPS this caller future. The detached persistence task must survive.
         let timed = tokio::time::timeout(
             std::time::Duration::from_millis(100),
-            mgr.fork_session(&db, "c-shield", None, None),
+            mgr.fork_session(&db, "c-shield", None, None, None),
         )
         .await;
         assert!(
@@ -6045,7 +6397,7 @@ mod tests {
         let original = original_session_id.to_string();
         let join = tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
-                if let ConnectionCommand::Fork { reply } = cmd {
+                if let ConnectionCommand::Fork { reply, .. } = cmd {
                     let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                         forked_session_id: forked.clone(),
                         original_session_id: original.clone(),
@@ -6082,7 +6434,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-fork", pre.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-fork", None, None)
+            .fork_session(&db, "c-fork", None, None, None)
             .await
             .expect("fork_session should succeed");
         let _ = join.await;
@@ -6128,10 +6480,7 @@ mod tests {
         .unwrap();
         let (mgr, join) =
             manager_with_fake_fork("c-restack", pre.id, "session-S2", "session-S1").await;
-        let result = mgr
-            .fork_session(&db, "c-restack", None, None)
-            .await
-            .unwrap();
+        let result = mgr.fork_session(&db, "c-restack", None, None, None).await.unwrap();
         let _ = join.await;
 
         let current = conversation_service::get_by_id(&db.conn, pre.id)
@@ -6186,7 +6535,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-raced", pre.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-raced", None, None)
+            .fork_session(&db, "c-raced", None, None, None)
             .await
             .expect("fork must survive the lifecycle subscriber winning the race");
         let _ = join.await;
@@ -6238,7 +6587,7 @@ mod tests {
         .unwrap();
         let (mgr, join) =
             manager_with_fake_fork("c-nosp", pre.id, "session-S2", "session-S1").await;
-        mgr.fork_session(&db, "c-nosp", None, None).await.unwrap();
+        mgr.fork_session(&db, "c-nosp", None, None, None).await.unwrap();
         let _ = join.await;
 
         let current = conversation_service::get_by_id(&db.conn, pre.id)
@@ -6284,7 +6633,7 @@ mod tests {
 
         let (mgr, join) =
             manager_with_fake_fork("c-latest", pre.id, "session-S2", "session-S1").await;
-        let result = mgr.fork_session(&db, "c-latest", None, None).await.unwrap();
+        let result = mgr.fork_session(&db, "c-latest", None, None, None).await.unwrap();
         let _ = join.await;
 
         let current = conversation_service::get_by_id(&db.conn, pre.id)
@@ -6334,7 +6683,7 @@ mod tests {
 
         let (mgr, join) =
             manager_with_fake_fork("c-fork-lock", pre.id, "session-S2", "session-S1").await;
-        let result = mgr.fork_session(&db, "c-fork-lock", None, None).await.unwrap();
+        let result = mgr.fork_session(&db, "c-fork-lock", None, None, None).await.unwrap();
         let _ = join.await;
 
         let sibling_id = result.sibling_conversation_id;
@@ -6404,7 +6753,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-fork-prefix", pre.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-fork-prefix", None, None)
+            .fork_session(&db, "c-fork-prefix", None, None, None)
             .await
             .unwrap();
         let _ = join.await;
@@ -6460,7 +6809,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-fork-untitled", pre.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-fork-untitled", None, None)
+            .fork_session(&db, "c-fork-untitled", None, None, None)
             .await
             .unwrap();
         let _ = join.await;
@@ -6512,7 +6861,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-fork-unlocked", pre.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-fork-unlocked", None, None)
+            .fork_session(&db, "c-fork-unlocked", None, None, None)
             .await
             .unwrap();
         let _ = join.await;
@@ -6555,7 +6904,7 @@ mod tests {
         )
         .await;
         let err = mgr
-            .fork_session(&db, "c-missing", None, None)
+            .fork_session(&db, "c-missing", None, None, None)
             .await
             .expect_err("fork against a missing row must error");
         let _ = join.await;
@@ -6604,7 +6953,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-deleted", pre.id, "session-S2", "session-S1").await;
         let err = mgr
-            .fork_session(&db, "c-deleted", None, None)
+            .fork_session(&db, "c-deleted", None, None, None)
             .await
             .expect_err("fork against a soft-deleted row must error");
         let _ = join.await;
@@ -6689,7 +7038,7 @@ mod tests {
         }
         let join = tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
-                if let ConnectionCommand::Fork { reply } = cmd {
+                if let ConnectionCommand::Fork { reply, .. } = cmd {
                     let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                         forked_session_id: "session-S2".to_string(),
                         original_session_id: "session-S1".to_string(),
@@ -6700,7 +7049,7 @@ mod tests {
         });
 
         let result = mgr
-            .fork_session(&db, "c-relink", Some(pre.id), Some(folder_id))
+            .fork_session(&db, "c-relink", Some(pre.id), Some(folder_id), None)
             .await
             .expect("fork must link the unbound row from caller ids and succeed");
         let _ = join.await;
@@ -6735,7 +7084,7 @@ mod tests {
             map.insert("c-unbound".into(), fake_connection("c-unbound", None));
         }
         let err = mgr
-            .fork_session(&db, "c-unbound", None, None)
+            .fork_session(&db, "c-unbound", None, None, None)
             .await
             .expect_err("unbound fork must error");
         assert!(

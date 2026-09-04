@@ -127,7 +127,7 @@
     },
     "zoomLevel": {
       "sectionTitle": "Fensterzoom",
-      "sectionDescription": "Skaliert die gesamte Oberfläche. Wird sofort übernommen und pro Gerät gespeichert.",
+      "sectionDescription": "Skaliert die gesamte Oberfläche. Wird sofort übernommen und pro Gerät gespeichert. ⌘/Ctrl + und - durchlaufen dieselben Zoomstufen wie dieses Menü (⌘/Ctrl 0 setzt auf 100% zurück).",
       "placeholder": "Zoomstufe wählen",
       "default": "Standard",
       "current": "Aktueller Zoom: {zoom}%"
@@ -146,13 +146,13 @@
       "ligatures": "Ligaturen aktivieren",
       "ligaturesUnavailable": "Diese Schriftart hat keine Ligaturen",
       "terminalLigaturesHint": "Terminal-Ligaturen gelten nur für mitgelieferte Programmierschriftarten.",
-      "wordWrap": "Zeilenumbruch im Editor aktivieren",
+      "wordWrap": "Zeilenumbruch aktivieren",
       "preview": "Vorschau"
     },
     "welcomePanel": {
-      "sectionTitle": "Willkommensbereich",
-      "sectionDescription": "Zeigt die Schnellaktionskarten „Code-Entwicklung / Büroarbeit“ über dem Eingabefeld neuer Konversationen.",
-      "showQuickActions": "In neuen Konversationen anzeigen"
+      "sectionTitle": "Modusauswahlbereich",
+      "sectionDescription": "Die Shortcut-Karten „Code-Entwicklung / Büroarbeit“ über dem Eingabefeld auf der Seite für eine neue Konversation.",
+      "showQuickActions": "Auf der Seite für neue Konversationen anzeigen"
     },
     "workspaceBackground": {
       "sectionTitle": "Arbeitsbereich-Hintergrund",
@@ -221,7 +221,7 @@
       },
       "css": {
         "dialogTitle": "Eigenes CSS",
-        "dialogDescription": "Gilt für alle HouHub-Fenster. Änderungen werden live vorschauend angezeigt; zum Speichern auf Anwenden klicken.",
+        "dialogDescription": "Gilt für alle houhub-Fenster. Änderungen werden live vorschauend angezeigt; zum Speichern auf Anwenden klicken.",
         "size": "{used} KB / {max} KB",
         "ruleCount": "{count} Regeln",
         "errorTooLarge": "Zu groß zum Speichern. Bitte unter das Limit kürzen.",
@@ -238,7 +238,7 @@
   "SystemSettings": {
     "loading": "Wird geladen...",
     "sectionTitle": "Systemverwaltung",
-    "sectionDescription": "Verwalte Netzwerk-Proxy, App-Updates und Spracheinstellungen.",
+    "sectionDescription": "Verwalte App-Updates, den Autostart beim Anmelden, den Netzwerk-Proxy und die Spracheinstellungen.",
     "proxyTitle": "Netzwerk-Proxy",
     "proxyDescription": "Wenn aktiviert, werden nachfolgende Netzwerkanfragen bevorzugt über diesen Proxy ausgeführt (einschließlich ACP-Chat, Agent-Installation und Git-Remote-Operationen).",
     "loadFailed": "Laden fehlgeschlagen: {message}",
@@ -672,6 +672,8 @@
     "local": {
       "filterPlaceholder": "Lokales MCP filtern...",
       "loadFailed": "Laden fehlgeschlagen: {message}",
+      "sourceUnreadable": "Die MCP-Konfiguration von {app} konnte nicht gelesen werden, daher werden ihre Server ausgeblendet: {message}",
+      "saveBlockedByUnreadableSource": "Reparieren oder entfernen Sie diese Datei und aktualisieren Sie, bevor Sie speichern: Zuweisungen werden aus den Agenten berechnet, die diese Seite lesen konnte, sodass ein Speichern jetzt diesen Server aus einem nicht lesbaren Agenten entfernen könnte.",
       "empty": "Kein lokales MCP erkannt.",
       "description": "Die lokale MCP-Konfiguration kann direkt bearbeitet und gespeichert werden.",
       "enabledApps": "Aktivierte Apps",
@@ -831,7 +833,7 @@
       "configTomlHint": "Wird wortwörtlich als gesamte ~/.grok/config.toml gespeichert. Ungültiges TOML wird abgelehnt, sodass ein Tippfehler deine Datei nie abschneidet.",
       "configTomlPlaceholder": "# Andere Schlüssel als die Steuerelemente oben, z. B.\n# [mcp_servers.*], [cli], [permission]-Regeln.",
       "customModelTitle": "Benutzerdefiniertes Modell (eigener Endpunkt)",
-      "customModelHint": "Richte Grok auf einen benutzerdefinierten oder selbst gehosteten Endpunkt. HouHub schreibt einen `[model.*]`-Block pro Modell und legt es als Standard fest. Lasse die Modell-ID leer, um es zu entfernen.",
+      "customModelHint": "Richte Grok auf einen benutzerdefinierten oder selbst gehosteten Endpunkt. houhub schreibt einen `[model.*]`-Block pro Modell und legt es als Standard fest. Lasse die Modell-ID leer, um es zu entfernen.",
       "customModelIdLabel": "Modell-ID",
       "customModelIdPlaceholder": "grok-4.5",
       "customModelIdHint": "Wird als `[model.*]`-Block registriert und als Modellname an die API gesendet; außerdem als `[models].default` gesetzt.",
@@ -849,7 +851,7 @@
       "autoCompactHint": "Verdichtet die Unterhaltung, wenn die Kontextnutzung diesen Prozentsatz erreicht (Grok-Standard 85). Wird in `[session]` geschrieben."
     },
     "cursor": {
-      "configDescription": "Konfiguriere Cursor hier. Wähle eine Authentifizierungsmethode – offizielles Abo (Browser-Anmeldung) oder einen Cursor-API-Schlüssel für Headless-/Servermaschinen – wähle dann ein Modell und bearbeite die Berechtigungsregeln und die Sandbox des CLI. HouHub schreibt sie in ~/.cursor/cli-config.json, gemeinsam mit dem cursor-agent-CLI.",
+      "configDescription": "Konfiguriere Cursor hier. Wähle eine Authentifizierungsmethode – offizielles Abo (Browser-Anmeldung) oder einen Cursor-API-Schlüssel für Headless-/Servermaschinen – wähle dann ein Modell und bearbeite die Berechtigungsregeln und die Sandbox des CLI. houhub schreibt sie in ~/.cursor/cli-config.json, gemeinsam mit dem cursor-agent-CLI.",
       "authTitle": "Authentifizierung",
       "authChecking": "Prüfe…",
       "authNotInstalled": "cursor-agent ist nicht installiert",
@@ -889,7 +891,14 @@
       "modelPickerPlaceholder": "Modelle suchen…",
       "modelNoMatch": "Kein passendes Modell",
       "modelsNeedAuth": "Melde dich an, um die Modellliste zu laden.",
-      "modelDefaultBadge": "Standard"
+      "modelDefaultBadge": "Standard",
+      "modelThinkingLabel": "Denken",
+      "modelEffortLabel": "Aufwand",
+      "modelFastLabel": "Fast",
+      "variantOn": "Ein",
+      "variantOff": "Aus",
+      "modelVariantHint": "Cursor liefert jede Kombination als eigene Modell-ID; diese Steuerungen wählen die passende aus. Sie setzen den Startwert – Modell, Denken und Fast lassen sich in einer Sitzung jederzeit im Eingabefeld ändern.",
+      "permissionModeAskHint": "„Vor dem Ausführen fragen“ legt dir jeden Toolaufruf zur Freigabe vor, samt Cursors eigener Option „Immer erlauben“ – sie hängt eine Regel an die Liste der erlaubten Aktionen unten an, sodass derselbe Aufruf künftig ohne Nachfrage läuft."
     },
     "deepseek": {
       "configManagement": "DeepSeek-Harness-Konfiguration",
@@ -901,7 +910,7 @@
       "apiKeyHint": "Wird dem Agenten als DEEPSEEK_API_KEY übergeben. Eine Umgebungsvariable hat Vorrang vor der Zugangsdatendatei – lass das Feld leer, wenn du dich im Terminal anmeldest."
     },
     "codex": {
-      "configDescription": "Unterstützt schnelle Konfiguration von API-URL, API-Key, Modellname und reasoning effort und synchronisiert mit `auth.json` / `config.toml`.",
+      "configDescription": "Unterstützt schnelle Konfiguration von API-URL, API-Key und Modellname und synchronisiert mit `auth.json` / `config.toml`.",
       "authMode": "Authentifizierungsmodus",
       "chatgptSubscription": "Offizielles Abonnement",
       "chatgptSubscriptionHint": "Mit offiziellem ChatGPT-Abonnement anmelden, kein API Key erforderlich",
@@ -941,7 +950,7 @@
       "sandboxMode_workspace-write": "Workspace-Schreibzugriff",
       "sandboxMode_danger-full-access": "Vollzugriff (keine Sandbox)",
       "sandboxModeHint": "Unter Windows wird Workspace-Schreibzugriff auf Nur-Lesen herabgestuft, sofern die experimentelle Windows-Sandbox von codex nicht aktiviert ist.",
-      "sandboxModeSeedsPresetHint": "HouHub bildet dies auch auf die Start-Freigabe-Voreinstellung der Sitzung ab, wirkt sich also – anders als die Freigaberichtlinie – auf gewöhnliche Anfragen aus. Beachte: Bei der Standard-Voreinstellung des Adapters sichtet jetzt ein Modell die Rechteausweitungen vor und leitet nur weiter, was es für unsicher hält; wähle im Eingabefeld „Um Freigabe bitten“, um jede selbst zu prüfen. Die Voreinstellung im Eingabefeld hat immer Vorrang.",
+      "sandboxModeSeedsPresetHint": "houhub bildet dies auch auf die Start-Freigabe-Voreinstellung der Sitzung ab, wirkt sich also – anders als die Freigaberichtlinie – auf gewöhnliche Anfragen aus. Beachte: Bei der Standard-Voreinstellung des Adapters sichtet jetzt ein Modell die Rechteausweitungen vor und leitet nur weiter, was es für unsicher hält; wähle im Eingabefeld „Um Freigabe bitten“, um jede selbst zu prüfen. Die Voreinstellung im Eingabefeld hat immer Vorrang.",
       "writableRootsLabel": "Zusätzliche beschreibbare Ordner",
       "writableRootsHint": "Ein absoluter Pfad pro Zeile, zusätzlich zum Arbeitsverzeichnis.",
       "sandboxRootsRelativeError": "Muss ein absoluter Pfad sein – codex löst relative Angaben unter ~/.codex auf: {path}",
@@ -964,7 +973,7 @@
       "loginRelogin": "Erneut anmelden / Konto wechseln",
       "loginTimeout": "Anmeldung abgelaufen, bitte erneut versuchen",
       "loginSaveFailed": "Anmeldung erfolgreich, aber Konfiguration konnte nicht gespeichert werden",
-      "sandboxModeReadOnlyAcpWarning": "Der ACP-Adapter liefert keine schreibgeschützte Sandbox mehr, daher laufen HouHub-Sitzungen unabhängig von dieser Einstellung mit Schreibrecht im Arbeitsbereich. HouHub wählt die strengste verfügbare Voreinstellung – jede Rechteausweitung kommt zu dir zur Freigabe –, doch Änderungen innerhalb des Arbeitsbereichs brauchen keine mehr. codex-CLI- und IDE-Sitzungen beachten „schreibgeschützt“ weiterhin."
+      "sandboxModeReadOnlyAcpWarning": "Der ACP-Adapter liefert keine schreibgeschützte Sandbox mehr, daher laufen houhub-Sitzungen unabhängig von dieser Einstellung mit Schreibrecht im Arbeitsbereich. houhub wählt die strengste verfügbare Voreinstellung – jede Rechteausweitung kommt zu dir zur Freigabe –, doch Änderungen innerhalb des Arbeitsbereichs brauchen keine mehr. codex-CLI- und IDE-Sitzungen beachten „schreibgeschützt“ weiterhin."
     },
     "gemini": {
       "authConfig": "Gemini-Auth-Konfiguration",
@@ -992,7 +1001,7 @@
       "providerManagement": "Provider-Verwaltung",
       "providerCount": "{count} Provider",
       "addProvider": "Provider hinzufügen",
-      "emptyProvider": "Noch kein Provider vorhanden. ID eingeben und dann auf „Provider hinzufügen“ klicken.",
+      "emptyProvider": "Noch keine benutzerdefinierten Provider. Klicke auf Benutzerdefinierten Provider hinzufügen, um einen zu erstellen.",
       "providerEnabledState": "{providerId} Aktivierungsstatus",
       "selectProviderNpm": "provider.npm auswählen",
       "modelManagement": "Modellverwaltung",
@@ -1165,7 +1174,7 @@
       "authModeApiKey": "API-Schlüssel",
       "authModeLogin": "Kimi-Konto-Anmeldung (Abo)",
       "authModeApiKeyHint": "Schreibt einen verwalteten Provider in config.toml und legt das Gate-Token an, damit Sitzungen geöffnet werden können.",
-      "loginHint": "Führe `kimi login` im Terminal aus, um dich mit einem Kimi-Abo-Konto anzumelden; ab Kimi 0.39.0 hänge für ein kimi.ai-Konto `--region global` an, denn standardmäßig wird bei kimi.com angemeldet. HouHub speichert nichts und nutzt Kimis eigene Anmeldung. Speichern hier entfernt HouHubs API-Schlüssel-Gate-Token.",
+      "loginHint": "Führe `kimi login` im Terminal aus, um dich mit einem Kimi-Abo-Konto anzumelden; ab Kimi 0.39.0 hänge für ein kimi.ai-Konto `--region global` an, denn standardmäßig wird bei kimi.com angemeldet. houhub speichert nichts und nutzt Kimis eigene Anmeldung. Speichern hier entfernt houhubs API-Schlüssel-Gate-Token.",
       "credentialTitle": "Zugangsdaten",
       "interfaceTypeLabel": "Provider-Typ",
       "interfaceTypeHint": "Das Provider-Protokoll, das Kimi spricht (`type` in config.toml). Für einen Moonshot-/platform.kimi.com-Schlüssel Kimi / Moonshot wählen.",
@@ -1333,15 +1342,15 @@
       "modelProviderIncompatible": "{provider} does not support {agent}. Choose a compatible model provider before saving.",
       "modelProviderClearedOnDisable": "Agent disabled. The incompatible model provider binding was removed.",
       "affectedRunningSessions": "{count, plural, one {# laufende Sitzung muss zum Anwenden neu verbunden werden} other {# laufende Sitzungen müssen zum Anwenden neu verbunden werden}}",
-      "piSaved": "Pi config saved",
-      "savePiFailed": "Failed to save Pi config",
-      "piRuntimeSaved": "Pi runtime saved",
-      "savePiRuntimeFailed": "Failed to save Pi runtime",
-      "piBinaryInstalled": "pi installed",
-      "piBinaryInstallFailed": "Failed to install pi",
-      "piBinaryUninstalled": "pi uninstalled",
-      "piBinaryUninstallFailed": "Failed to uninstall pi",
-      "savePiTrustFailed": "Failed to save workspace trust",
+      "piSaved": "Pi-Konfiguration gespeichert",
+      "savePiFailed": "Pi-Konfiguration konnte nicht gespeichert werden",
+      "piRuntimeSaved": "Pi-Laufzeit gespeichert",
+      "savePiRuntimeFailed": "Pi-Laufzeit konnte nicht gespeichert werden",
+      "piBinaryInstalled": "pi installiert",
+      "piBinaryInstallFailed": "pi-Installation fehlgeschlagen",
+      "piBinaryUninstalled": "pi deinstalliert",
+      "piBinaryUninstallFailed": "pi-Deinstallation fehlgeschlagen",
+      "savePiTrustFailed": "Speichern des Arbeitsbereich-Vertrauens fehlgeschlagen",
       "providerConnected": "{providerId} verbunden",
       "connectFailed": "Verbinden von {providerId} fehlgeschlagen",
       "providerDisconnected": "{providerId} getrennt",
@@ -1388,18 +1397,18 @@
       "failed": "Plugin-Vorgang fehlgeschlagen"
     },
     "pi": {
-      "configManagement": "Pi Configuration",
-      "configDescription": "Pi authenticates with your model provider's API key. The key is written to ~/.pi/agent/auth.json and the model selection to settings.json.",
-      "providerLabel": "Provider",
-      "modelLabel": "Model",
-      "thinkingLabel": "Thinking",
+      "configManagement": "Pi-Konfiguration",
+      "configDescription": "Pi authentifiziert sich über den API-Schlüssel deines Modellanbieters. Der Schlüssel wird in ~/.pi/agent/auth.json und die Modellauswahl in settings.json geschrieben.",
+      "providerLabel": "Anbieter",
+      "modelLabel": "Modell",
+      "thinkingLabel": "Denken",
       "thinking": {
-        "off": "Off",
-        "low": "Low",
-        "medium": "Medium",
-        "high": "High",
+        "off": "Aus",
+        "low": "Niedrig",
+        "medium": "Mittel",
+        "high": "Hoch",
         "minimal": "Minimal",
-        "xhigh": "Extra high",
+        "xhigh": "Sehr hoch",
         "max": "Maximum"
       },
       "apiKeyLabel": "API-Schlüssel",
@@ -1557,11 +1566,11 @@
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
       "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
-      "syncSkipped": "Your choice was saved, but HouHub could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
+      "syncSkipped": "Your choice was saved, but houhub could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
       "headless": {
         "title": "Ohne Browser auf diesem Rechner anmelden",
-        "description": "Antigravity führt die Google-Anmeldung selbst aus – auf dem Rechner, auf dem der Agent läuft. Fehlt dort ein Browser (HouHub auf einem Server ohne Desktop), wartet die erste Sitzung fünf Minuten und schlägt dann fehl. Melde dich stattdessen hier an: Link auf einem beliebigen Gerät öffnen und die Zieladresse zurück einfügen.",
+        "description": "Antigravity führt die Google-Anmeldung selbst aus – auf dem Rechner, auf dem der Agent läuft. Fehlt dort ein Browser (houhub auf einem Server ohne Desktop), wartet die erste Sitzung fünf Minuten und schlägt dann fehl. Melde dich stattdessen hier an: Link auf einem beliebigen Gerät öffnen und die Zieladresse zurück einfügen.",
         "start": "Anmeldelink holen",
         "saveFirst": "Zuerst speichern – die Anmeldung nutzt die gespeicherten Einstellungen, nicht das oben Eingetippte.",
         "step1": "1. Öffne diesen Link und melde dich bei Google an.",
@@ -1587,9 +1596,9 @@
   "GeneralSettings": {
     "loading": "Wird geladen...",
     "sectionTitle": "Allgemein",
-    "sectionDescription": "Zentrale Einstellungen für das Standardterminal, die Rendering-Beschleunigung und die Multi-Agent-Delegation.",
+    "sectionDescription": "Zentrale Einstellungen für das Standardterminal, die Rendering-Beschleunigung, Benachrichtigungstöne und die Multi-Agent-Delegation.",
     "terminalTitle": "Standardterminal",
-    "terminalDescription": "Wähle die Shell, die beim Öffnen neuer Terminal-Tabs aus der Terminalleiste oder dem Dateibaum verwendet wird.",
+    "terminalDescription": "Wählen Sie die Shell, die beim Öffnen neuer Terminal-Tabs über die Terminalleiste oder den Dateibaum verwendet wird. Agenten nutzen sie ebenfalls, wenn sie houhub um die Ausführung einer vollständigen Befehlszeile bitten.",
     "defaultTerminalShell": "Standard-Shell",
     "terminalSystemDefault": "Systemstandard",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
@@ -1614,7 +1623,7 @@
   },
   "LoginPage": {
     "documentTitle": "Anmelden - houhub",
-    "brand": "Houhub",
+    "brand": "HouHub",
     "subtitle": "Gib dein Zugriffstoken ein, um dich mit der Desktop-App zu verbinden",
     "tokenPlaceholder": "Zugriffstoken",
     "connect": "Verbinden",
@@ -1762,7 +1771,12 @@
         "reorderFoldersFailed": "Ordner konnten nicht neu sortiert werden: {message}",
         "changeFolderColorFailed": "Farbe konnte nicht geändert werden: {message}",
         "setFolderAliasFailed": "Alias konnte nicht festgelegt werden: {message}",
-        "changeFolderDefaultAgentFailed": "Standard-Agent konnte nicht gesetzt werden: {message}"
+        "changeFolderDefaultAgentFailed": "Standard-Agent konnte nicht gesetzt werden: {message}",
+        "createGroupFailed": "Gruppe konnte nicht erstellt werden: {message}",
+        "updateGroupFailed": "Gruppe konnte nicht aktualisiert werden: {message}",
+        "deleteGroupFailed": "Gruppe konnte nicht gelöscht werden: {message}",
+        "moveToGroupFailed": "Ordner konnte nicht verschoben werden: {message}",
+        "applyLayoutFailed": "Ordnerreihenfolge konnte nicht gespeichert werden: {message}"
       },
       "statsLabel": "{folders} Ordner · {convos} Konversationen",
       "reorderHandle": "Zum Neuordnen ziehen",
@@ -1771,7 +1785,7 @@
       "viewOptions": "Anzeigeoptionen",
       "listOptions": "Konversationsliste",
       "showCompleted": "Abgeschlossene Konversationen anzeigen",
-      "showWorktrees": "Worktree-Ordner anzeigen",
+      "showWorktrees": "Worktree-Branches anzeigen",
       "showRecent": "Gruppe „Zuletzt“ anzeigen",
       "navigationItems": "Navigationselemente",
       "moreOptions": "Weitere Optionen",
@@ -1840,7 +1854,7 @@
       "automations": "Automatisierungen",
       "loadingSubsessions": "Unterkonversationen werden geladen…",
       "worktreeRemovedBadge": "Quell-Worktree entfernt",
-      "tasks": "Aufgabenboard",
+      "tasks": "To-dos",
       "runningCountBadge": "{count, plural, one {# laufende Sitzung} other {# laufende Sitzungen}}",
       "sectionOrderMoveUp": "Nach oben",
       "sectionOrderMoveDown": "Nach unten",
@@ -1849,7 +1863,24 @@
       "noRecent": "Keine kürzlichen Konversationen",
       "showMoreRecent": "Mehr anzeigen ({count})",
       "resetRecentLimit": "Auf die ersten {count} zurücksetzen",
-      "forge": "Repository-Panel"
+      "forge": "Repository-Panel",
+      "canvas": "Unendliche Unterhaltungen",
+      "folderGroup": {
+        "newGroup": "Neue Gruppe",
+        "newGroupTitle": "Neue Ordnergruppe",
+        "defaultName": "Neue Gruppe",
+        "namePlaceholder": "Gruppenname",
+        "rename": "Gruppe umbenennen…",
+        "renameTitle": "Ordnergruppe umbenennen",
+        "delete": "Gruppe löschen",
+        "deleteConfirmTitle": "Diese Gruppe löschen?",
+        "deleteConfirmDescription": "„{name}“ wird entfernt. Die {count, plural, one {# Ordner darin bleibt} other {# Ordner darin bleiben}} im Arbeitsbereich und {count, plural, one {wechselt} other {wechseln}} zurück auf die oberste Ebene.",
+        "empty": "Keine Ordner in dieser Gruppe",
+        "moveToGroup": "In Gruppe verschieben",
+        "removeFromGroup": "Keine Gruppe",
+        "newGroupAndMove": "Neue Gruppe…",
+        "dropToUngroup": "Hier ablegen, um aus der Gruppe zu entfernen"
+      }
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",
@@ -1864,6 +1895,7 @@
       "forkSession": "Sitzung forken",
       "forkSessionSuccess": "Sitzung erfolgreich geforkt",
       "forkSessionFailed": "Sitzung konnte nicht geforkt werden: {error}",
+      "forkSessionBusy": "Verzweigen fehlgeschlagen: Ein Zug läuft",
       "exportConversation": "Konversation exportieren",
       "exportImage": "Bild",
       "exportMarkdown": "Markdown",
@@ -2329,7 +2361,9 @@
       "noMatches": "Keine Treffer",
       "pushBranch": "Hochladen",
       "deleteWorktree": "Worktree löschen",
-      "deleteWorktreeAndBranch": "Worktree und Branch löschen"
+      "deleteWorktreeAndBranch": "Worktree und Branch löschen",
+      "worktreeBranches": "Worktree-Branches ({count, plural, one {#} other {#}})",
+      "noWorktreeBranches": "Keine Worktree-Branches"
     },
     "commitDialog": {
       "toasts": {
@@ -2796,6 +2830,7 @@
           "downloadFailed": "{agent}-Download fehlgeschlagen: {message}",
           "sessionLoadResourceNotFound": "{agent}-Sitzung konnte nicht geladen werden. Neu laden, um es erneut zu versuchen, oder eine neue Konversation starten.",
           "sessionLoadUnavailable": "{agent} konnte diese Sitzung nicht wiederherstellen – sie wurde möglicherweise beendet oder der Agent wurde gestoppt. Neu laden, um es erneut zu versuchen, oder eine neue Konversation starten.",
+          "sessionLoadBusy": "Dieser Verlauf wird von der daraus abgezweigten Sitzung offen gehalten. Schließe diese Sitzung und lade neu, um ihn zu öffnen.",
           "sessionArchived": "Die vorherige Sitzung wurde auf {agent}-Seite archiviert. Führe {command} im Terminal aus, um sie wiederherzustellen und neu zu laden, oder starte eine neue Unterhaltung.",
           "turnFailedRefusal": "{agent} hat die Fortsetzung dieser Runde abgelehnt. Häufig deutet das auf einen Backend- oder Gateway-Fehler hin. Bitte prüfen Sie die Agent-Logs.",
           "turnFailedMaxTokens": "{agent} hat das Token-Limit für diese Runde erreicht.",
@@ -2883,7 +2918,11 @@
         "noModels": "Keine Modelle gefunden",
         "cancel": "Abbrechen",
         "send": "Senden",
-        "forkAndSend": "Fork & Senden",
+        "queueMessage": "In Warteschlange stellen",
+        "steerIntoTurn": "In laufenden Turn einfügen",
+        "steerQueuedInstead": "Stattdessen in die Warteschlange gestellt – wird mit dem nächsten Turn gesendet.",
+        "steerFailed": "Konnte nicht in den laufenden Turn eingefügt werden",
+        "steerAttachmentsUnsupported": "Nur Text – Entwürfe mit Anhängen laufen über die Warteschlange.",
         "slashCommands": "Slash-Befehle",
         "slashSearchPlaceholder": "Befehle suchen...",
         "slashSearchEmpty": "Keine passenden Befehle",
@@ -2944,9 +2983,9 @@
           "pasteDropFiles": "Füge einen Screenshot ein oder ziehe eine Datei direkt ins Eingabefeld, um sie anzuhängen.",
           "queueMessage": "Während der Agent antwortet, kannst du weitertippen – deine nächste Nachricht wird in die Warteschlange gestellt und automatisch gesendet.",
           "draftAutoSave": "Nicht gesendete Entwürfe werden pro Konversation automatisch gespeichert und beim Zurückkehren wiederhergestellt.",
-          "forkSend": "Im Dropdown der Senden-Schaltfläche gibt es Verzweigen und senden – verzweige vom aktuellen Punkt in einen neuen Tab.",
+          "forkFromTurn": "Jede abgeschlossene Antwort bietet Ab hier verzweigen – verzweige das Gespräch an dieser Nachricht in einen neuen Tab.",
           "exportConversation": "Klicke mit der rechten Maustaste in die Konversation, um sie als Markdown, HTML oder Bild zu exportieren.",
-          "chatChannels": "Verbinde Telegram / Lark / WeChat unter Einstellungen -> Chat-Kanaele, um vom Handy aus weiterzuarbeiten.",
+          "chatChannels": "Verbinde Telegram / Lark / WeChat unter Einstellungen → Chat-Kanäle, um vom Handy aus weiterzuarbeiten.",
           "shortcutsAuxPanel": "<shortcut>{toggleAuxPanel}</shortcut> blendet das rechte Panel ein – mit den geänderten Dateien und Git-Änderungen dieser Sitzung.",
           "shortcutsTerminalSidebar": "<shortcut>{toggleTerminal}</shortcut> öffnet das eingebaute Terminal, <shortcut>{toggleSidebar}</shortcut> schaltet die Seitenleiste um.",
           "customShortcuts": "Alle Tastenkürzel lassen sich unter Einstellungen → Tastenkürzel frei belegen.",
@@ -2960,7 +2999,7 @@
           "mentionTargets": "@ holt mehr als Dateien: Erwähne einen anderen Agenten, um eine Teilaufgabe abzugeben, oder verweise auf eine frühere Sitzung, einen Commit oder einen Skill.",
           "splitGroups": "Rechtsklick auf einen Tab, dann Nach rechts teilen oder Nach unten teilen – so bleiben zwei Konversationen in eigenen Bereichen offen.",
           "worktrees": "Öffne die Branch-Schaltfläche und wähle Neuer Worktree, damit mehrere Agenten dasselbe Repository bearbeiten, ohne sich gegenseitig die Dateien zu überschreiben.",
-          "importSessions": "Schon Sitzungen im Terminal gelaufen? Im Menü eines Ordners holt Lokale Sitzungen importieren diesen Verlauf nach HouHub.",
+          "importSessions": "Schon Sitzungen im Terminal gelaufen? Im Menü eines Ordners holt Lokale Sitzungen importieren diesen Verlauf nach houhub.",
           "subSessions": "Delegiert ein Agent, erscheint die Untersitzung in der Seitenleiste verschachtelt darunter – klapp die Zeile auf, um jeder einzeln zu folgen.",
           "liveFeedback": "Live-Feedback im +-Menü schiebt eine Notiz in den Zug, den der Agent gerade ausführt – ohne ihn zu unterbrechen.",
           "skillPacks": "Einstellungen → Skill-Pakete bündelt Coding-Experten, wissenschaftliche Recherche und Office-Skills – pro Agent aktivierbar.",
@@ -3148,6 +3187,8 @@
         "emptyConversation": "Keine Nachrichten in dieser Unterhaltung.",
         "systemMessage": "Systemnachricht",
         "copyMessage": "Kopieren",
+        "forkFromHere": "Ab hier verzweigen",
+        "forkBusy": "Verzweigen nicht möglich, während ein Zug läuft",
         "copied": "Kopiert",
         "downloadImage": "Bild herunterladen",
         "downloadFailed": "Download fehlgeschlagen: {message}",
@@ -3181,7 +3222,8 @@
         "copyImage": "Bild kopieren",
         "copiedImage": "Bild kopiert",
         "copyImageFailed": "Bild konnte nicht kopiert werden: {message}",
-        "copyImageUnsupported": "Das Kopieren dieses Bildes wird hier nicht unterstützt"
+        "copyImageUnsupported": "Das Kopieren dieses Bildes wird hier nicht unterstützt",
+        "selectionSaveAsNote": "Notiz"
       },
       "liveTurnStats": {
         "thinking": "Denkt nach...",
@@ -3248,7 +3290,10 @@
             "child_unknown": "Subagent: Fehler",
             "unknown": "unbekannte Aufgabe"
           }
-        }
+        },
+        "resumed": "Fortgesetzt",
+        "resumeDetail": "Details zur Fortsetzung",
+        "resumeReasonLabel": "Grund der Fortsetzung"
       },
       "contentParts": {
         "showingTailOutput": "Zur besseren Performance wird während des Streamings nur die Endausgabe angezeigt.",
@@ -3400,7 +3445,6 @@
         },
         "planMode": {
           "entered": "Planungsmodus gestartet",
-          "planLabel": "Plan",
           "submitted": "Plan eingereicht",
           "switched": "Modus gewechselt",
           "reviewApproved": "Plan genehmigt – wird umgesetzt",
@@ -3574,6 +3618,13 @@
         "cardFinishedWithStatus": "Hintergrundaufgabe beendet ({status})",
         "cardResultPending": "Ergebnis steht noch aus"
       },
+      "asyncTasks": {
+        "openOutput": "Ausgabe",
+        "stop": "Stoppen",
+        "tokens": "{count} Tokens",
+        "stopDeclined": "Diese Aufgabe konnte nicht gestoppt werden – sie ist möglicherweise bereits beendet.",
+        "stopFailed": "Aufgabe konnte nicht gestoppt werden: {error}"
+      },
       "proposedPlan": {
         "title": "Vorgeschlagener Plan",
         "planning": "Wird geplant…"
@@ -3611,7 +3662,9 @@
           "needs_review": "Prüfung nötig",
           "blocked": "blockiert",
           "unknown": "unbekannt"
-        }
+        },
+        "resumeDelegation": "Aufgabe {task} wird fortgesetzt",
+        "resumeDelegationNoId": "Delegierte Aufgabe wird fortgesetzt"
       }
     },
     "diffPreview": {
@@ -3739,11 +3792,11 @@
   "WebServiceSettings": {
     "addressSwitchHint": "Das Umschalten ändert nur die hier angezeigte und geöffnete Adresse – der Dienst lauscht auf allen Schnittstellen und bleibt unter jeder Adresse erreichbar.",
     "sectionTitle": "Webdienst",
-    "sectionDescription": "Aktivieren Sie den Fernzugriff auf Houhub über den Browser",
+    "sectionDescription": "Aktivieren Sie den Fernzugriff auf HouHub über den Browser",
     "port": "Port",
     "status": "Status",
     "autoStart": "Automatisch starten",
-    "autoStartHint": "Webdienst beim Start von Houhub starten",
+    "autoStartHint": "Webdienst beim Start von HouHub starten",
     "running": "Läuft",
     "stopped": "Gestoppt",
     "processing": "Verarbeitung...",
@@ -3758,7 +3811,7 @@
     "copy": "Kopieren",
     "qrcode": "QR-Code",
     "qrcodeTitle": "Zum Öffnen scannen",
-    "qrcodeHint": "Scanne mit deinem Handy, um Houhub im Browser zu öffnen",
+    "qrcodeHint": "Scanne mit deinem Handy, um HouHub im Browser zu öffnen",
     "addressLabel": "Zugriffsadresse",
     "tokenLabel": "Zugriffstoken",
     "tokenHint": "Geben Sie dieses Token beim ersten Zugriff auf den Web-Client ein",
@@ -3766,7 +3819,7 @@
     "regenerate": "Neu generieren",
     "stalePortOccupiedTitle": "Port {port} wird von einem anderen Prozess belegt",
     "stalePortUnknownTitle": "Status von Port {port} unklar",
-    "stalePortHint": "Houhub kann sich nicht binden, bis der Port freigegeben ist. Ändere den Port oben oder beende den Prozess, der ihn hält.",
+    "stalePortHint": "HouHub kann sich nicht binden, bis der Port freigegeben ist. Ändere den Port oben oder beende den Prozess, der ihn hält.",
     "errors": {
       "alreadyRunning": "Der Web-Dienst läuft bereits",
       "invalidAddress": "Host- oder Portformat ungültig",
@@ -3914,12 +3967,12 @@
     },
     "weixin": "WeChat",
     "weixinScanTitle": "QR-Code scannen",
-    "weixinScanDescription": "Oeffnen Sie WeChat und scannen Sie den QR-Code, um eine Verbindung herzustellen.",
+    "weixinScanDescription": "Öffnen Sie WeChat und scannen Sie den QR-Code, um eine Verbindung herzustellen.",
     "weixinQrcodeExpired": "QR-Code abgelaufen.",
     "weixinRefreshQrcode": "Aktualisieren",
     "weixinWaitingScan": "Warten auf Scan...",
     "weixinPollError": "Verbindung instabil, erneuter Versuch...",
-    "weixinReconnectNotice": "Aufgrund von Einschraenkungen des iLink-Protokolls muessen Sie nach jeder erneuten Verbindung dem Bot eine Nachricht senden, damit Ereignisausloeser wirksam werden."
+    "weixinReconnectNotice": "Aufgrund von Einschränkungen des iLink-Protokolls müssen Sie nach jeder erneuten Verbindung dem Bot eine Nachricht senden, damit Ereignisauslöser wirksam werden."
   },
   "ModelProviderSettings": {
     "sectionTitle": "Modellanbieter",
@@ -4174,7 +4227,7 @@
   },
   "SkillPacksSettings": {
     "title": "Skill-Pakete",
-    "description": "Kuratierte Skill-Pakete, die HouHub zentral verwaltet und mit deinen KI-Agenten verknüpft – Programmierexperten, wissenschaftliche Forschung und Office-Dokumenttools. Unten pro Agent aktivierbar.",
+    "description": "Kuratierte Skill-Pakete, die houhub zentral verwaltet und mit deinen KI-Agenten verknüpft – Programmierexperten, wissenschaftliche Forschung und Office-Dokumenttools. Unten pro Agent aktivierbar.",
     "tabs": {
       "experts": "Experten",
       "science": "Wissenschaft",
@@ -4782,7 +4835,7 @@
     "sectionAction": "Aktion",
     "actionLaunchSession": "Sitzung starten",
     "actionEnqueueTask": "Aufgabe einreihen",
-    "actionEnqueueTaskHint": "Jede Auslösung fügt dem Aufgaben-Board des Ordners eine To-do-Aufgabe mit dem Namen dieser Automatisierung hinzu; die Task-Engine führt sie gemäß den Board-Einstellungen aus."
+    "actionEnqueueTaskHint": "Jede Auslösung fügt den To-dos des Ordners eine To-do-Aufgabe mit dem Namen dieser Automatisierung hinzu; die Task-Engine führt sie gemäß den Board-Einstellungen aus."
   },
   "WorkbenchCloud": {
     "title": "Workbench Cloud",
@@ -4889,7 +4942,7 @@
     }
   },
   "CodexModelEditor": {
-    "customizedNotice": "Du hast die Modellliste angepasst, daher verwaltet Houhub jetzt die gesamte Modelltabelle von codex. Offizielle Modelle, die codex später hinzufügt, erscheinen nicht automatisch – klicke unten auf Aktualisieren und speichere erneut, um sie zu übernehmen. Entferne alle Anpassungen, damit codex sich wieder automatisch aktualisiert.",
+    "customizedNotice": "Du hast die Modellliste angepasst, daher verwaltet houhub jetzt die gesamte Modelltabelle von codex. Offizielle Modelle, die codex später hinzufügt, erscheinen nicht automatisch – klicke unten auf Aktualisieren und speichere erneut, um sie zu übernehmen. Entferne alle Anpassungen, damit codex sich wieder automatisch aktualisiert.",
     "officialsTitle": "Offizielle Modelle",
     "officialsHint": "Automatisch aus dem gestarteten codex übernommen; nicht benötigte entfernen.",
     "officialsEmpty": "Keine offiziellen Modelle verfügbar.",
@@ -4963,7 +5016,7 @@
     }
   },
   "Tasks": {
-    "title": "Aufgabenboard",
+    "title": "To-dos",
     "new": "Neue Aufgabe",
     "empty": "Noch keine Aufgaben",
     "emptyHint": "Füge ein To-do hinzu und starte es — der Agent arbeitet in einem isolierten Worktree, du prüfst und mergst das Ergebnis.",
@@ -5006,7 +5059,7 @@
     "actionComplete": "Abschließen",
     "actionAbandon": "Verwerfen",
     "cancelTitle": "Aufgabe abbrechen?",
-    "cancelDescription": "Die Aufgabe wird auf Abgebrochen gesetzt. Ihr Worktree bleibt erhalten und du kannst sie später erneut einreihen.",
+    "cancelDescription": "Die Aufgabe wird auf Abgebrochen gesetzt und du kannst sie später erneut einreihen.",
     "cancelReasonLabel": "Grund (optional)",
     "cancelReasonPlaceholder": "Z. B. falscher Ansatz – ich schreibe die Beschreibung neu",
     "cancelKeep": "Doch nicht",
@@ -5241,7 +5294,14 @@
     "deliverPrBackDeleteWorktree": "Worktree nach dem Push löschen",
     "deliverPrBackSubmit": "Pushen",
     "deliverPrBackDone": "In den Pull Request gepusht",
-    "deliverPrBackDoneMr": "In den Merge Request gepusht"
+    "deliverPrBackDoneMr": "In den Merge Request gepusht",
+    "cancelDeleteWorktree": "Auch den Worktree und den Arbeitsbranch löschen",
+    "settingsAutoCompact": "Schwelle für automatisches Komprimieren",
+    "settingsAutoCompactHint": "Vor einer Folge-, Wiederholungs- oder Merge-Runde die Sitzung komprimieren, wenn das Kontextfenster mindestens so voll ist. 0 = aus.",
+    "settingsCompactCommand": "Komprimierungsbefehl",
+    "settingsCompactCommandHint": "Leer lassen, um den vom Agenten angebotenen Befehl bzw. dessen bekannten Standard zu verwenden.",
+    "settingsCompactCommandPlaceholder": "/compact",
+    "eventContextCompact": "Kontext-Komprimierung"
   },
   "TokenUsage": {
     "title": "Token-Verbrauch",
@@ -5397,7 +5457,7 @@
   },
   "AgentToolsSettings": {
     "title": "Tools in der Unterhaltung",
-    "description": "Zusätzliche Tools, die HouHub einem Agenten innerhalb einer Unterhaltung gibt. Sie werden beim Start des Agenten injiziert – eine Änderung gilt daher für danach gestartete Agenten.",
+    "description": "Zusätzliche Tools, die houhub einem Agenten innerhalb einer Unterhaltung gibt. Sie werden beim Start des Agenten injiziert – eine Änderung gilt daher für danach gestartete Agenten.",
     "feedbackLabel": "Live-Feedback",
     "feedbackHint": "Sende einem Agenten Notizen und Korrekturen, während er arbeitet. Unterstützt der Agent sofortiges Einfügen, landet deine Notiz umgehend im laufenden Turn; andernfalls erhält der Agent ein Tool zum Abrufen deines Feedbacks – solche Agenten prüfen es meist nur, wenn du es im Prompt erwähnst, z. B. mit \"prüfe regelmäßig mein Live-Feedback\".",
     "questionLabel": "Benutzer fragen",
@@ -5439,7 +5499,9 @@
     "pickFolder": "Projektordner wählen",
     "noRemote": "Dieser Ordner hat kein erkennbares Forge-Remote (origin)",
     "errors": {
-      "noAccount": "Für {host} ist kein {provider}-Konto konfiguriert. Füge unter Einstellungen → Versionskontrolle eines hinzu, um dieses Repository zu laden."
+      "noAccount": "Für {host} ist kein {provider}-Konto konfiguriert. Füge unter Einstellungen → Versionskontrolle eines hinzu, um dieses Repository zu laden.",
+      "unsupportedHost": "Das Repository-Panel unterstützt nur GitHub und GitLab, und {host} wird als keines von beiden erkannt. Falls es sich um eine selbst gehostete GitHub-Enterprise- oder GitLab-Instanz handelt, füge unter Einstellungen → Versionskontrolle ein Konto dafür hinzu.",
+      "wrongForge": "{host} ist ein {provider} und nicht die Forge, als die es eingestuft war. Die Erkennung wurde korrigiert — neu laden, um es erneut zu versuchen."
     },
     "addAccount": "Konto hinzufügen",
     "empty": "Nichts zu zeigen",
@@ -5629,5 +5691,79 @@
     "newIssueLabels": "Labels",
     "newIssueSubmit": "Issue anlegen",
     "newIssueCreating": "Wird angelegt…"
+  },
+  "Canvas": {
+    "title": "Unendliche Unterhaltungen",
+    "untitled": "Unbenannte Unterhaltung",
+    "unresolvedConversation": "Unterhaltung gelöscht",
+    "removeCard": "Karte entfernen",
+    "unresolvedFolder": "Ordner nicht verfügbar",
+    "unresolvedFolderHint": "Der verknüpfte Ordner ist geschlossen oder gelöscht. Nach dem erneuten Öffnen lebt diese Region wieder auf.",
+    "customRegion": "Sammlung",
+    "runningCount": "{count} laufend",
+    "childCount": "{count} Subagenten",
+    "regionMenu": "Regionsoptionen",
+    "rename": "Umbenennen",
+    "collapse": "Einklappen",
+    "expand": "Ausklappen",
+    "color": "Farbe",
+    "removeRegion": "Region entfernen",
+    "removeNote": "Notiz löschen",
+    "showMore": "{count} weitere",
+    "emptyRegion": "Noch keine Unterhaltungen hier",
+    "emptyCustomHint": "Ziehe Unterhaltungskarten hierher, um sie zu sammeln",
+    "notePlaceholder": "Notiz schreiben…",
+    "noteEmptyHint": "Zum Schreiben doppelklicken",
+    "addNode": "Zum Canvas hinzufügen",
+    "addFolderRegion": "Ordner-Region",
+    "addAgentRegion": "Agenten-Region",
+    "addConversationCard": "Unterhaltungskarte",
+    "addCustomRegion": "Eigene Region",
+    "addNote": "Haftnotizkarte",
+    "searchConversations": "Unterhaltungen suchen…",
+    "noFolders": "Keine geöffneten Ordner",
+    "noConversations": "Keine Unterhaltungen gefunden",
+    "fitView": "Ansicht einpassen",
+    "zoomIn": "Vergrößern",
+    "zoomOut": "Verkleinern",
+    "resetZoom": "Zoom auf 100% zurücksetzen",
+    "viewportControls": "Ansicht",
+    "showMinimap": "Karte anzeigen",
+    "hideMinimap": "Karte ausblenden",
+    "autoArrange": "Automatisch anordnen",
+    "exportPng": "Als PNG exportieren",
+    "empty": "Dein Canvas ist leer",
+    "emptyHint": "Ordne deinen Arbeitsbereich räumlich: Regionen für Ordner und Agenten, Karten für Unterhaltungen, Notizen für alles andere.",
+    "seedFromWorkspace": "Aus aktuellem Arbeitsbereich erzeugen",
+    "unresolvedGroup": "Gruppe nicht verfügbar",
+    "unresolvedGroupHint": "Die verknüpfte Ordnergruppe wurde gelöscht. Entferne diesen Bereich oder füge einen neuen hinzu.",
+    "grid": "Raster",
+    "gridColumns": "Spalten",
+    "gridRows": "Zeilen",
+    "gridAuto": "Auto",
+    "addGroupRegion": "Ordnergruppen-Bereich",
+    "noGroups": "Keine Ordnergruppen",
+    "createRegionFromSelection": "In einen Bereich gruppieren",
+    "selectedCount": "{count} ausgewählt",
+    "openInWorkspace": "Im Arbeitsbereich öffnen",
+    "openDetailPanel": "In der Seitenleiste öffnen",
+    "detailPanelDescription": "Die vollständige Unterhaltung der ausgewählten Karte, ohne die Leinwand zu verlassen.",
+    "expandConversation": "Unterhaltung ausklappen",
+    "collapseConversation": "Unterhaltung einklappen",
+    "cardMenu": "Kartenoptionen",
+    "removeFromRegion": "Aus Bereich entfernen",
+    "newConversation": "Neue Unterhaltung",
+    "discardDraft": "Entwurf verwerfen",
+    "createFailed": "Unterhaltung konnte nicht erstellt werden",
+    "showAllMembers": "Alle Unterhaltungen anzeigen",
+    "showFewerMembers": "Weniger anzeigen",
+    "detachToCanvas": "Auf die Leinwand herausziehen",
+    "deleteSelected": "Auswahl löschen",
+    "confirmDeleteTitle": "Auswahl löschen?",
+    "confirmDeleteNotes": "{count, plural, one {# selbst geschriebene Notiz wird} other {# selbst geschriebene Notizen werden}} endgültig gelöscht. Das lässt sich nicht rückgängig machen.",
+    "confirmDeleteCancel": "Abbrechen",
+    "confirmDeleteConfirm": "Löschen",
+    "canvasActions": "Leinwand-Aktionen",
+    "mergeIntoNewRegion": "Neuer Bereich"
   }
 }

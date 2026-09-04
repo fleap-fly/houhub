@@ -127,7 +127,7 @@
     },
     "zoomLevel": {
       "sectionTitle": "ウィンドウズーム",
-      "sectionDescription": "インターフェイス全体を拡大・縮小します。すぐに反映され、デバイスごとに保存されます。",
+      "sectionDescription": "インターフェイス全体を拡大・縮小します。すぐに反映され、デバイスごとに保存されます。⌘/Ctrl + と - で、このメニューと同じ段階で拡大縮小します（⌘/Ctrl 0 で 100% に戻します）。",
       "placeholder": "ズームレベルを選択",
       "default": "デフォルト",
       "current": "現在のズーム：{zoom}%"
@@ -146,13 +146,13 @@
       "ligatures": "合字を有効にする",
       "ligaturesUnavailable": "このフォントには合字がありません",
       "terminalLigaturesHint": "ターミナルの合字は内蔵のコーディングフォントにのみ適用されます。",
-      "wordWrap": "エディタの行折り返しを有効にする",
+      "wordWrap": "折り返しを有効にする",
       "preview": "プレビュー"
     },
     "welcomePanel": {
-      "sectionTitle": "ウェルカムパネル",
-      "sectionDescription": "新しい会話の入力欄上にある「コード開発 / オフィスワーク」のクイックアクションカードを表示します。",
-      "showQuickActions": "新しい会話で表示"
+      "sectionTitle": "モード選択エリア",
+      "sectionDescription": "新しい会話ページで入力欄の上に表示される「コード開発 / 日常業務」のショートカットカードです。",
+      "showQuickActions": "新しい会話ページに表示する"
     },
     "workspaceBackground": {
       "sectionTitle": "ワークスペースの背景",
@@ -221,7 +221,7 @@
       },
       "css": {
         "dialogTitle": "カスタム CSS",
-        "dialogDescription": "すべての HouHub ウィンドウに適用されます。変更はリアルタイムでプレビューされ、「適用」で保存されます。",
+        "dialogDescription": "すべての houhub ウィンドウに適用されます。変更はリアルタイムでプレビューされ、「適用」で保存されます。",
         "size": "{used} KB / {max} KB",
         "ruleCount": "{count} 個のルール",
         "errorTooLarge": "サイズが大きすぎて保存できません。上限以下に減らしてください。",
@@ -238,7 +238,7 @@
   "SystemSettings": {
     "loading": "読み込み中...",
     "sectionTitle": "システム管理",
-    "sectionDescription": "ネットワークプロキシ、アプリ更新、言語設定を管理します。",
+    "sectionDescription": "アプリ更新、ログイン時の起動、ネットワークプロキシ、言語設定を管理します。",
     "proxyTitle": "ネットワークプロキシ",
     "proxyDescription": "有効にすると、以降のネットワークリクエストはこのプロキシを優先して使用します（ACP チャット、エージェントのインストール、Git リモート操作を含む）。",
     "loadFailed": "読み込みに失敗しました: {message}",
@@ -672,6 +672,8 @@
     "local": {
       "filterPlaceholder": "ローカルMCPを絞り込み...",
       "loadFailed": "読み込み失敗: {message}",
+      "sourceUnreadable": "{app} の MCP 設定を読み取れませんでした。そのサーバーは表示されません: {message}",
+      "saveBlockedByUnreadableSource": "保存する前にそのファイルを修正または削除して再読み込みしてください。割り当てはこのページが読み取れたエージェントから計算されるため、今保存すると読み取れなかったエージェントからこのサーバーが削除される可能性があります。",
       "empty": "ローカルMCPが見つかりません。",
       "description": "ローカルMCP設定は直接編集して保存できます。",
       "enabledApps": "有効なアプリ",
@@ -831,7 +833,7 @@
       "configTomlHint": "~/.grok/config.toml 全体としてそのまま書き込まれます。無効な TOML は拒否され、タイプミスでファイルが切り詰められることはありません。",
       "configTomlPlaceholder": "# 上のコントロール以外のキー。例:\n# [mcp_servers.*]、[cli]、[permission] ルール。",
       "customModelTitle": "カスタムモデル（独自エンドポイント）",
-      "customModelHint": "Grok をカスタムまたは自己ホストのエンドポイントに向けます。HouHub はモデルごとの `[model.*]` ブロックを書き込み、既定モデルに設定します。モデル ID を空にすると削除されます。",
+      "customModelHint": "Grok をカスタムまたは自己ホストのエンドポイントに向けます。houhub はモデルごとの `[model.*]` ブロックを書き込み、既定モデルに設定します。モデル ID を空にすると削除されます。",
       "customModelIdLabel": "モデル ID",
       "customModelIdPlaceholder": "grok-4.5",
       "customModelIdHint": "`[model.*]` ブロックとして登録され、モデル名として API に送信されます。`[models].default` にも設定されます。",
@@ -849,7 +851,7 @@
       "autoCompactHint": "コンテキスト使用率がこの割合に達したら会話を圧縮します（Grok の既定は 85）。`[session]` に書き込まれます。"
     },
     "cursor": {
-      "configDescription": "ここで Cursor を設定します。まず認証方式を選択し——公式サブスクリプション（ブラウザログイン）またはヘッドレス/サーバー用の Cursor API キー——次にモデルを選び、CLI の権限ルールとサンドボックスを編集します。HouHub はこれらを ~/.cursor/cli-config.json に書き込み、cursor-agent CLI と共有します。",
+      "configDescription": "ここで Cursor を設定します。まず認証方式を選択し——公式サブスクリプション（ブラウザログイン）またはヘッドレス/サーバー用の Cursor API キー——次にモデルを選び、CLI の権限ルールとサンドボックスを編集します。houhub はこれらを ~/.cursor/cli-config.json に書き込み、cursor-agent CLI と共有します。",
       "authTitle": "認証",
       "authChecking": "確認中…",
       "authNotInstalled": "cursor-agent が未インストールです",
@@ -889,7 +891,14 @@
       "modelPickerPlaceholder": "モデルを検索…",
       "modelNoMatch": "一致するモデルがありません",
       "modelsNeedAuth": "サインインするとモデル一覧を読み込みます。",
-      "modelDefaultBadge": "既定"
+      "modelDefaultBadge": "既定",
+      "modelThinkingLabel": "思考",
+      "modelEffortLabel": "思考の強度",
+      "modelFastLabel": "Fast",
+      "variantOn": "オン",
+      "variantOff": "オフ",
+      "modelVariantHint": "Cursor は組み合わせごとに個別のモデル ID を用意しており、これらのコントロールが該当する ID を選びます。ここで決まるのは起動時の既定値です。モデル・思考・Fast はセッション中いつでも入力欄から変更できます。",
+      "permissionModeAskHint": "「実行前に確認」は各ツール呼び出しを承認に回します。Cursor 自身の「常に許可」を選ぶと下の許可リストにルールが追加され、次回から同じ呼び出しは確認なしで実行されます。"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness の設定",
@@ -901,7 +910,7 @@
       "apiKeyHint": "DEEPSEEK_API_KEY としてエージェントに渡されます。環境変数は認証情報ファイルより優先されるため、ターミナルでログインする場合は空のままにしてください。"
     },
     "codex": {
-      "configDescription": "API URL、API Key、モデル名、reasoning effort を素早く設定でき、`auth.json` / `config.toml` と同期します。",
+      "configDescription": "API URL、API Key、モデル名を素早く設定でき、`auth.json` / `config.toml` と同期します。",
       "authMode": "認証方式",
       "chatgptSubscription": "公式サブスクリプション",
       "chatgptSubscriptionHint": "ChatGPT 公式サブスクリプションでログイン、API Key 不要",
@@ -941,7 +950,7 @@
       "sandboxMode_workspace-write": "ワークスペース書き込み",
       "sandboxMode_danger-full-access": "フルアクセス（サンドボックスなし）",
       "sandboxModeHint": "Windows では、codex の実験的 Windows サンドボックスが無効な場合、ワークスペース書き込みは読み取り専用に降格されます。",
-      "sandboxModeSeedsPresetHint": "HouHub はこれをセッション開始時の承認プリセットにも対応づけるため、承認ポリシーとは違って通常のプロンプトにも効きます。なお、アダプタの既定プリセットではモデルが権限昇格を先に選別し、危険と判断したものだけを転送します。すべて自分で確認したい場合は入力欄で「承認を求める」を選んでください。入力欄のプリセットが常に優先されます。",
+      "sandboxModeSeedsPresetHint": "houhub はこれをセッション開始時の承認プリセットにも対応づけるため、承認ポリシーとは違って通常のプロンプトにも効きます。なお、アダプタの既定プリセットではモデルが権限昇格を先に選別し、危険と判断したものだけを転送します。すべて自分で確認したい場合は入力欄で「承認を求める」を選んでください。入力欄のプリセットが常に優先されます。",
       "writableRootsLabel": "追加の書き込み可能フォルダ",
       "writableRootsHint": "作業ディレクトリに加えて許可する絶対パスを 1 行に 1 つ。",
       "sandboxRootsRelativeError": "絶対パスである必要があります — codex は相対パスを ~/.codex 基準で解決します: {path}",
@@ -964,7 +973,7 @@
       "loginRelogin": "再ログイン / アカウント切替",
       "loginTimeout": "ログインがタイムアウトしました。再試行してください",
       "loginSaveFailed": "ログインは成功しましたが、設定の保存に失敗しました",
-      "sandboxModeReadOnlyAcpWarning": "ACP アダプタには読み取り専用のサンドボックスがなくなったため、ここでの選択にかかわらず HouHub のセッションはワークスペース書き込み可で動きます。HouHub は選べる中で最も厳しいプリセット（権限昇格はすべてあなたの承認を求める）を選びますが、ワークスペース内の編集には承認が要らなくなります。codex CLI と IDE のセッションは引き続き読み取り専用に従います。"
+      "sandboxModeReadOnlyAcpWarning": "ACP アダプタには読み取り専用のサンドボックスがなくなったため、ここでの選択にかかわらず houhub のセッションはワークスペース書き込み可で動きます。houhub は選べる中で最も厳しいプリセット（権限昇格はすべてあなたの承認を求める）を選びますが、ワークスペース内の編集には承認が要らなくなります。codex CLI と IDE のセッションは引き続き読み取り専用に従います。"
     },
     "gemini": {
       "authConfig": "Gemini 認証設定",
@@ -992,7 +1001,7 @@
       "providerManagement": "プロバイダー管理",
       "providerCount": "{count} 個のプロバイダー",
       "addProvider": "プロバイダーを追加",
-      "emptyProvider": "まだプロバイダーがありません。ID を入力して「プロバイダーを追加」をクリックしてください。",
+      "emptyProvider": "カスタムプロバイダーはまだありません。「カスタムプロバイダーを追加」をクリックして作成してください。",
       "providerEnabledState": "{providerId} の有効状態",
       "selectProviderNpm": "provider.npm を選択",
       "modelManagement": "モデル管理",
@@ -1165,7 +1174,7 @@
       "authModeApiKey": "API キー",
       "authModeLogin": "Kimi アカウントログイン（サブスクリプション）",
       "authModeApiKeyHint": "config.toml に管理対象プロバイダーを書き込み、セッションを開けるようゲートトークンを配置します。",
-      "loginHint": "ターミナルで `kimi login` を実行し、Kimi サブスクリプションアカウントでログインしてください。Kimi 0.39.0 以降、kimi.ai のアカウントには `--region global` を付けます（既定は kimi.com へのログインです）。HouHub は資格情報を保存せず、Kimi 自身のログインを再利用します。ここで保存すると HouHub の API キー用ゲートトークンが削除されます。",
+      "loginHint": "ターミナルで `kimi login` を実行し、Kimi サブスクリプションアカウントでログインしてください。Kimi 0.39.0 以降、kimi.ai のアカウントには `--region global` を付けます（既定は kimi.com へのログインです）。houhub は資格情報を保存せず、Kimi 自身のログインを再利用します。ここで保存すると houhub の API キー用ゲートトークンが削除されます。",
       "credentialTitle": "資格情報",
       "interfaceTypeLabel": "プロバイダー種別",
       "interfaceTypeHint": "Kimi が話すプロバイダープロトコル（config.toml の `type`）。Moonshot / platform.kimi.com のキーには「Kimi / Moonshot」を選びます。",
@@ -1333,15 +1342,15 @@
       "modelProviderIncompatible": "{provider} does not support {agent}. Choose a compatible model provider before saving.",
       "modelProviderClearedOnDisable": "Agent disabled. The incompatible model provider binding was removed.",
       "affectedRunningSessions": "{count} 件の実行中セッションは再接続すると変更が適用されます",
-      "piSaved": "Pi config saved",
-      "savePiFailed": "Failed to save Pi config",
-      "piRuntimeSaved": "Pi runtime saved",
-      "savePiRuntimeFailed": "Failed to save Pi runtime",
-      "piBinaryInstalled": "pi installed",
-      "piBinaryInstallFailed": "Failed to install pi",
-      "piBinaryUninstalled": "pi uninstalled",
-      "piBinaryUninstallFailed": "Failed to uninstall pi",
-      "savePiTrustFailed": "Failed to save workspace trust",
+      "piSaved": "Pi 設定を保存しました",
+      "savePiFailed": "Pi 設定の保存に失敗しました",
+      "piRuntimeSaved": "Pi ランタイムを保存しました",
+      "savePiRuntimeFailed": "Pi ランタイムの保存に失敗しました",
+      "piBinaryInstalled": "pi をインストールしました",
+      "piBinaryInstallFailed": "pi のインストールに失敗しました",
+      "piBinaryUninstalled": "pi をアンインストールしました",
+      "piBinaryUninstallFailed": "pi のアンインストールに失敗しました",
+      "savePiTrustFailed": "ワークスペースの信頼設定の保存に失敗しました",
       "providerConnected": "{providerId} を接続しました",
       "connectFailed": "{providerId} の接続に失敗しました",
       "providerDisconnected": "{providerId} を切断しました",
@@ -1388,18 +1397,18 @@
       "failed": "プラグイン操作に失敗しました"
     },
     "pi": {
-      "configManagement": "Pi Configuration",
-      "configDescription": "Pi authenticates with your model provider's API key. The key is written to ~/.pi/agent/auth.json and the model selection to settings.json.",
-      "providerLabel": "Provider",
-      "modelLabel": "Model",
-      "thinkingLabel": "Thinking",
+      "configManagement": "Pi 設定",
+      "configDescription": "Pi はモデルプロバイダーの API キーで認証します。キーは ~/.pi/agent/auth.json に、モデル選択は settings.json に書き込まれます。",
+      "providerLabel": "プロバイダー",
+      "modelLabel": "モデル",
+      "thinkingLabel": "思考",
       "thinking": {
-        "off": "Off",
-        "low": "Low",
-        "medium": "Medium",
-        "high": "High",
-        "minimal": "Minimal",
-        "xhigh": "Extra high",
+        "off": "オフ",
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "minimal": "最小",
+        "xhigh": "最高",
         "max": "Maximum"
       },
       "apiKeyLabel": "API キー",
@@ -1557,11 +1566,11 @@
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
       "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
-      "syncSkipped": "Your choice was saved, but HouHub could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
+      "syncSkipped": "Your choice was saved, but houhub could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
       "headless": {
         "title": "ブラウザのないマシンでサインイン",
-        "description": "Antigravity の Google サインインはエージェント自身が実行するため、ブラウザはエージェントが動くマシンで開く必要があります。デスクトップのないサーバーに置いた HouHub にはブラウザがなく、最初のセッション作成は 5 分待ってから失敗します。代わりにここからサインインしてください。リンクを任意の端末で開き、移動先のアドレスを貼り戻します。",
+        "description": "Antigravity の Google サインインはエージェント自身が実行するため、ブラウザはエージェントが動くマシンで開く必要があります。デスクトップのないサーバーに置いた houhub にはブラウザがなく、最初のセッション作成は 5 分待ってから失敗します。代わりにここからサインインしてください。リンクを任意の端末で開き、移動先のアドレスを貼り戻します。",
         "start": "サインインリンクを取得",
         "saveFirst": "先に保存してください。サインインは保存済みの設定を使用し、上の入力内容は参照しません。",
         "step1": "1. このリンクを開いて Google にサインインします。",
@@ -1587,9 +1596,9 @@
   "GeneralSettings": {
     "loading": "読み込み中...",
     "sectionTitle": "一般",
-    "sectionDescription": "デフォルトターミナル、レンダリング高速化、マルチエージェント委譲などの共通設定をここで一括管理します。",
+    "sectionDescription": "デフォルトターミナル、レンダリング高速化、通知音、マルチエージェント委譲などの共通設定をここで一括管理します。",
     "terminalTitle": "デフォルトターミナル",
-    "terminalDescription": "ターミナルバーやファイルツリーから新しいターミナルタブを開く際に使うシェルを選択します。",
+    "terminalDescription": "ターミナルバーやファイルツリーから新しいターミナルタブを開くときに使用するシェルを選択します。エージェントが houhub にコマンドライン全体の実行を依頼するときにも使われます。",
     "defaultTerminalShell": "デフォルトシェル",
     "terminalSystemDefault": "システムデフォルト",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
@@ -1614,7 +1623,7 @@
   },
   "LoginPage": {
     "documentTitle": "ログイン - houhub",
-    "brand": "Houhub",
+    "brand": "HouHub",
     "subtitle": "デスクトップアプリに接続するためのアクセストークンを入力してください",
     "tokenPlaceholder": "アクセストークン",
     "connect": "接続",
@@ -1762,7 +1771,12 @@
         "reorderFoldersFailed": "フォルダの並べ替えに失敗しました: {message}",
         "changeFolderColorFailed": "色の変更に失敗しました: {message}",
         "setFolderAliasFailed": "エイリアスの設定に失敗しました: {message}",
-        "changeFolderDefaultAgentFailed": "デフォルトエージェントの設定に失敗しました: {message}"
+        "changeFolderDefaultAgentFailed": "デフォルトエージェントの設定に失敗しました: {message}",
+        "createGroupFailed": "グループの作成に失敗しました: {message}",
+        "updateGroupFailed": "グループの更新に失敗しました: {message}",
+        "deleteGroupFailed": "グループの削除に失敗しました: {message}",
+        "moveToGroupFailed": "フォルダの移動に失敗しました: {message}",
+        "applyLayoutFailed": "フォルダの並び順の保存に失敗しました: {message}"
       },
       "statsLabel": "{folders} フォルダ · {convos} 会話",
       "reorderHandle": "ドラッグして並べ替え",
@@ -1771,7 +1785,7 @@
       "viewOptions": "表示オプション",
       "listOptions": "会話リスト",
       "showCompleted": "完了した会話を表示",
-      "showWorktrees": "ワークツリーフォルダを表示",
+      "showWorktrees": "ワークツリーブランチを表示",
       "showRecent": "「最近」グループを表示",
       "navigationItems": "ナビゲーション項目",
       "moreOptions": "その他のオプション",
@@ -1840,7 +1854,7 @@
       "automations": "オートメーション",
       "loadingSubsessions": "サブ会話を読み込み中…",
       "worktreeRemovedBadge": "元の worktree は削除済み",
-      "tasks": "タスクボード",
+      "tasks": "ToDo タスク",
       "runningCountBadge": "{count} 件の会話が実行中",
       "sectionOrderMoveUp": "上へ移動",
       "sectionOrderMoveDown": "下へ移動",
@@ -1849,7 +1863,24 @@
       "noRecent": "最近の会話はありません",
       "showMoreRecent": "さらに表示（{count}）",
       "resetRecentLimit": "最初の{count}件に戻す",
-      "forge": "リポジトリパネル"
+      "forge": "リポジトリパネル",
+      "canvas": "無限会話",
+      "folderGroup": {
+        "newGroup": "新しいグループ",
+        "newGroupTitle": "新しいフォルダグループ",
+        "defaultName": "新しいグループ",
+        "namePlaceholder": "グループ名",
+        "rename": "グループ名を変更…",
+        "renameTitle": "フォルダグループの名前を変更",
+        "delete": "グループを削除",
+        "deleteConfirmTitle": "このグループを削除しますか？",
+        "deleteConfirmDescription": "「{name}」を削除します。グループ内の {count} 個のフォルダはワークスペースに残り、最上位に戻ります。",
+        "empty": "このグループにフォルダはありません",
+        "moveToGroup": "グループへ移動",
+        "removeFromGroup": "グループなし",
+        "newGroupAndMove": "新しいグループ…",
+        "dropToUngroup": "ここにドロップしてグループから外す"
+      }
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",
@@ -1864,6 +1895,7 @@
       "forkSession": "セッションをフォーク",
       "forkSessionSuccess": "セッションのフォークに成功しました",
       "forkSessionFailed": "セッションのフォークに失敗しました：{error}",
+      "forkSessionBusy": "分岐に失敗しました: ターンの実行中です",
       "exportConversation": "会話をエクスポート",
       "exportImage": "画像",
       "exportMarkdown": "Markdown",
@@ -2159,7 +2191,7 @@
       "addSelectionToChatDone": "{label} を会話に追加しました",
       "addFileToChat": "ファイルをチャットに追加",
       "addFileToChatDone": "{label} を会話に追加しました",
-      "toggleWordWrap": "行折り返しを切り替え",
+      "toggleWordWrap": "折り返しの切り替え",
       "viewDiff": "差分を見る",
       "openFile": "ファイルを開く",
       "fileCount": "{count, plural, one {# 個のファイル} other {# 個のファイル}}",
@@ -2329,7 +2361,9 @@
       "noMatches": "一致する項目がありません",
       "pushBranch": "プッシュ",
       "deleteWorktree": "ワークツリーを削除",
-      "deleteWorktreeAndBranch": "ワークツリーとブランチを削除"
+      "deleteWorktreeAndBranch": "ワークツリーとブランチを削除",
+      "worktreeBranches": "ワークツリーブランチ ({count, plural, one {#} other {#}})",
+      "noWorktreeBranches": "ワークツリーブランチはありません"
     },
     "commitDialog": {
       "toasts": {
@@ -2796,6 +2830,7 @@
           "downloadFailed": "{agent} のダウンロードに失敗しました: {message}",
           "sessionLoadResourceNotFound": "{agent} セッションの読み込みに失敗しました。再読み込みして再試行するか、新しい会話を開始してください。",
           "sessionLoadUnavailable": "{agent} はこのセッションを復元できませんでした。セッションが終了したか、エージェントが停止した可能性があります。再読み込みして再試行するか、新しい会話を開始してください。",
+          "sessionLoadBusy": "この履歴は、そこから分岐したセッションが開いたままにしています。そのセッションを閉じてから再読み込みしてください。",
           "sessionArchived": "以前のセッションは {agent} 側でアーカイブされています。ターミナルで {command} を実行して復元してから再読み込みするか、新しい会話を開始してください。",
           "turnFailedRefusal": "{agent} がこのターンの続行を拒否しました。バックエンドまたはゲートウェイのエラーが原因の可能性があります。エージェントのログを確認してください。",
           "turnFailedMaxTokens": "{agent} がこのターンの最大トークン数に達しました。",
@@ -2883,7 +2918,11 @@
         "noModels": "モデルが見つかりません",
         "cancel": "キャンセル",
         "send": "送信",
-        "forkAndSend": "フォークして送信",
+        "queueMessage": "キューに追加",
+        "steerIntoTurn": "現在のターンに挿入",
+        "steerQueuedInstead": "代わりにキューに追加しました。次のターンで送信されます。",
+        "steerFailed": "現在のターンに挿入できませんでした",
+        "steerAttachmentsUnsupported": "テキストのみ対応です。添付ファイル付きの下書きはキューをご利用ください。",
         "slashCommands": "スラッシュコマンド",
         "slashSearchPlaceholder": "コマンドを検索...",
         "slashSearchEmpty": "一致するコマンドがありません",
@@ -2944,9 +2983,9 @@
           "pasteDropFiles": "スクリーンショットを貼り付けたり、ファイルを入力欄にドロップするだけで添付できます",
           "queueMessage": "エージェントの応答中も入力を続けられ、次のメッセージはキューに入って完了後に自動送信されます",
           "draftAutoSave": "未送信の下書きは会話ごとに自動保存され、戻ったときに復元されます",
-          "forkSend": "送信ボタンのドロップダウンで「分岐して送信」を選ぶと、現在の地点から新しいタブに分岐できます",
+          "forkFromTurn": "完了した返信には「ここから分岐」があり、そのメッセージから新しいタブに分岐できます",
           "exportConversation": "会話内容を右クリックすると Markdown / HTML / 画像としてエクスポートできます",
-          "chatChannels": "「設定 -> チャットチャネル」で Telegram / Lark / WeChat を連携すれば、スマホから続けて操作できます",
+          "chatChannels": "「設定 → チャットチャネル」で Telegram / Lark / WeChat を連携すれば、スマホから続けて操作できます",
           "shortcutsAuxPanel": "<shortcut>{toggleAuxPanel}</shortcut> で右側パネルを開き、このセッションで変更したファイルや Git の差分を確認できます",
           "shortcutsTerminalSidebar": "<shortcut>{toggleTerminal}</shortcut> で内蔵ターミナル、<shortcut>{toggleSidebar}</shortcut> でサイドバーを切り替えできます",
           "customShortcuts": "すべてのショートカットは「設定 → ショートカット」で自由に変更できます",
@@ -2960,7 +2999,7 @@
           "mentionTargets": "@ で参照できるのはファイルだけではありません。別のエージェントをメンションしてサブタスクを任せたり、過去のセッション・コミット・スキルを参照したりできます。",
           "splitGroups": "タブを右クリックして「右に分割」または「下に分割」を選ぶと、2 つの会話をそれぞれのペインで開いたままにできます。",
           "worktrees": "ブランチボタンから「新規ワークツリー」を選ぶと、複数のエージェントが同じリポジトリで互いのファイルを上書きせずに並行作業できます。",
-          "importSessions": "すでにターミナルで実行したセッションは、フォルダーのメニューにある「ローカルセッションをインポート」で HouHub に取り込めます。",
+          "importSessions": "すでにターミナルで実行したセッションは、フォルダーのメニューにある「ローカルセッションをインポート」で houhub に取り込めます。",
           "subSessions": "エージェントが委任すると、サブセッションがサイドバーの親セッションの下に入れ子で表示されます。行を展開すれば、それぞれの作業を追えます。",
           "liveFeedback": "「+」メニューのライブフィードバックを使えば、エージェントが実行中のターンに、中断させずにメモを差し込めます。",
           "skillPacks": "設定 → スキルパックには、コーディング専門家・科学研究・オフィス作業のスキルがまとまっています。エージェントごとに有効化できます。",
@@ -3148,6 +3187,8 @@
         "emptyConversation": "この会話にはメッセージがありません。",
         "systemMessage": "システムメッセージ",
         "copyMessage": "コピー",
+        "forkFromHere": "ここから分岐",
+        "forkBusy": "ターンの実行中は分岐できません",
         "copied": "コピー済み",
         "downloadImage": "画像をダウンロード",
         "downloadFailed": "ダウンロードに失敗しました: {message}",
@@ -3181,7 +3222,8 @@
         "copyImage": "画像をコピー",
         "copiedImage": "画像をコピーしました",
         "copyImageFailed": "画像のコピーに失敗しました: {message}",
-        "copyImageUnsupported": "この環境では画像をコピーできません"
+        "copyImageUnsupported": "この環境では画像をコピーできません",
+        "selectionSaveAsNote": "メモに保存"
       },
       "liveTurnStats": {
         "thinking": "考え中...",
@@ -3248,7 +3290,10 @@
             "child_unknown": "サブエージェント: エラー",
             "unknown": "不明なタスク"
           }
-        }
+        },
+        "resumed": "再開済み",
+        "resumeDetail": "再開の詳細",
+        "resumeReasonLabel": "再開理由"
       },
       "contentParts": {
         "showingTailOutput": "パフォーマンスのため、ストリーミング中は末尾出力を表示しています。",
@@ -3400,7 +3445,6 @@
         },
         "planMode": {
           "entered": "計画モードを開始",
-          "planLabel": "計画",
           "submitted": "計画を送信しました",
           "switched": "モードを切り替え",
           "reviewApproved": "計画を承認 — 実行します",
@@ -3574,6 +3618,13 @@
         "cardFinishedWithStatus": "バックグラウンドタスクが終了しました（{status}）",
         "cardResultPending": "結果はまだ返っていません"
       },
+      "asyncTasks": {
+        "openOutput": "出力",
+        "stop": "停止",
+        "tokens": "{count} トークン",
+        "stopDeclined": "このタスクは停止できませんでした。すでに終了している可能性があります。",
+        "stopFailed": "タスクの停止に失敗しました: {error}"
+      },
       "proposedPlan": {
         "title": "提案された計画",
         "planning": "計画中…"
@@ -3611,7 +3662,9 @@
           "needs_review": "要確認",
           "blocked": "ブロック",
           "unknown": "不明"
-        }
+        },
+        "resumeDelegation": "タスク {task} を再開中",
+        "resumeDelegationNoId": "委任タスクを再開中"
       }
     },
     "diffPreview": {
@@ -3739,11 +3792,11 @@
   "WebServiceSettings": {
     "addressSwitchHint": "切り替えても、ここに表示され開くアドレスが変わるだけです。サービスはすべてのインターフェースで待ち受けており、どのアドレスからもアクセスできます。",
     "sectionTitle": "Webサービス",
-    "sectionDescription": "有効にするとブラウザからHouhubにリモートアクセスできます",
+    "sectionDescription": "有効にするとブラウザからHouHubにリモートアクセスできます",
     "port": "ポート",
     "status": "ステータス",
     "autoStart": "自動起動",
-    "autoStartHint": "Houhub の起動時に Web サービスを開始",
+    "autoStartHint": "HouHub の起動時に Web サービスを開始",
     "running": "実行中",
     "stopped": "停止中",
     "processing": "処理中...",
@@ -3758,7 +3811,7 @@
     "copy": "コピー",
     "qrcode": "QRコード",
     "qrcodeTitle": "スキャンして開く",
-    "qrcodeHint": "スマートフォンでスキャンして、ブラウザで Houhub を開きます",
+    "qrcodeHint": "スマートフォンでスキャンして、ブラウザで HouHub を開きます",
     "addressLabel": "アクセスアドレス",
     "tokenLabel": "アクセストークン",
     "tokenHint": "Webクライアントの初回アクセス時にこのトークンを入力してください",
@@ -3766,7 +3819,7 @@
     "regenerate": "再生成",
     "stalePortOccupiedTitle": "ポート {port} は他のプロセスに使用されています",
     "stalePortUnknownTitle": "ポート {port} の状態を確認できません",
-    "stalePortHint": "ポートが解放されるまで Houhub はバインドできません。上のポートを変更するか、占有しているプロセスを終了してください。",
+    "stalePortHint": "ポートが解放されるまで HouHub はバインドできません。上のポートを変更するか、占有しているプロセスを終了してください。",
     "errors": {
       "alreadyRunning": "Web サービスはすでに起動しています",
       "invalidAddress": "ホストまたはポートの形式が無効です",
@@ -3913,13 +3966,13 @@
       "ar": "アラビア語"
     },
     "weixin": "WeChat",
-    "weixinScanTitle": "QR code scan",
-    "weixinScanDescription": "Open WeChat and scan the QR code to connect.",
-    "weixinQrcodeExpired": "QR code expired.",
-    "weixinRefreshQrcode": "Refresh",
-    "weixinWaitingScan": "Waiting for scan...",
-    "weixinPollError": "Connection unstable, retrying...",
-    "weixinReconnectNotice": "Due to iLink protocol limitations, after each reconnection you must send a message to the bot before event triggers take effect."
+    "weixinScanTitle": "QRコードをスキャン",
+    "weixinScanDescription": "WeChatを開いてQRコードをスキャンして接続してください。",
+    "weixinQrcodeExpired": "QRコードの有効期限が切れました。",
+    "weixinRefreshQrcode": "更新",
+    "weixinWaitingScan": "スキャン待ち...",
+    "weixinPollError": "接続が不安定です。再試行中...",
+    "weixinReconnectNotice": "iLink プロトコルの制限により、再接続のたびにまずボットにメッセージを送信しないとイベントトリガーが有効になりません。"
   },
   "ModelProviderSettings": {
     "sectionTitle": "モデルプロバイダー",
@@ -4174,7 +4227,7 @@
   },
   "SkillPacksSettings": {
     "title": "スキルパック",
-    "description": "HouHub が一元管理し、各 AI エージェントにリンクする厳選スキルの束です——コーディング専門家、科学研究、オフィス文書ツール。下でエージェントごとに有効化できます。",
+    "description": "houhub が一元管理し、各 AI エージェントにリンクする厳選スキルの束です——コーディング専門家、科学研究、オフィス文書ツール。下でエージェントごとに有効化できます。",
     "tabs": {
       "experts": "エキスパート",
       "science": "科学研究",
@@ -4782,7 +4835,7 @@
     "sectionAction": "アクション",
     "actionLaunchSession": "セッションを起動",
     "actionEnqueueTask": "タスクをキューに追加",
-    "actionEnqueueTaskHint": "実行のたびに、このオートメーション名を冠した ToDo タスクが対象フォルダのタスクボードに追加され、タスクエンジンがボードの設定に従って実行します。"
+    "actionEnqueueTaskHint": "実行のたびに、このオートメーション名を冠した ToDo タスクが対象フォルダの ToDo タスクに追加され、タスクエンジンがボードの設定に従って実行します。"
   },
   "WorkbenchCloud": {
     "title": "Workbench Cloud",
@@ -4889,7 +4942,7 @@
     }
   },
   "CodexModelEditor": {
-    "customizedNotice": "モデル一覧をカスタマイズしたため、Houhub が codex のモデル表全体を管理します。codex が今後追加する公式モデルは自動では表示されません。下の更新をクリックして保存し直すと同期できます。カスタマイズをすべて削除すると codex の自動更新に戻ります。",
+    "customizedNotice": "モデル一覧をカスタマイズしたため、houhub が codex のモデル表全体を管理します。codex が今後追加する公式モデルは自動では表示されません。下の更新をクリックして保存し直すと同期できます。カスタマイズをすべて削除すると codex の自動更新に戻ります。",
     "officialsTitle": "公式モデル",
     "officialsHint": "起動する codex の公式モデルを自動的に含めます。不要なものは削除できます。",
     "officialsEmpty": "利用可能な公式モデルがありません。",
@@ -4963,7 +5016,7 @@
     }
   },
   "Tasks": {
-    "title": "タスクボード",
+    "title": "ToDo タスク",
     "new": "新規タスク",
     "empty": "タスクはまだありません",
     "emptyHint": "ToDo を追加して実行すると、エージェントが独立した worktree で作業し、結果をレビューしてマージできます。",
@@ -5006,7 +5059,7 @@
     "actionComplete": "完了",
     "actionAbandon": "破棄",
     "cancelTitle": "タスクをキャンセルしますか？",
-    "cancelDescription": "タスクは「キャンセル済み」になります。worktree は保持され、あとで再キューできます。",
+    "cancelDescription": "タスクは「キャンセル済み」になります。あとで再キューできます。",
     "cancelReasonLabel": "キャンセルの理由（任意）",
     "cancelReasonPlaceholder": "例：方針が違うので説明を書き直す",
     "cancelKeep": "やめておく",
@@ -5241,7 +5294,14 @@
     "deliverPrBackDeleteWorktree": "プッシュ後に worktree を削除",
     "deliverPrBackSubmit": "push",
     "deliverPrBackDone": "プルリクエストに push しました",
-    "deliverPrBackDoneMr": "マージリクエストに push しました"
+    "deliverPrBackDoneMr": "マージリクエストに push しました",
+    "cancelDeleteWorktree": "worktree と作業ブランチも削除する",
+    "settingsAutoCompact": "自動コンパクトのしきい値",
+    "settingsAutoCompactHint": "フォローアップ・再試行・マージの前に、コンテキストウィンドウの使用率がこの値以上ならセッションを圧縮してから送信します。0 で無効。",
+    "settingsCompactCommand": "コンパクトコマンド",
+    "settingsCompactCommandHint": "空欄ならエージェントが提供するコマンド（または既知の既定値）を自動で使います。",
+    "settingsCompactCommandPlaceholder": "/compact",
+    "eventContextCompact": "コンテキスト圧縮"
   },
   "TokenUsage": {
     "title": "トークン使用量",
@@ -5397,7 +5457,7 @@
   },
   "AgentToolsSettings": {
     "title": "会話内ツール",
-    "description": "HouHub が会話の中でエージェントに追加で渡すツールです。エージェントの起動時に注入されるため、変更は以降に起動したエージェントに適用されます。",
+    "description": "houhub が会話の中でエージェントに追加で渡すツールです。エージェントの起動時に注入されるため、変更は以降に起動したエージェントに適用されます。",
     "feedbackLabel": "ライブフィードバック",
     "feedbackHint": "作業中のエージェントにメモや修正を送れます。即時ステアリングに対応したエージェントでは、メモは実行中のターンへ即座に挿入されます。それ以外のエージェントはフィードバック確認ツールで読み取りますが、通常はプロンプトで言及した場合にのみ確認します。例：「ライブフィードバックを定期的に確認して」とメッセージに追加してください。",
     "questionLabel": "ユーザーに質問",
@@ -5439,7 +5499,9 @@
     "pickFolder": "プロジェクトフォルダを選択",
     "noRemote": "このフォルダには認識できるリモート（origin）がありません",
     "errors": {
-      "noAccount": "{host} の {provider} アカウントが設定されていません。「設定 → バージョン管理」で追加するとこのリポジトリを読み込めます。"
+      "noAccount": "{host} の {provider} アカウントが設定されていません。「設定 → バージョン管理」で追加するとこのリポジトリを読み込めます。",
+      "unsupportedHost": "リポジトリパネルは GitHub と GitLab にのみ対応しており、{host} はそのどちらとしても認識できません。自己ホスト型の GitHub Enterprise または GitLab インスタンスであれば、「設定 → バージョン管理」でアカウントを追加してください。",
+      "wrongForge": "{host} は {provider} でした。別のフォージとして扱われていましたが、判定を修正しました。再読み込みしてください。"
     },
     "addAccount": "アカウントを追加",
     "empty": "表示する項目がありません",
@@ -5629,5 +5691,79 @@
     "newIssueLabels": "ラベル",
     "newIssueSubmit": "イシューを作成",
     "newIssueCreating": "作成中…"
+  },
+  "Canvas": {
+    "title": "無限会話",
+    "untitled": "無題の会話",
+    "unresolvedConversation": "会話は削除されました",
+    "removeCard": "カードを削除",
+    "unresolvedFolder": "フォルダーを利用できません",
+    "unresolvedFolderHint": "バインドされたフォルダーは閉じられたか削除されました。再度開くとこのリージョンは復活します。",
+    "customRegion": "コレクション",
+    "runningCount": "{count} 件実行中",
+    "childCount": "サブエージェント {count} 件",
+    "regionMenu": "リージョンのオプション",
+    "rename": "名前を変更",
+    "collapse": "折りたたむ",
+    "expand": "展開",
+    "color": "色",
+    "removeRegion": "リージョンを削除",
+    "removeNote": "メモを削除",
+    "showMore": "他 {count} 件",
+    "emptyRegion": "まだ会話がありません",
+    "emptyCustomHint": "会話カードをここにドラッグして集めましょう",
+    "notePlaceholder": "メモを書く…",
+    "noteEmptyHint": "ダブルクリックで編集",
+    "addNode": "キャンバスに追加",
+    "addFolderRegion": "フォルダーリージョン",
+    "addAgentRegion": "エージェントリージョン",
+    "addConversationCard": "会話カード",
+    "addCustomRegion": "カスタムリージョン",
+    "addNote": "付箋カード",
+    "searchConversations": "会話を検索…",
+    "noFolders": "開いているフォルダーがありません",
+    "noConversations": "会話が見つかりません",
+    "fitView": "全体を表示",
+    "zoomIn": "拡大",
+    "zoomOut": "縮小",
+    "resetZoom": "ズームを 100% に戻す",
+    "viewportControls": "表示",
+    "showMinimap": "マップを表示",
+    "hideMinimap": "マップを非表示",
+    "autoArrange": "自動整列",
+    "exportPng": "PNG としてエクスポート",
+    "empty": "キャンバスは空です",
+    "emptyHint": "ワークスペースを空間的に整理：リージョンはフォルダーとエージェント、カードは会話、メモはその他に。",
+    "seedFromWorkspace": "現在のワークスペースから生成",
+    "unresolvedGroup": "グループは利用できません",
+    "unresolvedGroupHint": "バインドされたフォルダーグループは削除されました。この領域を削除するか、新しく追加してください。",
+    "grid": "グリッド",
+    "gridColumns": "列数",
+    "gridRows": "行数",
+    "gridAuto": "自動",
+    "addGroupRegion": "フォルダーグループ領域",
+    "noGroups": "フォルダーグループがありません",
+    "createRegionFromSelection": "領域にまとめる",
+    "selectedCount": "{count} 件選択中",
+    "openInWorkspace": "ワークスペースで開く",
+    "openDetailPanel": "サイドパネルで開く",
+    "detailPanelDescription": "キャンバスを離れずに、選択したカードの会話をすべて表示します。",
+    "expandConversation": "会話を展開",
+    "collapseConversation": "会話を折りたたむ",
+    "cardMenu": "カードのオプション",
+    "removeFromRegion": "領域から削除",
+    "newConversation": "新しい会話",
+    "discardDraft": "下書きを破棄",
+    "createFailed": "会話を作成できませんでした",
+    "showAllMembers": "すべての会話を表示",
+    "showFewerMembers": "表示を減らす",
+    "detachToCanvas": "キャンバスへ出す",
+    "deleteSelected": "選択項目を削除",
+    "confirmDeleteTitle": "選択項目を削除しますか？",
+    "confirmDeleteNotes": "書き込んだ {count} 件のメモが完全に削除されます。この操作は取り消せません。",
+    "confirmDeleteCancel": "キャンセル",
+    "confirmDeleteConfirm": "削除",
+    "canvasActions": "キャンバス操作",
+    "mergeIntoNewRegion": "新しい領域"
   }
 }

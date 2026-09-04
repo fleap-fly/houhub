@@ -927,6 +927,136 @@ mod tests {
     }
 
     #[test]
+    fn estimate_never_undercounts_serialized_for_background_activity() {
+        // BackgroundActivity carries whole parsed transcript turns, so it is
+        // sized structurally. Build the densest shape — every optional field
+        // present, every block variant, escape-heavy strings, agent stats with
+        // nested tool calls, result images, plus settled entries — and assert
+        // the structural estimate still covers the exact serialized length.
+        use crate::models::message::{
+            AgentExecutionStats, AgentToolCall, ContentBlock, ImageData, MessageTurn, TurnRole,
+            TurnUsage,
+        };
+
+        let image = ImageData {
+            data: "QUJD".repeat(64),
+            mime_type: "image/png".into(),
+            uri: Some("file:///tmp/图 \"quoted\".png".into()),
+        };
+        let turn = MessageTurn {
+            id: "bg-123456-0".into(),
+            role: TurnRole::Assistant,
+            blocks: vec![
+                ContentBlock::Text {
+                    text: "\"\\\n\t".repeat(300),
+                },
+                ContentBlock::Thinking {
+                    text: "思考\n".repeat(100),
+                },
+                ContentBlock::Image {
+                    data: "AAAA".repeat(32),
+                    mime_type: "image/jpeg".into(),
+                    uri: None,
+                },
+                ContentBlock::ImageGeneration {
+                    revised_prompt: Some("prompt \"revised\"".into()),
+                    image: Some(image.clone()),
+                },
+                ContentBlock::ToolUse {
+                    tool_use_id: Some("toolu_01ABC".into()),
+                    tool_name: "Bash".into(),
+                    input_preview: Some("{\"command\":\"pnpm build\"}".into()),
+                    status: None,
+                    meta: Some(serde_json::json!({"HouHub.delegation": {"status": "running"}})),
+                },
+                ContentBlock::ToolResult {
+                    tool_use_id: Some("toolu_01ABC".into()),
+                    output_preview: Some("output\nwith\tescapes\"".repeat(50)),
+                    is_error: true,
+                    agent_stats: Some(AgentExecutionStats {
+                        agent_type: Some("Explore".into()),
+                        status: Some("completed".into()),
+                        total_duration_ms: Some(u64::MAX),
+                        total_tokens: Some(u64::MAX),
+                        total_tool_use_count: Some(u32::MAX),
+                        read_count: Some(u32::MAX),
+                        search_count: Some(u32::MAX),
+                        bash_count: Some(u32::MAX),
+                        edit_file_count: Some(u32::MAX),
+                        lines_added: Some(u32::MAX),
+                        lines_removed: Some(u32::MAX),
+                        other_tool_count: Some(u32::MAX),
+                        tool_calls: vec![AgentToolCall {
+                            tool_name: "Read".into(),
+                            input_preview: Some("{\"file_path\":\"/a/b\"}".into()),
+                            output_preview: Some("line\n".repeat(40)),
+                            is_error: false,
+                        }],
+                        child_session_id: Some("019fe6bf-0bcb-70c2-a02d-e5c006dfc32a".into()),
+                    }),
+                    images: vec![image],
+                },
+            ],
+            timestamp: chrono::Utc::now(),
+            usage: Some(TurnUsage {
+                input_tokens: u64::MAX,
+                output_tokens: u64::MAX,
+                cache_creation_input_tokens: u64::MAX,
+                cache_read_input_tokens: u64::MAX,
+            }),
+            duration_ms: Some(u64::MAX),
+            model: Some("claude-sonnet-5[1m]".into()),
+            completed_at: Some(chrono::Utc::now()),
+        agent_message_id: None,
+        };
+        let env = Arc::new(EventEnvelope {
+            seq: u64::MAX,
+            connection_id: "conn-背景-\"escaped\"".into(),
+            payload: AcpEvent::BackgroundActivity {
+                session_id: "1f8b332f-128a-4603-a5f4-f44d5a0bf932".into(),
+                turns: vec![turn.clone(), turn],
+                outstanding: u32::MAX,
+                settled: vec![
+                    crate::acp::types::BackgroundSettledInfo {
+                        task_id: "ae6bd822f7a0e23a8".into(),
+                        status: "completed".into(),
+                        summary: Some("Agent \"Run pnpm build\" finished".into()),
+                        tool_use_id: Some("toolu_01P782zHv8AMMpXYqaz39ijf".into()),
+                        // Escape-heavy + large, to exercise the estimate's
+                        // coverage of the (previously omitted) `result` field.
+                        result: Some("Build \"log\"\n\t".repeat(2048)),
+                        wire_visible: false,
+                    },
+                    crate::acp::types::BackgroundSettledInfo {
+                        task_id: "bipkee1pw".into(),
+                        status: "failed".into(),
+                        summary: None,
+                        tool_use_id: None,
+                        result: None,
+                        wire_visible: false,
+                    },
+                ],
+                watermark: u64::MAX,
+            },
+        });
+        assert_ge_serialized(&env);
+
+        // Empty-payload shape (accounting-only event) must hold too.
+        let env = Arc::new(EventEnvelope {
+            seq: 1,
+            connection_id: "c".into(),
+            payload: AcpEvent::BackgroundActivity {
+                session_id: "s".into(),
+                turns: vec![],
+                outstanding: 0,
+                settled: vec![],
+                watermark: 0,
+            },
+        });
+        assert_ge_serialized(&env);
+    }
+
+    #[test]
     fn tool_update_near_cap_trips_via_field_key_overhead() {
         // raw_output alone is just under 64 KiB, but the other fields' keys and
         // `null`s push the serialized envelope over it. A values-only estimate

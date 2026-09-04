@@ -2,7 +2,10 @@ import { render, screen, cleanup, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { InlineSessionConfigSelector } from "./session-config-selector"
+import {
+  InlineSessionConfigSelector,
+  InlineSessionConfigToggle,
+} from "./session-config-selector"
 import { deriveModelGroups } from "@/lib/model-config-groups"
 import type { SessionConfigOptionInfo } from "@/lib/types"
 
@@ -166,5 +169,120 @@ describe("InlineSessionConfigSelector — model grouping", () => {
     ).toBeInTheDocument()
     // No provider headers for an ungroupable flat list.
     expect(screen.queryByText("anthropic")).toBeNull()
+  })
+})
+
+// Cline 3.0.50's `auto_approve` — the first boolean config option any pinned
+// agent ships.
+function autoApproveOption(current: boolean): SessionConfigOptionInfo {
+  return {
+    id: "auto_approve",
+    name: "Auto-approve tools",
+    description: "Automatically approve all tool calls without asking",
+    category: null,
+    kind: { type: "boolean", current_value: current },
+  }
+}
+
+describe("InlineSessionConfigToggle", () => {
+  afterEach(() => cleanup())
+
+  it("reports its state through aria-pressed and the accessible name", () => {
+    render(
+      <InlineSessionConfigToggle
+        option={autoApproveOption(true)}
+        onSelect={vi.fn()}
+        onLabel="On"
+        offLabel="Off"
+      />
+    )
+    const button = screen.getByRole("button", {
+      name: "Auto-approve tools: On",
+    })
+    expect(button).toHaveAttribute("aria-pressed", "true")
+  })
+
+  it("flips the value on click, in both directions", async () => {
+    const user = userEvent.setup()
+    const onSelect = vi.fn()
+
+    const { rerender } = render(
+      <InlineSessionConfigToggle
+        option={autoApproveOption(false)}
+        onSelect={onSelect}
+        onLabel="On"
+        offLabel="Off"
+      />
+    )
+    expect(screen.getByRole("button")).toHaveAttribute("aria-pressed", "false")
+    await user.click(screen.getByRole("button"))
+    expect(onSelect).toHaveBeenLastCalledWith("auto_approve", "true")
+
+    rerender(
+      <InlineSessionConfigToggle
+        option={autoApproveOption(true)}
+        onSelect={onSelect}
+        onLabel="On"
+        offLabel="Off"
+      />
+    )
+    await user.click(screen.getByRole("button"))
+    expect(onSelect).toHaveBeenLastCalledWith("auto_approve", "false")
+  })
+
+  it("renders nothing for a select option", () => {
+    const { container } = render(
+      <InlineSessionConfigToggle
+        option={modelOption([{ value: "opus", name: "Opus" }])}
+        onSelect={vi.fn()}
+        onLabel="On"
+        offLabel="Off"
+      />
+    )
+    expect(container).toBeEmptyDOMElement()
+  })
+})
+
+// The chips carry a `SelectorTooltip` instead of a native `title`: same hover
+// affordance, themed, and naming the setting rather than echoing the value the
+// chip already shows.
+describe("selector hover hints", () => {
+  afterEach(() => cleanup())
+
+  it("names the setting on hover, without echoing the value the chip shows", async () => {
+    const user = userEvent.setup()
+    const longName = "claude-opus-4-1-20250805-with-a-very-long-name"
+    const option = modelOption([{ value: "opus", name: longName }], "opus")
+    render(<InlineSessionConfigSelector option={option} onSelect={vi.fn()} />)
+
+    const trigger = screen.getByRole("button")
+    expect(trigger).not.toHaveAttribute("title")
+
+    await user.hover(trigger)
+    const tip = await screen.findByRole("tooltip")
+    expect(tip).toHaveTextContent("Model")
+    expect(tip).not.toHaveTextContent(longName)
+  })
+
+  it("shows the toggle's description on hover", async () => {
+    const user = userEvent.setup()
+    render(
+      <InlineSessionConfigToggle
+        option={autoApproveOption(true)}
+        onSelect={vi.fn()}
+        onLabel="On"
+        offLabel="Off"
+      />
+    )
+
+    const trigger = screen.getByRole("button")
+    expect(trigger).not.toHaveAttribute("title")
+
+    await user.hover(trigger)
+    const tip = await screen.findByRole("tooltip")
+    expect(tip).toHaveTextContent("Auto-approve tools")
+    expect(tip).toHaveTextContent(
+      "Automatically approve all tool calls without asking"
+    )
   })
 })

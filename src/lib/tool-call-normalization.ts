@@ -104,9 +104,12 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   mcp__houhub__delegate_to_agent: "delegate_to_agent",
   get_delegation_status: "get_delegation_status",
   cancel_delegation: "cancel_delegation",
-  // Workbench companion tools (Qoder and MCP relays may preserve the bare
-  // name rather than the server namespace). Keep their canonical identities
-  // ahead of the generic `task*` heuristics below.
+  resume_delegation: "resume_delegation",
+  // houhub-mcp workbench companions (session lookup, work-task reporting, chat
+  // authoring). Listed explicitly because the freeform `^task(\b|[_\s:-])` rule
+  // below would otherwise collapse `task_progress` / `task_complete` into the
+  // generic "task" tool and strand them on the generic tool shell. The suffix
+  // rules in `normalizeToolName` cover the `mcp__<server>__…` forms.
   get_session_info: "get_session_info",
   task_progress: "task_progress",
   task_complete: "task_complete",
@@ -432,6 +435,12 @@ export function normalizeToolName(toolName: string): string {
   if (/[^a-z0-9]get_delegation_status$/.test(canonical))
     return "get_delegation_status"
   if (/[^a-z0-9]cancel_delegation$/.test(canonical)) return "cancel_delegation"
+  if (/[^a-z0-9]resume_delegation$/.test(canonical)) return "resume_delegation"
+  if (/[^a-z0-9]create_goal$/.test(canonical)) return "create_goal"
+  if (/[^a-z0-9]update_goal$/.test(canonical)) return "update_goal"
+
+  // houhub-mcp workbench companions — same host-prefix story as the delegation
+  // tools above (`mcp__<server>__get_session_info`, `<server>/task_progress`, …).
   if (/[^a-z0-9]get_session_info$/.test(canonical)) return "get_session_info"
   if (/[^a-z0-9]task_progress$/.test(canonical)) return "task_progress"
   if (/[^a-z0-9]task_complete$/.test(canonical)) return "task_complete"
@@ -465,13 +474,17 @@ export function normalizeToolName(toolName: string): string {
   return trimmed
 }
 
-// Canonical names of the houhub-mcp delegation companion tools. Each has a
-// dedicated card renderer, so its identity must win over input-shape
-// heuristics during live streaming (see `inferLiveToolName`).
+// Canonical names of the houhub-mcp delegation companion tools. Their identity
+// must win over input-shape heuristics during live streaming (see
+// `inferLiveToolName`): most have a dedicated card renderer, and
+// `resume_delegation`'s `{task_id, reason}` input would otherwise be
+// misclassified by `inferFromInput` exactly like `cancel_delegation`'s
+// `{task_id}` (generic "task" tool).
 const DELEGATION_COMPANION_TOOLS: ReadonlySet<string> = new Set([
   "delegate_to_agent",
   "get_delegation_status",
   "cancel_delegation",
+  "resume_delegation",
 ])
 
 const WORKBENCH_COMPANION_TOOLS: ReadonlySet<string> = new Set([

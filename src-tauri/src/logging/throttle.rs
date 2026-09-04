@@ -42,6 +42,13 @@ pub struct LagSummary {
 /// [`LagSummary`] carrying everything coalesced since the last emitted line.
 /// Nothing is dropped silently — the suppressed tally always rides the next
 /// emitted line.
+/// Neutral aliases below let non-broadcast call sites use the same bounded
+/// leading-edge implementation without carrying a brand-specific name.
+pub type LeadingEdgeThrottle = LagLogThrottle;
+
+/// Neutral alias for the returned coalescing summary.
+pub type ThrottleSummary = LagSummary;
+
 #[derive(Debug)]
 pub struct LagLogThrottle {
     window: Duration,

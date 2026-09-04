@@ -8,6 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.pnpm-store/
 dist
 dist-ssr
 *.local
@@ -52,3 +53,7 @@ docs/images/gallery.svg
 # The binaries are platform-specific build artifacts; ship them through
 # release.yml, not git.
 src-tauri/binaries/
+
+# `rustc foo.rs` with no -o writes its binary here. Keep scratch compiles out
+# of worktree-clean checks.
+/rust_out

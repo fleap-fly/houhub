@@ -6955,7 +6955,10 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
             }
             package
         }
-        _ => "hermes-agent@0.20.6",
+        // Unreachable: Hermes is always an Npx distribution. Fall through to
+        // the npx guidance with the same pinned spec so a future match-arm
+        // change can't resurrect a stale recipe.
+        _ => "hermes-agent@0.21.0",
     };
     let build = |tail: &[&str]| -> Vec<String> {
         let mut argv = vec![
@@ -10081,12 +10084,34 @@ pub async fn acp_fork(
     connection_id: String,
     conversation_id: Option<i32>,
     folder_id: Option<i32>,
+    // "Fork from here": the rendered turn to fork at. `None` = fork at the
+    // tail, the composer's fork-send behaviour.
+    fork_from_turn_id: Option<String>,
     db: State<'_, AppDatabase>,
     manager: State<'_, ConnectionManager>,
 ) -> Result<ForkResultInfo, AcpError> {
     manager
-        .fork_session(&db, &connection_id, conversation_id, folder_id)
+        .fork_session(
+            &db,
+            &connection_id,
+            conversation_id,
+            folder_id,
+            fork_from_turn_id,
+        )
         .await
+}
+
+/// Stop one AIR async task. `Ok(false)` = the adapter declined (unknown,
+/// already terminal, or a stop already in flight) — a real answer, not a
+/// failure.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_stop_async_task(
+    connection_id: String,
+    task_id: String,
+    manager: State<'_, ConnectionManager>,
+) -> Result<bool, AcpError> {
+    manager.stop_async_task(&connection_id, &task_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -17491,15 +17516,15 @@ wire_api = "chat"
         assert_eq!(model.last().map(String::as_str), Some("model"));
         for argv in [&setup, &model] {
             if argv.first().map(String::as_str) == Some("npx") {
-                let py_idx = argv
+                let pkg_idx = argv
                     .iter()
                     .position(|a| a == "--package")
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
-                    argv.get(py_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.20.6")
+                    argv.get(pkg_idx + 1).map(String::as_str),
+                    Some("hermes-agent@0.21.0")
                 );
-                assert_eq!(argv.get(py_idx + 2).map(String::as_str), Some("hermes"));
+                assert_eq!(argv.get(pkg_idx + 2).map(String::as_str), Some("hermes"));
             } else {
                 // Resolved-binary form: bare `hermes` from PATH or an absolute
                 // npm-prefix path ending in the hermes bin.
@@ -17924,7 +17949,7 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.20.6", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.21.0", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
@@ -17936,7 +17961,7 @@ model = "gpt"
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.20.6",
+            "hermes-agent@0.21.0",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));

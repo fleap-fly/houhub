@@ -1,5 +1,6 @@
 "use client"
 
+import type { ConversationFolderPickerOverride } from "@/components/chat/conversation-context-bar"
 import { memo } from "react"
 import { useTranslations } from "next-intl"
 import type {
@@ -39,6 +40,8 @@ interface ChatInputProps {
   agentType?: AgentType | null
   availableCommands?: AvailableCommandInfo[] | null
   attachmentTabId?: string | null
+  /** Pass-through: see `MessageInput`. */
+  folderPickerOverride?: ConversationFolderPickerOverride
   draftStorageKey?: string | null
   isActive?: boolean
   /** Show the composer's flowing active-session border. Set only for the active
@@ -55,7 +58,6 @@ interface ChatInputProps {
   isEditingQueueItem?: boolean
   onSaveQueueEdit?: (draft: PromptDraft) => void
   onCancelQueueEdit?: () => void
-  onForkSend?: (draft: PromptDraft, modeId?: string | null) => void
   /** Inject the draft's text into the RUNNING turn over the native steering
    *  channel. Present only when the session's live-feedback channel is native
    *  (`useSessionFeedback().channel === "native"`); resolves once recorded,
@@ -99,6 +101,7 @@ export const ChatInput = memo(function ChatInput({
   agentType,
   availableCommands,
   attachmentTabId,
+  folderPickerOverride,
   draftStorageKey,
   isActive,
   showActiveFlow,
@@ -113,7 +116,6 @@ export const ChatInput = memo(function ChatInput({
   isEditingQueueItem,
   onSaveQueueEdit,
   onCancelQueueEdit,
-  onForkSend,
   onSteer,
   onAddFeedback,
   feedbackAddDisabled,
@@ -198,6 +200,7 @@ export const ChatInput = memo(function ChatInput({
         availableCommands={availableCommands}
         commandsLoading={commandsLoading}
         attachmentTabId={attachmentTabId}
+        folderPickerOverride={folderPickerOverride}
         draftStorageKey={draftStorageKey}
         isActive={isActive}
         showActiveFlow={showActiveFlow}
@@ -208,7 +211,6 @@ export const ChatInput = memo(function ChatInput({
         isEditingQueueItem={isEditingQueueItem}
         onSaveQueueEdit={onSaveQueueEdit}
         onCancelQueueEdit={onCancelQueueEdit}
-        onForkSend={onForkSend}
         onSteer={onSteer}
         onAddFeedback={onAddFeedback}
         feedbackAddDisabled={feedbackAddDisabled}

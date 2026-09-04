@@ -7,6 +7,10 @@ import {
   useAcpActions,
   useConnectionStore,
 } from "@/contexts/acp-connections-context"
+import {
+  CONNECTION_IDLE_TIMEOUT_MS,
+  IDLE_SWEEP_INTERVAL_MS,
+} from "@/lib/constants"
 import { parsePermissionToolCall } from "@/lib/permission-request"
 import { subscribe } from "@/lib/platform"
 import { saveConfigPreference } from "@/lib/selector-prefs-storage"
@@ -272,6 +276,60 @@ describe("AcpConnectionsProvider cross-client viewer lifecycle", () => {
       expect.anything(),
       expect.anything()
     )
+  })
+
+  it("a SECOND local surface joins the connection this client owns instead of spawning another agent", async () => {
+    // The canvas expands a conversation that is already open in a workspace
+    // tab. Two surfaces, two contextKeys, ONE agent process: the second must
+    // take the viewer path exactly like a second browser client does.
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    expect(h.acpConnect).toHaveBeenCalledTimes(1)
+
+    // Discovery now finds the connection THIS client owns under `TAB`.
+    h.acpFindConnectionForConversation.mockResolvedValue({
+      connection_id: "spawned-conn",
+      event_seq: 3,
+    })
+    await act(async () => {
+      await h.actions!.connect(
+        "canvas-node-7",
+        "claude_code",
+        "/tmp/x",
+        "sess-1",
+        42
+      )
+    })
+
+    // No second spawn, and the new surface is a non-owning viewer — so its
+    // teardown detaches instead of killing the tab's agent.
+    expect(h.acpConnect).toHaveBeenCalledTimes(1)
+    expect(h.store!.getConnection("canvas-node-7")?.isViewer).toBe(true)
+    expect(h.store!.getConnection(TAB)?.isViewer).toBe(false)
+  })
+
+  it("never demotes a surface to a viewer of its OWN connection", async () => {
+    // The guard this narrowing had to preserve: re-connecting the same key
+    // must not turn its owner entry into a viewer, or nothing would ever
+    // `acpDisconnect` and the agent process would leak.
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+
+    h.acpFindConnectionForConversation.mockResolvedValue({
+      connection_id: "spawned-conn",
+      event_seq: 3,
+    })
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-2", 42)
+    })
+
+    expect(h.store!.getConnection(TAB)?.isViewer).toBe(false)
   })
 
   it("skips discovery entirely when no persisted conversationId is given", async () => {
@@ -724,6 +782,124 @@ describe("AcpConnectionsProvider AIR session-failure lifecycle", () => {
       stop_reason: "end_turn",
     })
     expect(failuresNow()).toMatchObject({ notice: true, err: false })
+  })
+})
+
+// AIR async tasks: Claude's background shells / workflows / monitors. The wire
+// carries PARTIAL deltas keyed by task id, so the reducer owns a merge that has
+// to match `SessionState::apply_event` — including its refusal to invent a row
+// for a task it never saw announced.
+describe("AcpConnectionsProvider AIR async tasks", () => {
+  async function connectOwner(): Promise<AttachHandlers> {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    return latestAttachHandlers()
+  }
+
+  it("merges partial deltas into one row and refuses to create from a progress tick", async () => {
+    const handlers = await connectOwner()
+    // Progress for an unannounced task: its identity frame was missed, so a
+    // placeholder row would be worse than none.
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "async_task",
+      delta: { task_id: "ghost", spawned: false, state: "running" },
+    })
+    expect(h.store!.getConnection(TAB)?.asyncTasks).toHaveLength(0)
+
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "async_task",
+      delta: {
+        task_id: "t1",
+        spawned: true,
+        name: "pnpm test",
+        task_type: "shell",
+        description: "pnpm test --watch",
+        show_in_transcript: true,
+        can_stop: true,
+      },
+    })
+    // Absent fields must leave the announced identity alone.
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "async_task",
+      delta: {
+        task_id: "t1",
+        spawned: false,
+        last_tool_name: "Bash",
+        output_file_path: "/tmp/tasks/t1.output",
+      },
+    })
+
+    const tasks = h.store!.getConnection(TAB)?.asyncTasks ?? []
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0]).toMatchObject({
+      task_id: "t1",
+      name: "pnpm test",
+      task_type: "shell",
+      state: "running",
+      last_tool_name: "Bash",
+      output_file_path: "/tmp/tasks/t1.output",
+    })
+
+    // Settled rows are RETAINED — the adapter revises a finished task (a late
+    // output path, or correcting a best-effort `stopped` into the real
+    // outcome), and an evicted row would come back nameless.
+    emitAcpEvent(handlers, {
+      seq: 4,
+      connection_id: "spawned-conn",
+      type: "async_task",
+      delta: { task_id: "t1", spawned: false, state: "completed" },
+    })
+    const settled = h.store!.getConnection(TAB)?.asyncTasks ?? []
+    expect(settled).toHaveLength(1)
+    expect(settled[0]).toMatchObject({ state: "completed", name: "pnpm test" })
+  })
+
+  // A fork attaches to a NEW session id. The old session's tasks can never
+  // settle again — the adapter publishes their terminal frames on the id the
+  // connection has left — so the backend drops its table and this reducer has
+  // to follow. It can't wait for a snapshot to do it: an empty snapshot table
+  // reads as "nothing to say", not "clear yours".
+  it("drops task rows when the session id changes, but not on a replay", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "session_started",
+      session_id: "s1",
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "async_task",
+      delta: { task_id: "t1", spawned: true, name: "watch", can_stop: true },
+    })
+    expect(h.store!.getConnection(TAB)?.asyncTasks).toHaveLength(1)
+
+    // Re-announcing the SAME id is a replay, not a fork.
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "session_started",
+      session_id: "s1",
+    })
+    expect(h.store!.getConnection(TAB)?.asyncTasks).toHaveLength(1)
+
+    emitAcpEvent(handlers, {
+      seq: 4,
+      connection_id: "spawned-conn",
+      type: "session_started",
+      session_id: "s2",
+    })
+    expect(h.store!.getConnection(TAB)?.asyncTasks).toHaveLength(0)
   })
 })
 
@@ -3927,5 +4103,84 @@ describe("AcpConnectionsProvider retry banner (turn_retrying)", () => {
     })
 
     expect(h.store!.getConnection(TAB)?.claudeApiRetry?.attempt).toBe(1)
+  })
+})
+
+// The idle sweep reclaims any connection that is neither the single `activeKey`
+// nor an open TAB. Canvas conversation cards are neither — they live on a board
+// that has no tabs at all — so a second live card would have its agent
+// disconnected out from under the user after a minute of working in the first
+// one, while the card sat there still rendering as connected.
+describe("live surfaces that are not tabs", () => {
+  /** An owner sitting at `connected` — the only state the sweep reclaims. */
+  async function connectOwner(): Promise<void> {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    emitAcpEvent(latestAttachHandlers(), {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "turn_complete",
+      stop_reason: "end_turn",
+    } as EventEnvelope)
+  }
+
+  /** Run the sweep with this key having been idle well past the timeout. */
+  async function sweepPastIdleTimeout(): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(
+        CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
+      )
+    })
+  }
+
+  it("reclaims an idle connection nothing claims to be showing", async () => {
+    vi.useFakeTimers()
+    try {
+      await connectOwner()
+      h.actions!.setActiveKey("some-other-surface")
+      await sweepPastIdleTimeout()
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("spares one a registered non-tab surface is still holding open", async () => {
+    vi.useFakeTimers()
+    try {
+      await connectOwner()
+      h.actions!.setActiveKey("some-other-surface")
+      h.actions!.registerLiveSurfaceKeys("canvas", new Set([TAB]))
+      await sweepPastIdleTimeout()
+      expect(h.acpDisconnect).not.toHaveBeenCalled()
+      expect(h.store!.getConnection(TAB)?.status).toBe("connected")
+
+      // The board unmounts (or the card collapses) and the claim is dropped —
+      // the connection goes back to being sweepable.
+      h.actions!.registerLiveSurfaceKeys("canvas", new Set())
+      await sweepPastIdleTimeout()
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("keeps each registrar's claims separate", async () => {
+    vi.useFakeTimers()
+    try {
+      await connectOwner()
+      h.actions!.setActiveKey("some-other-surface")
+      h.actions!.registerLiveSurfaceKeys("canvas", new Set([TAB]))
+      // A second registrar publishing its own (empty) set must not drop the
+      // first one's claim — that is exactly how a single shared set breaks.
+      h.actions!.registerLiveSurfaceKeys("pet-window", new Set())
+      await sweepPastIdleTimeout()
+      expect(h.acpDisconnect).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

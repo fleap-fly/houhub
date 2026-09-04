@@ -127,7 +127,7 @@
     },
     "zoomLevel": {
       "sectionTitle": "Window zoom",
-      "sectionDescription": "Scale the entire interface. Applies immediately and persists per device.",
+      "sectionDescription": "Scale the entire interface. Applies immediately and persists per device. ⌘/Ctrl + and - move through the same zoom levels as this menu (⌘/Ctrl 0 resets to 100%).",
       "placeholder": "Select zoom level",
       "default": "Default",
       "current": "Current zoom: {zoom}%"
@@ -146,13 +146,13 @@
       "ligatures": "Enable font ligatures",
       "ligaturesUnavailable": "This font has no ligatures",
       "terminalLigaturesHint": "Terminal ligatures apply only to bundled coding fonts.",
-      "wordWrap": "Enable editor word wrap",
+      "wordWrap": "Enable word wrap",
       "preview": "Preview"
     },
     "welcomePanel": {
-      "sectionTitle": "Welcome panel",
-      "sectionDescription": "Show the Code Development / Office Work quick-action cards above the input on new conversations.",
-      "showQuickActions": "Show on new conversations"
+      "sectionTitle": "Mode selection area",
+      "sectionDescription": "The Code Development / Office Work shortcut cards shown above the composer on the new conversation page.",
+      "showQuickActions": "Show on the new conversation page"
     },
     "workspaceBackground": {
       "sectionTitle": "Workspace background",
@@ -221,7 +221,7 @@
       },
       "css": {
         "dialogTitle": "Custom CSS",
-        "dialogDescription": "Applies to every HouHub window. Changes preview live; press Apply to save.",
+        "dialogDescription": "Applies to every houhub window. Changes preview live; press Apply to save.",
         "size": "{used} KB / {max} KB",
         "ruleCount": "{count} rules",
         "errorTooLarge": "Too large to save. Trim it below the limit.",
@@ -238,7 +238,7 @@
   "SystemSettings": {
     "loading": "Loading...",
     "sectionTitle": "System Management",
-    "sectionDescription": "Manage network proxy, app updates and language preferences.",
+    "sectionDescription": "Manage app updates, launch at login, network proxy and language preferences.",
     "proxyTitle": "Network Proxy",
     "proxyDescription": "When enabled, subsequent network requests prefer this proxy (including ACP chat, agent installation and Git remote operations).",
     "loadFailed": "Load failed: {message}",
@@ -672,6 +672,8 @@
     "local": {
       "filterPlaceholder": "Filter local MCP...",
       "loadFailed": "Load failed: {message}",
+      "sourceUnreadable": "Could not read the MCP config for {app}, so its servers are hidden: {message}",
+      "saveBlockedByUnreadableSource": "Fix or remove that file and refresh before saving: assignments are computed from the agents this page could read, so saving now could drop this server from one it could not.",
       "empty": "No local MCP detected.",
       "description": "Local MCP configuration can be edited and saved directly.",
       "enabledApps": "Enabled Apps",
@@ -831,7 +833,7 @@
       "configTomlHint": "Saved verbatim as the whole ~/.grok/config.toml. Invalid TOML is rejected so a typo never truncates your file.",
       "configTomlPlaceholder": "# Keys other than the controls above, e.g.\n# [mcp_servers.*], [cli], [permission] rules.",
       "customModelTitle": "Custom model (BYO endpoint)",
-      "customModelHint": "Point Grok at a custom or self-hosted endpoint. HouHub writes a per-model `[model.*]` block and makes it the default. Leave the Model ID empty to remove it.",
+      "customModelHint": "Point Grok at a custom or self-hosted endpoint. houhub writes a per-model `[model.*]` block and makes it the default. Leave the Model ID empty to remove it.",
       "customModelIdLabel": "Model ID",
       "customModelIdPlaceholder": "grok-4.5",
       "customModelIdHint": "Registered as a `[model.*]` block and sent to the API as the model name; also set as `[models].default`.",
@@ -849,7 +851,7 @@
       "autoCompactHint": "Compact the conversation when context usage reaches this percent (Grok default 85). Written to `[session]`."
     },
     "cursor": {
-      "configDescription": "Configure Cursor here. Choose an authentication method — official subscription (browser sign-in) or a Cursor API key for headless/server machines — then pick a model and edit the CLI's permission rules and sandbox. HouHub writes them into ~/.cursor/cli-config.json, shared with the cursor-agent CLI.",
+      "configDescription": "Configure Cursor here. Choose an authentication method — official subscription (browser sign-in) or a Cursor API key for headless/server machines — then pick a model and edit the CLI's permission rules and sandbox. houhub writes them into ~/.cursor/cli-config.json, shared with the cursor-agent CLI.",
       "authTitle": "Authentication",
       "authChecking": "Checking…",
       "authNotInstalled": "cursor-agent is not installed",
@@ -889,7 +891,14 @@
       "modelPickerPlaceholder": "Search models…",
       "modelNoMatch": "No matching model",
       "modelsNeedAuth": "Sign in to load the model list.",
-      "modelDefaultBadge": "default"
+      "modelDefaultBadge": "default",
+      "modelThinkingLabel": "Thinking",
+      "modelEffortLabel": "Effort",
+      "modelFastLabel": "Fast",
+      "variantOn": "On",
+      "variantOff": "Off",
+      "modelVariantHint": "Cursor ships every combination as its own model id; these controls pick the right one. They set the launch default — a session can change model, thinking and Fast at any time from the composer.",
+      "permissionModeAskHint": "Ask before running sends each tool call to you for approval, with Cursor's own \"Allow always\" option — choosing it appends a rule to the Allowed list below, so the same call runs unprompted next time."
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness Configuration",
@@ -901,7 +910,7 @@
       "apiKeyHint": "Passed to the agent as DEEPSEEK_API_KEY. An environment variable outranks the credentials file, so leave this empty if you sign in through the terminal."
     },
     "codex": {
-      "configDescription": "Supports quick configuration for API URL, API Key, model name and reasoning effort, and syncs with `auth.json` / `config.toml`.",
+      "configDescription": "Supports quick configuration for API URL, API Key and model name, and syncs with `auth.json` / `config.toml`.",
       "authMode": "Auth Mode",
       "chatgptSubscription": "Official Subscription",
       "chatgptSubscriptionHint": "Log in with ChatGPT official subscription, no API Key required",
@@ -941,7 +950,7 @@
       "sandboxMode_workspace-write": "Workspace write",
       "sandboxMode_danger-full-access": "Full access (no sandbox)",
       "sandboxModeHint": "On Windows, workspace write is downgraded to read-only unless codex's experimental Windows sandbox is enabled.",
-      "sandboxModeSeedsPresetHint": "HouHub also maps this onto the session's starting approval preset, so unlike approval policy it does reach ordinary prompts. Note that the adapter's default preset now has a model pre-screen escalations and forward only what it judges unsafe; pick \"Ask for approval\" in the composer to review every one yourself. The composer's preset always overrides this.",
+      "sandboxModeSeedsPresetHint": "houhub also maps this onto the session's starting approval preset, so unlike approval policy it does reach ordinary prompts. Note that the adapter's default preset now has a model pre-screen escalations and forward only what it judges unsafe; pick \"Ask for approval\" in the composer to review every one yourself. The composer's preset always overrides this.",
       "writableRootsLabel": "Extra writable folders",
       "writableRootsHint": "One absolute path per line, in addition to the working directory.",
       "sandboxRootsRelativeError": "Must be an absolute path — codex resolves relative entries against ~/.codex: {path}",
@@ -964,7 +973,7 @@
       "loginRelogin": "Re-login / Switch account",
       "loginTimeout": "Login timed out, please try again",
       "loginSaveFailed": "Login succeeded but failed to save config",
-      "sandboxModeReadOnlyAcpWarning": "The ACP adapter no longer ships a read-only sandbox, so HouHub sessions run workspace-writable whatever this says. HouHub picks the strictest preset it can — every escalation comes to you for approval — but edits inside the workspace no longer need one. codex CLI and IDE sessions still honor read-only."
+      "sandboxModeReadOnlyAcpWarning": "The ACP adapter no longer ships a read-only sandbox, so houhub sessions run workspace-writable whatever this says. houhub picks the strictest preset it can — every escalation comes to you for approval — but edits inside the workspace no longer need one. codex CLI and IDE sessions still honor read-only."
     },
     "gemini": {
       "authConfig": "Gemini Auth Config",
@@ -992,7 +1001,7 @@
       "providerManagement": "Provider Management",
       "providerCount": "{count} providers",
       "addProvider": "Add Provider",
-      "emptyProvider": "No provider yet. Enter an ID then click \"Add Provider\".",
+      "emptyProvider": "No custom providers yet. Click Add custom provider to create one.",
       "providerEnabledState": "{providerId} enabled state",
       "selectProviderNpm": "Select provider.npm",
       "modelManagement": "Model Management",
@@ -1165,7 +1174,7 @@
       "authModeApiKey": "API key",
       "authModeLogin": "Kimi account login (subscription)",
       "authModeApiKeyHint": "Writes a houhub-managed provider into config.toml and seeds the gate token so sessions can open.",
-      "loginHint": "Run `kimi login` in a terminal to sign in with a Kimi subscription account — on Kimi 0.39.0+ add `--region global` for a kimi.ai account, since the default signs in to kimi.com. HouHub stores nothing and reuses Kimi's own login. Saving here removes HouHub's API-key gate token.",
+      "loginHint": "Run `kimi login` in a terminal to sign in with a Kimi subscription account — on Kimi 0.39.0+ add `--region global` for a kimi.ai account, since the default signs in to kimi.com. houhub stores nothing and reuses Kimi's own login. Saving here removes houhub's API-key gate token.",
       "credentialTitle": "Credential",
       "interfaceTypeLabel": "Provider type",
       "interfaceTypeHint": "The provider protocol Kimi speaks (config.toml `type`). Use Kimi / Moonshot for a Moonshot / platform.kimi.com key.",
@@ -1557,11 +1566,11 @@
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
       "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
-      "syncSkipped": "Your choice was saved, but HouHub could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
+      "syncSkipped": "Your choice was saved, but houhub could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
       "headless": {
         "title": "Sign in without a browser on this machine",
-        "description": "Antigravity runs the Google sign-in itself, on the machine the agent runs on. When there is no browser there — HouHub on a server with no desktop — the first session waits five minutes and then fails. Start the sign-in here instead: open the link on any device, then paste back the address you land on.",
+        "description": "Antigravity runs the Google sign-in itself, on the machine the agent runs on. When there is no browser there — houhub on a server with no desktop — the first session waits five minutes and then fails. Start the sign-in here instead: open the link on any device, then paste back the address you land on.",
         "start": "Get sign-in link",
         "saveFirst": "Save first — the sign-in uses the stored settings, not what is typed above.",
         "step1": "1. Open this link and sign in to Google.",
@@ -1587,9 +1596,9 @@
   "GeneralSettings": {
     "loading": "Loading...",
     "sectionTitle": "General",
-    "sectionDescription": "Centralized preferences for the default terminal, rendering acceleration, and multi-agent delegation.",
+    "sectionDescription": "Centralized preferences for the default terminal, rendering acceleration, notification sounds, and multi-agent delegation.",
     "terminalTitle": "Default Terminal",
-    "terminalDescription": "Choose the shell used when opening new terminal tabs from the terminal bar or file tree.",
+    "terminalDescription": "Choose the shell used when opening new terminal tabs from the terminal bar or file tree. Agents also use it when they ask houhub to run a whole command line for them.",
     "defaultTerminalShell": "Default shell",
     "terminalSystemDefault": "System default",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
@@ -1614,7 +1623,7 @@
   },
   "LoginPage": {
     "documentTitle": "Login - houhub",
-    "brand": "Houhub",
+    "brand": "HouHub",
     "subtitle": "Enter your access token to connect to the desktop app",
     "tokenPlaceholder": "Access Token",
     "connect": "Connect",
@@ -1762,7 +1771,12 @@
         "reorderFoldersFailed": "Failed to reorder folders: {message}",
         "changeFolderColorFailed": "Failed to change folder color: {message}",
         "setFolderAliasFailed": "Failed to set alias: {message}",
-        "changeFolderDefaultAgentFailed": "Failed to set default agent: {message}"
+        "changeFolderDefaultAgentFailed": "Failed to set default agent: {message}",
+        "createGroupFailed": "Failed to create group: {message}",
+        "updateGroupFailed": "Failed to update group: {message}",
+        "deleteGroupFailed": "Failed to delete group: {message}",
+        "moveToGroupFailed": "Failed to move folder: {message}",
+        "applyLayoutFailed": "Failed to save the folder order: {message}"
       },
       "statsLabel": "{folders} folders · {convos} conversations",
       "reorderHandle": "Drag to reorder",
@@ -1771,7 +1785,7 @@
       "viewOptions": "View options",
       "listOptions": "Conversation list",
       "showCompleted": "Show completed conversations",
-      "showWorktrees": "Show worktree folders",
+      "showWorktrees": "Show worktree branches",
       "showRecent": "Show Recent group",
       "navigationItems": "Navigation items",
       "moreOptions": "More options",
@@ -1840,7 +1854,7 @@
       "automations": "Automations",
       "loadingSubsessions": "Loading sub-conversations…",
       "worktreeRemovedBadge": "Source worktree removed",
-      "tasks": "Task Board",
+      "tasks": "To-dos",
       "runningCountBadge": "{count, plural, one {# session running} other {# sessions running}}",
       "sectionOrderMoveUp": "Move up",
       "sectionOrderMoveDown": "Move down",
@@ -1849,7 +1863,24 @@
       "noRecent": "No recent conversations",
       "showMoreRecent": "Show more ({count})",
       "resetRecentLimit": "Reset to the first {count}",
-      "forge": "Repository panel"
+      "forge": "Repository panel",
+      "canvas": "Infinite Conversations",
+      "folderGroup": {
+        "newGroup": "New group",
+        "newGroupTitle": "New folder group",
+        "defaultName": "New group",
+        "namePlaceholder": "Group name",
+        "rename": "Rename group…",
+        "renameTitle": "Rename folder group",
+        "delete": "Delete group",
+        "deleteConfirmTitle": "Delete this group?",
+        "deleteConfirmDescription": "\"{name}\" will be removed. The {count, plural, one {# folder} other {# folders}} inside it stay in the workspace and move back to the top level.",
+        "empty": "No folders in this group",
+        "moveToGroup": "Move to group",
+        "removeFromGroup": "No group",
+        "newGroupAndMove": "New group…",
+        "dropToUngroup": "Drop here to remove from group"
+      }
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",
@@ -1864,6 +1895,7 @@
       "forkSession": "Fork Session",
       "forkSessionSuccess": "Session forked successfully",
       "forkSessionFailed": "Failed to fork session: {error}",
+      "forkSessionBusy": "Failed to fork session: a turn is running",
       "exportConversation": "Export Conversation",
       "exportImage": "Image",
       "exportMarkdown": "Markdown",
@@ -2329,7 +2361,9 @@
       "noMatches": "No matches",
       "pushBranch": "Push",
       "deleteWorktree": "Delete worktree",
-      "deleteWorktreeAndBranch": "Delete worktree and branch"
+      "deleteWorktreeAndBranch": "Delete worktree and branch",
+      "worktreeBranches": "Worktree branches ({count, plural, one {#} other {#}})",
+      "noWorktreeBranches": "No worktree branches"
     },
     "commitDialog": {
       "toasts": {
@@ -2796,6 +2830,7 @@
           "downloadFailed": "{agent} download failed: {message}",
           "sessionLoadResourceNotFound": "{agent} session failed to load. Reload to retry, or start a new conversation.",
           "sessionLoadUnavailable": "{agent} couldn't restore this session — it may have ended or the agent stopped. Reload to retry, or start a new conversation.",
+          "sessionLoadBusy": "This history is held open by the session forked from it. Close that session, then reload to open this one.",
           "sessionArchived": "The previous session was archived on the {agent} side. Run {command} in a terminal to restore it and reload, or start a new conversation.",
           "turnFailedRefusal": "{agent} refused to continue this turn. This often indicates a backend or gateway error — check the agent's logs.",
           "turnFailedMaxTokens": "{agent} reached the maximum token limit for this turn.",
@@ -2885,7 +2920,11 @@
         "noModels": "No models found",
         "cancel": "Cancel",
         "send": "Send",
-        "forkAndSend": "Fork & Send",
+        "queueMessage": "Queue message",
+        "steerIntoTurn": "Insert into current turn",
+        "steerQueuedInstead": "Queued instead — it will be sent with the next turn.",
+        "steerFailed": "Couldn't insert into the current turn",
+        "steerAttachmentsUnsupported": "Text only — drafts with attachments go through the queue.",
         "slashCommands": "Slash commands",
         "slashSearchPlaceholder": "Search commands...",
         "slashSearchEmpty": "No matching commands",
@@ -2944,9 +2983,9 @@
           "pasteDropFiles": "Paste a screenshot or drop a file directly onto the input to attach it.",
           "queueMessage": "While the agent is replying, keep typing — your next message gets queued and auto-sent when it finishes.",
           "draftAutoSave": "Unsent drafts are auto-saved per conversation and restored when you come back.",
-          "forkSend": "The send button's dropdown has Fork and Send — branch from the current turn into a new tab.",
+          "forkFromTurn": "Any completed reply has Fork from here — branch the conversation at that message into a new tab.",
           "exportConversation": "Right-click inside the conversation to export it as Markdown, HTML, or an image.",
-          "chatChannels": "Connect Telegram / Lark / WeChat under Settings -> Chat Channels to continue from your phone.",
+          "chatChannels": "Connect Telegram / Lark / WeChat under Settings → Chat Channels to continue from your phone.",
           "shortcutsAuxPanel": "<shortcut>{toggleAuxPanel}</shortcut> toggles the right panel to view this session's touched files and Git changes.",
           "shortcutsTerminalSidebar": "<shortcut>{toggleTerminal}</shortcut> opens the built-in terminal, <shortcut>{toggleSidebar}</shortcut> toggles the sidebar.",
           "customShortcuts": "Every shortcut is fully remappable under Settings → Shortcuts.",
@@ -2960,7 +2999,7 @@
           "mentionTargets": "@ pulls in more than files — mention another agent to hand off a subtask, or reference a past session, a commit, or a skill.",
           "splitGroups": "Right-click a tab and pick Split Right or Split Down to keep two conversations open in their own panes.",
           "worktrees": "Open the branch button and pick New worktree so several agents can work the same repo without overwriting each other's files.",
-          "importSessions": "Already ran sessions in the terminal? A folder's menu has Import local sessions — bring that history into HouHub.",
+          "importSessions": "Already ran sessions in the terminal? A folder's menu has Import local sessions — bring that history into houhub.",
           "subSessions": "When an agent delegates, the sub-session appears nested under it in the sidebar — expand the row to follow what each one did.",
           "liveFeedback": "Live feedback in the + menu drops a note into the turn the agent is already running, without interrupting it.",
           "skillPacks": "Settings → Skill Packs bundles coding experts, scientific research, and office skills — switch them on per agent.",
@@ -3158,6 +3197,8 @@
         "emptyConversation": "No messages in this conversation.",
         "systemMessage": "System message",
         "copyMessage": "Copy",
+        "forkFromHere": "Fork from here",
+        "forkBusy": "Can't fork while a turn is running",
         "copied": "Copied",
         "downloadImage": "Download image",
         "downloadFailed": "Download failed: {message}",
@@ -3191,7 +3232,8 @@
         "copyImage": "Copy image",
         "copiedImage": "Image copied",
         "copyImageFailed": "Could not copy image: {message}",
-        "copyImageUnsupported": "Copying this image is not supported here"
+        "copyImageUnsupported": "Copying this image is not supported here",
+        "selectionSaveAsNote": "Note"
       },
       "liveTurnStats": {
         "thinking": "Thinking...",
@@ -3258,7 +3300,10 @@
             "child_unknown": "subagent unknown error",
             "unknown": "unknown task"
           }
-        }
+        },
+        "resumed": "Resumed",
+        "resumeDetail": "Resume details",
+        "resumeReasonLabel": "Resume reason"
       },
       "contentParts": {
         "showingTailOutput": "Showing tail output while streaming for performance.",
@@ -3410,7 +3455,6 @@
         },
         "planMode": {
           "entered": "Entered plan mode",
-          "planLabel": "Plan",
           "submitted": "Plan submitted",
           "switched": "Switched mode",
           "reviewApproved": "Plan approved — implementing",
@@ -3584,6 +3628,13 @@
         "cardFinishedWithStatus": "Background task finished ({status})",
         "cardResultPending": "Result not returned yet"
       },
+      "asyncTasks": {
+        "openOutput": "Output",
+        "stop": "Stop",
+        "tokens": "{count} tokens",
+        "stopDeclined": "That task could not be stopped — it may have already finished.",
+        "stopFailed": "Failed to stop the task: {error}"
+      },
       "proposedPlan": {
         "title": "Proposed plan",
         "planning": "Planning…"
@@ -3611,7 +3662,9 @@
           "needs_review": "needs review",
           "blocked": "blocked",
           "unknown": "unknown"
-        }
+        },
+        "resumeDelegation": "Resuming task {task}",
+        "resumeDelegationNoId": "Resuming a delegated task"
       }
     },
     "diffPreview": {
@@ -3739,11 +3792,11 @@
   "WebServiceSettings": {
     "addressSwitchHint": "Switching only changes the address shown and opened here — the service listens on all interfaces and stays reachable at every address.",
     "sectionTitle": "Web Service",
-    "sectionDescription": "Enable to access Houhub remotely via browser",
+    "sectionDescription": "Enable to access HouHub remotely via browser",
     "port": "Port",
     "status": "Status",
     "autoStart": "Auto-start",
-    "autoStartHint": "Start the Web service when Houhub launches",
+    "autoStartHint": "Start the Web service when HouHub launches",
     "running": "Running",
     "stopped": "Stopped",
     "processing": "Processing...",
@@ -3758,7 +3811,7 @@
     "copy": "Copy",
     "qrcode": "QR Code",
     "qrcodeTitle": "Scan to Open",
-    "qrcodeHint": "Scan with your phone to open Houhub in a browser",
+    "qrcodeHint": "Scan with your phone to open HouHub in a browser",
     "addressLabel": "Access Address",
     "tokenLabel": "Access Token",
     "tokenHint": "Enter this token when accessing the Web client for the first time",
@@ -3766,7 +3819,7 @@
     "regenerate": "Regenerate",
     "stalePortOccupiedTitle": "Port {port} is held by another process",
     "stalePortUnknownTitle": "Port {port} status is unclear",
-    "stalePortHint": "Houhub can't bind here until the port is released. Change the port above, or close the process holding it.",
+    "stalePortHint": "HouHub can't bind here until the port is released. Change the port above, or close the process holding it.",
     "errors": {
       "alreadyRunning": "Web service is already running",
       "invalidAddress": "Invalid host or port format",
@@ -4186,7 +4239,7 @@
   },
   "SkillPacksSettings": {
     "title": "Skill Packs",
-    "description": "Curated skill bundles that HouHub manages centrally and links into your AI agents — coding experts, scientific research, and office document tools. Enable them per agent below.",
+    "description": "Curated skill bundles that houhub manages centrally and links into your AI agents — coding experts, scientific research, and office document tools. Enable them per agent below.",
     "tabs": {
       "experts": "Experts",
       "science": "Science",
@@ -4782,7 +4835,7 @@
     "sectionAction": "Action",
     "actionLaunchSession": "Launch session",
     "actionEnqueueTask": "Enqueue task",
-    "actionEnqueueTaskHint": "Each fire adds a to-do task titled after this automation to the folder's task board; the task engine runs it per the board's settings."
+    "actionEnqueueTaskHint": "Each fire adds a to-do task titled after this automation to the folder's to-dos; the task engine runs it per the board's settings."
   },
   "WorkbenchCloud": {
     "title": "Workbench Cloud",
@@ -4889,7 +4942,7 @@
     }
   },
   "CodexModelEditor": {
-    "customizedNotice": "You've customized the model list, so Houhub now manages codex's full model table. Official models codex ships later won't appear automatically — click the refresh button below and save again to sync them. Clear your customizations to let codex update automatically.",
+    "customizedNotice": "You've customized the model list, so houhub now manages codex's full model table. Official models codex ships later won't appear automatically — click the refresh button below and save again to sync them. Clear your customizations to let codex update automatically.",
     "officialsTitle": "Official models",
     "officialsHint": "Auto-included from the codex you launch; remove any you don't want.",
     "officialsEmpty": "No official models available.",
@@ -4963,7 +5016,7 @@
     }
   },
   "Tasks": {
-    "title": "Task Board",
+    "title": "To-dos",
     "new": "New task",
     "empty": "No tasks yet",
     "emptyHint": "Add a to-do, then run it — the agent works in an isolated worktree and you review and merge the result.",
@@ -5006,7 +5059,7 @@
     "actionComplete": "Complete",
     "actionAbandon": "Abandon",
     "cancelTitle": "Cancel task?",
-    "cancelDescription": "The task moves to Canceled. Its worktree is kept, and you can requeue it later.",
+    "cancelDescription": "The task moves to Canceled, and you can requeue it later.",
     "cancelReasonLabel": "Reason (optional)",
     "cancelReasonPlaceholder": "e.g. wrong approach — I'll rewrite the description",
     "cancelKeep": "Never mind",
@@ -5241,7 +5294,14 @@
     "deliverPrBackDeleteWorktree": "Delete the worktree after pushing",
     "deliverPrBackSubmit": "Push",
     "deliverPrBackDone": "Pushed to the pull request",
-    "deliverPrBackDoneMr": "Pushed to the merge request"
+    "deliverPrBackDoneMr": "Pushed to the merge request",
+    "cancelDeleteWorktree": "Also delete its worktree and work branch",
+    "settingsAutoCompact": "Auto-compact threshold",
+    "settingsAutoCompactHint": "Before a follow-up, retry or merge round, compact the session when its context window is at least this full. 0 = off.",
+    "settingsCompactCommand": "Compact command",
+    "settingsCompactCommandHint": "Leave blank to use what the agent offers, or its known default.",
+    "settingsCompactCommandPlaceholder": "/compact",
+    "eventContextCompact": "Context compaction"
   },
   "TokenUsage": {
     "title": "Token Usage",
@@ -5397,7 +5457,7 @@
   },
   "AgentToolsSettings": {
     "title": "In-conversation tools",
-    "description": "Extra tools HouHub gives an agent inside a conversation. Each is injected when the agent starts, so a change applies to agents started afterwards.",
+    "description": "Extra tools houhub gives an agent inside a conversation. Each is injected when the agent starts, so a change applies to agents started afterwards.",
     "feedbackLabel": "Live Feedback",
     "feedbackHint": "Send notes and corrections to an agent while it's working. When the agent supports instant steering, your note is inserted into the running turn immediately; otherwise the agent gets a tool to check for your feedback — those agents typically only check when you mention it in your prompt, for example add \"check my live feedback regularly\" to your message.",
     "questionLabel": "Ask user question",
@@ -5439,7 +5499,9 @@
     "pickFolder": "Pick a project folder",
     "noRemote": "This folder has no recognizable forge remote (origin)",
     "errors": {
-      "noAccount": "No {provider} account is configured for {host}. Add one under Settings → Version Control to load this repository."
+      "noAccount": "No {provider} account is configured for {host}. Add one under Settings → Version Control to load this repository.",
+      "unsupportedHost": "The repository panel supports GitHub and GitLab only, and {host} is not recognized as either. If it is a self-hosted GitHub Enterprise or GitLab instance, add an account for it under Settings → Version Control.",
+      "wrongForge": "{host} is a {provider}, not the forge houhub had it classified as. The detection has been corrected — reload to retry."
     },
     "addAccount": "Add an account",
     "empty": "Nothing here",
@@ -5629,5 +5691,79 @@
     "newIssueLabels": "Labels",
     "newIssueSubmit": "Create issue",
     "newIssueCreating": "Creating…"
+  },
+  "Canvas": {
+    "title": "Infinite Conversations",
+    "untitled": "Untitled conversation",
+    "unresolvedConversation": "Conversation removed",
+    "removeCard": "Remove card",
+    "unresolvedFolder": "Folder unavailable",
+    "unresolvedFolderHint": "The bound folder is closed or deleted. Reopen it and this region comes back to life.",
+    "customRegion": "Collection",
+    "runningCount": "{count} running",
+    "childCount": "{count} sub-agents",
+    "regionMenu": "Region options",
+    "rename": "Rename",
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "color": "Color",
+    "removeRegion": "Remove region",
+    "removeNote": "Delete note",
+    "showMore": "{count} more",
+    "emptyRegion": "No conversations here yet",
+    "emptyCustomHint": "Drag conversation cards here to collect them",
+    "notePlaceholder": "Write a note…",
+    "noteEmptyHint": "Double-click to write",
+    "addNode": "Add to canvas",
+    "addFolderRegion": "Folder region",
+    "addAgentRegion": "Agent region",
+    "addConversationCard": "Conversation card",
+    "addCustomRegion": "Custom region",
+    "addNote": "Sticky note card",
+    "searchConversations": "Search conversations…",
+    "noFolders": "No open folders",
+    "noConversations": "No conversations found",
+    "fitView": "Fit view",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "resetZoom": "Reset zoom to 100%",
+    "viewportControls": "View",
+    "showMinimap": "Show map",
+    "hideMinimap": "Hide map",
+    "autoArrange": "Auto-arrange",
+    "exportPng": "Export as PNG",
+    "empty": "Your canvas is empty",
+    "emptyHint": "Map your workspace spatially: regions for folders and agents, cards for conversations, notes for everything else.",
+    "seedFromWorkspace": "Generate from current workspace",
+    "unresolvedGroup": "Group unavailable",
+    "unresolvedGroupHint": "The bound folder group was deleted. Remove this region or add a new one.",
+    "grid": "Grid",
+    "gridColumns": "Columns",
+    "gridRows": "Rows",
+    "gridAuto": "Auto",
+    "addGroupRegion": "Folder group region",
+    "noGroups": "No folder groups",
+    "createRegionFromSelection": "Group into a region",
+    "selectedCount": "{count} selected",
+    "openInWorkspace": "Open in workspace",
+    "openDetailPanel": "Open in side panel",
+    "detailPanelDescription": "The full conversation for the selected card, without leaving the canvas.",
+    "expandConversation": "Expand conversation",
+    "collapseConversation": "Collapse conversation",
+    "cardMenu": "Card options",
+    "removeFromRegion": "Remove from region",
+    "newConversation": "New conversation",
+    "discardDraft": "Discard draft",
+    "createFailed": "Couldn't create the conversation",
+    "showAllMembers": "Show all conversations",
+    "showFewerMembers": "Show fewer",
+    "detachToCanvas": "Move out to canvas",
+    "deleteSelected": "Delete selection",
+    "confirmDeleteTitle": "Delete selection?",
+    "confirmDeleteNotes": "{count, plural, one {# note you wrote} other {# notes you wrote}} will be deleted for good. This cannot be undone.",
+    "confirmDeleteCancel": "Cancel",
+    "confirmDeleteConfirm": "Delete",
+    "canvasActions": "Canvas actions",
+    "mergeIntoNewRegion": "New region"
   }
 }

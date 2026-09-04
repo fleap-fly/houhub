@@ -16,7 +16,6 @@ import {
   FileStack,
   FlaskConical,
   FolderSearch,
-  GitFork,
   Loader2,
   Lock,
   MessageSquarePlus,
@@ -126,12 +125,14 @@ import {
   ConversationContextBar,
   ConversationFolderBranchPicker,
   useConversationFolderBranchPickerVisible,
+  type ConversationFolderPickerOverride,
 } from "@/components/chat/conversation-context-bar"
 import { ComposerContextUsage } from "@/components/chat/composer-context-usage"
 import { ComposerConnectionStatus } from "@/components/chat/composer-connection-status"
 import { InlineModeSelector } from "@/components/chat/mode-selector"
 import { InlineSessionConfigSelector } from "@/components/chat/session-config-selector"
 import { ModelOptionPicker } from "@/components/chat/model-option-picker"
+import { SelectorTooltip } from "@/components/chat/selector-tooltip"
 import {
   SessionSelectorsPanel,
   type SessionSelectorGroup,
@@ -241,6 +242,10 @@ interface MessageInputProps {
    * active local folder picker. */
   contextLocation?: { label: string; title?: string } | null
   attachmentTabId?: string | null
+  /** Identity + switching for a composer that isn't in a tab (a canvas card).
+   *  Passed straight to the folder picker below the composer; without it that
+   *  picker falls back to the workspace's active tab. */
+  folderPickerOverride?: ConversationFolderPickerOverride
   draftStorageKey?: string | null
   isActive?: boolean
   /** Paint the flowing active-session gradient on the composer border. Set only
@@ -262,10 +267,6 @@ interface MessageInputProps {
   isEditingQueueItem?: boolean
   onSaveQueueEdit?: (draft: PromptDraft) => void
   onCancelQueueEdit?: () => void
-  /** Fork the session and send `draft`. Fire-and-forget: the input consumes the
-   *  draft synchronously (clears on click); the parent re-queues it if the fork
-   *  can't run, so it is never lost. */
-  onForkSend?: (draft: PromptDraft, modeId?: string | null) => void
   /** Inject the draft's TEXT into the RUNNING turn (native live-feedback
    *  steering). Present only on sessions whose feedback channel is native —
    *  when absent, the prompting branch renders its historical Stop-only form.
@@ -538,6 +539,7 @@ export function MessageInput({
   enableWorkspaceReferences = true,
   contextLocation,
   attachmentTabId,
+  folderPickerOverride,
   draftStorageKey,
   isActive = false,
   showActiveFlow = false,
@@ -548,7 +550,6 @@ export function MessageInput({
   isEditingQueueItem = false,
   onSaveQueueEdit,
   onCancelQueueEdit,
-  onForkSend,
   onSteer,
   onAddFeedback,
   feedbackAddDisabled,
@@ -1019,10 +1020,10 @@ export function MessageInput({
   const hasAnySelector =
     showConfigLoading || hasConfigOptions || showModeLoading || showModeSelector
   const hasInlineSelectors = hasConfigOptions || showModeSelector
-  const localFolderBranchPickerVisible =
-    useConversationFolderBranchPickerVisible(attachmentTabId)
-  const hasFolderBranchPicker =
-    enableWorkspaceReferences && localFolderBranchPickerVisible
+  const hasFolderBranchPicker = useConversationFolderBranchPickerVisible(
+    attachmentTabId,
+    folderPickerOverride
+  )
   const folderBranchPickerAttached = hasFolderBranchPicker
   const contextLocationLabel = contextLocation?.label.trim() ?? ""
   const hasContextLocation = contextLocationLabel.length > 0
@@ -2766,37 +2767,6 @@ export function MessageInput({
     resetComposer,
   ])
 
-  const handleForkSendClick = useCallback(() => {
-    if (!onForkSend) return
-    // Same uploading gate as `handleSend`: a fork-send consumes the draft
-    // (and its blocks) immediately, so an unsettled upload would strip to
-    // nothing on the wire.
-    if (attachments.some((a) => a.type === "image" && a.uploading)) {
-      toast.error(tAttach("attachUploadInProgress"))
-      return
-    }
-    const draft = buildDraft()
-    if (!draft) return
-    // Fork-send consumes the draft synchronously, exactly like a normal send:
-    // fire-and-forget and clear the input immediately, so there is no in-flight
-    // editable window. If the fork can't run (queue non-empty / disconnected /
-    // failure) the parent re-queues the draft, so it is never lost.
-    onForkSend(draft, showModeSelector ? effectiveModeId : null)
-    if (effectiveDraftStorageKey) {
-      clearMessageInputDraftV2(effectiveDraftStorageKey)
-    }
-    resetComposer()
-  }, [
-    onForkSend,
-    attachments,
-    tAttach,
-    buildDraft,
-    effectiveModeId,
-    showModeSelector,
-    effectiveDraftStorageKey,
-    resetComposer,
-  ])
-
   // Mid-turn "insert into current turn" (native steering). Awaited, unlike
   // the synchronous send/enqueue/fork paths: the draft clears ONLY once the
   // backend confirms the injection was recorded — a turn-end race falls back
@@ -3261,36 +3231,6 @@ export function MessageInput({
         <Square className="size-4" />
       </Button>
     )
-  ) : onForkSend ? (
-    <div className="flex items-center">
-      <Button
-        onClick={handleSend}
-        disabled={disabled || !hasSendableContent}
-        size="icon"
-        className="h-8 w-8 rounded-r-none"
-        title={t("send")}
-      >
-        <Send className="size-4" />
-      </Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            disabled={disabled || !hasSendableContent}
-            size="icon"
-            className="h-8 w-5 rounded-l-none border-l border-primary-foreground/20"
-            aria-label={t("forkAndSend")}
-          >
-            <ChevronUp className="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" side="top">
-          <DropdownMenuItem onSelect={handleForkSendClick}>
-            <GitFork className="h-4 w-4" />
-            {t("forkAndSend")}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
   ) : (
     <Button
       onClick={handleSend}
@@ -3860,24 +3800,31 @@ export function MessageInput({
                         open={collapsedSelectorsOpen}
                         onOpenChange={setCollapsedSelectorsOpen}
                       >
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon-xs"
-                            className="shrink-0"
-                            title={t("agentSettings")}
-                            aria-label={t("agentSettings")}
-                          >
-                            {agentType ? (
-                              <AgentIcon
-                                agentType={agentType}
-                                className="size-3"
-                              />
-                            ) : (
-                              <Cog className="size-3" />
-                            )}
-                          </Button>
-                        </PopoverTrigger>
+                        {/* Suppressed while the panel is open — the Popover is
+                            non-modal, so the trigger keeps taking hover under
+                            it (see SelectorTooltip). */}
+                        <SelectorTooltip
+                          label={t("agentSettings")}
+                          suppressed={collapsedSelectorsOpen}
+                        >
+                          <PopoverTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              className="shrink-0"
+                              aria-label={t("agentSettings")}
+                            >
+                              {agentType ? (
+                                <AgentIcon
+                                  agentType={agentType}
+                                  className="size-3"
+                                />
+                              ) : (
+                                <Cog className="size-3" />
+                              )}
+                            </Button>
+                          </PopoverTrigger>
+                        </SelectorTooltip>
                         <PopoverContent
                           ref={collapsedSelectorsGuard.contentRef}
                           side="top"
@@ -4003,7 +3950,10 @@ export function MessageInput({
           // right-align at the trailing edge.
           <div className="flex items-center justify-between gap-2 rounded-b-xl px-2 pt-1 text-xs text-muted-foreground">
             <div className="flex min-w-0 items-center gap-1">
-              <ConversationFolderBranchPicker tabId={attachmentTabId} />
+              <ConversationFolderBranchPicker
+                tabId={attachmentTabId}
+                override={folderPickerOverride}
+              />
             </div>
             {/* `pr-px` offsets the composer chrome's 1px border: the send button
                 sits INSIDE that border while this status row sits outside it, so

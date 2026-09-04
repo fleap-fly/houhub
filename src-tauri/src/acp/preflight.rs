@@ -52,6 +52,7 @@ pub struct CheckItem {
 #[derive(Debug, Clone, Serialize)]
 pub struct AdapterInfo {
     /// npm spec houhub installs, e.g. "@agentclientprotocol/claude-agent-acp@0.69.0".
+    /// npm spec HouHub installs, e.g. "@agentclientprotocol/claude-agent-acp@0.73.0".
     pub adapter_package: String,
     /// Command the launch gate resolves, e.g. "claude-agent-acp".
     pub adapter_cmd: String,
@@ -717,7 +718,7 @@ mod adapter_tests {
         );
         assert_eq!(
             info.adapter_package,
-            "@agentclientprotocol/claude-agent-acp@0.69.0"
+            "@agentclientprotocol/claude-agent-acp@0.73.0"
         );
         assert_eq!(info.adapter_cmd, "claude-agent-acp");
         assert!(!info.adapter_installed);
@@ -731,7 +732,7 @@ mod adapter_tests {
     #[test]
     fn codex_adapter_info_uses_codex_home() {
         let info = info_for(AgentType::Codex, None, true);
-        assert_eq!(info.adapter_package, "@agentclientprotocol/codex-acp@1.7.0");
+        assert_eq!(info.adapter_package, "@agentclientprotocol/codex-acp@1.8.0");
         assert_eq!(info.adapter_cmd, "codex-acp");
         assert!(info.adapter_installed);
         assert_eq!(info.native_cmd, "codex");

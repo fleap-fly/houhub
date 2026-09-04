@@ -127,7 +127,7 @@
     },
     "zoomLevel": {
       "sectionTitle": "تكبير النافذة",
-      "sectionDescription": "تكبير أو تصغير الواجهة بالكامل. يتم تطبيقه فوراً ويُحفظ لكل جهاز على حدة.",
+      "sectionDescription": "تكبير أو تصغير الواجهة بالكامل. يتم تطبيقه فوراً ويُحفظ لكل جهاز على حدة. ⌘/Ctrl + و - ينتقلان بين نفس مستويات التكبير في هذه القائمة (⌘/Ctrl 0 يعيد الضبط إلى 100%).",
       "placeholder": "اختر مستوى التكبير",
       "default": "افتراضي",
       "current": "التكبير الحالي: {zoom}%"
@@ -146,13 +146,13 @@
       "ligatures": "تفعيل الحروف المتصلة",
       "ligaturesUnavailable": "هذا الخط لا يحتوي على حروف متصلة",
       "terminalLigaturesHint": "تنطبق الحروف المتصلة في الطرفية على خطوط البرمجة المضمّنة فقط.",
-      "wordWrap": "تفعيل التفاف الأسطر في المحرر",
+      "wordWrap": "تفعيل التفاف النص",
       "preview": "معاينة"
     },
     "welcomePanel": {
-      "sectionTitle": "لوحة الترحيب",
-      "sectionDescription": "اعرض بطاقات الإجراءات السريعة «تطوير الكود / الأعمال المكتبية» أعلى مربع الإدخال في المحادثات الجديدة.",
-      "showQuickActions": "العرض في المحادثات الجديدة"
+      "sectionTitle": "منطقة اختيار الوضع",
+      "sectionDescription": "بطاقات الاختصار «تطوير الكود / الأعمال المكتبية» التي تظهر أعلى مربع الإدخال في صفحة المحادثة الجديدة.",
+      "showQuickActions": "العرض في صفحة المحادثة الجديدة"
     },
     "workspaceBackground": {
       "sectionTitle": "خلفية مساحة العمل",
@@ -221,7 +221,7 @@
       },
       "css": {
         "dialogTitle": "CSS مخصص",
-        "dialogDescription": "يسري على جميع نوافذ HouHub. تُعاين التغييرات مباشرة؛ اضغط تطبيق للحفظ.",
+        "dialogDescription": "يسري على جميع نوافذ houhub. تُعاين التغييرات مباشرة؛ اضغط تطبيق للحفظ.",
         "size": "{used} كيلوبايت / {max} كيلوبايت",
         "ruleCount": "{count} قاعدة",
         "errorTooLarge": "الحجم كبير جدًا للحفظ. قلّصه إلى ما دون الحد.",
@@ -238,7 +238,7 @@
   "SystemSettings": {
     "loading": "جارٍ التحميل...",
     "sectionTitle": "إدارة النظام",
-    "sectionDescription": "إدارة وكيل الشبكة وتحديثات التطبيق وتفضيلات اللغة.",
+    "sectionDescription": "إدارة تحديثات التطبيق والتشغيل عند تسجيل الدخول ووكيل الشبكة وتفضيلات اللغة.",
     "proxyTitle": "وكيل الشبكة",
     "proxyDescription": "عند التفعيل، ستُفضَّل إعدادات هذا الوكيل في طلبات الشبكة اللاحقة (بما في ذلك دردشة ACP وتثبيت الوكلاء وعمليات Git البعيدة).",
     "loadFailed": "فشل التحميل: {message}",
@@ -672,6 +672,8 @@
     "local": {
       "filterPlaceholder": "تصفية MCP المحلي...",
       "loadFailed": "فشل التحميل: {message}",
+      "sourceUnreadable": "تعذّرت قراءة إعدادات MCP الخاصة بـ {app}، لذا تم إخفاء خوادمها: {message}",
+      "saveBlockedByUnreadableSource": "أصلح هذا الملف أو احذفه ثم حدّث الصفحة قبل الحفظ: تُحتسب الإسنادات من الوكلاء الذين تمكّنت الصفحة من قراءتهم، لذا قد يؤدي الحفظ الآن إلى إزالة هذا الخادم من وكيل تعذّرت قراءته.",
       "empty": "لم يتم اكتشاف MCP محلي.",
       "description": "يمكن تعديل إعداد MCP المحلي وحفظه مباشرة.",
       "enabledApps": "التطبيقات المفعلة",
@@ -831,7 +833,7 @@
       "configTomlHint": "يُحفظ حرفيًا كملف ~/.grok/config.toml بالكامل. يُرفض TOML غير الصالح حتى لا يقتطع خطأ مطبعي ملفك أبدًا.",
       "configTomlPlaceholder": "# مفاتيح غير عناصر التحكم أعلاه، مثل\n# [mcp_servers.*] و[cli] وقواعد [permission].",
       "customModelTitle": "نموذج مخصّص (نقطة نهاية خاصة)",
-      "customModelHint": "وجِّه Grok إلى نقطة نهاية مخصّصة أو مستضافة ذاتيًا. يكتب HouHub كتلة `[model.*]` لكل نموذج ويجعلها النموذج الافتراضي. اترك معرّف النموذج فارغًا لإزالته.",
+      "customModelHint": "وجِّه Grok إلى نقطة نهاية مخصّصة أو مستضافة ذاتيًا. يكتب houhub كتلة `[model.*]` لكل نموذج ويجعلها النموذج الافتراضي. اترك معرّف النموذج فارغًا لإزالته.",
       "customModelIdLabel": "معرّف النموذج",
       "customModelIdPlaceholder": "grok-4.5",
       "customModelIdHint": "يُسجَّل ككتلة `[model.*]` ويُرسَل إلى الـ API كاسم للنموذج؛ ويُضبط أيضًا كـ `[models].default`.",
@@ -849,7 +851,7 @@
       "autoCompactHint": "يضغط المحادثة عندما يبلغ استخدام السياق هذه النسبة المئوية (الافتراضي في Grok هو 85). يُكتَب في `[session]`."
     },
     "cursor": {
-      "configDescription": "اضبط Cursor هنا. اختر طريقة مصادقة — اشتراك رسمي (تسجيل دخول عبر المتصفح) أو مفتاح Cursor API للأجهزة بدون واجهة أو الخوادم — ثم اختر نموذجًا وحرّر قواعد أذونات CLI وبيئة الحماية. يكتبها HouHub في ~/.cursor/cli-config.json، بالمشاركة مع أداة cursor-agent.",
+      "configDescription": "اضبط Cursor هنا. اختر طريقة مصادقة — اشتراك رسمي (تسجيل دخول عبر المتصفح) أو مفتاح Cursor API للأجهزة بدون واجهة أو الخوادم — ثم اختر نموذجًا وحرّر قواعد أذونات CLI وبيئة الحماية. يكتبها houhub في ~/.cursor/cli-config.json، بالمشاركة مع أداة cursor-agent.",
       "authTitle": "المصادقة",
       "authChecking": "جارٍ التحقق…",
       "authNotInstalled": "cursor-agent غير مثبّت",
@@ -889,7 +891,14 @@
       "modelPickerPlaceholder": "ابحث عن النماذج…",
       "modelNoMatch": "لا يوجد نموذج مطابق",
       "modelsNeedAuth": "سجّل الدخول لتحميل قائمة النماذج.",
-      "modelDefaultBadge": "افتراضي"
+      "modelDefaultBadge": "افتراضي",
+      "modelThinkingLabel": "التفكير",
+      "modelEffortLabel": "مستوى التفكير",
+      "modelFastLabel": "Fast",
+      "variantOn": "تشغيل",
+      "variantOff": "إيقاف",
+      "modelVariantHint": "يوفّر Cursor كل تركيبة كمعرّف نموذج مستقل، وهذه العناصر تختار المعرّف المناسب. إنها تحدد القيمة الافتراضية عند البدء — ويمكن تغيير النموذج والتفكير وFast في أي وقت من صندوق الكتابة.",
+      "permissionModeAskHint": "يعرض وضع «اسأل قبل التشغيل» كل استدعاء أداة عليك للموافقة، ومعه خيار Cursor «السماح دائمًا» — اختياره يضيف قاعدة إلى قائمة المسموح بها أدناه، فيُنفَّذ الاستدعاء نفسه لاحقًا دون سؤال."
     },
     "deepseek": {
       "configManagement": "إعدادات DeepSeek Harness",
@@ -901,7 +910,7 @@
       "apiKeyHint": "يُمرَّر إلى الوكيل باسم DEEPSEEK_API_KEY. متغيّر البيئة له أسبقية على ملف بيانات الاعتماد، لذا اترك الحقل فارغًا إن كنت تسجّل الدخول من الطرفية."
     },
     "codex": {
-      "configDescription": "يدعم الإعداد السريع لعنوان API ومفتاح API واسم النموذج وجهد الاستدلال، مع المزامنة مع `auth.json` / `config.toml`.",
+      "configDescription": "يدعم الإعداد السريع لعنوان API ومفتاح API واسم النموذج، مع المزامنة مع `auth.json` / `config.toml`.",
       "authMode": "طريقة المصادقة",
       "chatgptSubscription": "اشتراك رسمي",
       "chatgptSubscriptionHint": "تسجيل الدخول باشتراك ChatGPT الرسمي، لا حاجة لـ API Key",
@@ -941,7 +950,7 @@
       "sandboxMode_workspace-write": "الكتابة في مساحة العمل",
       "sandboxMode_danger-full-access": "وصول كامل (بدون عزل)",
       "sandboxModeHint": "على Windows، تُخفَّض الكتابة في مساحة العمل إلى قراءة فقط ما لم تُفعَّل بيئة العزل التجريبية الخاصة بـ codex.",
-      "sandboxModeSeedsPresetHint": "يربط HouHub هذا أيضاً بإعداد الموافقة الذي تبدأ به الجلسة، فهو — بخلاف سياسة الموافقة — يؤثر على الطلبات العادية. لاحظ أن الإعداد الافتراضي للمحوّل صار يجعل نموذجاً يفرز طلبات تصعيد الصلاحيات ولا يمرّر إلا ما يراه غير آمن؛ اختر «طلب الموافقة» في مربع الكتابة لمراجعتها كلها بنفسك. ويظل إعداد مربع الكتابة هو الغالب دائماً.",
+      "sandboxModeSeedsPresetHint": "يربط houhub هذا أيضاً بإعداد الموافقة الذي تبدأ به الجلسة، فهو — بخلاف سياسة الموافقة — يؤثر على الطلبات العادية. لاحظ أن الإعداد الافتراضي للمحوّل صار يجعل نموذجاً يفرز طلبات تصعيد الصلاحيات ولا يمرّر إلا ما يراه غير آمن؛ اختر «طلب الموافقة» في مربع الكتابة لمراجعتها كلها بنفسك. ويظل إعداد مربع الكتابة هو الغالب دائماً.",
       "writableRootsLabel": "مجلدات إضافية قابلة للكتابة",
       "writableRootsHint": "مسار مطلق واحد في كل سطر، إضافةً إلى مجلد العمل.",
       "sandboxRootsRelativeError": "يجب أن يكون مسارًا مطلقًا — يحسم codex المسارات النسبية داخل ~/.codex: {path}",
@@ -964,7 +973,7 @@
       "loginRelogin": "إعادة تسجيل الدخول / تبديل الحساب",
       "loginTimeout": "انتهت مهلة تسجيل الدخول، يرجى المحاولة مرة أخرى",
       "loginSaveFailed": "تم تسجيل الدخول بنجاح ولكن فشل حفظ الإعدادات",
-      "sandboxModeReadOnlyAcpWarning": "لم يعد محوّل ACP يوفّر بيئة معزولة للقراءة فقط، لذا تعمل جلسات HouHub بصلاحية الكتابة في مساحة العمل مهما كان الاختيار هنا. يختار HouHub أشد إعداد متاح — إذ يُعرض عليك كل تصعيد للصلاحيات للموافقة — لكن التعديلات داخل مساحة العمل لم تعد تحتاج موافقة. أما جلسات codex CLI وبيئة التطوير فما زالت تحترم وضع القراءة فقط."
+      "sandboxModeReadOnlyAcpWarning": "لم يعد محوّل ACP يوفّر بيئة معزولة للقراءة فقط، لذا تعمل جلسات houhub بصلاحية الكتابة في مساحة العمل مهما كان الاختيار هنا. يختار houhub أشد إعداد متاح — إذ يُعرض عليك كل تصعيد للصلاحيات للموافقة — لكن التعديلات داخل مساحة العمل لم تعد تحتاج موافقة. أما جلسات codex CLI وبيئة التطوير فما زالت تحترم وضع القراءة فقط."
     },
     "gemini": {
       "authConfig": "إعداد مصادقة Gemini",
@@ -992,7 +1001,7 @@
       "providerManagement": "إدارة المزودات",
       "providerCount": "{count} مزودات",
       "addProvider": "إضافة مزود",
-      "emptyProvider": "لا يوجد مزود بعد. أدخل معرّفًا ثم انقر \"إضافة مزود\".",
+      "emptyProvider": "لا توجد مزودات مخصصة بعد. انقر على «إضافة مزود مخصص» لإنشاء واحد.",
       "providerEnabledState": "حالة تفعيل {providerId}",
       "selectProviderNpm": "اختر provider.npm",
       "modelManagement": "إدارة النماذج",
@@ -1165,7 +1174,7 @@
       "authModeApiKey": "مفتاح API",
       "authModeLogin": "تسجيل الدخول بحساب Kimi (اشتراك)",
       "authModeApiKeyHint": "يكتب مزوّدًا مُدارًا في config.toml ويزرع رمز البوابة كي تتمكن الجلسات من الفتح.",
-      "loginHint": "شغّل `kimi login` في الطرفية لتسجيل الدخول بحساب اشتراك Kimi، وابتداءً من Kimi 0.39.0 أضف `--region global` لحساب kimi.ai لأن الوضع الافتراضي يسجّل الدخول إلى kimi.com. لا يخزّن HouHub أي بيانات اعتماد بل يعيد استخدام تسجيل دخول Kimi نفسه. الحفظ هنا يزيل رمز بوابة مفتاح API الخاص بـ HouHub.",
+      "loginHint": "شغّل `kimi login` في الطرفية لتسجيل الدخول بحساب اشتراك Kimi، وابتداءً من Kimi 0.39.0 أضف `--region global` لحساب kimi.ai لأن الوضع الافتراضي يسجّل الدخول إلى kimi.com. لا يخزّن houhub أي بيانات اعتماد بل يعيد استخدام تسجيل دخول Kimi نفسه. الحفظ هنا يزيل رمز بوابة مفتاح API الخاص بـ houhub.",
       "credentialTitle": "بيانات الاعتماد",
       "interfaceTypeLabel": "نوع المزوّد",
       "interfaceTypeHint": "بروتوكول المزوّد الذي يتحدث به Kimi (الحقل `type` في config.toml). اختر Kimi / Moonshot لمفتاح من Moonshot أو platform.kimi.com.",
@@ -1333,15 +1342,15 @@
       "modelProviderIncompatible": "{provider} does not support {agent}. Choose a compatible model provider before saving.",
       "modelProviderClearedOnDisable": "Agent disabled. The incompatible model provider binding was removed.",
       "affectedRunningSessions": "{count} جلسة نشطة تحتاج إلى إعادة الاتصال لتطبيق التغيير",
-      "piSaved": "Pi config saved",
-      "savePiFailed": "Failed to save Pi config",
-      "piRuntimeSaved": "Pi runtime saved",
-      "savePiRuntimeFailed": "Failed to save Pi runtime",
-      "piBinaryInstalled": "pi installed",
-      "piBinaryInstallFailed": "Failed to install pi",
-      "piBinaryUninstalled": "pi uninstalled",
-      "piBinaryUninstallFailed": "Failed to uninstall pi",
-      "savePiTrustFailed": "Failed to save workspace trust",
+      "piSaved": "تم حفظ إعدادات Pi",
+      "savePiFailed": "فشل حفظ إعدادات Pi",
+      "piRuntimeSaved": "تم حفظ وقت تشغيل Pi",
+      "savePiRuntimeFailed": "فشل حفظ وقت تشغيل Pi",
+      "piBinaryInstalled": "تم تثبيت pi",
+      "piBinaryInstallFailed": "فشل تثبيت pi",
+      "piBinaryUninstalled": "تم إلغاء تثبيت pi",
+      "piBinaryUninstallFailed": "فشل إلغاء تثبيت pi",
+      "savePiTrustFailed": "فشل حفظ الثقة بمساحة العمل",
       "providerConnected": "تم ربط {providerId}",
       "connectFailed": "فشل ربط {providerId}",
       "providerDisconnected": "تم قطع اتصال {providerId}",
@@ -1388,18 +1397,18 @@
       "failed": "فشلت عملية الإضافة"
     },
     "pi": {
-      "configManagement": "Pi Configuration",
-      "configDescription": "Pi authenticates with your model provider's API key. The key is written to ~/.pi/agent/auth.json and the model selection to settings.json.",
-      "providerLabel": "Provider",
-      "modelLabel": "Model",
-      "thinkingLabel": "Thinking",
+      "configManagement": "إعدادات Pi",
+      "configDescription": "يصادق Pi عبر مفتاح API لمزوّد النموذج. يُكتب المفتاح في ~/.pi/agent/auth.json واختيار النموذج في settings.json.",
+      "providerLabel": "المزوّد",
+      "modelLabel": "النموذج",
+      "thinkingLabel": "التفكير",
       "thinking": {
-        "off": "Off",
-        "low": "Low",
-        "medium": "Medium",
-        "high": "High",
-        "minimal": "Minimal",
-        "xhigh": "Extra high",
+        "off": "إيقاف",
+        "low": "منخفض",
+        "medium": "متوسط",
+        "high": "مرتفع",
+        "minimal": "الحد الأدنى",
+        "xhigh": "مرتفع جدًا",
         "max": "Maximum"
       },
       "apiKeyLabel": "مفتاح API",
@@ -1557,11 +1566,11 @@
       "missingAgentPlatformConfig": "Enter an API key, or both a project and a location — sessions will fail to start without one of the two.",
       "missingEnterpriseConfig": "Gemini Enterprise needs both a project and a location.",
       "settingsFileHint": "Saved to auth.type in this file. Any other keys you put there are preserved.",
-      "syncSkipped": "Your choice was saved, but HouHub could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
+      "syncSkipped": "Your choice was saved, but houhub could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "Save",
       "headless": {
         "title": "تسجيل الدخول دون متصفح على هذا الجهاز",
-        "description": "ينفّذ Antigravity تسجيل دخول Google بنفسه على الجهاز الذي يعمل عليه الوكيل. وإذا لم يوجد متصفح هناك — أي HouHub على خادم بلا سطح مكتب — فستنتظر أول جلسة خمس دقائق ثم تفشل. سجّل الدخول من هنا بدلاً من ذلك: افتح الرابط على أي جهاز، ثم الصق العنوان الذي وصلت إليه.",
+        "description": "ينفّذ Antigravity تسجيل دخول Google بنفسه على الجهاز الذي يعمل عليه الوكيل. وإذا لم يوجد متصفح هناك — أي houhub على خادم بلا سطح مكتب — فستنتظر أول جلسة خمس دقائق ثم تفشل. سجّل الدخول من هنا بدلاً من ذلك: افتح الرابط على أي جهاز، ثم الصق العنوان الذي وصلت إليه.",
         "start": "الحصول على رابط تسجيل الدخول",
         "saveFirst": "احفظ أولاً — يستخدم تسجيل الدخول الإعدادات المحفوظة، وليس ما كُتب أعلاه.",
         "step1": "1. افتح هذا الرابط وسجّل الدخول إلى Google.",
@@ -1587,9 +1596,9 @@
   "GeneralSettings": {
     "loading": "جارٍ التحميل...",
     "sectionTitle": "عام",
-    "sectionDescription": "تفضيلات موحّدة للطرفية الافتراضية وتسريع العرض وتفويض الوكلاء المتعدّدين.",
+    "sectionDescription": "تفضيلات موحّدة للطرفية الافتراضية وتسريع العرض وأصوات الإشعارات وتفويض الوكلاء المتعدّدين.",
     "terminalTitle": "الطرفية الافتراضية",
-    "terminalDescription": "اختر الصدفة المستخدمة عند فتح علامات تبويب طرفية جديدة من شريط الطرفية أو شجرة الملفات.",
+    "terminalDescription": "اختر الصدفة المستخدمة عند فتح علامات تبويب طرفية جديدة من شريط الطرفية أو شجرة الملفات. تستخدمها الوكلاء أيضًا عندما تطلب من houhub تنفيذ سطر أوامر كامل نيابةً عنها.",
     "defaultTerminalShell": "الصدفة الافتراضية",
     "terminalSystemDefault": "افتراضي النظام",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
@@ -1614,7 +1623,7 @@
   },
   "LoginPage": {
     "documentTitle": "تسجيل الدخول - houhub",
-    "brand": "Houhub",
+    "brand": "HouHub",
     "subtitle": "أدخل رمز الوصول للاتصال بتطبيق سطح المكتب",
     "tokenPlaceholder": "رمز الوصول",
     "connect": "اتصال",
@@ -1762,7 +1771,12 @@
         "reorderFoldersFailed": "فشل إعادة ترتيب المجلدات: {message}",
         "changeFolderColorFailed": "فشل تغيير اللون: {message}",
         "setFolderAliasFailed": "فشل تعيين الاسم المستعار: {message}",
-        "changeFolderDefaultAgentFailed": "فشل تعيين الوكيل الافتراضي: {message}"
+        "changeFolderDefaultAgentFailed": "فشل تعيين الوكيل الافتراضي: {message}",
+        "createGroupFailed": "فشل إنشاء المجموعة: {message}",
+        "updateGroupFailed": "فشل تحديث المجموعة: {message}",
+        "deleteGroupFailed": "فشل حذف المجموعة: {message}",
+        "moveToGroupFailed": "فشل نقل المجلد: {message}",
+        "applyLayoutFailed": "فشل حفظ ترتيب المجلدات: {message}"
       },
       "statsLabel": "{folders} مجلدات · {convos} محادثة",
       "reorderHandle": "اسحب لإعادة الترتيب",
@@ -1771,7 +1785,7 @@
       "viewOptions": "خيارات العرض",
       "listOptions": "قائمة المحادثات",
       "showCompleted": "عرض المحادثات المكتملة",
-      "showWorktrees": "عرض مجلدات worktree",
+      "showWorktrees": "عرض فروع worktree",
       "showRecent": "عرض مجموعة الأحدث",
       "navigationItems": "عناصر التنقل",
       "moreOptions": "المزيد من الخيارات",
@@ -1840,7 +1854,7 @@
       "automations": "الأتمتة",
       "loadingSubsessions": "جارٍ تحميل المحادثات الفرعية…",
       "worktreeRemovedBadge": "تمت إزالة شجرة العمل الأصلية",
-      "tasks": "لوحة المهام",
+      "tasks": "المهام قيد الانتظار",
       "runningCountBadge": "{count} جلسة قيد التشغيل",
       "sectionOrderMoveUp": "تحريك لأعلى",
       "sectionOrderMoveDown": "تحريك لأسفل",
@@ -1849,7 +1863,24 @@
       "noRecent": "لا توجد محادثات حديثة",
       "showMoreRecent": "عرض المزيد ({count})",
       "resetRecentLimit": "إعادة التعيين إلى أول {count}",
-      "forge": "لوحة المستودع"
+      "forge": "لوحة المستودع",
+      "canvas": "محادثات لا نهائية",
+      "folderGroup": {
+        "newGroup": "مجموعة جديدة",
+        "newGroupTitle": "مجموعة مجلدات جديدة",
+        "defaultName": "مجموعة جديدة",
+        "namePlaceholder": "اسم المجموعة",
+        "rename": "إعادة تسمية المجموعة…",
+        "renameTitle": "إعادة تسمية مجموعة المجلدات",
+        "delete": "حذف المجموعة",
+        "deleteConfirmTitle": "حذف هذه المجموعة؟",
+        "deleteConfirmDescription": "ستتم إزالة \"{name}\". تبقى المجلدات ({count}) بداخلها في مساحة العمل وتعود إلى المستوى الأعلى.",
+        "empty": "لا توجد مجلدات في هذه المجموعة",
+        "moveToGroup": "نقل إلى مجموعة",
+        "removeFromGroup": "بدون مجموعة",
+        "newGroupAndMove": "مجموعة جديدة…",
+        "dropToUngroup": "أفلِت هنا لإزالته من المجموعة"
+      }
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
@@ -1864,6 +1895,7 @@
       "forkSession": "تفريع الجلسة",
       "forkSessionSuccess": "تم تفريع الجلسة بنجاح",
       "forkSessionFailed": "فشل في تفريع الجلسة: {error}",
+      "forkSessionBusy": "فشل التفريع: هناك دور قيد التنفيذ",
       "exportConversation": "تصدير المحادثة",
       "exportImage": "صورة",
       "exportMarkdown": "Markdown",
@@ -2159,7 +2191,7 @@
       "addSelectionToChatDone": "تمت إضافة {label} إلى المحادثة",
       "addFileToChat": "إضافة الملف إلى المحادثة",
       "addFileToChatDone": "تمت إضافة {label} إلى المحادثة",
-      "toggleWordWrap": "تبديل التفاف الأسطر",
+      "toggleWordWrap": "تبديل التفاف النص",
       "viewDiff": "عرض Diff",
       "openFile": "فتح الملف",
       "fileCount": "{count, plural, one {# ملف} other {# ملفات}}",
@@ -2329,7 +2361,9 @@
       "noMatches": "لا توجد نتائج",
       "pushBranch": "دفع",
       "deleteWorktree": "حذف worktree",
-      "deleteWorktreeAndBranch": "حذف worktree والفرع"
+      "deleteWorktreeAndBranch": "حذف worktree والفرع",
+      "worktreeBranches": "فروع worktree ({count, plural, one {#} other {#}})",
+      "noWorktreeBranches": "لا توجد فروع worktree"
     },
     "commitDialog": {
       "toasts": {
@@ -2796,6 +2830,7 @@
           "downloadFailed": "فشل تنزيل {agent}: {message}",
           "sessionLoadResourceNotFound": "فشل تحميل جلسة {agent}. أعد التحميل لإعادة المحاولة، أو ابدأ محادثة جديدة.",
           "sessionLoadUnavailable": "تعذّر على {agent} استعادة هذه الجلسة، فقد تكون انتهت أو توقّف الوكيل. أعد التحميل لإعادة المحاولة، أو ابدأ محادثة جديدة.",
+          "sessionLoadBusy": "هذا السجل مشغول بالجلسة المتفرّعة عنه. أغلق تلك الجلسة ثم أعد التحميل لفتحه.",
           "sessionArchived": "تمت أرشفة الجلسة السابقة من جهة {agent}. شغّل {command} في الطرفية لاستعادتها وإعادة تحميلها، أو ابدأ محادثة جديدة.",
           "turnFailedRefusal": "رفض {agent} متابعة هذه الجولة. يدل ذلك غالبًا على خطأ في الخلفية أو البوابة. يرجى مراجعة سجلات الوكيل.",
           "turnFailedMaxTokens": "بلغ {agent} الحد الأقصى للرموز المسموح بها في هذه الجولة.",
@@ -2883,7 +2918,11 @@
         "noModels": "لم يتم العثور على نماذج",
         "cancel": "إلغاء",
         "send": "إرسال",
-        "forkAndSend": "تفريع وإرسال",
+        "queueMessage": "إضافة إلى قائمة الانتظار",
+        "steerIntoTurn": "إدراج في الدور الحالي",
+        "steerQueuedInstead": "أُضيفت إلى قائمة الانتظار — ستُرسل مع الدور التالي.",
+        "steerFailed": "تعذّر الإدراج في الدور الحالي",
+        "steerAttachmentsUnsupported": "نص فقط — المسودات التي تحتوي على مرفقات تمر عبر قائمة الانتظار.",
         "slashCommands": "أوامر الشرطة المائلة",
         "slashSearchPlaceholder": "البحث عن الأوامر...",
         "slashSearchEmpty": "لا توجد أوامر مطابقة",
@@ -2944,9 +2983,9 @@
           "pasteDropFiles": "ألصق لقطة شاشة أو اسحب ملفًا مباشرة إلى حقل الإدخال لإرفاقه.",
           "queueMessage": "أثناء رد الوكيل، تابع الكتابة — ستوضع رسالتك التالية في الطابور وتُرسل تلقائيًا عند انتهائه.",
           "draftAutoSave": "تُحفظ المسودات غير المُرسلة تلقائيًا لكل محادثة وتُستعاد عند العودة.",
-          "forkSend": "تتضمن قائمة زر الإرسال المنسدلة «تفرّع وأرسل» لإنشاء فرع من النقطة الحالية في تبويب جديد.",
+          "forkFromTurn": "يوفّر كل رد مكتمل «تفريع من هنا» لإنشاء فرع من تلك الرسالة في تبويب جديد.",
           "exportConversation": "انقر بزر الفأرة الأيمن داخل المحادثة لتصديرها بصيغة Markdown أو HTML أو صورة.",
-          "chatChannels": "اربط Telegram / Lark / WeChat من الاعدادات -> قنوات الدردشة للمتابعة من هاتفك.",
+          "chatChannels": "اربط Telegram / Lark / WeChat من «الإعدادات → قنوات الدردشة» للمتابعة من هاتفك.",
           "shortcutsAuxPanel": "<shortcut>{toggleAuxPanel}</shortcut> يبدّل اللوحة اليمنى لعرض الملفات المعدّلة وتغييرات Git لهذه الجلسة.",
           "shortcutsTerminalSidebar": "<shortcut>{toggleTerminal}</shortcut> يفتح الطرفية المدمجة، و<shortcut>{toggleSidebar}</shortcut> يبدّل الشريط الجانبي.",
           "customShortcuts": "يمكن إعادة تعيين جميع الاختصارات من «الإعدادات → الاختصارات».",
@@ -2960,7 +2999,7 @@
           "mentionTargets": "لا تقتصر @ على الملفات: اذكر وكيلًا آخر لتفويض مهمة فرعية، أو أشِر إلى جلسة سابقة أو التزام أو مهارة.",
           "splitGroups": "انقر بزر الفأرة الأيمن على تبويب واختر «تقسيم لليمين» أو «تقسيم للأسفل» لإبقاء محادثتين في لوحين منفصلين.",
           "worktrees": "افتح زر الفرع واختر «Worktree جديد» ليعمل عدة وكلاء على المستودع نفسه دون أن يستبدل أحدهم ملفات الآخر.",
-          "importSessions": "هل شغّلت جلسات في الطرفية من قبل؟ تحتوي قائمة المجلد على «استيراد الجلسات المحلية» لجلب ذلك السجل إلى HouHub.",
+          "importSessions": "هل شغّلت جلسات في الطرفية من قبل؟ تحتوي قائمة المجلد على «استيراد الجلسات المحلية» لجلب ذلك السجل إلى houhub.",
           "subSessions": "عندما يفوّض وكيل مهمة، تظهر الجلسة الفرعية متداخلة تحته في الشريط الجانبي — وسّع الصف لتتابع ما فعلته كل واحدة.",
           "liveFeedback": "تُدرج «ملاحظات مباشرة» في قائمة + ملاحظةً داخل الدور الذي ينفّذه الوكيل بالفعل، دون مقاطعته.",
           "skillPacks": "تجمع الإعدادات ← حزم المهارات خبراء البرمجة والبحث العلمي ومهارات المكتب — فعّلها لكل وكيل على حدة.",
@@ -3148,6 +3187,8 @@
         "emptyConversation": "لا توجد رسائل في هذه المحادثة.",
         "systemMessage": "رسالة النظام",
         "copyMessage": "نسخ",
+        "forkFromHere": "تفريع من هنا",
+        "forkBusy": "لا يمكن التفريع أثناء تنفيذ دور",
         "copied": "تم النسخ",
         "downloadImage": "تنزيل الصورة",
         "downloadFailed": "فشل التنزيل: {message}",
@@ -3181,7 +3222,8 @@
         "copyImage": "نسخ الصورة",
         "copiedImage": "تم نسخ الصورة",
         "copyImageFailed": "تعذّر نسخ الصورة: {message}",
-        "copyImageUnsupported": "نسخ هذه الصورة غير مدعوم هنا"
+        "copyImageUnsupported": "نسخ هذه الصورة غير مدعوم هنا",
+        "selectionSaveAsNote": "ملاحظة"
       },
       "liveTurnStats": {
         "thinking": "جارٍ التفكير...",
@@ -3248,7 +3290,10 @@
             "child_unknown": "الوكيل الفرعي: خطأ",
             "unknown": "مهمة غير معروفة"
           }
-        }
+        },
+        "resumed": "تم الاستئناف",
+        "resumeDetail": "تفاصيل الاستئناف",
+        "resumeReasonLabel": "سبب الاستئناف"
       },
       "contentParts": {
         "showingTailOutput": "يتم عرض نهاية المخرجات أثناء البث لتحسين الأداء.",
@@ -3400,7 +3445,6 @@
         },
         "planMode": {
           "entered": "تم بدء وضع التخطيط",
-          "planLabel": "الخطة",
           "submitted": "تم إرسال الخطة",
           "switched": "تم تبديل الوضع",
           "reviewApproved": "تمت الموافقة على الخطة — جارٍ التنفيذ",
@@ -3574,6 +3618,13 @@
         "cardFinishedWithStatus": "انتهت مهمة الخلفية ({status})",
         "cardResultPending": "لم تصل النتيجة بعد"
       },
+      "asyncTasks": {
+        "openOutput": "المخرجات",
+        "stop": "إيقاف",
+        "tokens": "{count} رمز",
+        "stopDeclined": "تعذّر إيقاف هذه المهمة، ربما تكون قد انتهت بالفعل.",
+        "stopFailed": "فشل إيقاف المهمة: {error}"
+      },
       "proposedPlan": {
         "title": "الخطة المقترحة",
         "planning": "جارٍ التخطيط…"
@@ -3611,7 +3662,9 @@
           "needs_review": "بحاجة إلى مراجعة",
           "blocked": "متوقفة",
           "unknown": "غير معروف"
-        }
+        },
+        "resumeDelegation": "استئناف المهمة {task}",
+        "resumeDelegationNoId": "استئناف مهمة مفوضة"
       }
     },
     "diffPreview": {
@@ -3739,11 +3792,11 @@
   "WebServiceSettings": {
     "addressSwitchHint": "التبديل يغيّر فقط العنوان المعروض والمفتوح هنا؛ تستمع الخدمة على جميع الواجهات وتبقى قابلة للوصول من كل عنوان.",
     "sectionTitle": "خدمة الويب",
-    "sectionDescription": "تفعيل للوصول إلى Houhub عن بُعد عبر المتصفح",
+    "sectionDescription": "تفعيل للوصول إلى HouHub عن بُعد عبر المتصفح",
     "port": "المنفذ",
     "status": "الحالة",
     "autoStart": "تشغيل تلقائي",
-    "autoStartHint": "تشغيل خدمة الويب عند بدء Houhub",
+    "autoStartHint": "تشغيل خدمة الويب عند بدء HouHub",
     "running": "قيد التشغيل",
     "stopped": "متوقف",
     "processing": "جارٍ المعالجة...",
@@ -3758,7 +3811,7 @@
     "copy": "نسخ",
     "qrcode": "رمز QR",
     "qrcodeTitle": "امسح للفتح",
-    "qrcodeHint": "امسح بهاتفك لفتح Houhub في المتصفح",
+    "qrcodeHint": "امسح بهاتفك لفتح HouHub في المتصفح",
     "addressLabel": "عنوان الوصول",
     "tokenLabel": "رمز الوصول",
     "tokenHint": "أدخل هذا الرمز عند الوصول إلى عميل الويب لأول مرة",
@@ -3766,7 +3819,7 @@
     "regenerate": "إعادة التوليد",
     "stalePortOccupiedTitle": "المنفذ {port} مستخدم من قبل عملية أخرى",
     "stalePortUnknownTitle": "حالة المنفذ {port} غير واضحة",
-    "stalePortHint": "لا يستطيع Houhub الربط قبل تحرير المنفذ. غيّر المنفذ أعلاه، أو أغلق العملية التي تحتفظ به.",
+    "stalePortHint": "لا يستطيع HouHub الربط قبل تحرير المنفذ. غيّر المنفذ أعلاه، أو أغلق العملية التي تحتفظ به.",
     "errors": {
       "alreadyRunning": "خدمة الويب قيد التشغيل بالفعل",
       "invalidAddress": "تنسيق المضيف أو المنفذ غير صالح",
@@ -3913,13 +3966,13 @@
       "ar": "العربية"
     },
     "weixin": "WeChat",
-    "weixinScanTitle": "Scan QR code",
-    "weixinScanDescription": "Open WeChat and scan the QR code to connect.",
-    "weixinQrcodeExpired": "QR code expired.",
-    "weixinRefreshQrcode": "Refresh",
-    "weixinWaitingScan": "Waiting for scan...",
-    "weixinPollError": "Connection unstable, retrying...",
-    "weixinReconnectNotice": "Due to iLink protocol limitations, after each reconnection you must send a message to the bot before event triggers take effect."
+    "weixinScanTitle": "مسح رمز QR",
+    "weixinScanDescription": "افتح WeChat وامسح رمز QR للاتصال.",
+    "weixinQrcodeExpired": "انتهت صلاحية رمز QR.",
+    "weixinRefreshQrcode": "تحديث",
+    "weixinWaitingScan": "في انتظار المسح...",
+    "weixinPollError": "الاتصال غير مستقر، جاري إعادة المحاولة...",
+    "weixinReconnectNotice": "بسبب قيود بروتوكول iLink، بعد كل إعادة اتصال يجب عليك إرسال رسالة إلى الروبوت حتى تصبح مشغلات الأحداث فعالة."
   },
   "ModelProviderSettings": {
     "sectionTitle": "مزودو النماذج",
@@ -4174,7 +4227,7 @@
   },
   "SkillPacksSettings": {
     "title": "حزم المهارات",
-    "description": "حزم مهارات منسّقة يديرها HouHub مركزيًا ويربطها بوكلاء الذكاء الاصطناعي لديك — خبراء البرمجة، والبحث العلمي، وأدوات مستندات المكتب. فعّلها لكل وكيل أدناه.",
+    "description": "حزم مهارات منسّقة يديرها houhub مركزيًا ويربطها بوكلاء الذكاء الاصطناعي لديك — خبراء البرمجة، والبحث العلمي، وأدوات مستندات المكتب. فعّلها لكل وكيل أدناه.",
     "tabs": {
       "experts": "الخبراء",
       "science": "البحث العلمي",
@@ -4782,7 +4835,7 @@
     "sectionAction": "الإجراء",
     "actionLaunchSession": "تشغيل جلسة",
     "actionEnqueueTask": "إضافة مهمة إلى قائمة الانتظار",
-    "actionEnqueueTaskHint": "عند كل تشغيل تُضاف مهمة قيد التنفيذ تحمل اسم هذه الأتمتة إلى لوحة مهام المجلد، وينفذها محرك المهام وفق إعدادات اللوحة."
+    "actionEnqueueTaskHint": "عند كل تشغيل تُضاف مهمة قيد الانتظار تحمل اسم هذه الأتمتة إلى المهام قيد الانتظار للمجلد، وينفذها محرك المهام وفق إعدادات اللوحة."
   },
   "WorkbenchCloud": {
     "title": "Workbench Cloud",
@@ -4889,7 +4942,7 @@
     }
   },
   "CodexModelEditor": {
-    "customizedNotice": "لقد خصّصت قائمة النماذج، لذا يدير Houhub الآن جدول نماذج codex بالكامل. لن تظهر النماذج الرسمية التي يضيفها codex لاحقًا تلقائيًا — انقر على زر التحديث بالأسفل ثم احفظ مرة أخرى لمزامنتها. امسح كل تخصيصاتك ليعود codex إلى التحديث تلقائيًا.",
+    "customizedNotice": "لقد خصّصت قائمة النماذج، لذا يدير houhub الآن جدول نماذج codex بالكامل. لن تظهر النماذج الرسمية التي يضيفها codex لاحقًا تلقائيًا — انقر على زر التحديث بالأسفل ثم احفظ مرة أخرى لمزامنتها. امسح كل تخصيصاتك ليعود codex إلى التحديث تلقائيًا.",
     "officialsTitle": "النماذج الرسمية",
     "officialsHint": "تُضاف تلقائيًا من codex الذي تشغّله؛ احذف ما لا تريده.",
     "officialsEmpty": "لا توجد نماذج رسمية متاحة.",
@@ -4963,7 +5016,7 @@
     }
   },
   "Tasks": {
-    "title": "لوحة المهام",
+    "title": "المهام قيد الانتظار",
     "new": "مهمة جديدة",
     "empty": "لا توجد مهام بعد",
     "emptyHint": "أضف مهمة ثم شغّلها — يعمل الوكيل في worktree معزول، وتراجع النتيجة وتدمجها.",
@@ -5006,7 +5059,7 @@
     "actionComplete": "إنهاء",
     "actionAbandon": "تخلٍّ",
     "cancelTitle": "إلغاء المهمة؟",
-    "cancelDescription": "ستصبح المهمة ملغاة. يُحتفظ بـ worktree الخاصة بها ويمكنك إعادة إدراجها لاحقًا.",
+    "cancelDescription": "ستصبح المهمة ملغاة، ويمكنك إعادة إدراجها لاحقًا.",
     "cancelReasonLabel": "السبب (اختياري)",
     "cancelReasonPlaceholder": "مثلاً: النهج خاطئ، سأعيد كتابة الوصف",
     "cancelKeep": "تراجع",
@@ -5241,7 +5294,14 @@
     "deliverPrBackDeleteWorktree": "حذف worktree بعد الدفع",
     "deliverPrBackSubmit": "ادفع",
     "deliverPrBackDone": "تم الدفع إلى طلب السحب",
-    "deliverPrBackDoneMr": "تم الدفع إلى طلب الدمج"
+    "deliverPrBackDoneMr": "تم الدفع إلى طلب الدمج",
+    "cancelDeleteWorktree": "حذف الـ worktree وفرع العمل أيضًا",
+    "settingsAutoCompact": "عتبة الضغط التلقائي",
+    "settingsAutoCompactHint": "قبل جولة متابعة أو إعادة محاولة أو دمج، اضغط الجلسة إذا بلغ امتلاء نافذة السياق هذه النسبة. 0 يعني إيقاف.",
+    "settingsCompactCommand": "أمر الضغط",
+    "settingsCompactCommandHint": "اتركه فارغًا لاستخدام الأمر الذي يوفّره الوكيل أو قيمته الافتراضية المعروفة.",
+    "settingsCompactCommandPlaceholder": "/compact",
+    "eventContextCompact": "ضغط السياق"
   },
   "TokenUsage": {
     "title": "استهلاك الرموز",
@@ -5397,7 +5457,7 @@
   },
   "AgentToolsSettings": {
     "title": "أدوات داخل المحادثة",
-    "description": "أدوات إضافية يمنحها HouHub للوكيل داخل المحادثة. تُحقن عند بدء تشغيل الوكيل، لذا يسري أي تغيير على الوكلاء الذين يبدأون بعده.",
+    "description": "أدوات إضافية يمنحها houhub للوكيل داخل المحادثة. تُحقن عند بدء تشغيل الوكيل، لذا يسري أي تغيير على الوكلاء الذين يبدأون بعده.",
     "feedbackLabel": "ملاحظات مباشرة",
     "feedbackHint": "أرسل ملاحظات وتصحيحات إلى الوكيل أثناء عمله. إذا كان الوكيل يدعم الإدراج الفوري، تُدرج ملاحظتك فورًا في الدور الجاري؛ وإلا يحصل الوكيل على أداة للاطلاع على ملاحظاتك — وهؤلاء الوكلاء عادةً لا يتحققون منها إلا إذا ذكرت ذلك في الموجّه، مثلًا أضف \"تحقق من ملاحظاتي المباشرة بانتظام\" إلى رسالتك.",
     "questionLabel": "سؤال المستخدم",
@@ -5439,7 +5499,9 @@
     "pickFolder": "اختر مجلد مشروع",
     "noRemote": "لا يحتوي هذا المجلد على remote معروف (origin)",
     "errors": {
-      "noAccount": "لا يوجد حساب {provider} مُهيّأ للمضيف {host}. أضف حسابًا من الإعدادات ← التحكم بالإصدارات لتحميل هذا المستودع."
+      "noAccount": "لا يوجد حساب {provider} مُهيّأ للمضيف {host}. أضف حسابًا من الإعدادات ← التحكم بالإصدارات لتحميل هذا المستودع.",
+      "unsupportedHost": "لوحة المستودع تدعم GitHub و GitLab فقط، و{host} لا يُعرَف كأي منهما. إذا كان مثيلًا مستضافًا ذاتيًا من GitHub Enterprise أو GitLab، فأضف له حسابًا من الإعدادات ← التحكم بالإصدارات.",
+      "wrongForge": "{host} هو {provider}، وليس المنصة التي كان مصنّفًا ضمنها. تم تصحيح الاكتشاف — أعد التحميل للمحاولة مجددًا."
     },
     "addAccount": "إضافة حساب",
     "empty": "لا يوجد شيء هنا",
@@ -5629,5 +5691,79 @@
     "newIssueLabels": "التسميات",
     "newIssueSubmit": "إنشاء المشكلة",
     "newIssueCreating": "جارٍ الإنشاء…"
+  },
+  "Canvas": {
+    "title": "محادثات لا نهائية",
+    "untitled": "محادثة بلا عنوان",
+    "unresolvedConversation": "تم حذف المحادثة",
+    "removeCard": "إزالة البطاقة",
+    "unresolvedFolder": "المجلد غير متاح",
+    "unresolvedFolderHint": "المجلد المرتبط مغلق أو محذوف. أعد فتحه وستعود هذه المنطقة إلى الحياة.",
+    "customRegion": "مجموعة",
+    "runningCount": "{count} قيد التشغيل",
+    "childCount": "{count} وكلاء فرعيون",
+    "regionMenu": "خيارات المنطقة",
+    "rename": "إعادة تسمية",
+    "collapse": "طي",
+    "expand": "توسيع",
+    "color": "اللون",
+    "removeRegion": "إزالة المنطقة",
+    "removeNote": "حذف الملاحظة",
+    "showMore": "{count} أخرى",
+    "emptyRegion": "لا توجد محادثات هنا بعد",
+    "emptyCustomHint": "اسحب بطاقات المحادثات إلى هنا لجمعها",
+    "notePlaceholder": "اكتب ملاحظة…",
+    "noteEmptyHint": "انقر نقرًا مزدوجًا للكتابة",
+    "addNode": "إضافة إلى اللوحة",
+    "addFolderRegion": "منطقة مجلد",
+    "addAgentRegion": "منطقة وكيل",
+    "addConversationCard": "بطاقة محادثة",
+    "addCustomRegion": "منطقة مخصصة",
+    "addNote": "بطاقة ملاحظة لاصقة",
+    "searchConversations": "البحث في المحادثات…",
+    "noFolders": "لا توجد مجلدات مفتوحة",
+    "noConversations": "لم يتم العثور على محادثات",
+    "fitView": "ملاءمة العرض",
+    "zoomIn": "تكبير",
+    "zoomOut": "تصغير",
+    "resetZoom": "إعادة التكبير إلى 100%",
+    "viewportControls": "العرض",
+    "showMinimap": "إظهار الخريطة",
+    "hideMinimap": "إخفاء الخريطة",
+    "autoArrange": "ترتيب تلقائي",
+    "exportPng": "تصدير كـ PNG",
+    "empty": "لوحتك فارغة",
+    "emptyHint": "نظّم مساحة عملك مكانيًا: مناطق للمجلدات والوكلاء، بطاقات للمحادثات، وملاحظات لكل ما عدا ذلك.",
+    "seedFromWorkspace": "إنشاء من مساحة العمل الحالية",
+    "unresolvedGroup": "المجموعة غير متاحة",
+    "unresolvedGroupHint": "تم حذف مجموعة المجلدات المرتبطة. أزل هذه المنطقة أو أضف واحدة جديدة.",
+    "grid": "الشبكة",
+    "gridColumns": "الأعمدة",
+    "gridRows": "الصفوف",
+    "gridAuto": "تلقائي",
+    "addGroupRegion": "منطقة مجموعة المجلدات",
+    "noGroups": "لا توجد مجموعات مجلدات",
+    "createRegionFromSelection": "تجميع في منطقة",
+    "selectedCount": "{count} محدد",
+    "openInWorkspace": "فتح في مساحة العمل",
+    "openDetailPanel": "فتح في اللوحة الجانبية",
+    "detailPanelDescription": "المحادثة الكاملة للبطاقة المحددة، دون مغادرة اللوحة.",
+    "expandConversation": "توسيع المحادثة",
+    "collapseConversation": "طي المحادثة",
+    "cardMenu": "خيارات البطاقة",
+    "removeFromRegion": "إزالة من المنطقة",
+    "newConversation": "محادثة جديدة",
+    "discardDraft": "تجاهل المسودة",
+    "createFailed": "تعذّر إنشاء المحادثة",
+    "showAllMembers": "إظهار كل المحادثات",
+    "showFewerMembers": "إظهار أقل",
+    "detachToCanvas": "إخراج إلى اللوحة",
+    "deleteSelected": "حذف المحدد",
+    "confirmDeleteTitle": "حذف العناصر المحددة؟",
+    "confirmDeleteNotes": "سيتم حذف الملاحظات التي كتبتها ({count}) نهائيًا. لا يمكن التراجع عن هذا الإجراء.",
+    "confirmDeleteCancel": "إلغاء",
+    "confirmDeleteConfirm": "حذف",
+    "canvasActions": "إجراءات اللوحة",
+    "mergeIntoNewRegion": "منطقة جديدة"
   }
 }

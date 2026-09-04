@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   listAllConversations: vi.fn(async () => [] as DbConversationSummary[]),
   listAllFolderDetails: vi.fn(async () => [] as FolderDetail[]),
   listOpenFolderDetails: vi.fn(async () => [] as FolderDetail[]),
+  listFolderGroups: vi.fn(async () => []),
 }))
 
 vi.mock("@/lib/api", () => ({
@@ -17,6 +18,7 @@ vi.mock("@/lib/api", () => ({
   listAllConversations: h.listAllConversations,
   listAllFolderDetails: h.listAllFolderDetails,
   listOpenFolderDetails: h.listOpenFolderDetails,
+  listFolderGroups: h.listFolderGroups,
   openFolder: vi.fn(),
   openFolderById: vi.fn(),
   openWorktreeFolder: vi.fn(),
@@ -52,6 +54,7 @@ describe("HouHub local workspace resilience", () => {
     h.listAllConversations.mockReset().mockResolvedValue([])
     h.listAllFolderDetails.mockReset().mockResolvedValue([])
     h.listOpenFolderDetails.mockReset().mockResolvedValue([])
+    h.listFolderGroups.mockReset().mockResolvedValue([])
     resetAppWorkspaceStore()
   })
 

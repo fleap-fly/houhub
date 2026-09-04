@@ -127,7 +127,7 @@
     },
     "zoomLevel": {
       "sectionTitle": "視窗縮放",
-      "sectionDescription": "整體放大或縮小介面，立即生效，依裝置分別儲存。",
+      "sectionDescription": "整體放大或縮小介面，立即生效，依裝置分別儲存。⌘/Ctrl + 和 - 依與此選單相同的檔位調節（⌘/Ctrl 0 恢復為 100%）。",
       "placeholder": "請選擇縮放檔位",
       "default": "預設",
       "current": "目前縮放：{zoom}%"
@@ -146,13 +146,13 @@
       "ligatures": "啟用連字",
       "ligaturesUnavailable": "此字型不含連字",
       "terminalLigaturesHint": "終端機連字僅對內建程式字型生效。",
-      "wordWrap": "啟用編輯器自動換行",
+      "wordWrap": "啟用自動換行",
       "preview": "預覽"
     },
     "welcomePanel": {
-      "sectionTitle": "歡迎頁快捷區",
-      "sectionDescription": "控制新對話輸入框上方的「程式開發 / 辦公工作」快捷卡片是否顯示。",
-      "showQuickActions": "在新對話中顯示"
+      "sectionTitle": "模式選擇區域",
+      "sectionDescription": "新會話頁面輸入框上方顯示的「程式開發 / 日常辦公」快捷卡片區域。",
+      "showQuickActions": "在新會話頁面顯示"
     },
     "workspaceBackground": {
       "sectionTitle": "工作區背景",
@@ -221,7 +221,7 @@
       },
       "css": {
         "dialogTitle": "自訂 CSS",
-        "dialogDescription": "對所有 HouHub 視窗生效。修改會即時預覽，點擊「套用」才會儲存。",
+        "dialogDescription": "對所有 houhub 視窗生效。修改會即時預覽，點擊「套用」才會儲存。",
         "size": "{used} KB / {max} KB",
         "ruleCount": "{count} 條規則",
         "errorTooLarge": "內容過大，無法儲存，請精簡到上限以內。",
@@ -238,7 +238,7 @@
   "SystemSettings": {
     "loading": "載入中...",
     "sectionTitle": "系統管理",
-    "sectionDescription": "管理網路代理、應用升級與語言偏好。",
+    "sectionDescription": "管理應用升級、開機自動啟動、網路代理與語言偏好。",
     "proxyTitle": "網路代理",
     "proxyDescription": "啟用後，後續網路請求將優先走該代理（包含 ACP 對話、Agent 安裝、Git 遠端操作等）。",
     "loadFailed": "載入失敗：{message}",
@@ -672,6 +672,8 @@
     "local": {
       "filterPlaceholder": "篩選本地 MCP...",
       "loadFailed": "載入失敗：{message}",
+      "sourceUnreadable": "無法讀取 {app} 的 MCP 設定，其伺服器已隱藏：{message}",
+      "saveBlockedByUnreadableSource": "儲存前請先修復或刪除該檔案並重新整理：指派結果依本頁能讀取到的智慧體計算，現在儲存可能會將該伺服器從讀不到的智慧體中移除。",
       "empty": "目前未檢測到本地 MCP。",
       "description": "本地 MCP 配置可直接編輯並儲存。",
       "enabledApps": "啟用應用",
@@ -831,7 +833,7 @@
       "configTomlHint": "按原樣整體寫入 ~/.grok/config.toml。非法 TOML 會被拒絕，絕不因筆誤截斷檔案。",
       "configTomlPlaceholder": "# 上面控制項之外的鍵，例如\n# [mcp_servers.*]、[cli]、[permission] 規則。",
       "customModelTitle": "自訂模型（自帶端點）",
-      "customModelHint": "讓 Grok 指向自訂或自架端點。HouHub 會寫入按模型的 `[model.*]` 區塊並設為預設模型。清空模型 ID 即可移除。",
+      "customModelHint": "讓 Grok 指向自訂或自架端點。houhub 會寫入按模型的 `[model.*]` 區塊並設為預設模型。清空模型 ID 即可移除。",
       "customModelIdLabel": "模型 ID",
       "customModelIdPlaceholder": "grok-4.5",
       "customModelIdHint": "註冊為 `[model.*]` 區塊，並作為模型名稱傳送給 API；同時設為 `[models].default`。",
@@ -849,7 +851,7 @@
       "autoCompactHint": "當上下文使用率達到此百分比時壓縮對話（Grok 預設 85）。寫入 `[session]`。"
     },
     "cursor": {
-      "configDescription": "在此設定 Cursor。先選擇驗證方式——官網訂閱（瀏覽器登入）或用於無頭/伺服器的 Cursor API 金鑰——然後選擇模型並編輯 CLI 的權限規則與沙箱。HouHub 會寫入 ~/.cursor/cli-config.json，與 cursor-agent CLI 共用。",
+      "configDescription": "在此設定 Cursor。先選擇驗證方式——官網訂閱（瀏覽器登入）或用於無頭/伺服器的 Cursor API 金鑰——然後選擇模型並編輯 CLI 的權限規則與沙箱。houhub 會寫入 ~/.cursor/cli-config.json，與 cursor-agent CLI 共用。",
       "authTitle": "驗證",
       "authChecking": "檢測中…",
       "authNotInstalled": "cursor-agent 未安裝",
@@ -889,7 +891,14 @@
       "modelPickerPlaceholder": "搜尋模型…",
       "modelNoMatch": "沒有相符的模型",
       "modelsNeedAuth": "登入後載入模型清單。",
-      "modelDefaultBadge": "預設"
+      "modelDefaultBadge": "預設",
+      "modelThinkingLabel": "思考",
+      "modelEffortLabel": "思考強度",
+      "modelFastLabel": "Fast 快速模式",
+      "variantOn": "開",
+      "variantOff": "關",
+      "modelVariantHint": "Cursor 把每種組合都當作獨立的模型 ID，這幾個控制項負責挑出對應的那一個。它們設定的是啟動預設值——工作階段中隨時可在輸入框上方變更模型、思考與 Fast。",
+      "permissionModeAskHint": "「執行前詢問」會把每次工具呼叫交給你確認，其中帶有 Cursor 自己的「一律允許」選項——選它會往下方的「允許規則」追加一條，之後同類呼叫便不再詢問。"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness 設定",
@@ -901,7 +910,7 @@
       "apiKeyHint": "以 DEEPSEEK_API_KEY 傳給智慧體。環境變數的優先權高於憑證檔，因此若用終端機登入，這裡留空即可。"
     },
     "codex": {
-      "configDescription": "支援 API URL、API Key、模型名稱、Reasoning Effort 快捷配置，並與 `auth.json` / `config.toml` 雙向聯動。",
+      "configDescription": "支援 API URL、API Key、模型名稱快捷配置，並與 `auth.json` / `config.toml` 雙向聯動。",
       "authMode": "認證方式",
       "chatgptSubscription": "官網訂閱",
       "chatgptSubscriptionHint": "使用 ChatGPT 官網訂閱登入，無需配置 API Key",
@@ -941,7 +950,7 @@
       "sandboxMode_workspace-write": "可寫工作區",
       "sandboxMode_danger-full-access": "完全開放（無沙箱）",
       "sandboxModeHint": "在 Windows 上，未開啟 codex 的實驗性 Windows 沙箱時，可寫工作區會被降級為唯讀。",
-      "sandboxModeSeedsPresetHint": "HouHub 還會用它推導工作階段的初始審批預設，因此與審批策略不同，它對一般提問同樣生效。注意：轉接器的預設現在會讓模型先篩一遍越權請求，只把它判定為不安全的轉給你；想逐條自己審，在輸入框中選「請求批准」。輸入框中選擇的預設始終覆蓋它。",
+      "sandboxModeSeedsPresetHint": "houhub 還會用它推導工作階段的初始審批預設，因此與審批策略不同，它對一般提問同樣生效。注意：轉接器的預設現在會讓模型先篩一遍越權請求，只把它判定為不安全的轉給你；想逐條自己審，在輸入框中選「請求批准」。輸入框中選擇的預設始終覆蓋它。",
       "writableRootsLabel": "額外可寫目錄",
       "writableRootsHint": "每行一個絕對路徑，作為工作目錄之外的額外可寫位置。",
       "sandboxRootsRelativeError": "必須是絕對路徑 — codex 會把相對路徑解析到 ~/.codex 底下：{path}",
@@ -964,7 +973,7 @@
       "loginRelogin": "重新登入 / 切換帳號",
       "loginTimeout": "登入逾時，請重試",
       "loginSaveFailed": "登入成功但配置儲存失敗",
-      "sandboxModeReadOnlyAcpWarning": "ACP 轉接器已經沒有唯讀沙箱了，因此無論這裡怎麼選，HouHub 工作階段都以可寫工作區執行。HouHub 會選中它能選的最嚴格預設——每一次越權都交給你審批——但工作區內部的修改不再需要審批。codex CLI 和 IDE 工作階段仍然遵守唯讀。"
+      "sandboxModeReadOnlyAcpWarning": "ACP 轉接器已經沒有唯讀沙箱了，因此無論這裡怎麼選，houhub 工作階段都以可寫工作區執行。houhub 會選中它能選的最嚴格預設——每一次越權都交給你審批——但工作區內部的修改不再需要審批。codex CLI 和 IDE 工作階段仍然遵守唯讀。"
     },
     "gemini": {
       "authConfig": "Gemini 認證配置",
@@ -992,7 +1001,7 @@
       "providerManagement": "Provider 管理",
       "providerCount": "共 {count} 個",
       "addProvider": "新增 Provider",
-      "emptyProvider": "暫無 Provider，輸入 ID 後點擊「新增 Provider」建立。",
+      "emptyProvider": "還沒有自訂 Provider。點擊「新增自訂 Provider」建立。",
       "providerEnabledState": "{providerId} 啟用狀態",
       "selectProviderNpm": "選擇 provider.npm",
       "modelManagement": "模型管理",
@@ -1165,7 +1174,7 @@
       "authModeApiKey": "API Key",
       "authModeLogin": "Kimi 帳號登入（訂閱）",
       "authModeApiKeyHint": "在 config.toml 寫入受管供應商，並植入門控權杖以便工作階段能夠開啟。",
-      "loginHint": "在終端機執行 `kimi login`，用 Kimi 訂閱帳號登入；Kimi 0.39.0 起，kimi.ai 帳號需加上 `--region global`，預設登入的是 kimi.com。HouHub 不儲存任何憑證，沿用 Kimi 自己的登入。在此儲存會移除 HouHub 的 API Key 門控權杖。",
+      "loginHint": "在終端機執行 `kimi login`，用 Kimi 訂閱帳號登入；Kimi 0.39.0 起，kimi.ai 帳號需加上 `--region global`，預設登入的是 kimi.com。houhub 不儲存任何憑證，沿用 Kimi 自己的登入。在此儲存會移除 houhub 的 API Key 門控權杖。",
       "credentialTitle": "憑證",
       "interfaceTypeLabel": "供應商類型",
       "interfaceTypeHint": "Kimi 使用的供應商協定（config.toml 的 `type`）。Moonshot / platform.kimi.com 的 Key 請選「Kimi / Moonshot」。",
@@ -1333,15 +1342,15 @@
       "modelProviderIncompatible": "{provider} does not support {agent}. Choose a compatible model provider before saving.",
       "modelProviderClearedOnDisable": "Agent disabled. The incompatible model provider binding was removed.",
       "affectedRunningSessions": "{count} 個進行中的工作階段需重新連線以套用變更",
-      "piSaved": "Pi config saved",
-      "savePiFailed": "Failed to save Pi config",
-      "piRuntimeSaved": "Pi runtime saved",
-      "savePiRuntimeFailed": "Failed to save Pi runtime",
-      "piBinaryInstalled": "pi installed",
-      "piBinaryInstallFailed": "Failed to install pi",
-      "piBinaryUninstalled": "pi uninstalled",
-      "piBinaryUninstallFailed": "Failed to uninstall pi",
-      "savePiTrustFailed": "Failed to save workspace trust",
+      "piSaved": "Pi 設定已儲存",
+      "savePiFailed": "儲存 Pi 設定失敗",
+      "piRuntimeSaved": "Pi 執行環境已儲存",
+      "savePiRuntimeFailed": "儲存 Pi 執行環境失敗",
+      "piBinaryInstalled": "pi 已安裝",
+      "piBinaryInstallFailed": "pi 安裝失敗",
+      "piBinaryUninstalled": "pi 已解除安裝",
+      "piBinaryUninstallFailed": "pi 解除安裝失敗",
+      "savePiTrustFailed": "儲存工作區信任失敗",
       "providerConnected": "已連接 {providerId}",
       "connectFailed": "連接 {providerId} 失敗",
       "providerDisconnected": "已中斷 {providerId}",
@@ -1388,18 +1397,18 @@
       "failed": "外掛操作失敗"
     },
     "pi": {
-      "configManagement": "Pi Configuration",
-      "configDescription": "Pi authenticates with your model provider's API key. The key is written to ~/.pi/agent/auth.json and the model selection to settings.json.",
-      "providerLabel": "Provider",
-      "modelLabel": "Model",
-      "thinkingLabel": "Thinking",
+      "configManagement": "Pi 設定",
+      "configDescription": "Pi 透過模型提供方的 API Key 驗證。Key 寫入 ~/.pi/agent/auth.json，模型選擇寫入 settings.json。",
+      "providerLabel": "提供方",
+      "modelLabel": "模型",
+      "thinkingLabel": "思考",
       "thinking": {
-        "off": "Off",
-        "low": "Low",
-        "medium": "Medium",
-        "high": "High",
-        "minimal": "Minimal",
-        "xhigh": "Extra high",
+        "off": "關閉",
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "minimal": "極低",
+        "xhigh": "極高",
         "max": "Maximum"
       },
       "apiKeyLabel": "API Key",
@@ -1557,11 +1566,11 @@
       "missingAgentPlatformConfig": "请填写 API Key，或同时填写项目与区域 —— 二者缺一不可，否则会话无法启动。",
       "missingEnterpriseConfig": "Gemini Enterprise 需要同时填写项目与区域。",
       "settingsFileHint": "auth.type 会保存到该文件；你自己写在里面的其他键会原样保留。",
-      "syncSkipped": "你的選擇已經儲存，但 HouHub 無法寫入 ACP 服務端的 settings.json，因此 Antigravity 仍會依照該檔案的設定進行驗證。請自行在其中設定 auth.type，或移走檔案後再儲存一次。",
+      "syncSkipped": "Your choice was saved, but houhub could not write it to the ACP server's settings.json, so Antigravity will keep authenticating the way that file says. Set auth.type in it yourself, or move it aside and save again.",
       "save": "保存",
       "headless": {
         "title": "在沒有瀏覽器的機器上登入",
-        "description": "Antigravity 的 Google 登入由智慧代理自己發起，瀏覽器必須開在執行代理的那台機器上。部署在無桌面伺服器上的 HouHub 沒有瀏覽器，首次建立工作階段會等待 5 分鐘後失敗。改從這裡登入：把連結拿到任意裝置上開啟，再把跳轉後的網址貼回來。",
+        "description": "Antigravity 的 Google 登入由智慧代理自己發起，瀏覽器必須開在執行代理的那台機器上。部署在無桌面伺服器上的 houhub 沒有瀏覽器，首次建立工作階段會等待 5 分鐘後失敗。改從這裡登入：把連結拿到任意裝置上開啟，再把跳轉後的網址貼回來。",
         "start": "取得登入連結",
         "saveFirst": "請先儲存——登入用的是已儲存的設定，而不是上面剛填的內容。",
         "step1": "1. 開啟這個連結並登入 Google 帳號。",
@@ -1587,9 +1596,9 @@
   "GeneralSettings": {
     "loading": "載入中...",
     "sectionTitle": "一般",
-    "sectionDescription": "集中管理預設終端機、渲染加速以及多智能體協同等通用偏好。",
+    "sectionDescription": "集中管理預設終端機、渲染加速、通知提示音以及多智能體協同等通用偏好。",
     "terminalTitle": "預設終端",
-    "terminalDescription": "選擇從終端標籤列或檔案樹開啟新終端時使用的 Shell。",
+    "terminalDescription": "選擇從終端列或檔案樹開啟新終端分頁時使用的 Shell。智慧代理請求 houhub 代為執行整條命令列時也會使用它。",
     "defaultTerminalShell": "預設 Shell",
     "terminalSystemDefault": "系統預設",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
@@ -1614,7 +1623,7 @@
   },
   "LoginPage": {
     "documentTitle": "登入 - houhub",
-    "brand": "Houhub",
+    "brand": "HouHub",
     "subtitle": "輸入存取 Token 以連接到桌面端",
     "tokenPlaceholder": "Access Token",
     "connect": "連接",
@@ -1762,7 +1771,12 @@
         "reorderFoldersFailed": "重新排序資料夾失敗：{message}",
         "changeFolderColorFailed": "修改顏色失敗：{message}",
         "setFolderAliasFailed": "設定別名失敗：{message}",
-        "changeFolderDefaultAgentFailed": "設定預設智能體失敗：{message}"
+        "changeFolderDefaultAgentFailed": "設定預設智能體失敗：{message}",
+        "createGroupFailed": "建立分組失敗：{message}",
+        "updateGroupFailed": "更新分組失敗：{message}",
+        "deleteGroupFailed": "刪除分組失敗：{message}",
+        "moveToGroupFailed": "移動資料夾失敗：{message}",
+        "applyLayoutFailed": "儲存資料夾順序失敗：{message}"
       },
       "statsLabel": "{folders} 個資料夾 · {convos} 個對話",
       "reorderHandle": "拖拽排序",
@@ -1771,7 +1785,7 @@
       "viewOptions": "顯示選項",
       "listOptions": "會話列表",
       "showCompleted": "顯示已完成對話",
-      "showWorktrees": "顯示工作樹資料夾",
+      "showWorktrees": "顯示工作樹分支",
       "showRecent": "顯示「最近」分組",
       "navigationItems": "選單導覽項目",
       "moreOptions": "更多選項",
@@ -1840,7 +1854,7 @@
       "automations": "自動化",
       "loadingSubsessions": "正在載入子會話…",
       "worktreeRemovedBadge": "來源 worktree 已刪除",
-      "tasks": "任務看板",
+      "tasks": "待辦任務",
       "runningCountBadge": "{count} 個會話進行中",
       "sectionOrderMoveUp": "上移",
       "sectionOrderMoveDown": "下移",
@@ -1849,7 +1863,24 @@
       "noRecent": "暫無最近對話",
       "showMoreRecent": "顯示更多（{count}）",
       "resetRecentLimit": "重設為前 {count} 筆",
-      "forge": "儲存庫面板"
+      "forge": "儲存庫面板",
+      "canvas": "無限會話",
+      "folderGroup": {
+        "newGroup": "新增分組",
+        "newGroupTitle": "新增資料夾分組",
+        "defaultName": "新增分組",
+        "namePlaceholder": "分組名稱",
+        "rename": "重新命名分組…",
+        "renameTitle": "重新命名資料夾分組",
+        "delete": "刪除分組",
+        "deleteConfirmTitle": "刪除此分組？",
+        "deleteConfirmDescription": "將刪除「{name}」。組內的 {count} 個資料夾會保留在工作區，並回到頂層。",
+        "empty": "分組內尚無資料夾",
+        "moveToGroup": "移動到分組",
+        "removeFromGroup": "不分組",
+        "newGroupAndMove": "新增分組…",
+        "dropToUngroup": "拖到這裡可移出分組"
+      }
     },
     "conversation": {
       "reloadFailed": "會話重新載入失敗：{message}",
@@ -1864,6 +1895,7 @@
       "forkSession": "分叉會話",
       "forkSessionSuccess": "會話分叉成功",
       "forkSessionFailed": "會話分叉失敗：{error}",
+      "forkSessionBusy": "分叉失敗：目前有回合正在進行",
       "exportConversation": "匯出對話",
       "exportImage": "圖片",
       "exportMarkdown": "Markdown",
@@ -2329,7 +2361,9 @@
       "noMatches": "無相符項目",
       "pushBranch": "推送",
       "deleteWorktree": "刪除工作樹",
-      "deleteWorktreeAndBranch": "刪除工作樹及分支"
+      "deleteWorktreeAndBranch": "刪除工作樹及分支",
+      "worktreeBranches": "工作樹分支 ({count})",
+      "noWorktreeBranches": "無工作樹分支"
     },
     "commitDialog": {
       "toasts": {
@@ -2796,6 +2830,7 @@
           "downloadFailed": "{agent} 下載失敗：{message}",
           "sessionLoadResourceNotFound": "{agent} 會話載入失敗，可重新載入重試，或開始新會話。",
           "sessionLoadUnavailable": "{agent} 無法還原此會話，它可能已結束或 agent 已停止。可重新載入重試，或開始新會話。",
+          "sessionLoadBusy": "這份歷史正被從它分叉出來的工作階段佔用。關閉那個工作階段後，重新載入即可開啟。",
           "sessionArchived": "原會話已在 {agent} 側歸檔，可在終端機執行 {command} 找回歷史後重新載入，或直接開始新會話。",
           "turnFailedRefusal": "{agent} 拒絕繼續此輪回覆，通常代表後端或網關出錯，請檢查代理日誌。",
           "turnFailedMaxTokens": "{agent} 已達到此輪回覆的最大 Token 限制。",
@@ -2883,7 +2918,11 @@
         "noModels": "找不到模型",
         "cancel": "取消",
         "send": "傳送",
-        "forkAndSend": "分叉發送",
+        "queueMessage": "加入佇列",
+        "steerIntoTurn": "插入目前回合",
+        "steerQueuedInstead": "已轉入佇列——將隨下一回合傳送。",
+        "steerFailed": "無法插入目前回合",
+        "steerAttachmentsUnsupported": "僅支援純文字——帶附件的草稿請走佇列。",
         "slashCommands": "斜線命令",
         "slashSearchPlaceholder": "搜尋命令...",
         "slashSearchEmpty": "沒有符合的指令",
@@ -2942,11 +2981,11 @@
           "shortcutsNewSearch": "<shortcut>{newConversation}</shortcut> 快速新建會話，<shortcut>{searchConversations}</shortcut> 搜尋歷史會話",
           "slashAtMention": "在輸入框輸入 / 觸發斜線命令，輸入 @ 引用專案內檔案",
           "pasteDropFiles": "直接貼上截圖或把檔案拖到輸入框，即可作為附件",
-          "queueMessage": "agent 回覆中也能繼續輸入並排隊，回答完畢會自動續發",
+          "queueMessage": "智能體回覆中也能繼續輸入並排隊，回答完畢會自動續發",
           "draftAutoSave": "未發送的草稿會自動儲存，重新開啟會話仍在",
-          "forkSend": "傳送按鈕旁的下拉選擇「分叉傳送」，從目前位置開一條新分支",
+          "forkFromTurn": "任一已完成的回覆上都有「從此處分叉」，從那則訊息開一條新分支",
           "exportConversation": "右鍵會話內容區可匯出為 Markdown / HTML / 圖片",
-          "chatChannels": "在「設定 -> 聊天頻道」接入 Telegram / 飛書 / 微信，從手機繼續操作",
+          "chatChannels": "在「設定 → 聊天頻道」接入 Telegram / 飛書 / 微信，從手機繼續操作",
           "shortcutsAuxPanel": "<shortcut>{toggleAuxPanel}</shortcut> 切換右側面板，檢視本次會話改動的檔案與 Git 變更",
           "shortcutsTerminalSidebar": "<shortcut>{toggleTerminal}</shortcut> 開啟內建終端機，<shortcut>{toggleSidebar}</shortcut> 切換側邊欄",
           "customShortcuts": "所有快捷鍵都可在「設定 → 快捷鍵」中自訂",
@@ -2960,7 +2999,7 @@
           "mentionTargets": "@ 不只能引用檔案：還能 @ 另一個智能體把子任務交給它，或引用歷史會話、某次提交、某個技能。",
           "splitGroups": "右鍵點擊標籤選擇「向右拆分」或「向下拆分」，兩個會話各佔一個分割區同時開著。",
           "worktrees": "點開分支按鈕選「新增工作樹」，多個智能體就能在同一個儲存庫並行工作，互不覆蓋彼此的檔案。",
-          "importSessions": "之前在終端機裡跑過的會話，用資料夾右鍵選單的「匯入本地會話」就能把那段歷史接進 HouHub。",
+          "importSessions": "之前在終端機裡跑過的會話，用資料夾右鍵選單的「匯入本地會話」就能把那段歷史接進 houhub。",
           "subSessions": "智能體委派出去的子會話會巢狀顯示在側邊欄的父會話底下，展開就能追蹤每一個子會話做了什麼。",
           "liveFeedback": "「+」選單裡的「即時回饋」能把一則便條塞進智能體正在跑的這一輪，不用打斷它。",
           "skillPacks": "設定 → 技能包 裡打包了程式專家、科研與辦公三類技能，可以按智能體分別開關。",
@@ -3148,6 +3187,8 @@
         "emptyConversation": "目前會話暫無訊息。",
         "systemMessage": "系統訊息",
         "copyMessage": "複製",
+        "forkFromHere": "從此處分叉",
+        "forkBusy": "目前有回合正在進行，暫不可分叉",
         "copied": "已複製",
         "downloadImage": "下載圖片",
         "downloadFailed": "下載失敗：{message}",
@@ -3181,7 +3222,8 @@
         "copyImage": "複製圖片",
         "copiedImage": "已複製圖片",
         "copyImageFailed": "複製圖片失敗：{message}",
-        "copyImageUnsupported": "目前環境不支援複製該圖片"
+        "copyImageUnsupported": "目前環境不支援複製該圖片",
+        "selectionSaveAsNote": "存為便利貼"
       },
       "liveTurnStats": {
         "thinking": "思考中...",
@@ -3248,7 +3290,10 @@
             "child_unknown": "子代理未知錯誤",
             "unknown": "未知任務"
           }
-        }
+        },
+        "resumed": "已恢復",
+        "resumeDetail": "恢復詳情",
+        "resumeReasonLabel": "恢復原因"
       },
       "contentParts": {
         "showingTailOutput": "為確保效能，串流輸出時僅顯示尾端內容。",
@@ -3400,7 +3445,6 @@
         },
         "planMode": {
           "entered": "進入計畫模式",
-          "planLabel": "計畫",
           "submitted": "計畫已提交",
           "switched": "切換模式",
           "reviewApproved": "已核准執行計畫",
@@ -3574,6 +3618,13 @@
         "cardFinishedWithStatus": "背景任務已結束（{status}）",
         "cardResultPending": "結果尚未返回"
       },
+      "asyncTasks": {
+        "openOutput": "輸出",
+        "stop": "停止",
+        "tokens": "{count} tokens",
+        "stopDeclined": "無法停止該任務，它可能已經結束。",
+        "stopFailed": "停止任務失敗：{error}"
+      },
       "proposedPlan": {
         "title": "計劃提案",
         "planning": "規劃中…"
@@ -3611,7 +3662,9 @@
           "needs_review": "待複核",
           "blocked": "受阻",
           "unknown": "未知"
-        }
+        },
+        "resumeDelegation": "恢復任務 {task}",
+        "resumeDelegationNoId": "恢復委派任務"
       }
     },
     "diffPreview": {
@@ -3739,11 +3792,11 @@
   "WebServiceSettings": {
     "addressSwitchHint": "切換只會改變這裡顯示與開啟的位址；服務會監聽所有網路介面，每個位址都可存取。",
     "sectionTitle": "Web 服務",
-    "sectionDescription": "啟用後可透過瀏覽器遠端存取 Houhub",
+    "sectionDescription": "啟用後可透過瀏覽器遠端存取 HouHub",
     "port": "連接埠",
     "status": "狀態",
     "autoStart": "自動啟動",
-    "autoStartHint": "Houhub 啟動時自動開啟 Web 服務",
+    "autoStartHint": "HouHub 啟動時自動開啟 Web 服務",
     "running": "執行中",
     "stopped": "已停止",
     "processing": "處理中...",
@@ -3758,7 +3811,7 @@
     "copy": "複製",
     "qrcode": "QR 碼",
     "qrcodeTitle": "掃碼開啟",
-    "qrcodeHint": "用手機掃描，在瀏覽器中開啟 Houhub",
+    "qrcodeHint": "用手機掃描，在瀏覽器中開啟 HouHub",
     "addressLabel": "存取位址",
     "tokenLabel": "存取 Token",
     "tokenHint": "Web 用戶端首次存取時需輸入此 Token",
@@ -3766,7 +3819,7 @@
     "regenerate": "重新產生",
     "stalePortOccupiedTitle": "連接埠 {port} 已被其他行程佔用",
     "stalePortUnknownTitle": "連接埠 {port} 狀態不明",
-    "stalePortHint": "在連接埠釋放前 Houhub 無法繫結。可以更換上方的連接埠，或結束佔用該連接埠的行程。",
+    "stalePortHint": "在連接埠釋放前 HouHub 無法繫結。可以更換上方的連接埠，或結束佔用該連接埠的行程。",
     "errors": {
       "alreadyRunning": "Web 服務已在執行",
       "invalidAddress": "主機或連接埠格式無效",
@@ -4174,7 +4227,7 @@
   },
   "SkillPacksSettings": {
     "title": "技能包",
-    "description": "由 HouHub 集中管理、並連結到各 AI 智慧代理的成套技能——程式設計專家、科學研究與辦公文件工具。可在下方依代理分別啟用。",
+    "description": "由 houhub 集中管理、並連結到各 AI 智慧代理的成套技能——程式設計專家、科學研究與辦公文件工具。可在下方依代理分別啟用。",
     "tabs": {
       "experts": "專家",
       "science": "科學研究",
@@ -4782,7 +4835,7 @@
     "sectionAction": "動作",
     "actionLaunchSession": "啟動會話",
     "actionEnqueueTask": "任務入列",
-    "actionEnqueueTaskHint": "每次觸發都會在目標資料夾的任務看板加入一個待辦任務（標題為本自動化名稱），由任務引擎依看板設定執行。"
+    "actionEnqueueTaskHint": "每次觸發都會在目標資料夾的待辦任務裡加入一個待辦任務（標題為本自動化名稱），由任務引擎依看板設定執行。"
   },
   "WorkbenchCloud": {
     "title": "项目云端",
@@ -4889,7 +4942,7 @@
     }
   },
   "CodexModelEditor": {
-    "customizedNotice": "你已自訂模型清單，Houhub 將接管 codex 的完整模型表。codex 日後新增的官方模型不會自動出現——點擊下方重新整理並再次儲存即可同步。清空所有自訂即可交回 codex 自動更新。",
+    "customizedNotice": "你已自訂模型清單，houhub 將接管 codex 的完整模型表。codex 日後新增的官方模型不會自動出現——點擊下方重新整理並再次儲存即可同步。清空所有自訂即可交回 codex 自動更新。",
     "officialsTitle": "官方模型",
     "officialsHint": "自動納入你啟動的 codex 的官方模型；可刪除不需要的。",
     "officialsEmpty": "暫無官方模型。",
@@ -4963,7 +5016,7 @@
     }
   },
   "Tasks": {
-    "title": "任務看板",
+    "title": "待辦任務",
     "new": "新增任務",
     "empty": "還沒有任務",
     "emptyHint": "新增待辦後即可處理——agent 在獨立 worktree 中工作，你驗收並合併結果。",
@@ -5006,7 +5059,7 @@
     "actionComplete": "完成",
     "actionAbandon": "放棄",
     "cancelTitle": "取消任務？",
-    "cancelDescription": "任務將變為已取消。worktree 會保留，之後可以重新排隊。",
+    "cancelDescription": "任務將變為已取消，之後可以重新排隊。",
     "cancelReasonLabel": "取消原因（選填）",
     "cancelReasonPlaceholder": "例如：方向不對，我重寫一下任務描述",
     "cancelKeep": "先不取消",
@@ -5241,7 +5294,14 @@
     "deliverPrBackDeleteWorktree": "推回後刪除 worktree",
     "deliverPrBackSubmit": "推送",
     "deliverPrBackDone": "已推回 PR",
-    "deliverPrBackDoneMr": "已推回合併請求"
+    "deliverPrBackDoneMr": "已推回合併請求",
+    "cancelDeleteWorktree": "同時刪除其 worktree 與工作分支",
+    "settingsAutoCompact": "自動壓縮上下文閾值",
+    "settingsAutoCompactHint": "繼續處理、重試或合併前，若工作階段上下文佔用達到該比例，先壓縮再傳送任務訊息。0 表示關閉。",
+    "settingsCompactCommand": "壓縮指令",
+    "settingsCompactCommandHint": "留空則依代理自身提供的指令（或已知預設值）自動選擇。",
+    "settingsCompactCommandPlaceholder": "/compact",
+    "eventContextCompact": "上下文壓縮"
   },
   "TokenUsage": {
     "title": "Token 用量",
@@ -5397,7 +5457,7 @@
   },
   "AgentToolsSettings": {
     "title": "對話內工具",
-    "description": "HouHub 在對話中額外提供給智慧代理的工具。工具會在代理啟動時注入，變更只對之後啟動的代理生效。",
+    "description": "houhub 在對話中額外提供給智慧代理的工具。工具會在代理啟動時注入，變更只對之後啟動的代理生效。",
     "feedbackLabel": "即時回饋",
     "feedbackHint": "在智慧代理工作時向它傳送備註與修正。支援即時插入的代理會立刻在目前回合中看到你的備註；其他代理則透過檢查回饋的工具讀取——這類代理通常只有在提示中提到時才會檢查，例如在訊息中加上「定期檢查我的即時回饋」。",
     "questionLabel": "向使用者提問",
@@ -5439,7 +5499,9 @@
     "pickFolder": "選擇專案資料夾",
     "noRemote": "該資料夾沒有可識別的程式碼託管遠端（origin）",
     "errors": {
-      "noAccount": "尚未為 {host} 設定 {provider} 帳號。請先在「設定 → 版本控制」中新增，才能載入這個儲存庫。"
+      "noAccount": "尚未為 {host} 設定 {provider} 帳號。請先在「設定 → 版本控制」中新增，才能載入這個儲存庫。",
+      "unsupportedHost": "儲存庫面板目前僅支援 GitHub 與 GitLab，而 {host} 不屬於其中任何一種。如果它是自架的 GitHub Enterprise 或 GitLab 執行個體，請在「設定 → 版本控制」中為它新增帳號。",
+      "wrongForge": "{host} 實際上是 {provider}，先前被誤判為另一種程式碼託管服務。已自動更正，請重新載入。"
     },
     "addAccount": "新增帳號",
     "empty": "暫無內容",
@@ -5629,5 +5691,79 @@
     "newIssueLabels": "標籤",
     "newIssueSubmit": "建立議題",
     "newIssueCreating": "建立中…"
+  },
+  "Canvas": {
+    "title": "無限會話",
+    "untitled": "未命名會話",
+    "unresolvedConversation": "會話已刪除",
+    "removeCard": "移除卡片",
+    "unresolvedFolder": "資料夾不可用",
+    "unresolvedFolderHint": "繫結的資料夾已關閉或刪除。重新開啟後此區域會自動恢復。",
+    "customRegion": "收藏區",
+    "runningCount": "{count} 個進行中",
+    "childCount": "{count} 個子智慧體",
+    "regionMenu": "區域選項",
+    "rename": "重新命名",
+    "collapse": "摺疊",
+    "expand": "展開",
+    "color": "顏色",
+    "removeRegion": "移除區域",
+    "removeNote": "刪除便籤",
+    "showMore": "還有 {count} 個",
+    "emptyRegion": "這裡還沒有會話",
+    "emptyCustomHint": "把會話卡片拖到這裡收集",
+    "notePlaceholder": "寫點什麼…",
+    "noteEmptyHint": "點兩下開始編輯",
+    "addNode": "新增到畫布",
+    "addFolderRegion": "資料夾區域",
+    "addAgentRegion": "智慧體區域",
+    "addConversationCard": "會話卡片",
+    "addCustomRegion": "自訂區域",
+    "addNote": "便籤卡片",
+    "searchConversations": "搜尋會話…",
+    "noFolders": "沒有開啟的資料夾",
+    "noConversations": "未找到會話",
+    "fitView": "符合檢視",
+    "zoomIn": "放大",
+    "zoomOut": "縮小",
+    "resetZoom": "重設縮放為 100%",
+    "viewportControls": "檢視",
+    "showMinimap": "顯示導覽地圖",
+    "hideMinimap": "隱藏導覽地圖",
+    "autoArrange": "自動整理",
+    "exportPng": "匯出 PNG",
+    "empty": "畫布還是空的",
+    "emptyHint": "用空間方式梳理工作區：區域對應資料夾和智慧體，卡片對應會話，便籤記錄其它。",
+    "seedFromWorkspace": "從目前工作區產生",
+    "unresolvedGroup": "分組不可用",
+    "unresolvedGroupHint": "綁定的資料夾分組已被刪除。可以移除這個區域，或重新新增一個。",
+    "grid": "網格",
+    "gridColumns": "欄數",
+    "gridRows": "列數",
+    "gridAuto": "自動",
+    "addGroupRegion": "資料夾分組區域",
+    "noGroups": "沒有資料夾分組",
+    "createRegionFromSelection": "收進新區域",
+    "selectedCount": "已選 {count} 個",
+    "openInWorkspace": "在工作區開啟",
+    "openDetailPanel": "在側欄開啟對話",
+    "detailPanelDescription": "在不離開畫布的前提下，檢視所選卡片的完整對話。",
+    "expandConversation": "展開會話",
+    "collapseConversation": "收合會話",
+    "cardMenu": "卡片選項",
+    "removeFromRegion": "從區域移除",
+    "newConversation": "新增會話",
+    "discardDraft": "捨棄草稿",
+    "createFailed": "建立會話失敗",
+    "showAllMembers": "顯示全部對話",
+    "showFewerMembers": "收起多餘對話",
+    "detachToCanvas": "移出到畫布",
+    "deleteSelected": "刪除所選",
+    "confirmDeleteTitle": "刪除選取內容？",
+    "confirmDeleteNotes": "你寫下的 {count} 則便利貼將被永久刪除，此操作無法復原。",
+    "confirmDeleteCancel": "取消",
+    "confirmDeleteConfirm": "刪除",
+    "canvasActions": "畫布操作",
+    "mergeIntoNewRegion": "新增區域"
   }
 }

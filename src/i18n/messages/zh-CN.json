@@ -127,7 +127,7 @@
     },
     "zoomLevel": {
       "sectionTitle": "窗口缩放",
-      "sectionDescription": "整体放大或缩小界面，立即生效，按设备分别保存。",
+      "sectionDescription": "整体放大或缩小界面，立即生效，按设备分别保存。⌘/Ctrl + 和 - 按与此菜单相同的档位调节（⌘/Ctrl 0 恢复为 100%）。",
       "placeholder": "请选择缩放档位",
       "default": "默认",
       "current": "当前缩放：{zoom}%"
@@ -146,13 +146,13 @@
       "ligatures": "启用连字",
       "ligaturesUnavailable": "该字体不含连字",
       "terminalLigaturesHint": "终端连字仅对内置编程字体生效。",
-      "wordWrap": "启用编辑器自动换行",
+      "wordWrap": "启用自动换行",
       "preview": "预览"
     },
     "welcomePanel": {
-      "sectionTitle": "欢迎页快捷区",
-      "sectionDescription": "控制新会话输入框上方的“代码开发 / 办公工作”快捷卡片是否显示。",
-      "showQuickActions": "在新会话中显示"
+      "sectionTitle": "模式选择区域",
+      "sectionDescription": "新会话页面输入框上方显示的「代码开发 / 日常办公」快捷卡片区域。",
+      "showQuickActions": "在新会话页面显示"
     },
     "workspaceBackground": {
       "sectionTitle": "工作区背景",
@@ -221,7 +221,7 @@
       },
       "css": {
         "dialogTitle": "自定义 CSS",
-        "dialogDescription": "对所有 HouHub 窗口生效。修改会实时预览，点击「应用」才会保存。",
+        "dialogDescription": "对所有 houhub 窗口生效。修改会实时预览，点击「应用」才会保存。",
         "size": "{used} KB / {max} KB",
         "ruleCount": "{count} 条规则",
         "errorTooLarge": "内容过大，无法保存，请精简到上限以内。",
@@ -238,7 +238,7 @@
   "SystemSettings": {
     "loading": "加载中...",
     "sectionTitle": "系统管理",
-    "sectionDescription": "管理网络代理、应用升级与语言偏好。",
+    "sectionDescription": "管理应用升级、开机自启、网络代理与语言偏好。",
     "proxyTitle": "网络代理",
     "proxyDescription": "开启后，后续网络请求将优先走该代理（包括 ACP 对话、Agent 安装、Git 远程操作等）。",
     "loadFailed": "加载失败：{message}",
@@ -672,6 +672,8 @@
     "local": {
       "filterPlaceholder": "筛选本地 MCP...",
       "loadFailed": "加载失败：{message}",
+      "sourceUnreadable": "无法读取 {app} 的 MCP 配置，其服务器已隐藏：{message}",
+      "saveBlockedByUnreadableSource": "保存前请先修复或删除该文件并刷新：分配结果按本页能读到的智能体计算，现在保存可能会把该服务器从读不到的智能体中移除。",
       "empty": "当前未检测到本地 MCP。",
       "description": "本地 MCP 配置可直接编辑并保存。",
       "enabledApps": "启用应用",
@@ -831,7 +833,7 @@
       "configTomlHint": "按原样整体写入 ~/.grok/config.toml。非法 TOML 会被拒绝，绝不因笔误截断文件。",
       "configTomlPlaceholder": "# 上面控件之外的键，例如\n# [mcp_servers.*]、[cli]、[permission] 规则。",
       "customModelTitle": "自定义模型（自带端点）",
-      "customModelHint": "让 Grok 指向自定义或自托管端点。HouHub 会写入按模型的 `[model.*]` 块并将其设为默认模型。清空模型 ID 即可移除。",
+      "customModelHint": "让 Grok 指向自定义或自托管端点。houhub 会写入按模型的 `[model.*]` 块并将其设为默认模型。清空模型 ID 即可移除。",
       "customModelIdLabel": "模型 ID",
       "customModelIdPlaceholder": "grok-4.5",
       "customModelIdHint": "注册为 `[model.*]` 块，并作为模型名发送给 API；同时设为 `[models].default`。",
@@ -849,7 +851,7 @@
       "autoCompactHint": "当上下文使用率达到该百分比时压缩对话（Grok 默认 85）。写入 `[session]`。"
     },
     "cursor": {
-      "configDescription": "在此配置 Cursor。先选择认证方式——官网订阅（浏览器登录）或用于无头/服务器的 Cursor API 密钥——然后选择模型并编辑 CLI 的权限规则与沙箱。HouHub 会写入 ~/.cursor/cli-config.json，与 cursor-agent CLI 共享。",
+      "configDescription": "在此配置 Cursor。先选择认证方式——官网订阅（浏览器登录）或用于无头/服务器的 Cursor API 密钥——然后选择模型并编辑 CLI 的权限规则与沙箱。houhub 会写入 ~/.cursor/cli-config.json，与 cursor-agent CLI 共享。",
       "authTitle": "鉴权",
       "authChecking": "检测中…",
       "authNotInstalled": "cursor-agent 未安装",
@@ -889,7 +891,14 @@
       "modelPickerPlaceholder": "搜索模型…",
       "modelNoMatch": "没有匹配的模型",
       "modelsNeedAuth": "登录后加载模型列表。",
-      "modelDefaultBadge": "默认"
+      "modelDefaultBadge": "默认",
+      "modelThinkingLabel": "思考",
+      "modelEffortLabel": "思考强度",
+      "modelFastLabel": "Fast 快速模式",
+      "variantOn": "开",
+      "variantOff": "关",
+      "modelVariantHint": "Cursor 把每种组合都当作独立的模型 ID，这几个控件负责挑出对应的那一个。它们设置的是启动默认值——会话中随时可以在输入框上方改模型、思考与 Fast。",
+      "permissionModeAskHint": "「运行前询问」会把每次工具调用交给你确认，其中带有 Cursor 自己的「始终允许」选项——选它会往下方的「允许规则」里追加一条，之后同类调用便不再询问。"
     },
     "deepseek": {
       "configManagement": "DeepSeek Harness 配置",
@@ -901,7 +910,7 @@
       "apiKeyHint": "以 DEEPSEEK_API_KEY 传给智能体。环境变量的优先级高于凭据文件，因此若用终端登录，这里留空即可。"
     },
     "codex": {
-      "configDescription": "支持 API URL、API Key、模型名称、Reasoning Effort 快捷配置，并与 `auth.json` / `config.toml` 双向联动。",
+      "configDescription": "支持 API URL、API Key、模型名称快捷配置，并与 `auth.json` / `config.toml` 双向联动。",
       "authMode": "认证方式",
       "chatgptSubscription": "官网订阅",
       "chatgptSubscriptionHint": "使用 ChatGPT 官网订阅登录，无需配置 API Key",
@@ -941,7 +950,7 @@
       "sandboxMode_workspace-write": "可写工作区",
       "sandboxMode_danger-full-access": "完全放开（无沙箱）",
       "sandboxModeHint": "在 Windows 上，未开启 codex 的实验性 Windows 沙箱时，可写工作区会被降级为只读。",
-      "sandboxModeSeedsPresetHint": "HouHub 还会用它推导会话的初始审批预设，因此与审批策略不同，它对普通提问同样生效。注意：适配器的默认预设现在会让模型先筛一遍越权请求，只把它判定为不安全的转给你；想逐条自己审，在输入框中选「请求批准」。输入框中选择的预设始终覆盖它。",
+      "sandboxModeSeedsPresetHint": "houhub 还会用它推导会话的初始审批预设，因此与审批策略不同，它对普通提问同样生效。注意：适配器的默认预设现在会让模型先筛一遍越权请求，只把它判定为不安全的转给你；想逐条自己审，在输入框中选「请求批准」。输入框中选择的预设始终覆盖它。",
       "writableRootsLabel": "额外可写目录",
       "writableRootsHint": "每行一个绝对路径，作为工作目录之外的额外可写位置。",
       "sandboxRootsRelativeError": "必须是绝对路径 — codex 会把相对路径解析到 ~/.codex 下：{path}",
@@ -964,7 +973,7 @@
       "loginRelogin": "重新登录 / 切换账号",
       "loginTimeout": "登录超时，请重试",
       "loginSaveFailed": "登录成功但配置保存失败",
-      "sandboxModeReadOnlyAcpWarning": "ACP 适配器已经没有只读沙箱了，因此无论这里怎么选，HouHub 会话都以可写工作区运行。HouHub 会选中它能选的最严格预设——每一次越权都交给你审批——但工作区内部的修改不再需要审批。codex CLI 和 IDE 会话仍然遵守只读。"
+      "sandboxModeReadOnlyAcpWarning": "ACP 适配器已经没有只读沙箱了，因此无论这里怎么选，houhub 会话都以可写工作区运行。houhub 会选中它能选的最严格预设——每一次越权都交给你审批——但工作区内部的修改不再需要审批。codex CLI 和 IDE 会话仍然遵守只读。"
     },
     "gemini": {
       "authConfig": "Gemini 认证配置",
@@ -992,7 +1001,7 @@
       "providerManagement": "Provider 管理",
       "providerCount": "共 {count} 个",
       "addProvider": "新增 Provider",
-      "emptyProvider": "暂无 Provider，输入 ID 后点击“新增 Provider”创建。",
+      "emptyProvider": "还没有自定义 Provider。点击「添加自定义 Provider」创建。",
       "providerEnabledState": "{providerId} 启用状态",
       "selectProviderNpm": "选择 provider.npm",
       "modelManagement": "模型管理",
@@ -1165,7 +1174,7 @@
       "authModeApiKey": "API Key",
       "authModeLogin": "Kimi 账号登录（订阅）",
       "authModeApiKeyHint": "在 config.toml 写入受管供应商，并播种门控令牌以便会话能够打开。",
-      "loginHint": "在终端运行 `kimi login`，用 Kimi 订阅账号登录；Kimi 0.39.0 起，kimi.ai 账号需加 `--region global`，默认登录的是 kimi.com。HouHub 不存储任何凭据，复用 Kimi 自己的登录。在此保存会移除 HouHub 的 API Key 门控令牌。",
+      "loginHint": "在终端运行 `kimi login`，用 Kimi 订阅账号登录；Kimi 0.39.0 起，kimi.ai 账号需加 `--region global`，默认登录的是 kimi.com。houhub 不存储任何凭据，复用 Kimi 自己的登录。在此保存会移除 houhub 的 API Key 门控令牌。",
       "credentialTitle": "凭据",
       "interfaceTypeLabel": "供应商类型",
       "interfaceTypeHint": "Kimi 使用的供应商协议（config.toml 的 `type`）。Moonshot / platform.kimi.com 的 Key 请选「Kimi / Moonshot」。",
@@ -1557,11 +1566,11 @@
       "missingAgentPlatformConfig": "请填写 API Key，或同时填写项目与区域 —— 二者缺一不可，否则会话无法启动。",
       "missingEnterpriseConfig": "Gemini Enterprise 需要同时填写项目与区域。",
       "settingsFileHint": "auth.type 会保存到该文件；你自己写在里面的其他键会原样保留。",
-      "syncSkipped": "你的选择已经存下来了，但 HouHub 没能写进 ACP 服务端的 settings.json，所以 Antigravity 仍然按那个文件里写的方式认证。请自己在里面设置 auth.type，或者把它挪走再保存一次。",
+      "syncSkipped": "你的选择已经存下来了，但 houhub 没能写进 ACP 服务端的 settings.json，所以 Antigravity 仍然按那个文件里写的方式认证。请自己在里面设置 auth.type，或者把它挪走再保存一次。",
       "save": "保存",
       "headless": {
         "title": "在没有浏览器的机器上登录",
-        "description": "Antigravity 的 Google 登录由智能体自己发起，浏览器必须开在运行智能体的那台机器上。部署在无桌面服务器上的 HouHub 没有浏览器，首次新建会话会等待 5 分钟后失败。改从这里登录：把链接拿到任意设备上打开，再把跳转后的地址粘回来。",
+        "description": "Antigravity 的 Google 登录由智能体自己发起，浏览器必须开在运行智能体的那台机器上。部署在无桌面服务器上的 houhub 没有浏览器，首次新建会话会等待 5 分钟后失败。改从这里登录：把链接拿到任意设备上打开，再把跳转后的地址粘回来。",
         "start": "获取登录链接",
         "saveFirst": "请先保存——登录用的是已保存的设置，而不是上面刚填的内容。",
         "step1": "1. 打开这个链接并登录 Google 账号。",
@@ -1587,9 +1596,9 @@
   "GeneralSettings": {
     "loading": "加载中...",
     "sectionTitle": "常规",
-    "sectionDescription": "集中管理默认终端、渲染加速以及多智能体协同等通用偏好。",
+    "sectionDescription": "集中管理默认终端、渲染加速、通知提示音以及多智能体协同等通用偏好。",
     "terminalTitle": "默认终端",
-    "terminalDescription": "选择从终端标签栏或文件树打开新终端时使用的 Shell。",
+    "terminalDescription": "选择从终端栏或文件树打开新终端标签页时使用的 Shell。智能体请求 houhub 代为执行整条命令行时也会使用它。",
     "defaultTerminalShell": "默认 Shell",
     "terminalSystemDefault": "系统默认",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
@@ -1614,7 +1623,7 @@
   },
   "LoginPage": {
     "documentTitle": "登录 - houhub",
-    "brand": "Houhub",
+    "brand": "HouHub",
     "subtitle": "输入访问 Token 以连接到桌面端",
     "tokenPlaceholder": "Access Token",
     "connect": "连接",
@@ -1762,7 +1771,12 @@
         "reorderFoldersFailed": "重新排序文件夹失败：{message}",
         "changeFolderColorFailed": "修改颜色失败：{message}",
         "setFolderAliasFailed": "设置别名失败：{message}",
-        "changeFolderDefaultAgentFailed": "设置默认智能体失败：{message}"
+        "changeFolderDefaultAgentFailed": "设置默认智能体失败：{message}",
+        "createGroupFailed": "创建分组失败：{message}",
+        "updateGroupFailed": "更新分组失败：{message}",
+        "deleteGroupFailed": "删除分组失败：{message}",
+        "moveToGroupFailed": "移动文件夹失败：{message}",
+        "applyLayoutFailed": "保存文件夹顺序失败：{message}"
       },
       "statsLabel": "{folders} 个文件夹 · {convos} 个会话",
       "reorderHandle": "拖拽排序",
@@ -1771,7 +1785,7 @@
       "viewOptions": "显示选项",
       "listOptions": "会话列表",
       "showCompleted": "显示已完成会话",
-      "showWorktrees": "显示工作树文件夹",
+      "showWorktrees": "显示工作树分支",
       "showRecent": "显示「最近」分组",
       "navigationItems": "菜单导航项",
       "moreOptions": "更多选项",
@@ -1840,7 +1854,7 @@
       "automations": "自动化",
       "loadingSubsessions": "正在加载子会话…",
       "worktreeRemovedBadge": "源 worktree 已删除",
-      "tasks": "任务看板",
+      "tasks": "待办任务",
       "runningCountBadge": "{count} 个会话进行中",
       "sectionOrderMoveUp": "上移",
       "sectionOrderMoveDown": "下移",
@@ -1849,7 +1863,24 @@
       "noRecent": "暂无最近会话",
       "showMoreRecent": "显示更多（{count}）",
       "resetRecentLimit": "重置为前 {count} 条",
-      "forge": "仓库面板"
+      "forge": "仓库面板",
+      "canvas": "无限会话",
+      "folderGroup": {
+        "newGroup": "新建分组",
+        "newGroupTitle": "新建文件夹分组",
+        "defaultName": "新建分组",
+        "namePlaceholder": "分组名称",
+        "rename": "重命名分组…",
+        "renameTitle": "重命名文件夹分组",
+        "delete": "删除分组",
+        "deleteConfirmTitle": "删除该分组？",
+        "deleteConfirmDescription": "将删除“{name}”。组内的 {count} 个文件夹会保留在工作区，并回到顶层。",
+        "empty": "分组内暂无文件夹",
+        "moveToGroup": "移动到分组",
+        "removeFromGroup": "不分组",
+        "newGroupAndMove": "新建分组…",
+        "dropToUngroup": "拖到这里可移出分组"
+      }
     },
     "conversation": {
       "reloadFailed": "会话重新加载失败：{message}",
@@ -1864,6 +1895,7 @@
       "forkSession": "分叉会话",
       "forkSessionSuccess": "会话分叉成功",
       "forkSessionFailed": "会话分叉失败：{error}",
+      "forkSessionBusy": "分叉失败：当前有回合正在进行",
       "exportConversation": "导出会话",
       "exportImage": "图片",
       "exportMarkdown": "Markdown",
@@ -2329,7 +2361,9 @@
       "noMatches": "无匹配项",
       "pushBranch": "推送",
       "deleteWorktree": "删除工作树",
-      "deleteWorktreeAndBranch": "删除工作树及分支"
+      "deleteWorktreeAndBranch": "删除工作树及分支",
+      "worktreeBranches": "工作树分支 ({count})",
+      "noWorktreeBranches": "无工作树分支"
     },
     "commitDialog": {
       "toasts": {
@@ -2796,6 +2830,7 @@
           "downloadFailed": "{agent} 下载失败：{message}",
           "sessionLoadResourceNotFound": "{agent} 会话加载失败，可重新加载重试，或开始新会话。",
           "sessionLoadUnavailable": "{agent} 无法恢复此会话，它可能已结束或 agent 已停止。可重新加载重试，或开始新会话。",
+          "sessionLoadBusy": "这份历史正被从它分叉出来的会话占用。关掉那个会话，再重新加载即可打开。",
           "sessionArchived": "原会话已在 {agent} 侧归档，可在终端运行 {command} 找回历史后重载，或直接开始新会话。",
           "turnFailedRefusal": "{agent} 拒绝继续本轮回复，通常意味着后端或网关出错，请检查代理日志。",
           "turnFailedMaxTokens": "{agent} 已达到本轮回复的最大 Token 限制。",
@@ -2885,7 +2920,11 @@
         "noModels": "未找到模型",
         "cancel": "取消",
         "send": "发送",
-        "forkAndSend": "分叉发送",
+        "queueMessage": "加入队列",
+        "steerIntoTurn": "插入当前回合",
+        "steerQueuedInstead": "已转入队列——将随下一回合发送。",
+        "steerFailed": "无法插入当前回合",
+        "steerAttachmentsUnsupported": "仅支持纯文本——带附件的草稿请走队列。",
         "slashCommands": "斜杠命令",
         "slashSearchPlaceholder": "搜索命令...",
         "slashSearchEmpty": "没有匹配的命令",
@@ -2942,11 +2981,11 @@
           "shortcutsNewSearch": "<shortcut>{newConversation}</shortcut> 快速新建会话，<shortcut>{searchConversations}</shortcut> 搜索历史会话",
           "slashAtMention": "在输入框输入 / 触发斜杠命令，输入 @ 引用项目内文件",
           "pasteDropFiles": "直接粘贴截图或把文件拖到输入框，即可作为附件",
-          "queueMessage": "agent 回复中也能继续输入并排队，回答完毕会自动续发",
+          "queueMessage": "智能体回复中也能继续输入并排队，回答完毕会自动续发",
           "draftAutoSave": "未发送的草稿会自动保存，重新打开会话仍在",
-          "forkSend": "发送按钮旁的下拉选择「分叉发送」，从当前位置开一条新分支",
+          "forkFromTurn": "任意已完成的回复上都有「从此处分叉」，从那条消息开一条新分支",
           "exportConversation": "右键会话内容区可导出为 Markdown / HTML / 图片",
-          "chatChannels": "在「设置 -> 聊天频道」接入 Telegram / 飞书 / 微信，从手机继续操作",
+          "chatChannels": "在「设置 → 聊天频道」接入 Telegram / 飞书 / 微信，从手机继续操作",
           "shortcutsAuxPanel": "<shortcut>{toggleAuxPanel}</shortcut> 切换右侧面板，查看本次会话改动的文件与 Git 变更",
           "shortcutsTerminalSidebar": "<shortcut>{toggleTerminal}</shortcut> 打开内置终端，<shortcut>{toggleSidebar}</shortcut> 切换侧边栏",
           "customShortcuts": "所有快捷键都可在「设置 → 快捷键」中自定义",
@@ -2960,7 +2999,7 @@
           "mentionTargets": "@ 不只能引用文件：还能 @ 另一个智能体把子任务交给它，或引用历史会话、某次提交、某个技能。",
           "splitGroups": "右键点击标签选择「向右拆分」或「向下拆分」，两个会话各占一个分栏同时开着。",
           "worktrees": "点开分支按钮选「新建工作树」，多个智能体就能在同一个仓库并行干活，互不覆盖彼此的文件。",
-          "importSessions": "之前在终端里跑过的会话，用文件夹右键菜单的「导入本地会话」就能把那段历史接进 HouHub。",
+          "importSessions": "之前在终端里跑过的会话，用文件夹右键菜单的「导入本地会话」就能把那段历史接进 houhub。",
           "subSessions": "智能体委派出去的子会话会嵌套显示在侧边栏的父会话下面，展开就能跟踪每一个子会话做了什么。",
           "liveFeedback": "「+」菜单里的「实时反馈」能把一条便条塞进智能体正在跑的这一轮，不用打断它。",
           "skillPacks": "设置 → 技能包 里打包了编程专家、科研和办公三类技能，可以按智能体分别开关。",
@@ -3158,6 +3197,8 @@
         "emptyConversation": "当前会话暂无消息。",
         "systemMessage": "系统消息",
         "copyMessage": "复制",
+        "forkFromHere": "从此处分叉",
+        "forkBusy": "当前有回合正在进行，暂不可分叉",
         "copied": "已复制",
         "downloadImage": "下载图片",
         "downloadFailed": "下载失败：{message}",
@@ -3191,7 +3232,8 @@
         "copyImage": "复制图片",
         "copiedImage": "已复制图片",
         "copyImageFailed": "复制图片失败：{message}",
-        "copyImageUnsupported": "当前环境不支持复制该图片"
+        "copyImageUnsupported": "当前环境不支持复制该图片",
+        "selectionSaveAsNote": "存为便签"
       },
       "liveTurnStats": {
         "thinking": "思考中...",
@@ -3258,7 +3300,10 @@
             "child_unknown": "子代理未知错误",
             "unknown": "未知任务"
           }
-        }
+        },
+        "resumed": "已恢复",
+        "resumeDetail": "恢复详情",
+        "resumeReasonLabel": "恢复原因"
       },
       "contentParts": {
         "showingTailOutput": "为保证性能，流式输出时仅显示尾部内容。",
@@ -3410,7 +3455,6 @@
         },
         "planMode": {
           "entered": "进入计划模式",
-          "planLabel": "计划",
           "submitted": "计划已提交",
           "switched": "切换模式",
           "reviewApproved": "已批准执行计划",
@@ -3584,6 +3628,13 @@
         "cardFinishedWithStatus": "后台任务已结束（{status}）",
         "cardResultPending": "结果尚未返回"
       },
+      "asyncTasks": {
+        "openOutput": "输出",
+        "stop": "停止",
+        "tokens": "{count} tokens",
+        "stopDeclined": "无法停止该任务，它可能已经结束。",
+        "stopFailed": "停止任务失败：{error}"
+      },
       "proposedPlan": {
         "title": "计划提案",
         "planning": "规划中…"
@@ -3611,7 +3662,9 @@
           "needs_review": "待复核",
           "blocked": "受阻",
           "unknown": "未知"
-        }
+        },
+        "resumeDelegation": "恢复任务 {task}",
+        "resumeDelegationNoId": "恢复委派任务"
       }
     },
     "diffPreview": {
@@ -3739,11 +3792,11 @@
   "WebServiceSettings": {
     "addressSwitchHint": "切换只改变这里显示和打开的地址；服务监听所有网卡，每个地址都可访问。",
     "sectionTitle": "Web 服务",
-    "sectionDescription": "启用后可通过浏览器远程访问 Houhub",
+    "sectionDescription": "启用后可通过浏览器远程访问 HouHub",
     "port": "端口",
     "status": "状态",
     "autoStart": "自动启动",
-    "autoStartHint": "Houhub 启动时自动开启 Web 服务",
+    "autoStartHint": "HouHub 启动时自动开启 Web 服务",
     "running": "运行中",
     "stopped": "已停止",
     "processing": "处理中...",
@@ -3758,7 +3811,7 @@
     "copy": "复制",
     "qrcode": "二维码",
     "qrcodeTitle": "扫码打开",
-    "qrcodeHint": "用手机扫描，在浏览器中打开 Houhub",
+    "qrcodeHint": "用手机扫描，在浏览器中打开 HouHub",
     "addressLabel": "访问地址",
     "tokenLabel": "访问 Token",
     "tokenHint": "Web 客户端首次访问时需输入此 Token",
@@ -3766,7 +3819,7 @@
     "regenerate": "重新生成",
     "stalePortOccupiedTitle": "端口 {port} 已被其他进程占用",
     "stalePortUnknownTitle": "端口 {port} 状态未知",
-    "stalePortHint": "在端口释放前 Houhub 无法绑定。可以更换上方的端口，或结束占用该端口的进程。",
+    "stalePortHint": "在端口释放前 HouHub 无法绑定。可以更换上方的端口，或结束占用该端口的进程。",
     "errors": {
       "alreadyRunning": "Web 服务已在运行",
       "invalidAddress": "主机或端口格式无效",
@@ -4186,7 +4239,7 @@
   },
   "SkillPacksSettings": {
     "title": "技能包",
-    "description": "由 HouHub 集中管理、并链接到各 AI 智能体的成套技能——编码专家、科学研究与办公文档工具。可在下方按智能体分别启用。",
+    "description": "由 houhub 集中管理、并链接到各 AI 智能体的成套技能——编码专家、科学研究与办公文档工具。可在下方按智能体分别启用。",
     "tabs": {
       "experts": "专家",
       "science": "科学研究",
@@ -4782,7 +4835,7 @@
     "sectionAction": "动作",
     "actionLaunchSession": "启动会话",
     "actionEnqueueTask": "任务入队",
-    "actionEnqueueTaskHint": "每次触发都会在目标文件夹的任务看板加入一个待办任务（标题为本自动化名称），由任务引擎按看板设置执行。"
+    "actionEnqueueTaskHint": "每次触发都会在目标文件夹的待办任务里加入一个待办任务（标题为本自动化名称），由任务引擎按看板设置执行。"
   },
   "WorkbenchCloud": {
     "title": "项目云端",
@@ -4889,7 +4942,7 @@
     }
   },
   "CodexModelEditor": {
-    "customizedNotice": "你已自定义模型列表，Houhub 将接管 codex 的完整模型表。codex 日后新增的官方模型不会自动出现——点击下方刷新并重新保存即可同步。清空全部自定义即可交回 codex 自动更新。",
+    "customizedNotice": "你已自定义模型列表，houhub 将接管 codex 的完整模型表。codex 日后新增的官方模型不会自动出现——点击下方刷新并重新保存即可同步。清空全部自定义即可交回 codex 自动更新。",
     "officialsTitle": "官方模型",
     "officialsHint": "自动纳入你启动的 codex 的官方模型；可删除不需要的。",
     "officialsEmpty": "暂无官方模型。",
@@ -4963,7 +5016,7 @@
     }
   },
   "Tasks": {
-    "title": "任务看板",
+    "title": "待办任务",
     "new": "新建任务",
     "empty": "还没有任务",
     "emptyHint": "添加待办后即可处理——agent 在独立 worktree 中工作，你验收并合并结果。",
@@ -5006,7 +5059,7 @@
     "actionComplete": "完成",
     "actionAbandon": "放弃",
     "cancelTitle": "取消任务？",
-    "cancelDescription": "任务将变为已取消。worktree 会保留，之后可以重新排队。",
+    "cancelDescription": "任务将变为已取消，之后可以重新排队。",
     "cancelReasonLabel": "取消原因（可选）",
     "cancelReasonPlaceholder": "例如：方向不对，我重写一下任务描述",
     "cancelKeep": "先不取消",
@@ -5241,7 +5294,14 @@
     "deliverPrBackDeleteWorktree": "推回后删除 worktree",
     "deliverPrBackSubmit": "推送",
     "deliverPrBackDone": "已推回 PR",
-    "deliverPrBackDoneMr": "已推回合并请求"
+    "deliverPrBackDoneMr": "已推回合并请求",
+    "cancelDeleteWorktree": "同时删除其 worktree 和工作分支",
+    "settingsAutoCompact": "自动压缩上下文阈值",
+    "settingsAutoCompactHint": "继续处理、重试或合并前，若会话上下文占用达到该比例，先压缩再发送任务消息。0 表示关闭。",
+    "settingsCompactCommand": "压缩命令",
+    "settingsCompactCommandHint": "留空则按智能体自身提供的命令（或已知默认值）自动选择。",
+    "settingsCompactCommandPlaceholder": "/compact",
+    "eventContextCompact": "上下文压缩"
   },
   "TokenUsage": {
     "title": "Token 用量",
@@ -5397,7 +5457,7 @@
   },
   "AgentToolsSettings": {
     "title": "会话内工具",
-    "description": "HouHub 在会话中额外提供给智能体的工具。工具在智能体启动时注入，改动只对之后启动的智能体生效。",
+    "description": "houhub 在会话中额外提供给智能体的工具。工具在智能体启动时注入，改动只对之后启动的智能体生效。",
     "feedbackLabel": "实时反馈",
     "feedbackHint": "在智能体工作时向它发送备注与纠偏。支持即时插入的智能体会立刻在当前回合中看到你的备注；其他智能体则通过检查反馈的工具读取——这类智能体通常只有在提示词里提到时才会检查，例如在消息中加上“定期检查我的实时反馈”。",
     "questionLabel": "向用户提问",
@@ -5439,7 +5499,9 @@
     "pickFolder": "选择项目文件夹",
     "noRemote": "该文件夹没有可识别的代码托管远端（origin）",
     "errors": {
-      "noAccount": "还没有为 {host} 配置 {provider} 账号。请在「设置 → 版本控制」中添加后再加载该仓库。"
+      "noAccount": "还没有为 {host} 配置 {provider} 账号。请在「设置 → 版本控制」中添加后再加载该仓库。",
+      "unsupportedHost": "仓库面板目前仅支持 GitHub 和 GitLab，而 {host} 不是其中任何一种。如果它是自建的 GitHub Enterprise 或 GitLab 实例，请在「设置 → 版本控制」中为它添加账号。",
+      "wrongForge": "{host} 实际上是 {provider}，此前被误判为另一种代码托管服务。已自动更正，请重新加载。"
     },
     "addAccount": "添加账号",
     "empty": "暂无内容",
@@ -5629,5 +5691,79 @@
     "newIssueLabels": "标签",
     "newIssueSubmit": "创建议题",
     "newIssueCreating": "创建中…"
+  },
+  "Canvas": {
+    "title": "无限会话",
+    "untitled": "未命名会话",
+    "unresolvedConversation": "会话已删除",
+    "removeCard": "移除卡片",
+    "unresolvedFolder": "文件夹不可用",
+    "unresolvedFolderHint": "绑定的文件夹已关闭或删除。重新打开后此区域会自动恢复。",
+    "customRegion": "收藏区",
+    "runningCount": "{count} 个进行中",
+    "childCount": "{count} 个子智能体",
+    "regionMenu": "区域选项",
+    "rename": "重命名",
+    "collapse": "折叠",
+    "expand": "展开",
+    "color": "颜色",
+    "removeRegion": "移除区域",
+    "removeNote": "删除便签",
+    "showMore": "还有 {count} 个",
+    "emptyRegion": "这里还没有会话",
+    "emptyCustomHint": "把会话卡片拖到这里收集",
+    "notePlaceholder": "写点什么…",
+    "noteEmptyHint": "双击开始编辑",
+    "addNode": "添加到画布",
+    "addFolderRegion": "文件夹区域",
+    "addAgentRegion": "智能体区域",
+    "addConversationCard": "会话卡片",
+    "addCustomRegion": "自定义区域",
+    "addNote": "便签卡片",
+    "searchConversations": "搜索会话…",
+    "noFolders": "没有打开的文件夹",
+    "noConversations": "未找到会话",
+    "fitView": "适应视图",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "resetZoom": "重置缩放为 100%",
+    "viewportControls": "视图",
+    "showMinimap": "显示导航地图",
+    "hideMinimap": "隐藏导航地图",
+    "autoArrange": "自动整理",
+    "exportPng": "导出 PNG",
+    "empty": "画布还是空的",
+    "emptyHint": "用空间方式梳理工作区：区域对应文件夹和智能体，卡片对应会话，便签记录其它。",
+    "seedFromWorkspace": "从当前工作区生成",
+    "unresolvedGroup": "分组不可用",
+    "unresolvedGroupHint": "绑定的文件夹分组已被删除。可以移除这个区域，或重新添加一个。",
+    "grid": "网格",
+    "gridColumns": "列数",
+    "gridRows": "行数",
+    "gridAuto": "自动",
+    "addGroupRegion": "文件夹分组区域",
+    "noGroups": "没有文件夹分组",
+    "createRegionFromSelection": "收进新区域",
+    "selectedCount": "已选 {count} 个",
+    "openInWorkspace": "在工作区打开",
+    "openDetailPanel": "在侧栏打开会话",
+    "detailPanelDescription": "在不离开画布的前提下，查看所选卡片的完整会话。",
+    "expandConversation": "展开会话",
+    "collapseConversation": "收起会话",
+    "cardMenu": "卡片选项",
+    "removeFromRegion": "从区域移除",
+    "newConversation": "新建会话",
+    "discardDraft": "丢弃草稿",
+    "createFailed": "创建会话失败",
+    "showAllMembers": "显示全部会话",
+    "showFewerMembers": "收起多余会话",
+    "detachToCanvas": "移出到画布",
+    "deleteSelected": "删除所选",
+    "confirmDeleteTitle": "删除选中内容？",
+    "confirmDeleteNotes": "你写下的 {count} 条便签将被永久删除，此操作无法撤销。",
+    "confirmDeleteCancel": "取消",
+    "confirmDeleteConfirm": "删除",
+    "canvasActions": "画布操作",
+    "mergeIntoNewRegion": "新建区域"
   }
 }

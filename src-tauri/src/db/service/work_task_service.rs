@@ -1966,11 +1966,14 @@ pub async fn merge_landed(
     Ok(true)
 }
 
-/// review → done for a task that produced nothing to land: the user accepted
-/// it outright instead of merging an empty change set. The second writer of
-/// `done` (see [`merge_landed`]) — `merge_commit` stays NULL, and the caller
-/// has already checked git truth, so the CAS is the whole guard.
-pub async fn complete_without_merge(conn: &DatabaseConnection, id: i32) -> Result<bool, DbError> {
+/// review → done for a task with no merge to run. `reason` is persisted in the
+/// status event so the timeline describes whether the worktree was empty or
+/// already gone.
+pub async fn complete_without_merge(
+    conn: &DatabaseConnection,
+    id: i32,
+    reason: &str,
+) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
     let res = work_task::Entity::update_many()
@@ -2003,7 +2006,7 @@ pub async fn complete_without_merge(conn: &DatabaseConnection, id: i32) -> Resul
         "user",
         Some(WorkTaskStatus::Review),
         WorkTaskStatus::Done,
-        Some(serde_json::json!({ "reason": "completed without merging: no changes" })),
+        Some(serde_json::json!({ "reason": reason })),
     )
     .await?;
     txn.commit().await?;
@@ -2015,12 +2018,15 @@ pub async fn complete_without_merge(conn: &DatabaseConnection, id: i32) -> Resul
 pub async fn merge_back_to_review(
     conn: &DatabaseConnection,
     id: i32,
+    // `Some` binds the bounce to one generation; `None` preserves the
+    // historical merge recovery behavior.
+    expect_run_seq: Option<i32>,
     error: Option<String>,
     conflict_files: Option<Vec<String>>,
 ) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
-    let res = work_task::Entity::update_many()
+    let update = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::Status,
             Expr::value(status_str(WorkTaskStatus::Review)),
@@ -2030,9 +2036,12 @@ pub async fn merge_back_to_review(
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Merging))
-        .filter(work_task::Column::DeletedAt.is_null())
-        .exec(&txn)
-        .await?;
+        .filter(work_task::Column::DeletedAt.is_null());
+    let update = match expect_run_seq {
+        Some(seq) => update.filter(work_task::Column::RunSeq.eq(seq)),
+        None => update,
+    };
+    let res = update.exec(&txn).await?;
     if res.rows_affected != 1 {
         txn.rollback().await?;
         return Ok(false);
@@ -3077,7 +3086,9 @@ mod tests {
         // A second landing (event vs recovery race) is a no-op.
         assert!(!merge_landed(&db.conn, t.id, "zzz").await.unwrap());
         // And nothing can pull a done task back to review.
-        assert!(!merge_back_to_review(&db.conn, t.id, None, None).await.unwrap());
+        assert!(!merge_back_to_review(&db.conn, t.id, None, None, None)
+            .await
+            .unwrap());
 
         let got = get(&db.conn, t.id).await.unwrap();
         assert_eq!(got.status, WorkTaskStatus::Done);
@@ -3118,6 +3129,7 @@ mod tests {
         assert!(merge_back_to_review(
             &db.conn,
             t.id,
+            None,
             Some("conflict".into()),
             Some(vec!["a.rs".into()])
         )
@@ -3179,7 +3191,7 @@ mod tests {
         assert!(get(&db.conn, t.id).await.unwrap().last_error.is_none());
 
         // Back in clean review for the unattended path proper.
-        assert!(merge_back_to_review(&db.conn, t.id, None, None).await.unwrap());
+        assert!(merge_back_to_review(&db.conn, t.id, None, None, None).await.unwrap());
         assert!(begin_merge(&db.conn, t.id, &state, seq + 1, true, None)
             .await
             .unwrap()
@@ -3240,7 +3252,7 @@ mod tests {
             .unwrap()
             .is_some());
         assert!(
-            merge_back_to_review(&db.conn, t.id, Some("launch failed".into()), None)
+            merge_back_to_review(&db.conn, t.id, None, Some("launch failed".into()), None)
                 .await
                 .unwrap()
         );
@@ -3685,7 +3697,7 @@ mod tests {
         let finished = create(&db.conn, draft(folder_id, "finished")).await.unwrap();
         let seq = to_review(&db, finished.id).await;
         assert!(queue_merge(&db.conn, finished.id, &intent, seq, None).await.unwrap());
-        assert!(complete_without_merge(&db.conn, finished.id)
+        assert!(complete_without_merge(&db.conn, finished.id, "nothing to merge")
             .await
             .unwrap());
         assert!(get_model(&db.conn, finished.id)
@@ -3704,7 +3716,9 @@ mod tests {
         let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
 
         // A todo task is not up for acceptance.
-        assert!(!complete_without_merge(&db.conn, t.id).await.unwrap());
+        assert!(!complete_without_merge(&db.conn, t.id, "no changes")
+            .await
+            .unwrap());
 
         let seq = to_review(&db, t.id).await;
         // A refused merge leaves its banner on the review row; finishing the
@@ -3721,7 +3735,7 @@ mod tests {
             .await
             .unwrap()
             .is_some());
-        assert!(merge_back_to_review(&db.conn, t.id, Some("nope".into()), None)
+        assert!(merge_back_to_review(&db.conn, t.id, None, Some("nope".into()), None)
             .await
             .unwrap());
         assert_eq!(
@@ -3729,7 +3743,9 @@ mod tests {
             Some("nope")
         );
 
-        assert!(complete_without_merge(&db.conn, t.id).await.unwrap());
+        assert!(complete_without_merge(&db.conn, t.id, "no changes")
+            .await
+            .unwrap());
         let got = get(&db.conn, t.id).await.unwrap();
         assert_eq!(got.status, WorkTaskStatus::Done);
         // Nothing was merged, so nothing points at a merge commit.
@@ -3738,7 +3754,9 @@ mod tests {
         assert!(got.last_error.is_none());
 
         // Terminal: a second acceptance and a late merge settle are no-ops.
-        assert!(!complete_without_merge(&db.conn, t.id).await.unwrap());
+        assert!(!complete_without_merge(&db.conn, t.id, "no changes")
+            .await
+            .unwrap());
         assert!(!merge_landed(&db.conn, t.id, "abc").await.unwrap());
         assert_eq!(
             get(&db.conn, t.id).await.unwrap().status,

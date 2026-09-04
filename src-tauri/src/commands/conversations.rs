@@ -10,25 +10,13 @@ use crate::db::service::{conversation_service, folder_service, import_service, t
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
 use crate::models::*;
-use crate::parsers::acp_native::AcpNativeParser;
-use crate::parsers::claude::ClaudeParser;
-use crate::parsers::cline::ClineParser;
-use crate::parsers::codebuddy::CodeBuddyParser;
+// Concrete parser type only for `load_thread_name_index`, which is codex's own
+// index reader and not part of the `AgentParser` trait. Every history read goes
+// through `build_agent_parser`.
 use crate::parsers::codex::CodexParser;
-use crate::parsers::deepseek::DeepSeekParser;
-use crate::parsers::antigravity::AntigravityParser;
-use crate::parsers::qoder::QoderParser;
-use crate::parsers::gemini::GeminiParser;
-use crate::parsers::cursor::CursorParser;
-use crate::parsers::grok::GrokParser;
-use crate::parsers::hermes::HermesParser;
-use crate::parsers::kimi_code::KimiCodeParser;
-use crate::parsers::openclaw::OpenClawParser;
-use crate::parsers::pi::PiParser;
-use crate::parsers::opencode::OpenCodeParser;
 use crate::parsers::{
-    folder_name_from_path, normalize_path_for_matching, path_eq_for_matching, AgentParser,
-    ParseError,
+    build_agent_parser, folder_name_from_path, normalize_path_for_matching, path_eq_for_matching,
+    AgentParser, ParseError,
 };
 use crate::web::event_bridge::{
     emit_event, ConversationChange, ConversationsBulkChanged, EventEmitter, ImportScanProgress,
@@ -222,27 +210,18 @@ fn list_conversations_sync(
     let mut all_conversations = Vec::new();
     let mut seen_keys = HashSet::new();
 
-    let mut parsers: Vec<(AgentType, Box<dyn AgentParser>)> = vec![
-        (AgentType::ClaudeCode, Box::new(ClaudeParser::new())),
-        (AgentType::Codex, Box::new(CodexParser::new())),
-        (AgentType::OpenCode, Box::new(OpenCodeParser::new())),
-        (AgentType::Gemini, Box::new(GeminiParser::new())),
-        (AgentType::OpenClaw, Box::new(OpenClawParser::new())),
-        (AgentType::Cline, Box::new(ClineParser::new())),
-        (AgentType::Hermes, Box::new(HermesParser::new())),
-        (AgentType::CodeBuddy, Box::new(CodeBuddyParser::new())),
-        (AgentType::KimiCode, Box::new(KimiCodeParser::new())),
-        (AgentType::Pi, Box::new(PiParser::new())),
-        (AgentType::Grok, Box::new(GrokParser::new())),
-        (AgentType::Cursor, Box::new(CursorParser::new())),
-        (AgentType::DeepSeek, Box::new(DeepSeekParser::new())),
-        (AgentType::Qoder, Box::new(QoderParser::new())),
-        (AgentType::Antigravity, Box::new(AntigravityParser::new())),
-    ];
-    // Registered custom agents read back from HouHub's own ACP transcripts, so
+    // BUILTIN_AGENT_TYPES, not `registry::builtin_acp_agents()`: the two differ
+    // in ORDER, and this list's order is the sidebar's tie-break for two
+    // conversations that compare equal on the active sort.
+    let mut parsers: Vec<(AgentType, Box<dyn AgentParser>)> =
+        crate::models::agent::BUILTIN_AGENT_TYPES
+            .iter()
+            .map(|&at| (at, build_agent_parser(at)))
+            .collect();
+    // Registered custom agents read back from houhub's own ACP transcripts, so
     // their sessions participate in folder grouping and stats like any other.
     for custom in crate::acp::custom_registry::all() {
-        parsers.push((custom, Box::new(AcpNativeParser::new(custom))));
+        parsers.push((custom, build_agent_parser(custom)));
     }
 
     for (at, parser) in &parsers {
@@ -339,28 +318,7 @@ pub async fn get_conversation(
     conversation_id: String,
 ) -> Result<ConversationDetail, AppCommandError> {
     tokio::task::spawn_blocking(move || -> Result<ConversationDetail, AppCommandError> {
-        let parser: Box<dyn AgentParser> = match agent_type {
-            AgentType::ClaudeCode => Box::new(ClaudeParser::new()),
-            AgentType::Codex => Box::new(CodexParser::new()),
-            AgentType::OpenCode => Box::new(OpenCodeParser::new()),
-            AgentType::Gemini => Box::new(GeminiParser::new()),
-            AgentType::OpenClaw => Box::new(OpenClawParser::new()),
-            AgentType::Cline => Box::new(ClineParser::new()),
-            AgentType::Hermes => Box::new(HermesParser::new()),
-            AgentType::CodeBuddy => Box::new(CodeBuddyParser::new()),
-            AgentType::KimiCode => Box::new(KimiCodeParser::new()),
-            AgentType::Pi => Box::new(PiParser::new()),
-            AgentType::Grok => Box::new(GrokParser::new()),
-            AgentType::Cursor => Box::new(CursorParser::new()),
-            AgentType::DeepSeek => Box::new(DeepSeekParser::new()),
-            AgentType::Qoder => Box::new(QoderParser::new()),
-            AgentType::Antigravity => Box::new(AntigravityParser::new()),
-            // Custom ACP agents have no native store to reverse-engineer;
-            // their history is houhub's own ACP transcript.
-            AgentType::Custom(_) => Box::new(AcpNativeParser::new(agent_type)),
-        };
-
-        parser
+        build_agent_parser(agent_type)
             .get_conversation(&conversation_id)
             .map_err(parse_error_to_app_error)
     })
@@ -948,9 +906,17 @@ pub async fn import_selected_sessions(
 /// Build the `meta["houhub.delegation"]` value for a delegation child loaded
 /// from the DB. Mirrors the shape produced at runtime by
 /// `acp::delegation::meta_writer::build_delegation_meta`, but only includes
-/// the fields the DB can vouch for: `status` and `child_conversation_id`.
-/// `child_connection_id` is omitted (no live connection for a historical
-/// view; the frontend's parser treats it as optional).
+/// the fields the DB can vouch for: `status`, `child_conversation_id`,
+/// `task_id`, `task_preview` and `agent_type`. `child_connection_id` is
+/// omitted (no live connection for a historical view; the frontend's parser
+/// treats it as optional).
+///
+/// The last three are pure FALLBACKS on the frontend
+/// (`use-delegation-card-model.ts` prefers the parsed `raw_input` and the live
+/// binding), so supplying them can't override a better source. They exist for
+/// the cards that have no better source: a `resume_delegation` call — whose
+/// arguments are only `{task_id, reason}` — and a `delegate_to_agent` call on a
+/// host whose announcements never carry arguments (Cursor).
 ///
 /// Status mapping:
 ///  - `in_progress` → `running` (still streaming or about to)
@@ -980,6 +946,21 @@ fn build_historical_delegation_meta(child: &DbConversationSummary) -> serde_json
         "child_conversation_id".into(),
         serde_json::Value::Number(child.id.into()),
     );
+    obj.insert(
+        "agent_type".into(),
+        serde_json::Value::String(child.agent_type.as_wire().into_owned()),
+    );
+    if let Some(task_id) = child.delegation_call_id.as_deref() {
+        obj.insert("task_id".into(), serde_json::Value::String(task_id.into()));
+    }
+    // The child row's title was seeded from the original task text — the same
+    // substitute the broker uses for `task_preview` when it resumes a task.
+    if let Some(title) = child.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        obj.insert(
+            "task_preview".into(),
+            serde_json::Value::String(title.into()),
+        );
+    }
     serde_json::Value::Object(obj)
 }
 
@@ -1006,20 +987,91 @@ fn parse_delegate_task_id(output: &str) -> Option<String> {
     }
 }
 
-/// Walk every `delegate_to_agent` ToolUse block in `turns` and, when it can be
-/// matched to a child conversation in `children`, set `meta["houhub.delegation"]`
-/// to the DB-derived snapshot. Skips blocks whose meta is already populated so
-/// the live-broker write (when present) always wins. Tool-name match is by
-/// substring to cover the MCP-prefixed (`mcp__houhub-mcp__delegate_to_agent`)
-/// and bare forms the host may have emitted.
+/// Descend through wrapper envelopes looking for a `task_id` string. A wrapper
+/// value may itself be a JSON *string* (hosts that stringify nested arguments),
+/// so re-parse those. Depth-capped like the frontend walker.
 ///
-/// Matching is by `parent_tool_use_id` first, then by the broker's task id.
-/// The fallback is what covers codex: its rollout names the call `call_<id>`,
-/// while the broker — which sees the call over the ACP wire, where code mode
-/// renames every inner call — recorded `exec-<uuid>`. The two never meet, so
-/// every codex delegation card lost its `child_conversation_id` and with it the
-/// "查看会话" affordance. The task id round-trips: the broker mirrors it into
-/// `delegation_call_id`, and the ack the model received carries it verbatim.
+/// Shares `acp::lifecycle`'s key list rather than restating it: that list, its
+/// frontend twins in `delegation-card.ts` / `houhub-mcp-tool.ts`, and this
+/// walker must peel the same envelopes, or a card and the meta injected beneath
+/// it disagree about which task a call names.
+fn find_task_id_in_value(value: &serde_json::Value, depth: u8) -> Option<String> {
+    use crate::acp::lifecycle::ARGS_WRAPPER_KEYS;
+
+    if depth > 4 {
+        return None;
+    }
+    if let Some(s) = value.as_str() {
+        let nested: serde_json::Value = serde_json::from_str(s).ok()?;
+        return find_task_id_in_value(&nested, depth + 1);
+    }
+    let obj = value.as_object()?;
+    for key in ARGS_WRAPPER_KEYS {
+        if let Some(inner) = obj.get(key) {
+            if let Some(found) = find_task_id_in_value(inner, depth + 1) {
+                return Some(found);
+            }
+        }
+    }
+    let id = obj.get("task_id")?.as_str()?.trim();
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+/// The `task_id` argument of a `resume_delegation` call, read off the tool
+/// use's serialized arguments (`{"task_id": "...", "reason": "..."}`). Unlike
+/// `delegate_to_agent` — whose id only exists on the RESULT — resume names its
+/// task in the request, so this needs no cross-block correlation.
+///
+/// Two host realities stop a plain `from_str(input)["task_id"]` from finding
+/// it, and both end the same way: no binding, so the reloaded card is stuck on
+/// the `running` its own ack froze and shows no task text — the exact history
+/// gap the resume card exists to close.
+///   * NESTING. CodeBuddy routes MCP calls through `DeferExecuteTool` and
+///     persists `{"toolName": …, "params": {…}}`, deliberately leaving the
+///     wrapper on `input_preview` for readers to peel (see
+///     `parsers::codebuddy::deferred_tool_name`); Antigravity wraps in
+///     `{"arguments": {…}}`.
+///   * TRUNCATION. `input_preview` is a *preview*: parsers cap it (500 chars
+///     for OpenClaw, 2000 for Cline), so a long `reason` leaves the JSON
+///     unparseable even though `task_id` — written first in practice — is
+///     intact in what survived.
+///
+/// So: peel wrappers off well-formed JSON, else fall back to the same tolerant
+/// scan `parse_delegate_task_id` already uses on this file's sibling path. A
+/// scan that guesses wrong is harmless — the id simply matches no child in
+/// `by_task_id` and nothing is injected.
+fn parse_resume_task_id(input: &str) -> Option<String> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(input) {
+        if let Some(id) = find_task_id_in_value(&value, 0) {
+            return Some(id);
+        }
+    }
+    parse_delegate_task_id(input)
+}
+
+/// Walk every `delegate_to_agent` / `resume_delegation` ToolUse block in
+/// `turns` and, when it can be matched to a child conversation in `children`,
+/// set `meta["houhub.delegation"]` to the DB-derived snapshot. Skips blocks
+/// whose meta is already populated so the live-broker write (when present)
+/// always wins. Tool-name match is by substring to cover the MCP-prefixed
+/// (`mcp__houhub-mcp__delegate_to_agent`) and bare forms the host may have
+/// emitted.
+///
+/// For `delegate_to_agent`, matching is by `parent_tool_use_id` first, then by
+/// the broker's task id. The fallback is what covers codex: its rollout names
+/// the call `call_<id>`, while the broker — which sees the call over the ACP
+/// wire, where code mode renames every inner call — recorded `exec-<uuid>`. The
+/// two never meet, so every codex delegation card lost its
+/// `child_conversation_id` and with it the "查看会话" affordance. The task id
+/// round-trips: the broker mirrors it into `delegation_call_id`, and the ack the
+/// model received carries it verbatim.
+///
+/// For `resume_delegation` the ONLY key is the task id, taken from the call's
+/// own arguments: a resume never owns a `parent_tool_use_id` (it re-binds to the
+/// ORIGINAL delegate call's id, which belongs to a different block, usually in
+/// an earlier turn). Without this the resumed card would be frozen at the
+/// `running` its ack reported, forever — the child's real outcome landed on the
+/// DB row, not on the resume result.
 fn inject_delegation_meta(turns: &mut [MessageTurn], children: &[DbConversationSummary]) {
     if children.is_empty() {
         return;
@@ -1055,29 +1107,43 @@ fn inject_delegation_meta(turns: &mut [MessageTurn], children: &[DbConversationS
 
     for turn in turns.iter_mut() {
         for block in turn.blocks.iter_mut() {
-            if let ContentBlock::ToolUse {
-                tool_use_id: Some(tu),
+            let ContentBlock::ToolUse {
+                tool_use_id,
                 tool_name,
+                input_preview,
                 meta,
                 ..
             } = block
-            {
-                if meta.is_some() {
+            else {
+                continue;
+            };
+            if meta.is_some() {
+                continue;
+            }
+            let child: Option<&DbConversationSummary> =
+                if tool_name.contains("delegate_to_agent") {
+                    tool_use_id.as_deref().and_then(|tu| {
+                        by_parent_tool_use_id
+                            .get(tu)
+                            .or_else(|| {
+                                task_id_by_call
+                                    .get(tu)
+                                    .and_then(|task_id| by_task_id.get(task_id.as_str()))
+                            })
+                            .copied()
+                    })
+                } else if tool_name.contains("resume_delegation") {
+                    input_preview
+                        .as_deref()
+                        .and_then(parse_resume_task_id)
+                        .and_then(|task_id| by_task_id.get(task_id.as_str()).copied())
+                } else {
                     continue;
-                }
-                if !tool_name.contains("delegate_to_agent") {
-                    continue;
-                }
-                let child = by_parent_tool_use_id.get(tu.as_str()).or_else(|| {
-                    task_id_by_call
-                        .get(tu.as_str())
-                        .and_then(|task_id| by_task_id.get(task_id.as_str()))
-                });
-                if let Some(child) = child {
-                    *meta = Some(serde_json::json!({
-                        "houhub.delegation": build_historical_delegation_meta(child),
-                    }));
-                }
+                };
+            if let Some(child) = child {
+                *meta = Some(serde_json::json!({
+                    "houhub.delegation": build_historical_delegation_meta(child),
+                }));
             }
         }
     }
@@ -1116,85 +1182,63 @@ pub async fn get_folder_conversation_core(
                 .map(|f| f.path),
         };
         tokio::task::spawn_blocking(move || -> Result<_, AppCommandError> {
-            let parser: Box<dyn AgentParser> = match at {
-                AgentType::ClaudeCode => Box::new(ClaudeParser::new()),
-                AgentType::Codex => Box::new(CodexParser::new()),
-                AgentType::OpenCode => Box::new(OpenCodeParser::new()),
-                AgentType::Gemini => Box::new(GeminiParser::new()),
-                AgentType::OpenClaw => Box::new(OpenClawParser::new()),
-                AgentType::Cline => Box::new(ClineParser::new()),
-                AgentType::Hermes => Box::new(HermesParser::new()),
-                AgentType::CodeBuddy => Box::new(CodeBuddyParser::new()),
-                AgentType::KimiCode => Box::new(KimiCodeParser::new()),
-                AgentType::Pi => Box::new(PiParser::new()),
-                AgentType::Grok => Box::new(GrokParser::new()),
-                AgentType::Cursor => Box::new(CursorParser::new()),
-                AgentType::DeepSeek => Box::new(DeepSeekParser::new()),
-                AgentType::Qoder => Box::new(QoderParser::new()),
-                AgentType::Antigravity => Box::new(AntigravityParser::new()),
-                AgentType::Custom(_) => Box::new(AcpNativeParser::new(at)),
-            };
-                match parser.get_conversation(&eid) {
-                    Ok(d) => Ok((
-                        d.turns,
-                        d.session_stats,
-                        None,
-                        d.summary.title,
-                        d.summary.model,
-                        d.transcript_watermark,
-                    )),
-                    Err(crate::parsers::ParseError::ConversationNotFound(_)) => {
-                        // The external_id may no longer match any local file —
-                        // e.g. an ACP session UUID (OpenClaw, Cline) or a stale
-                        // ID after session/new fallback overwrote the original
-                        // (Gemini CLI).  Fall back to matching by folder_path
-                        // and started_at from the parsed conversation list.
-                        if matches!(
-                            at,
-                            AgentType::OpenClaw
-                                | AgentType::Cline
-                                | AgentType::Gemini
-                                | AgentType::Pi
-                                | AgentType::Grok
-                        ) {
-                            if let Ok(all) = parser.list_conversations() {
-                                // Filter by folder_path first, then find the closest
-                                // started_at match within 300 seconds of db_created_at.
-                                let matched = all
-                                    .into_iter()
-                                    .filter(|c| {
-                                        c.folder_path
-                                            .as_ref()
-                                            .zip(folder_path_for_fallback.as_ref())
-                                            .is_some_and(|(a, b)| path_eq_for_matching(a, b))
-                                    })
-                                    .min_by_key(|c| {
-                                        (c.started_at - db_created_at).num_seconds().unsigned_abs()
-                                    })
-                                    .filter(|c| {
-                                        let diff = (c.started_at - db_created_at)
-                                            .num_seconds()
-                                            .unsigned_abs();
-                                        diff < 300
-                                    });
-                                if let Some(conv) = matched {
-                                    let new_ext_id = conv.id.clone();
-                                    if let Ok(d) = parser.get_conversation(&new_ext_id) {
-                                        return Ok((
-                                            d.turns,
-                                            d.session_stats,
-                                            Some(new_ext_id),
-                                            d.summary.title,
-                                            d.summary.model,
-                                            d.transcript_watermark,
-                                        ));
-                                    }
+            let parser = build_agent_parser(at);
+            match parser.get_conversation(&eid) {
+                Ok(d) => Ok((
+                    d.turns,
+                    d.session_stats,
+                    None,
+                    d.summary.title,
+                    d.summary.model,
+                    d.transcript_watermark,
+                )),
+                Err(crate::parsers::ParseError::ConversationNotFound(_)) => {
+                    // The external_id may no longer match any local file —
+                    // e.g. an ACP session UUID (OpenClaw, Cline) or a stale
+                    // ID after session/new fallback overwrote the original
+                    // (Gemini CLI).  Fall back to matching by folder_path
+                    // and started_at from the parsed conversation list.
+                    if matches!(
+                        at,
+                        AgentType::OpenClaw | AgentType::Cline | AgentType::Gemini
+                    ) {
+                        if let Ok(all) = parser.list_conversations() {
+                            // Filter by folder_path first, then find the closest
+                            // started_at match within 300 seconds of db_created_at.
+                            let matched = all
+                                .into_iter()
+                                .filter(|c| {
+                                    c.folder_path
+                                        .as_ref()
+                                        .zip(folder_path_for_fallback.as_ref())
+                                        .is_some_and(|(a, b)| path_eq_for_matching(a, b))
+                                })
+                                .min_by_key(|c| {
+                                    (c.started_at - db_created_at).num_seconds().unsigned_abs()
+                                })
+                                .filter(|c| {
+                                    let diff =
+                                        (c.started_at - db_created_at).num_seconds().unsigned_abs();
+                                    diff < 300
+                                });
+                            if let Some(conv) = matched {
+                                let new_ext_id = conv.id.clone();
+                                if let Ok(d) = parser.get_conversation(&new_ext_id) {
+                                    return Ok((
+                                        d.turns,
+                                        d.session_stats,
+                                        Some(new_ext_id),
+                                        d.summary.title,
+                                        d.summary.model,
+                                        d.transcript_watermark,
+                                    ));
                                 }
                             }
                         }
-                        Ok((vec![], None, None, None, None, None))
                     }
-                    Err(e) => Err(parse_error_to_app_error(e)),
+                    Ok((vec![], None, None, None, None, None))
+                }
+                Err(e) => Err(parse_error_to_app_error(e)),
                 }
             })
             .await
@@ -2358,6 +2402,11 @@ pub async fn delete_conversation_with_cleanup_core(
         emit_conversation_upsert(emitter, conn, parent_id).await;
     }
     cleanup_tabs_for_deleted_conversation(emitter, conn, conversation_id).await;
+    // Canvas references (pinned cards, custom-region memberships) survive the
+    // soft delete for the same reason tabs do — no FK cascade ever fires — so
+    // they get the same explicit scrub, at the same funnel.
+    crate::commands::canvas::cleanup_canvas_for_deleted_conversation(emitter, conn, conversation_id)
+        .await;
     if let Some(folder_id) = folder_id {
         cleanup_chat_folder_for_deleted_conversation(conn, folder_id).await;
     }
@@ -2469,13 +2518,21 @@ mod tests {
     }
 
     fn tool_use_turn(tool_use_id: Option<&str>, tool_name: &str) -> MessageTurn {
+        tool_use_turn_with_input(tool_use_id, tool_name, None)
+    }
+
+    fn tool_use_turn_with_input(
+        tool_use_id: Option<&str>,
+        tool_name: &str,
+        input_preview: Option<&str>,
+    ) -> MessageTurn {
         MessageTurn {
             id: "t1".into(),
             role: TurnRole::Assistant,
             blocks: vec![ContentBlock::ToolUse {
                 tool_use_id: tool_use_id.map(String::from),
                 tool_name: tool_name.into(),
-                input_preview: None,
+                input_preview: input_preview.map(String::from),
                 status: None,
                 meta: None,
             }],
@@ -2484,6 +2541,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
+        agent_message_id: None,
         }
     }
 
@@ -2522,6 +2580,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
+        agent_message_id: None,
         }
     }
 
@@ -2540,6 +2599,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: completed.then_some(ts),
+        agent_message_id: None,
         }
     }
 
@@ -2702,6 +2762,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
+        agent_message_id: None,
         };
         let pending_image =
             |message_id: &str, data: &str| crate::acp::session_state::PendingUserMessage {
@@ -2856,10 +2917,189 @@ mod tests {
         );
     }
 
+    fn tool_result_turn(tool_use_id: &str, output: &str) -> MessageTurn {
+        MessageTurn {
+            id: "t2".into(),
+            // Tool results are folded into the assistant turn that owns them.
+            role: TurnRole::Assistant,
+            blocks: vec![ContentBlock::ToolResult {
+                tool_use_id: Some(tool_use_id.into()),
+                output_preview: Some(output.into()),
+                is_error: false,
+                agent_stats: None,
+                images: Vec::new(),
+            }],
+            timestamp: chrono::Utc::now(),
+            usage: None,
+            duration_ms: None,
+            model: None,
+            completed_at: None,
+        agent_message_id: None,
+        }
+    }
+
     /// codex's rollout names the call `call_<id>` while the broker recorded the
     /// ACP-side `exec-<uuid>` — the two never meet, so the card lost its
     /// `child_conversation_id` (and the "查看会话" affordance) entirely. The
     /// broker's task id, echoed in the ack the model received, is the bridge.
+    #[test]
+    fn inject_delegation_meta_falls_back_to_the_task_id() {
+        let mut turns = vec![
+            tool_use_turn(Some("call_73UFK2"), "mcp__houhub_mcp__delegate_to_agent"),
+            tool_result_turn(
+                "call_73UFK2",
+                "Delegation successful. task_id=8ff4c14c-740c-4482-b758-8f2091f97063. \
+                 Call get_delegation_status with this id in the task_ids array.",
+            ),
+        ];
+        let mut child = summary_child(2890, "exec-0fb6db94-3042-4cc4-b492-2edd1804c1fa", "completed");
+        child.delegation_call_id = Some("8ff4c14c-740c-4482-b758-8f2091f97063".into());
+
+        inject_delegation_meta(&mut turns, &[child]);
+
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("houhub.delegation").cloned())
+            .expect("meta should be set");
+        assert_eq!(inner["child_conversation_id"], 2890);
+    }
+
+    #[test]
+    fn inject_delegation_meta_does_not_bind_a_foreign_task_id() {
+        let mut turns = vec![
+            tool_use_turn(Some("call_a"), "delegate_to_agent"),
+            tool_result_turn("call_a", "Delegation successful. task_id=aaaa."),
+        ];
+        let mut child = summary_child(1, "exec-zzz", "completed");
+        child.delegation_call_id = Some("bbbb".into());
+
+        inject_delegation_meta(&mut turns, &[child]);
+
+        assert!(
+            first_block_meta(&turns[0]).is_none(),
+            "a different task's child must not be bound"
+        );
+    }
+
+    /// `resume_delegation` names its task in its own ARGUMENTS, and owns no
+    /// `parent_tool_use_id` (it re-binds to the original delegate call's id,
+    /// which lives in an earlier block). Without this injection the resumed
+    /// card would be stuck on the `running` its ack reported, because the
+    /// child's real outcome only ever landed on the DB row.
+    #[test]
+    fn inject_delegation_meta_binds_a_resume_call_by_its_task_id_argument() {
+        let mut turns = vec![tool_use_turn_with_input(
+            Some("tu-resume"),
+            "mcp__houhub-mcp__resume_delegation",
+            Some(r#"{"task_id":"b0858712-9257","reason":"the app was killed"}"#),
+        )];
+        let mut child = summary_child(9, "tu-original-delegate", "completed");
+        child.delegation_call_id = Some("b0858712-9257".into());
+        child.title = Some("Build the /test4 sandbox page".into());
+
+        inject_delegation_meta(&mut turns, &[child]);
+
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("houhub.delegation").cloned())
+            .expect("meta should be set");
+        // The CHILD's real status, not the `running` the resume ack froze.
+        assert_eq!(inner["status"], "completed");
+        assert_eq!(inner["child_conversation_id"], 9);
+        assert_eq!(inner["task_id"], "b0858712-9257");
+        assert_eq!(inner["agent_type"], "codex");
+        assert_eq!(inner["task_preview"], "Build the /test4 sandbox page");
+    }
+
+    #[test]
+    fn inject_delegation_meta_does_not_bind_a_resume_call_to_a_foreign_task() {
+        let mut turns = vec![tool_use_turn_with_input(
+            Some("tu-resume"),
+            "resume_delegation",
+            Some(r#"{"task_id":"aaaa"}"#),
+        )];
+        let mut child = summary_child(9, "tu-x", "completed");
+        child.delegation_call_id = Some("bbbb".into());
+
+        inject_delegation_meta(&mut turns, &[child]);
+
+        assert!(
+            first_block_meta(&turns[0]).is_none(),
+            "a different task's child must not be bound to this resume"
+        );
+    }
+
+    #[test]
+    fn parse_resume_task_id_reads_the_argument_object() {
+        assert_eq!(
+            parse_resume_task_id(r#"{"task_id":"abc-123","reason":"crashed"}"#).as_deref(),
+            Some("abc-123")
+        );
+        assert_eq!(parse_resume_task_id(r#"{"task_id":"  "}"#), None);
+        assert_eq!(parse_resume_task_id(r#"{"reason":"crashed"}"#), None);
+        assert_eq!(parse_resume_task_id("not json"), None);
+    }
+
+    /// Hosts don't all persist the bare argument object, and a preview is
+    /// allowed to be cut off. Every shape here reaches `inject_delegation_meta`
+    /// in practice, and each one that fails to yield an id leaves the reloaded
+    /// resume card frozen on its own ack with no task text.
+    #[test]
+    fn parse_resume_task_id_peels_host_wrappers_and_survives_truncation() {
+        // CodeBuddy's DeferExecuteTool wrapper — `parsers::codebuddy` leaves
+        // `params` on `input_preview` on purpose, for readers to peel.
+        assert_eq!(
+            parse_resume_task_id(
+                r#"{"toolName":"mcp__houhub-mcp__resume_delegation","params":{"task_id":"abc-123"}}"#
+            )
+            .as_deref(),
+            Some("abc-123")
+        );
+        // Antigravity's `{"arguments": {...}}`.
+        assert_eq!(
+            parse_resume_task_id(r#"{"arguments":{"task_id":"abc-123","reason":"x"}}"#).as_deref(),
+            Some("abc-123")
+        );
+        // Cursor's `{providerIdentifier, toolName, args}`.
+        assert_eq!(
+            parse_resume_task_id(
+                r#"{"providerIdentifier":"houhub-mcp","toolName":"resume_delegation","args":{"task_id":"abc-123"}}"#
+            )
+            .as_deref(),
+            Some("abc-123")
+        );
+        // …and the same wrapper with the arguments stringified.
+        assert_eq!(
+            parse_resume_task_id(r#"{"arguments":"{\"task_id\":\"abc-123\"}"}"#).as_deref(),
+            Some("abc-123")
+        );
+        // A long `reason` pushes past the parsers' preview cap, so the JSON
+        // never closes — but the id, written first, survived.
+        assert_eq!(
+            parse_resume_task_id(r#"{"task_id":"abc-123","reason":"the app was ki"#).as_deref(),
+            Some("abc-123")
+        );
+        // A wrapper key present but carrying something unreadable must not
+        // shadow a usable top-level id.
+        assert_eq!(
+            parse_resume_task_id(r#"{"params":"not json","task_id":"abc-123"}"#).as_deref(),
+            Some("abc-123")
+        );
+    }
+
+    #[test]
+    fn parse_delegate_task_id_reads_both_ack_shapes() {
+        assert_eq!(
+            parse_delegate_task_id("Delegation successful. task_id=8ff4c14c-740c. Call …")
+                .as_deref(),
+            Some("8ff4c14c-740c")
+        );
+        assert_eq!(
+            parse_delegate_task_id(r#"{"task_id":"abc-123","status":"running"}"#).as_deref(),
+            Some("abc-123")
+        );
+        assert_eq!(parse_delegate_task_id("no id here"), None);
+        assert_eq!(parse_delegate_task_id("task_id="), None);
+    }
+
     #[test]
     fn inject_delegation_meta_maps_in_progress_to_running() {
         let mut turns = vec![tool_use_turn(Some("tu-1"), "delegate_to_agent")];
@@ -2953,6 +3193,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
+        agent_message_id: None,
         }];
         let children = vec![summary_child(42, "tu-1", "completed")];
         inject_delegation_meta(&mut turns, &children);
