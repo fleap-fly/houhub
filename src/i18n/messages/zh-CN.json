@@ -1375,7 +1375,8 @@
       "localUnrecognized": "{versionText}。本地版本无法识别，可尝试升级覆盖安装。",
       "upgradeAvailable": "{versionText}。发现可升级版本。",
       "remoteUnavailable": "{versionText}。远程版本暂不可用。",
-      "latest": "{versionText}。已是最新版本。"
+      "latest": "{versionText}。已是最新版本。",
+      "latestChannel": "{versionText}。已启用最新版通道；升级会安装最新版本。"
     },
     "cline": {
       "configDescription": "配置 Cline API 提供商和凭证。设置将保存到 ~/.cline/data/。"
@@ -1587,7 +1588,14 @@
       }
     },
     "customAgentMcpLabel": "MCP 支持",
-    "customAgentMcpHint": "会话建立时向该智能体注入 houhub 内置的 houhub-mcp 伴生进程 —— 委托、实时反馈与任务工具都依赖它。若该智能体不支持 MCP、连接时报错，请关闭此项；设置在下次连接时生效。"
+    "customAgentMcpHint": "会话建立时向该智能体注入 houhub 内置的 houhub-mcp 伴生进程 —— 委托、实时反馈与任务工具都依赖它。若该智能体不支持 MCP、连接时报错，请关闭此项；设置在下次连接时生效。",
+    "adapterChannel": {
+      "label": "适配器版本",
+      "description": "安装与升级默认使用 houhub 审查并固定的版本。选择最新版后会改为安装该包当时最新的 npm 版本；若最新版安装失败，houhub 会回退到固定版本，并在安装日志中说明。",
+      "pinned": "固定版本（推荐）",
+      "latest": "最新版（未经审查）",
+      "latestWarning": "最新版本未经审查，可能破坏该 Agent 在 houhub 中的使用，偶尔甚至是已知损坏的版本。实际安装的版本以版本状态为准。"
+    }
   },
   "SettingsPages": {
     "agentsLoading": "加载 Agent 设置中...",
@@ -2116,7 +2124,26 @@
       "closeOthers": "关闭其它",
       "closeAll": "关闭所有",
       "hideTerminal": "隐藏终端（{shortcut}）",
-      "openFolderFirst": "请先打开一个文件夹"
+      "openFolderFirst": "请先打开一个文件夹",
+      "keybar": {
+        "label": "终端虚拟键",
+        "show": "显示虚拟键",
+        "hide": "隐藏虚拟键",
+        "esc": "ESC",
+        "tab": "TAB",
+        "ctrl": "CTRL",
+        "alt": "ALT",
+        "slash": "/",
+        "dash": "-",
+        "home": "HOME",
+        "end": "END",
+        "pgup": "PGUP",
+        "pgdn": "PGDN",
+        "up": "↑",
+        "down": "↓",
+        "left": "←",
+        "right": "→"
+      }
     },
     "workspaceDialog": {
       "title": "打开文件夹",
@@ -2753,7 +2780,8 @@
         "descriptionWithTarget": "确定回滚文件 \"{name}\" 的本地修改吗？",
         "descriptionFallback": "确定回滚该文件的本地修改吗？"
       },
-      "terminalTitle": "终端 · {name}"
+      "terminalTitle": "终端 · {name}",
+      "moreActions": "更多操作"
     },
     "commandDropdown": {
       "loading": "加载中...",
@@ -2841,7 +2869,8 @@
           "turnFailedEmptyProtocol": "{agent} 本轮的输出 houhub 无法解析，可能是代理版本与协议不匹配。",
           "turnFailedEmptyMetadata": "{agent} 本轮只收到状态更新（计划 / 模式 / 用量），没有收到任何回复。",
           "detailsInAlerts": "在状态栏的「告警」中展开详情，可查看代理输出。",
-          "mcpRejectedByAgent": "附带 houhub 的 MCP 伴生进程时，{agent} 拒绝了本次会话：{message} 如果该智能体不支持 MCP，请在设置中关闭它的“MCP 支持”后重新连接。"
+          "mcpRejectedByAgent": "附带 houhub 的 MCP 伴生进程时，{agent} 拒绝了本次会话：{message} 如果该智能体不支持 MCP，请在设置中关闭它的“MCP 支持”后重新连接。",
+          "turnFailedAuthRequired": "{agent} 需要你重新登录后才能执行本轮回复。请在设置中登录，然后重新发送这条消息。"
         },
         "unableReadAgentConfig": "无法读取 Agent 配置：{message}",
         "connectFailedTitle": "{agent} 连接失败",
@@ -2946,14 +2975,11 @@
         "mentionGroupSession": "会话",
         "mentionGroupCommit": "提交",
         "mentionGroupSkill": "技能",
-        "queueMessage": "加入队列",
-        "steerIntoTurn": "插入当前回合",
-        "steerQueuedInstead": "已转入队列——将随下一回合发送。",
-        "steerFailed": "无法插入当前回合",
-        "steerAttachmentsUnsupported": "仅支持纯文本——带附件的草稿请走队列。",
         "toggleOn": "开",
         "toggleOff": "关",
-        "slashLoading": "正在加载命令…"
+        "slashLoading": "正在加载命令…",
+        "steerAsNote": "发送留言，供下次检查时读取",
+        "steerNoteFailed": "留言发送失败"
       },
       "messageQueue": {
         "addToQueue": "加入队列",
@@ -3233,7 +3259,8 @@
         "copiedImage": "已复制图片",
         "copyImageFailed": "复制图片失败：{message}",
         "copyImageUnsupported": "当前环境不支持复制该图片",
-        "selectionSaveAsNote": "存为便签"
+        "selectionSaveAsNote": "存为便签",
+        "forkNotReady": "这条回复暂时还不能作为分叉点，请稍后再试"
       },
       "liveTurnStats": {
         "thinking": "思考中...",
@@ -3298,7 +3325,8 @@
             "child_max_turn_requests": "子代理超出请求上限",
             "child_empty": "子代理无响应",
             "child_unknown": "子代理未知错误",
-            "unknown": "未知任务"
+            "unknown": "未知任务",
+            "child_auth_required": "子智能体需登录"
           }
         },
         "resumed": "已恢复",
@@ -3665,6 +3693,27 @@
         },
         "resumeDelegation": "恢复任务 {task}",
         "resumeDelegationNoId": "恢复委派任务"
+      },
+      "houhubMcpTool": {
+        "getSessionInfo": "读取会话 {session}",
+        "getSessionInfoNoId": "读取会话",
+        "taskProgress": "进度：{message}",
+        "taskProgressNoMessage": "上报任务进度",
+        "taskComplete": "任务结束 · {verdict}",
+        "taskCompleteWithSummary": "任务结束 · {verdict}：{summary}",
+        "createAutomation": "创建自动化 {name}",
+        "createAutomationNoName": "创建自动化",
+        "createWorkTask": "创建待办任务 {title}",
+        "createWorkTaskNoTitle": "创建待办任务",
+        "resumeDelegation": "恢复任务 {task}",
+        "resumeDelegationNoId": "恢复委派任务",
+        "promptLabel": "指令",
+        "verdict": {
+          "success": "成功",
+          "needs_review": "待复核",
+          "blocked": "受阻",
+          "unknown": "未知"
+        }
       }
     },
     "diffPreview": {
@@ -3716,6 +3765,17 @@
     },
     "toasts": {
       "cloneFailed": "克隆仓库失败"
+    },
+    "fileViewer": {
+      "title": "文件预览",
+      "description": "会话中引用的文件，在旁边打开。",
+      "openInWorkspace": "在工作区打开",
+      "back": "返回",
+      "preview": "预览",
+      "source": "源码",
+      "loading": "加载中...",
+      "cannotResolve": "无法解析该文件路径。",
+      "tooLargeToPreview": "文件太大，无法在此预览。请在工作区打开。"
     }
   },
   "ProjectBoot": {
@@ -4125,7 +4185,8 @@
       "linked_to_houhub": "已启用",
       "linked_elsewhere": "冲突 — 已有其他链接",
       "blocked_by_real_directory": "冲突 — 已有同名的自定义 skill 占用",
-      "broken": "链接损坏"
+      "broken": "链接损坏",
+      "linked_to_houhub": "已启用"
     },
     "badges": {
       "userModified": "用户修改过"
@@ -4162,7 +4223,8 @@
       "linked_to_houhub": "已启用",
       "linked_elsewhere": "冲突 — 已有其他链接",
       "blocked_by_real_directory": "冲突 — 已有同名的自定义 skill 占用",
-      "broken": "链接损坏"
+      "broken": "链接损坏",
+      "linked_to_houhub": "已启用"
     },
     "badges": {
       "userModified": "用户修改过",
@@ -4212,7 +4274,8 @@
       "linked_to_houhub": "已启用",
       "linked_elsewhere": "已阻止——存在其他链接",
       "blocked_by_real_directory": "已阻止——自定义技能占用此名称",
-      "broken": "链接已损坏"
+      "broken": "链接已损坏",
+      "linked_to_houhub": "已启用"
     },
     "badges": {
       "notSynced": "未同步"
@@ -4867,7 +4930,8 @@
       "linked_to_houhub": "已启用",
       "linked_elsewhere": "链接到其他位置",
       "blocked_by_real_directory": "被同名真实目录占用",
-      "broken": "链接已失效"
+      "broken": "链接已失效",
+      "linked_to_houhub": "已启用"
     },
     "actions": {
       "new": "新建",

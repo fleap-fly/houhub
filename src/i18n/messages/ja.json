@@ -1375,7 +1375,8 @@
       "localUnrecognized": "{versionText}。ローカルバージョンは比較できません。上書きインストールのためアップグレードを試してください。",
       "upgradeAvailable": "{versionText}。アップグレード可能です。",
       "remoteUnavailable": "{versionText}。現在リモートバージョンは取得できません。",
-      "latest": "{versionText}。すでに最新です。"
+      "latest": "{versionText}。すでに最新です。",
+      "latestChannel": "{versionText}。最新版チャンネルが有効です。アップグレードで最新リリースをインストールします。"
     },
     "cline": {
       "configDescription": "Cline API プロバイダーと認証情報を設定します。設定は ~/.cline/data/ に保存されます。"
@@ -1587,7 +1588,14 @@
       }
     },
     "customAgentMcpLabel": "MCP サポート",
-    "customAgentMcpHint": "セッション開始時に houhub 内蔵の houhub-mcp コンパニオンをこのエージェントへ渡します。委任・リアルタイムフィードバック・タスクツールはこの経路を使います。MCP サーバーを受け付けず接続に失敗するエージェントではオフにしてください。設定は次回の接続から有効になります。"
+    "customAgentMcpHint": "セッション開始時に houhub 内蔵の houhub-mcp コンパニオンをこのエージェントへ渡します。委任・リアルタイムフィードバック・タスクツールはこの経路を使います。MCP サーバーを受け付けず接続に失敗するエージェントではオフにしてください。設定は次回の接続から有効になります。",
+    "adapterChannel": {
+      "label": "アダプターのバージョン",
+      "description": "インストールとアップグレードは、houhub がレビューして固定したバージョンを使用します。「最新版」を選ぶと、その時点で最新の npm リリースをインストールします。最新版のインストールに失敗した場合は固定バージョンにフォールバックし、インストールログにその旨を記録します。",
+      "pinned": "固定バージョン（推奨）",
+      "latest": "最新版（未レビュー）",
+      "latestWarning": "最新リリースは未レビューのため、houhub でこのエージェントが動かなくなることがあります。まれに既知の不具合を含むリリースが最新版になっていることもあります。実際にインストールされたバージョンはバージョン状態に表示されます。"
+    }
   },
   "SettingsPages": {
     "agentsLoading": "エージェント設定を読み込み中...",
@@ -2116,7 +2124,26 @@
       "closeOthers": "他を閉じる",
       "closeAll": "すべて閉じる",
       "hideTerminal": "ターミナルを隠す ({shortcut})",
-      "openFolderFirst": "先にフォルダを開いてください"
+      "openFolderFirst": "先にフォルダを開いてください",
+      "keybar": {
+        "label": "仮想ターミナルキー",
+        "show": "仮想キーを表示",
+        "hide": "仮想キーを隠す",
+        "esc": "ESC",
+        "tab": "TAB",
+        "ctrl": "CTRL",
+        "alt": "ALT",
+        "slash": "/",
+        "dash": "-",
+        "home": "HOME",
+        "end": "END",
+        "pgup": "PGUP",
+        "pgdn": "PGDN",
+        "up": "↑",
+        "down": "↓",
+        "left": "←",
+        "right": "→"
+      }
     },
     "workspaceDialog": {
       "title": "フォルダーを開く",
@@ -2753,7 +2780,8 @@
         "descriptionWithTarget": "ファイル \"{name}\" のローカル変更をロールバックしますか？",
         "descriptionFallback": "このファイルのローカル変更をロールバックしますか？"
       },
-      "terminalTitle": "ターミナル · {name}"
+      "terminalTitle": "ターミナル · {name}",
+      "moreActions": "その他のアクション"
     },
     "commandDropdown": {
       "loading": "読み込み中...",
@@ -2841,7 +2869,8 @@
           "turnFailedEmptyProtocol": "{agent} の出力を houhub が解析できませんでした。エージェントのバージョンがプロトコルと一致していない可能性があります。",
           "turnFailedEmptyMetadata": "{agent} はこのターンでステータス更新（計画 / モード / 使用量）のみを送信し、応答はありませんでした。",
           "detailsInAlerts": "ステータスバーのアラートを開き、詳細を展開するとエージェントの出力を確認できます。",
-          "mcpRejectedByAgent": "houhub の MCP コンパニオンを渡した際、{agent} がセッションを拒否しました: {message} このエージェントが MCP に対応していない場合は、設定で「MCP サポート」をオフにして再接続してください。"
+          "mcpRejectedByAgent": "houhub の MCP コンパニオンを渡した際、{agent} がセッションを拒否しました: {message} このエージェントが MCP に対応していない場合は、設定で「MCP サポート」をオフにして再接続してください。",
+          "turnFailedAuthRequired": "{agent} はこのターンを実行する前に再度のサインインを必要としています。設定からサインインしてから、メッセージを送り直してください。"
         },
         "unableReadAgentConfig": "エージェント設定を読み取れません: {message}",
         "connectFailedTitle": "{agent} の接続に失敗しました",
@@ -2946,14 +2975,11 @@
         "mentionGroupSession": "セッション",
         "mentionGroupCommit": "コミット",
         "mentionGroupSkill": "スキル",
-        "queueMessage": "キューに追加",
-        "steerIntoTurn": "現在のターンに挿入",
-        "steerQueuedInstead": "代わりにキューに追加しました。次のターンで送信されます。",
-        "steerFailed": "現在のターンに挿入できませんでした",
-        "steerAttachmentsUnsupported": "テキストのみ対応です。添付ファイル付きの下書きはキューをご利用ください。",
         "toggleOn": "オン",
         "toggleOff": "オフ",
-        "slashLoading": "コマンドを読み込み中…"
+        "slashLoading": "コマンドを読み込み中…",
+        "steerAsNote": "次の確認用にメモを送信",
+        "steerNoteFailed": "メモを送信できませんでした"
       },
       "messageQueue": {
         "addToQueue": "キューに追加",
@@ -3223,7 +3249,8 @@
         "copiedImage": "画像をコピーしました",
         "copyImageFailed": "画像のコピーに失敗しました: {message}",
         "copyImageUnsupported": "この環境では画像をコピーできません",
-        "selectionSaveAsNote": "メモに保存"
+        "selectionSaveAsNote": "メモに保存",
+        "forkNotReady": "この返信からはまだ分岐できません。少し待ってからお試しください"
       },
       "liveTurnStats": {
         "thinking": "考え中...",
@@ -3288,7 +3315,8 @@
             "child_max_turn_requests": "サブエージェント: 要求上限",
             "child_empty": "サブエージェント応答なし",
             "child_unknown": "サブエージェント: エラー",
-            "unknown": "不明なタスク"
+            "unknown": "不明なタスク",
+            "child_auth_required": "サブエージェント要サインイン"
           }
         },
         "resumed": "再開済み",
@@ -3665,6 +3693,27 @@
         },
         "resumeDelegation": "タスク {task} を再開中",
         "resumeDelegationNoId": "委任タスクを再開中"
+      },
+      "houhubMcpTool": {
+        "getSessionInfo": "セッション {session} を読み取り中",
+        "getSessionInfoNoId": "セッションを読み取り中",
+        "taskProgress": "進捗: {message}",
+        "taskProgressNoMessage": "タスクの進捗を報告",
+        "taskComplete": "タスク終了 · {verdict}",
+        "taskCompleteWithSummary": "タスク終了 · {verdict}: {summary}",
+        "createAutomation": "自動化 {name} を作成中",
+        "createAutomationNoName": "自動化を作成中",
+        "createWorkTask": "作業タスク {title} を作成中",
+        "createWorkTaskNoTitle": "作業タスクを作成中",
+        "resumeDelegation": "タスク {task} を再開中",
+        "resumeDelegationNoId": "委任タスクを再開中",
+        "promptLabel": "プロンプト",
+        "verdict": {
+          "success": "成功",
+          "needs_review": "要確認",
+          "blocked": "ブロック",
+          "unknown": "不明"
+        }
       }
     },
     "diffPreview": {
@@ -3716,6 +3765,17 @@
     },
     "toasts": {
       "cloneFailed": "リポジトリのクローンに失敗しました"
+    },
+    "fileViewer": {
+      "title": "ファイルプレビュー",
+      "description": "この会話で参照されたファイルを横に開きます。",
+      "openInWorkspace": "ワークスペースで開く",
+      "back": "戻る",
+      "preview": "プレビュー",
+      "source": "ソース",
+      "loading": "読み込み中...",
+      "cannotResolve": "このファイルパスを解決できません。",
+      "tooLargeToPreview": "このファイルは大きすぎてここではプレビューできません。ワークスペースで開いてください。"
     }
   },
   "ProjectBoot": {
@@ -4113,7 +4173,8 @@
       "linked_to_houhub": "有効",
       "linked_elsewhere": "ブロック — 別のリンクが存在",
       "blocked_by_real_directory": "ブロック — カスタムスキルがこの名前を占有",
-      "broken": "壊れたリンク"
+      "broken": "壊れたリンク",
+      "linked_to_houhub": "有効"
     },
     "badges": {
       "userModified": "ユーザーにより変更"
@@ -4150,7 +4211,8 @@
       "linked_to_houhub": "有効",
       "linked_elsewhere": "ブロック — 別のリンクが存在",
       "blocked_by_real_directory": "ブロック — カスタムスキルがこの名前を占有",
-      "broken": "壊れたリンク"
+      "broken": "壊れたリンク",
+      "linked_to_houhub": "有効"
     },
     "badges": {
       "userModified": "ユーザーにより変更",
@@ -4200,7 +4262,8 @@
       "linked_to_houhub": "有効",
       "linked_elsewhere": "ブロック — 他のリンクが存在します",
       "blocked_by_real_directory": "ブロック — カスタムスキルがこの名前を使用しています",
-      "broken": "リンク切れ"
+      "broken": "リンク切れ",
+      "linked_to_houhub": "有効"
     },
     "badges": {
       "notSynced": "未同期"
@@ -4867,7 +4930,8 @@
       "linked_to_houhub": "有効",
       "linked_elsewhere": "別の場所にリンク",
       "blocked_by_real_directory": "実在フォルダにより占有",
-      "broken": "リンク切れ"
+      "broken": "リンク切れ",
+      "linked_to_houhub": "有効"
     },
     "actions": {
       "new": "新規",

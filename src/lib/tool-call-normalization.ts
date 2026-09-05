@@ -561,9 +561,13 @@ export function inferLiveToolName(params: {
   // becoming the generic `task` tool and keeps the workbench companions
   // standalone through every adapter pass.
   const qoderToolName = extractQoderToolName(params.meta)
+  let normalizedQoderTool: string | null = null
   if (qoderToolName) {
     const normalizedQoder = normalizeToolName(qoderToolName)
-    if (MCP_COMPANION_TOOLS.has(normalizedQoder)) return normalizedQoder
+    normalizedQoderTool = normalizedQoder.toLowerCase()
+    if (MCP_COMPANION_TOOLS.has(normalizedQoderTool)) {
+      return normalizedQoderTool
+    }
   }
 
   // The delegation broker stamps `meta["houhub.delegation"]` onto the parent's
@@ -626,6 +630,7 @@ export function inferLiveToolName(params: {
   // title. We deliberately do NOT run `normalizeToolName` here: its live-title
   // heuristic rewrites `memory_recall` to `memory_re`.
   if (metaToolName) return metaToolName.toLowerCase()
+  if (normalizedQoderTool) return normalizedQoderTool
 
   // Grok stamps the authoritative tool name in `_meta["x.ai/tool"].name` while
   // its `title` MUTATES across the lifecycle. A background-task poll is the
@@ -750,6 +755,39 @@ export function extractClaudeCodeSkillName(
   if (typeof skill !== "string") return null
   const trimmed = skill.trim()
   return trimmed.length > 0 ? trimmed : null
+}
+
+/**
+ * Whether the agent has moved this tool call's process into the background —
+ * JetBrains AIR's `_meta.jetbrains.air.asyncTasks.backgrounded` marker
+ * (codex-acp 1.10+, published only because `build_client_capabilities`
+ * advertises the `asyncTasks` capability).
+ *
+ * It arrives on a `tool_call_update` that carries NOTHING else: no status, no
+ * content, no output — just the id and this flag, immediately before the
+ * matching `async_task_spawned`. That is the point of reading it: the launching
+ * `execute` call stays `in_progress` for the rest of the connection (codex only
+ * completes it when the process finally exits or a stop lands), so without the
+ * marker the card is indistinguishable from a command that hung.
+ *
+ * Two shape notes, both load-bearing:
+ *   - there is NO `version` key inside this `air` block — unlike its
+ *     `sessionFailure` sibling — so nothing here may gate on one;
+ *   - the flag is only ever published as `true`; the adapter withdraws it by
+ *     settling the tool call, never by sending `false`. Strict equality anyway,
+ *     so a future `false` reads as "not backgrounded" rather than truthy.
+ */
+export function toolCallMovedToBackground(
+  meta: Record<string, unknown> | null | undefined
+): boolean {
+  if (!meta || typeof meta !== "object") return false
+  const jetbrains = (meta as Record<string, unknown>).jetbrains
+  if (!jetbrains || typeof jetbrains !== "object") return false
+  const air = (jetbrains as Record<string, unknown>).air
+  if (!air || typeof air !== "object") return false
+  const asyncTasks = (air as Record<string, unknown>).asyncTasks
+  if (!asyncTasks || typeof asyncTasks !== "object") return false
+  return (asyncTasks as Record<string, unknown>).backgrounded === true
 }
 
 /**

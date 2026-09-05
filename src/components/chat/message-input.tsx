@@ -11,6 +11,7 @@ import {
   Check,
   ChevronUp,
   ClipboardPaste,
+  Clock,
   Cog,
   Copy,
   FileStack,
@@ -191,6 +192,7 @@ import { sessionToSuggestion } from "@/components/chat/composer/suggestion/adapt
 import type { Editor, JSONContent } from "@tiptap/core"
 import { useReferenceSearch } from "@/components/chat/composer/use-reference-search"
 import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
+import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import {
   imageAttachmentToPromptBlock,
   type ImageInputAttachment,
@@ -267,13 +269,24 @@ interface MessageInputProps {
   isEditingQueueItem?: boolean
   onSaveQueueEdit?: (draft: PromptDraft) => void
   onCancelQueueEdit?: () => void
-  /** Inject the draft's TEXT into the RUNNING turn (native live-feedback
-   *  steering). Present only on sessions whose feedback channel is native —
-   *  when absent, the prompting branch renders its historical Stop-only form.
-   *  Awaited: resolve = injected + recorded (clear the draft); reject =
-   *  failure, where a turn-end `NoActiveTurn` race falls back to the queue
-   *  and anything else keeps the draft. */
-  onSteer?: (text: string) => Promise<void>
+  /** Send the draft into the RUNNING turn over the session's live-feedback
+   *  channel (see {@link steerChannel}). Present only on sessions with a
+   *  working delivery channel — when absent, the prompting branch renders its
+   *  historical Stop-only form. `text` is the recorded/display form; `blocks`
+   *  carries the full draft whenever it holds more than plain text (image
+   *  attachments, file badges), encoded exactly like a normal send. Awaited:
+   *  resolve = recorded (clear the draft); reject = failure, where a turn-end
+   *  `NoActiveTurn` race falls back to the queue and anything else keeps the
+   *  draft. */
+  onSteer?: (text: string, blocks?: PromptInputBlock[]) => Promise<void>
+  /** Which channel {@link onSteer} rides (`useSessionFeedback().channel`).
+   *  Picks the honest copy for the mid-turn action: `native` = inserted into
+   *  the turn immediately, `pull` = recorded as a note the agent reads on its
+   *  next `check_user_feedback` call. Defaults to `pull` — the weaker promise
+   *  — so a caller that wires `onSteer` and forgets this understates delivery
+   *  rather than claiming an insert that never happened (same reason
+   *  `FeedbackDialog.channel` defaults to `pull`). */
+  steerChannel?: "native" | "pull"
   /** Open the live-feedback dialog (from the "+" menu). When omitted the entry
    *  is hidden (feature off). */
   onAddFeedback?: () => void
@@ -551,6 +564,7 @@ export function MessageInput({
   onSaveQueueEdit,
   onCancelQueueEdit,
   onSteer,
+  steerChannel = "pull",
   onAddFeedback,
   feedbackAddDisabled,
   injectContent,
@@ -617,6 +631,26 @@ export function MessageInput({
   // is reconciled into the outgoing blocks by `buildDraft`.
   const [attachments, setAttachments] = useState<InputAttachment[]>([])
   const embeddedPayloadsRef = useRef<Map<string, PromptInputBlock>>(new Map())
+  const hasUploadingImage = attachments.some(
+    (attachment) => attachment.type === "image" && attachment.uploading
+  )
+  const attachmentEngine = useComposerAttachments({
+    editorRef,
+    promptCapabilities,
+    attachmentTabId,
+    defaultPath,
+    logLabel: "MessageInput",
+  })
+  const effectiveAttachments =
+    attachmentEngine.attachments.length > 0
+      ? attachmentEngine.attachments
+      : attachments
+  const effectiveHasUploadingImage =
+    attachmentEngine.hasUploadingImage || hasUploadingImage
+  const engineImageBlocks = useMemo(
+    () => attachmentEngine.imagePromptBlocks(),
+    [attachmentEngine, attachmentEngine.attachments, promptCapabilities]
+  )
   const [isDragActive, setIsDragActive] = useState(false)
   // Collapsed (narrow) selectors live in a controlled Popover holding a
   // master–detail panel (`SessionSelectorsPanel`). It's controlled so a value
@@ -1029,11 +1063,11 @@ export function MessageInput({
   const hasContextLocation = contextLocationLabel.length > 0
   const imageAttachments = useMemo(
     () =>
-      attachments.filter(
+      effectiveAttachments.filter(
         (attachment): attachment is ImageInputAttachment =>
           attachment.type === "image"
       ),
-    [attachments]
+    [effectiveAttachments]
   )
   const previewAttachment = useMemo(
     () =>
@@ -1042,7 +1076,7 @@ export function MessageInput({
         : null,
     [previewAttachmentId, imageAttachments]
   )
-  const hasAttachments = attachments.length > 0
+  const hasAttachments = effectiveAttachments.length > 0
   const hasSendableContent = !composerEmpty || hasAttachments
 
   // ── Slash command autocomplete ──
@@ -2643,7 +2677,8 @@ export function MessageInput({
 
   const removeAttachment = useCallback((id: string) => {
     setAttachments((prev) => prev.filter((item) => item.id !== id))
-  }, [])
+    attachmentEngine.removeAttachment(id)
+  }, [attachmentEngine])
 
   const buildDraft = useCallback((): PromptDraft | null => {
     const editor = editorRef.current?.getEditor()
@@ -2686,31 +2721,36 @@ export function MessageInput({
         return true
       })
     }
-    if (blocks.length === 0 && attachments.length === 0) return null
+    if (blocks.length === 0 && effectiveAttachments.length === 0) return null
 
     // `attachments` holds only images now — files live inline as badges above.
     // The wire encoding is capability-driven (native `image` block vs embedded
     // `resource` blob), so an agent that advertises `image: false` but
     // `embedded_context: true` still receives the bytes it accepts.
-    for (const attachment of attachments) {
-      if (attachment.type === "image") {
-        blocks.push(
-          imageAttachmentToPromptBlock(attachment, promptCapabilities)
-        )
+    if (engineImageBlocks.length > 0) {
+      blocks.push(...engineImageBlocks)
+    } else {
+      for (const attachment of effectiveAttachments) {
+        if (attachment.type === "image") {
+          blocks.push(
+            imageAttachmentToPromptBlock(attachment, promptCapabilities)
+          )
+        }
       }
     }
 
     const displayText =
       displayProse ||
-      `Attached ${attachments.length} attachment${attachments.length > 1 ? "s" : ""}`
+      `Attached ${effectiveAttachments.length} attachment${effectiveAttachments.length > 1 ? "s" : ""}`
     return { blocks, displayText }
-  }, [attachments, skillPrefix, promptCapabilities])
+  }, [effectiveAttachments, engineImageBlocks, skillPrefix, promptCapabilities])
 
   // Clear the editor + attachments after a send / enqueue / save.
   const resetComposer = useCallback(() => {
     editorRef.current?.clear()
     setComposerEmpty(true)
     setAttachments([])
+    attachmentEngine.clearAttachments()
     embeddedPayloadsRef.current.clear()
     closeSlashMenu()
   }, [closeSlashMenu])
@@ -2725,7 +2765,7 @@ export function MessageInput({
     // nothing to hydrate. Block ALL three branches below (send / enqueue /
     // queue-edit save; a queued block is sent verbatim later) until uploads
     // finish. The draft stays intact, so this is a "wait a moment", not a loss.
-    if (attachments.some((a) => a.type === "image" && a.uploading)) {
+    if (effectiveHasUploadingImage) {
       toast.error(tAttach("attachUploadInProgress"))
       return
     }
@@ -2767,18 +2807,28 @@ export function MessageInput({
     resetComposer,
   ])
 
-  // Mid-turn "insert into current turn" (native steering). Awaited, unlike
-  // the synchronous send/enqueue/fork paths: the draft clears ONLY once the
-  // backend confirms the injection was recorded — a turn-end race falls back
-  // to the queue (the note is never lost), any other failure keeps the draft
-  // for retry. Steering is text-only: a draft carrying non-text blocks (file
-  // badges) is queued whole instead of being silently stripped; image
-  // attachments disable the menu entry at render (which also keeps unsettled
-  // uploads out of this path — the enqueue fallback below bypasses
-  // `handleSend`'s uploading gate).
+  // Mid-turn send over the session's live-feedback channel: a native push
+  // inserts into the running turn; a pull-tool session records a waiting note
+  // the agent reads on its next check (the copy is keyed on `steerChannel` so
+  // neither overpromises). Awaited, unlike the synchronous send/enqueue
+  // paths: the draft clears ONLY once the backend confirms the note was
+  // recorded — a turn-end race falls back to the queue (the note is never
+  // lost), any other failure keeps the draft for retry. A draft that holds
+  // more than plain text (image attachments, file badges) steers as its full
+  // block list — the same encoding a normal send uses, which the native wire
+  // carries verbatim — with the display text as the recorded note; nothing is
+  // silently stripped. Only the native wire takes blocks: the pull path
+  // rejects them as `NoActiveTurn`, which lands on the same enqueue fallback,
+  // so an attachment on a pull session goes to the queue whole. Unsettled
+  // uploads are gated here exactly like `handleSend` (no server-side uri to
+  // hydrate from yet), since the enqueue fallback below bypasses its gate.
   const [steering, setSteering] = useState(false)
   const handleSteerClick = useCallback(async () => {
     if (!onSteer || steering) return
+    if (effectiveHasUploadingImage) {
+      toast.error(tAttach("attachUploadInProgress"))
+      return
+    }
     const draft = buildDraft()
     if (!draft) return
     const enqueueInstead = () => {
@@ -2787,25 +2837,29 @@ export function MessageInput({
       resetComposer()
       toast.info(t("steerQueuedInstead"))
     }
-    if (draft.blocks.some((b) => b.type !== "text")) {
-      enqueueInstead()
-      return
-    }
-    const text = draft.blocks
-      .map((b) => (b.type === "text" ? b.text : ""))
-      .join("\n")
-      .trim()
+    const blocks = draft.blocks.some((b) => b.type !== "text")
+      ? draft.blocks
+      : undefined
+    const text = blocks
+      ? draft.displayText
+      : draft.blocks
+          .map((b) => (b.type === "text" ? b.text : ""))
+          .join("\n")
+          .trim()
     if (!text) return
     setSteering(true)
     try {
-      await onSteer(text)
+      await onSteer(text, blocks)
       resetComposer()
     } catch (err) {
       if (isNoActiveTurnRejection(err)) {
         // The turn ended in the race window — reroute through the queue.
         enqueueInstead()
       } else {
-        toast.error(t("steerFailed"), { description: toErrorMessage(err) })
+        toast.error(
+          t(steerChannel === "pull" ? "steerNoteFailed" : "steerFailed"),
+          { description: toErrorMessage(err) }
+        )
       }
     } finally {
       setSteering(false)
@@ -2813,11 +2867,14 @@ export function MessageInput({
   }, [
     onSteer,
     steering,
+    effectiveHasUploadingImage,
+    tAttach,
     buildDraft,
     onEnqueue,
     showModeSelector,
     effectiveModeId,
     resetComposer,
+    steerChannel,
     t,
   ])
 
@@ -3167,11 +3224,14 @@ export function MessageInput({
     </div>
   ) : isPrompting && onCancel ? (
     onSteer && onEnqueue && hasSendableContent ? (
-      // Native-steering sessions surface the mid-turn actions that already
-      // exist but were keyboard-only/invisible: the primary half of the split
-      // queues the draft (what Enter has always done here), the dropdown
-      // injects it into the RUNNING turn. Without `onSteer` this branch stays
-      // pixel-identical to the historical Stop-only form below.
+      // Sessions with a working live-feedback channel surface the mid-turn
+      // actions that already exist but were keyboard-only/invisible: the
+      // primary half of the split queues the draft (what Enter has always
+      // done here), the dropdown sends it over the channel — a native push
+      // inserts into the RUNNING turn, a pull-tool session records a waiting
+      // note for the agent's next check (label keyed on `steerChannel`).
+      // Without `onSteer` this branch stays pixel-identical to the
+      // historical Stop-only form below.
       <div className="flex items-center gap-1">
         <Button
           onClick={onCancel}
@@ -3198,7 +3258,9 @@ export function MessageInput({
                 disabled={steering}
                 size="icon"
                 className="h-8 w-5 rounded-l-none border-l border-primary-foreground/20"
-                aria-label={t("steerIntoTurn")}
+                aria-label={t(
+                  steerChannel === "pull" ? "steerAsNote" : "steerIntoTurn"
+                )}
               >
                 <ChevronUp className="size-4" />
               </Button>
@@ -3206,15 +3268,17 @@ export function MessageInput({
             <DropdownMenuContent align="end" side="top">
               <DropdownMenuItem
                 onSelect={() => void handleSteerClick()}
-                disabled={steering || attachments.length > 0}
-                title={
-                  attachments.length > 0
-                    ? t("steerAttachmentsUnsupported")
-                    : undefined
-                }
+                disabled={steering}
               >
-                <Zap className="h-4 w-4" />
-                {t("steerIntoTurn")}
+                {/* Icon carries the same promise as the label: the bolt is
+                    the instant insert, the clock is the note that waits —
+                    the very glyph the notes strip uses for `pending`. */}
+                {steerChannel === "pull" ? (
+                  <Clock className="h-4 w-4" />
+                ) : (
+                  <Zap className="h-4 w-4" />
+                )}
+                {t(steerChannel === "pull" ? "steerAsNote" : "steerIntoTurn")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -3387,7 +3451,7 @@ export function MessageInput({
             >
               <ConversationContextBar
                 hasExtraContent={hasImageAttachments}
-                scrollEndTrigger={attachments.length}
+                scrollEndTrigger={effectiveAttachments.length}
                 extraContent={
                   <>
                     {imageAttachments.map((attachment) => (

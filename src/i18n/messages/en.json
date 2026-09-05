@@ -1375,7 +1375,8 @@
       "localUnrecognized": "{versionText}. Local version is not comparable; try upgrade to overwrite install.",
       "upgradeAvailable": "{versionText}. Upgrade available.",
       "remoteUnavailable": "{versionText}. Remote version is currently unavailable.",
-      "latest": "{versionText}. Already latest."
+      "latest": "{versionText}. Already latest.",
+      "latestChannel": "{versionText}. Latest channel is on; Upgrade installs the newest release."
     },
     "cline": {
       "configDescription": "Configure Cline API provider and credentials. Settings are saved to ~/.cline/data/."
@@ -1587,7 +1588,14 @@
       }
     },
     "customAgentMcpLabel": "MCP support",
-    "customAgentMcpHint": "Sends houhub's built-in MCP companion to this agent when a session starts — the channel behind delegation, live feedback and task tools. Turn it off for an agent that rejects MCP servers and fails to connect; the change applies to the next connection."
+    "customAgentMcpHint": "Sends houhub's built-in MCP companion to this agent when a session starts — the channel behind delegation, live feedback and task tools. Turn it off for an agent that rejects MCP servers and fails to connect; the change applies to the next connection.",
+    "adapterChannel": {
+      "label": "Adapter version",
+      "description": "Install and Upgrade use the version houhub has reviewed and pinned. Latest switches them to the package's newest npm release at that moment; if installing it fails, houhub falls back to the pinned version and notes it in the install log.",
+      "pinned": "Pinned (recommended)",
+      "latest": "Latest (unreviewed)",
+      "latestWarning": "Newest releases are unreviewed and can break this agent in houhub, and occasionally a release is known broken. Version Status shows what is actually installed."
+    }
   },
   "SettingsPages": {
     "agentsLoading": "Loading agent settings...",
@@ -2116,7 +2124,26 @@
       "closeOthers": "Close Others",
       "closeAll": "Close All",
       "hideTerminal": "Hide Terminal ({shortcut})",
-      "openFolderFirst": "Open a folder first"
+      "openFolderFirst": "Open a folder first",
+      "keybar": {
+        "label": "Terminal virtual keys",
+        "show": "Show virtual keys",
+        "hide": "Hide virtual keys",
+        "esc": "ESC",
+        "tab": "TAB",
+        "ctrl": "CTRL",
+        "alt": "ALT",
+        "slash": "/",
+        "dash": "-",
+        "home": "HOME",
+        "end": "END",
+        "pgup": "PGUP",
+        "pgdn": "PGDN",
+        "up": "↑",
+        "down": "↓",
+        "left": "←",
+        "right": "→"
+      }
     },
     "workspaceDialog": {
       "title": "Open Folder",
@@ -2753,7 +2780,8 @@
         "descriptionWithTarget": "Rollback local changes for file \"{name}\"?",
         "descriptionFallback": "Rollback local changes for this file?"
       },
-      "terminalTitle": "Terminal · {name}"
+      "terminalTitle": "Terminal · {name}",
+      "moreActions": "More actions"
     },
     "commandDropdown": {
       "loading": "Loading...",
@@ -2841,7 +2869,8 @@
           "turnFailedEmptyProtocol": "{agent} produced output that houhub could not parse — the agent version may not match the protocol.",
           "turnFailedEmptyMetadata": "{agent} sent only status updates this turn (plan / mode / usage) and no reply.",
           "detailsInAlerts": "Open Alerts in the status bar and expand the details to see the agent's output.",
-          "mcpRejectedByAgent": "{agent} refused the session while houhub’s MCP companion was attached: {message} If this agent does not support MCP, turn off “MCP support” for it in Settings and connect again."
+          "mcpRejectedByAgent": "{agent} refused the session while houhub’s MCP companion was attached: {message} If this agent does not support MCP, turn off “MCP support” for it in Settings and connect again.",
+          "turnFailedAuthRequired": "{agent} needs you to sign in again before it can run this turn. Sign in from Settings, then send the message again."
         },
         "unableReadAgentConfig": "Unable to read Agent config: {message}",
         "connectFailedTitle": "{agent} connection failed",
@@ -2946,14 +2975,11 @@
         "mentionGroupSession": "Sessions",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Skills",
-        "queueMessage": "Queue message",
-        "steerIntoTurn": "Insert into current turn",
-        "steerQueuedInstead": "Queued instead — it will be sent with the next turn.",
-        "steerFailed": "Couldn't insert into the current turn",
-        "steerAttachmentsUnsupported": "Text only — drafts with attachments go through the queue.",
         "toggleOn": "On",
         "toggleOff": "Off",
-        "slashLoading": "Loading commands…"
+        "slashLoading": "Loading commands…",
+        "steerAsNote": "Send note for next check",
+        "steerNoteFailed": "Couldn't send your note"
       },
       "messageQueue": {
         "addToQueue": "Queue message",
@@ -3233,7 +3259,8 @@
         "copiedImage": "Image copied",
         "copyImageFailed": "Could not copy image: {message}",
         "copyImageUnsupported": "Copying this image is not supported here",
-        "selectionSaveAsNote": "Note"
+        "selectionSaveAsNote": "Note",
+        "forkNotReady": "Can't fork from this reply just yet — try again in a moment"
       },
       "liveTurnStats": {
         "thinking": "Thinking...",
@@ -3298,7 +3325,8 @@
             "child_max_turn_requests": "subagent request limit",
             "child_empty": "subagent no output",
             "child_unknown": "subagent unknown error",
-            "unknown": "unknown task"
+            "unknown": "unknown task",
+            "child_auth_required": "subagent needs sign-in"
           }
         },
         "resumed": "Resumed",
@@ -3665,6 +3693,27 @@
         },
         "resumeDelegation": "Resuming task {task}",
         "resumeDelegationNoId": "Resuming a delegated task"
+      },
+      "houhubMcpTool": {
+        "getSessionInfo": "Reading session {session}",
+        "getSessionInfoNoId": "Reading a session",
+        "taskProgress": "Progress: {message}",
+        "taskProgressNoMessage": "Reporting task progress",
+        "taskComplete": "Task finished · {verdict}",
+        "taskCompleteWithSummary": "Task finished · {verdict}: {summary}",
+        "createAutomation": "Creating automation {name}",
+        "createAutomationNoName": "Creating an automation",
+        "createWorkTask": "Creating work task {title}",
+        "createWorkTaskNoTitle": "Creating a work task",
+        "resumeDelegation": "Resuming task {task}",
+        "resumeDelegationNoId": "Resuming a delegated task",
+        "promptLabel": "Prompt",
+        "verdict": {
+          "success": "success",
+          "needs_review": "needs review",
+          "blocked": "blocked",
+          "unknown": "unknown"
+        }
       }
     },
     "diffPreview": {
@@ -3716,6 +3765,17 @@
     },
     "toasts": {
       "cloneFailed": "Failed to clone repository"
+    },
+    "fileViewer": {
+      "title": "File preview",
+      "description": "A file referenced in this conversation, opened beside it.",
+      "openInWorkspace": "Open in workspace",
+      "back": "Back",
+      "preview": "Preview",
+      "source": "Source",
+      "loading": "Loading...",
+      "cannotResolve": "Cannot resolve this file path.",
+      "tooLargeToPreview": "This file is too large to preview here. Open it in the workspace instead."
     }
   },
   "ProjectBoot": {
@@ -4125,7 +4185,8 @@
       "linked_to_houhub": "Enabled",
       "linked_elsewhere": "Blocked — another link exists",
       "blocked_by_real_directory": "Blocked — a custom skill occupies this name",
-      "broken": "Broken link"
+      "broken": "Broken link",
+      "linked_to_houhub": "Enabled"
     },
     "badges": {
       "userModified": "User modified"
@@ -4162,7 +4223,8 @@
       "linked_to_houhub": "Enabled",
       "linked_elsewhere": "Blocked — another link exists",
       "blocked_by_real_directory": "Blocked — a custom skill occupies this name",
-      "broken": "Broken link"
+      "broken": "Broken link",
+      "linked_to_houhub": "Enabled"
     },
     "badges": {
       "userModified": "User modified",
@@ -4212,7 +4274,8 @@
       "linked_to_houhub": "Enabled",
       "linked_elsewhere": "Blocked — another link exists",
       "blocked_by_real_directory": "Blocked — a custom skill occupies this name",
-      "broken": "Broken link"
+      "broken": "Broken link",
+      "linked_to_houhub": "Enabled"
     },
     "badges": {
       "notSynced": "Not synced"
@@ -4867,7 +4930,8 @@
       "linked_to_houhub": "Enabled",
       "linked_elsewhere": "Linked elsewhere",
       "blocked_by_real_directory": "Blocked by a real folder",
-      "broken": "Broken link"
+      "broken": "Broken link",
+      "linked_to_houhub": "Enabled"
     },
     "actions": {
       "new": "New",

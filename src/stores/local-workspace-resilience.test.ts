@@ -82,6 +82,7 @@ describe("HouHub local workspace resilience", () => {
       alias: null,
       color: "default",
       kind: "regular" as const,
+      group_id: null,
       parent_id: null,
       default_agent_type: null,
       git_branch: null,

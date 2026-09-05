@@ -1375,7 +1375,8 @@
       "localUnrecognized": "{versionText}. 로컬 버전을 비교할 수 없습니다. 덮어쓰기 설치를 위해 업그레이드를 시도하세요.",
       "upgradeAvailable": "{versionText}. 업그레이드가 가능합니다.",
       "remoteUnavailable": "{versionText}. 현재 원격 버전을 사용할 수 없습니다.",
-      "latest": "{versionText}. 이미 최신입니다."
+      "latest": "{versionText}. 이미 최신입니다.",
+      "latestChannel": "{versionText}. 최신 버전 채널이 켜져 있습니다. 업그레이드하면 최신 릴리스를 설치합니다."
     },
     "cline": {
       "configDescription": "Cline API 제공자와 자격 증명을 구성합니다. 설정은 ~/.cline/data/에 저장됩니다."
@@ -1587,7 +1588,14 @@
       }
     },
     "customAgentMcpLabel": "MCP 지원",
-    "customAgentMcpHint": "세션을 시작할 때 houhub 내장 houhub-mcp 동반 프로세스를 이 에이전트에 전달합니다. 위임, 실시간 피드백, 작업 도구가 이 채널을 사용합니다. MCP 서버를 거부해 연결에 실패하는 에이전트라면 꺼 두세요. 변경은 다음 연결부터 적용됩니다."
+    "customAgentMcpHint": "세션을 시작할 때 houhub 내장 houhub-mcp 동반 프로세스를 이 에이전트에 전달합니다. 위임, 실시간 피드백, 작업 도구가 이 채널을 사용합니다. MCP 서버를 거부해 연결에 실패하는 에이전트라면 꺼 두세요. 변경은 다음 연결부터 적용됩니다.",
+    "adapterChannel": {
+      "label": "어댑터 버전",
+      "description": "설치와 업그레이드는 houhub가 검토해 고정한 버전을 사용합니다. 최신 버전을 선택하면 해당 패키지의 그 시점 최신 npm 릴리스를 설치하며, 최신 버전 설치에 실패하면 고정 버전으로 되돌리고 설치 로그에 남깁니다.",
+      "pinned": "고정 버전 (권장)",
+      "latest": "최신 버전 (미검토)",
+      "latestWarning": "최신 릴리스는 검토되지 않아 houhub에서 이 에이전트가 깨질 수 있으며, 간혹 알려진 문제가 있는 릴리스일 수도 있습니다. 실제 설치된 버전은 버전 상태에 표시됩니다."
+    }
   },
   "SettingsPages": {
     "agentsLoading": "에이전트 설정을 불러오는 중...",
@@ -2116,7 +2124,26 @@
       "closeOthers": "다른 항목 닫기",
       "closeAll": "모두 닫기",
       "hideTerminal": "터미널 숨기기 ({shortcut})",
-      "openFolderFirst": "먼저 폴더를 여세요"
+      "openFolderFirst": "먼저 폴더를 여세요",
+      "keybar": {
+        "label": "터미널 가상 키",
+        "show": "가상 키 표시",
+        "hide": "가상 키 숨기기",
+        "esc": "ESC",
+        "tab": "TAB",
+        "ctrl": "CTRL",
+        "alt": "ALT",
+        "slash": "/",
+        "dash": "-",
+        "home": "HOME",
+        "end": "END",
+        "pgup": "PGUP",
+        "pgdn": "PGDN",
+        "up": "↑",
+        "down": "↓",
+        "left": "←",
+        "right": "→"
+      }
     },
     "workspaceDialog": {
       "title": "폴더 열기",
@@ -2753,7 +2780,8 @@
         "descriptionWithTarget": "파일 \"{name}\"의 로컬 변경 사항을 롤백할까요?",
         "descriptionFallback": "이 파일의 로컬 변경 사항을 롤백할까요?"
       },
-      "terminalTitle": "터미널 · {name}"
+      "terminalTitle": "터미널 · {name}",
+      "moreActions": "더 많은 작업"
     },
     "commandDropdown": {
       "loading": "로딩 중...",
@@ -2841,7 +2869,8 @@
           "turnFailedEmptyProtocol": "{agent}의 출력을 houhub가 구문 분석할 수 없습니다. 에이전트 버전이 프로토콜과 맞지 않을 수 있습니다.",
           "turnFailedEmptyMetadata": "{agent}이(가) 이번 턴에 상태 업데이트(계획 / 모드 / 사용량)만 보내고 응답은 없었습니다.",
           "detailsInAlerts": "상태 표시줄의 알림을 열고 세부 정보를 펼치면 에이전트 출력을 확인할 수 있습니다.",
-          "mcpRejectedByAgent": "houhub의 MCP 동반 프로세스를 전달하는 동안 {agent}이(가) 세션을 거부했습니다: {message} 이 에이전트가 MCP를 지원하지 않는다면 설정에서 ‘MCP 지원’을 끄고 다시 연결하세요."
+          "mcpRejectedByAgent": "houhub의 MCP 동반 프로세스를 전달하는 동안 {agent}이(가) 세션을 거부했습니다: {message} 이 에이전트가 MCP를 지원하지 않는다면 설정에서 ‘MCP 지원’을 끄고 다시 연결하세요.",
+          "turnFailedAuthRequired": "{agent}이(가) 이번 턴을 실행하려면 다시 로그인해야 합니다. 설정에서 로그인한 뒤 메시지를 다시 보내세요."
         },
         "unableReadAgentConfig": "에이전트 구성을 읽을 수 없습니다: {message}",
         "connectFailedTitle": "{agent} 연결 실패",
@@ -2946,14 +2975,11 @@
         "mentionGroupSession": "세션",
         "mentionGroupCommit": "커밋",
         "mentionGroupSkill": "스킬",
-        "queueMessage": "대기열에 추가",
-        "steerIntoTurn": "현재 턴에 삽입",
-        "steerQueuedInstead": "대신 대기열에 추가되었습니다. 다음 턴에 전송됩니다.",
-        "steerFailed": "현재 턴에 삽입하지 못했습니다",
-        "steerAttachmentsUnsupported": "텍스트만 지원됩니다. 첨부 파일이 있는 초안은 대기열을 이용하세요.",
         "toggleOn": "켬",
         "toggleOff": "끔",
-        "slashLoading": "명령을 불러오는 중…"
+        "slashLoading": "명령을 불러오는 중…",
+        "steerAsNote": "다음 확인용 메모 보내기",
+        "steerNoteFailed": "메모를 보내지 못했습니다"
       },
       "messageQueue": {
         "addToQueue": "대기열에 추가",
@@ -3223,7 +3249,8 @@
         "copiedImage": "이미지를 복사했습니다",
         "copyImageFailed": "이미지 복사 실패: {message}",
         "copyImageUnsupported": "이 환경에서는 이미지를 복사할 수 없습니다",
-        "selectionSaveAsNote": "메모로 저장"
+        "selectionSaveAsNote": "메모로 저장",
+        "forkNotReady": "아직 이 응답에서 분기할 수 없습니다. 잠시 후 다시 시도하세요"
       },
       "liveTurnStats": {
         "thinking": "생각 중...",
@@ -3288,7 +3315,8 @@
             "child_max_turn_requests": "서브에이전트: 요청 한도",
             "child_empty": "서브에이전트 응답 없음",
             "child_unknown": "서브에이전트: 오류",
-            "unknown": "알 수 없는 작업"
+            "unknown": "알 수 없는 작업",
+            "child_auth_required": "서브에이전트 로그인 필요"
           }
         },
         "resumed": "재개됨",
@@ -3665,6 +3693,27 @@
         },
         "resumeDelegation": "작업 {task} 재개 중",
         "resumeDelegationNoId": "위임 작업 재개 중"
+      },
+      "houhubMcpTool": {
+        "getSessionInfo": "세션 {session} 읽는 중",
+        "getSessionInfoNoId": "세션 읽는 중",
+        "taskProgress": "진행: {message}",
+        "taskProgressNoMessage": "작업 진행 상황 보고",
+        "taskComplete": "작업 종료 · {verdict}",
+        "taskCompleteWithSummary": "작업 종료 · {verdict}: {summary}",
+        "createAutomation": "자동화 {name} 생성 중",
+        "createAutomationNoName": "자동화 생성 중",
+        "createWorkTask": "작업 항목 {title} 생성 중",
+        "createWorkTaskNoTitle": "작업 항목 생성 중",
+        "resumeDelegation": "작업 {task} 재개 중",
+        "resumeDelegationNoId": "위임 작업 재개 중",
+        "promptLabel": "프롬프트",
+        "verdict": {
+          "success": "성공",
+          "needs_review": "검토 필요",
+          "blocked": "차단됨",
+          "unknown": "알 수 없음"
+        }
       }
     },
     "diffPreview": {
@@ -3716,6 +3765,17 @@
     },
     "toasts": {
       "cloneFailed": "저장소 클론에 실패했습니다"
+    },
+    "fileViewer": {
+      "title": "파일 미리보기",
+      "description": "이 대화에서 참조된 파일을 옆에서 엽니다.",
+      "openInWorkspace": "작업 공간에서 열기",
+      "back": "뒤로",
+      "preview": "미리보기",
+      "source": "소스",
+      "loading": "불러오는 중...",
+      "cannotResolve": "이 파일 경로를 확인할 수 없습니다.",
+      "tooLargeToPreview": "이 파일은 너무 커서 여기서 미리 볼 수 없습니다. 작업 공간에서 여세요."
     }
   },
   "ProjectBoot": {
@@ -4113,7 +4173,8 @@
       "linked_to_houhub": "활성화됨",
       "linked_elsewhere": "차단됨 — 다른 링크가 존재함",
       "blocked_by_real_directory": "차단됨 — 사용자 정의 스킬이 이 이름을 점유 중",
-      "broken": "손상된 링크"
+      "broken": "손상된 링크",
+      "linked_to_houhub": "활성화됨"
     },
     "badges": {
       "userModified": "사용자가 수정함"
@@ -4150,7 +4211,8 @@
       "linked_to_houhub": "활성화됨",
       "linked_elsewhere": "차단됨 — 다른 링크가 존재함",
       "blocked_by_real_directory": "차단됨 — 사용자 정의 스킬이 이 이름을 점유 중",
-      "broken": "손상된 링크"
+      "broken": "손상된 링크",
+      "linked_to_houhub": "활성화됨"
     },
     "badges": {
       "userModified": "사용자가 수정함",
@@ -4200,7 +4262,8 @@
       "linked_to_houhub": "활성",
       "linked_elsewhere": "차단됨 — 다른 링크가 존재합니다",
       "blocked_by_real_directory": "차단됨 — 사용자 정의 스킬이 이 이름을 사용 중",
-      "broken": "링크 끊김"
+      "broken": "링크 끊김",
+      "linked_to_houhub": "활성"
     },
     "badges": {
       "notSynced": "미동기화"
@@ -4867,7 +4930,8 @@
       "linked_to_houhub": "사용 중",
       "linked_elsewhere": "다른 위치에 연결됨",
       "blocked_by_real_directory": "실제 폴더가 차지함",
-      "broken": "손상된 링크"
+      "broken": "손상된 링크",
+      "linked_to_houhub": "사용 중"
     },
     "actions": {
       "new": "새로 만들기",

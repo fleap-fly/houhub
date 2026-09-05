@@ -19,6 +19,7 @@ import {
 import {
   groupOfTab,
   isReparentUnmount,
+  type OpenedDraftTarget,
   resetTabStore,
   selectIsSplit,
   useTabStore as useGlobalTabStore,

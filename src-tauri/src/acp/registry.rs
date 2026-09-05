@@ -586,12 +586,11 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // chunks (present since ≤0.69.0; `ContentChunk::message_id` behind
             // the schema's `unstable_message_id` feature).
             //
-            // (d) NOT adopted, and still gated bilaterally: the AIR capability
-            // array grew to `["sessionFailure", "agentFileChangeReport",
-            // "nativeSubagentSessions", "asyncTasks"]`. HouHub advertises only
-            // `sessionFailure`, so `native-subagents.js` and `async-tasks.js`
-            // stay dark and this upgrade carries no regression risk. See
-            // `build_client_capabilities` for why each is out.
+            // (d) The AIR capability array grew to `["sessionFailure",
+            // "agentFileChangeReport", "nativeSubagentSessions", "asyncTasks"]`.
+            // HouHub adopted `asyncTasks` and deliberately leaves the other two
+            // out, so `native-subagents.js` and `file-change-audit.js` stay
+            // dark. See `build_client_capabilities` for why each is in or out.
             //
             // Also new and reachable through existing generic paths:
             // `exit-plan.js` + `clear-context-coordinator.js` give ExitPlanMode
@@ -602,9 +601,67 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `tool-result-meta.js` parses the SDK's `tool_result_meta` sidecar
             // (`nonExecutionKind` + `userFeedback`) but only feeds exit-plan's
             // internal reconciliation. `engines.node` stays ">=22".
+            //
+            // 0.74.0 is a small, focused release (`diff -rq` against 0.73.0:
+            // `acp-agent.js`, `session-failure-extension.js`, one new
+            // `hide-claude-auth.js`, and `package.json`). `initialize` does not
+            // move at all — same `sessionCapabilities`, same AIR capability
+            // array, same `engines.node`, same `@anthropic-ai/claude-agent-sdk`
+            // 0.3.257 — so every capability decision above still holds. What
+            // DOES change, in the order it matters:
+            //
+            // (e) BREAKING for AIR clients, and the reason this bump needed
+            // code: `auth_required` no longer settles the turn. 0.73.0's
+            // `failActiveWithSessionFailure` resolved an AIR client's prompt
+            // with a disguised `end_turn` carrying the record on the response
+            // `_meta`; 0.74.0 special-cases the kind BEFORE that path and does
+            // both halves instead — it publishes ONE session-scoped `access`
+            // record (severity `error`, `actions: ["login"]`, title
+            // "Sign in to continue using Claude.", the CLI's own
+            // "… Please run /login" prose demoted to `details`) on the UPDATE
+            // channel, and then REJECTS the prompt with the `authRequired`
+            // JSON-RPC error, because ACP defines that rejection as the signal
+            // that starts a client's own auth flow. Both halves already have a
+            // consumer here — `air_session_failure` renders the strip with its
+            // Login button — but the rejection did not: `run_conversation_loop`
+            // propagated every prompt error, so a mid-session sign-out would
+            // have torn the whole connection down (terminal `Error` →
+            // `Disconnected`, conversation row flipped to Cancelled) where
+            // 0.73.0 just ended the turn. `run_conversation_loop` now keeps an
+            // `ErrorCode::AuthRequired` prompt rejection turn-scoped; see the
+            // `Err(e) if e.code == AuthRequired` arm there.
+            //
+            // (f) Three fixes that land for free. A 401 no longer publishes a
+            // "Retrying Claude, attempt N of M" WARNING before the sign-out
+            // error (upstream #1072) — that strip used to outlive the refusal
+            // with no action to clear it. A record whose `recoveryPolicy` is
+            // `auth_status` now also clears (agent-side bookkeeping; nothing
+            // goes on the wire) when a real model answers, so an out-of-band
+            // sign-in no longer leaves a stale row that makes the adapter
+            // dedupe away the NEXT sign-out — and HouHub's `login` action is
+            // exactly that case, since it opens /settings/agents and the
+            // credential is then fixed outside the query process. And
+            // `createSession` now discards a query it spawned but never
+            // registered, so a failed `session/new` stops leaking a live CLI
+            // child.
+            //
+            // (g) Inert here. `--hide-claude-auth` (new `hide-claude-auth.js`:
+            // refuse turns a claude.ai subscription would pay for, plus the
+            // sign-out respawn machinery) is argv-gated and `args` below is
+            // empty — HouHub has no per-agent argv override, and a user who
+            // builds a CUSTOM agent around that flag gets `AgentType::Custom`,
+            // which is not advertised AIR at all. That also makes the record's
+            // new `reason` field unreachable: `CLAUDE_SUBSCRIPTION_NOT_SUPPORTED_REASON`
+            // is its only producer, so `parse_session_failure_record`
+            // deliberately does not read it. Likewise the hardening of the
+            // legacy gateway `authenticate` (an absent payload still succeeds;
+            // a PRESENT one must now carry an absolute http(s) `baseUrl`) and
+            // the containment of a per-session failure during
+            // `providers/set`/`providers/disable` — HouHub calls neither method
+            // on claude.
             distribution: AgentDistribution::Npx {
-                version: "0.73.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.73.0",
+                version: "0.74.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.74.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -851,9 +908,60 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // three names). Steering still ships no `promptRequired` opt-in
             // (tarball grep: zero hits), and there is still no `engines.node`,
             // so the 20.0.0 floor is retained.
+            //
+            // 1.9.0 + 1.10.0 add exactly five wire methods between them (diff of
+            // the two bundles' method literals: nothing was REMOVED), of which
+            // three are internal app-server calls and two face the client:
+            //
+            // (a) 1.10.0 — AIR **`asyncTasks`**, and this is the bump's reason.
+            // codex's background terminals (a shell the model leaves running,
+            // e.g. via the `unified_exec` tool) now publish the same lifecycle
+            // claude-agent-acp 0.73.0 does, so `build_client_capabilities` now
+            // advertises the capability to Codex as well. It is purely
+            // additive: `CodexBackgroundTerminalTasks` is constructed with
+            // `enabled = clientSupportsAirCapability(…, "asyncTasks")` and every
+            // method short-circuits on `isActive()`, so NOT advertising is
+            // byte-identical to 1.8.0. Verified against a live 1.10.0 over
+            // stdio, WITH and WITHOUT the advertisement — see the wire trace in
+            // `build_client_capabilities`. The control run is the argument for
+            // opting in: without it the launching `execute` tool call sits at
+            // `in_progress` for the rest of the connection and HouHub learns
+            // nothing at all about the process behind it.
+            //
+            // (b) 1.9.0 — **`_auth/status_update`**, a connection-level (NO
+            // `sessionId`) notification pushed unconditionally: once just after
+            // the `initialize` response, then on each authenticate / logout /
+            // session create, and on the app-server's `account/updated`. It is
+            // NOT capability-gated in either direction; the agent only
+            // ANNOUNCES it via `agentCapabilities._meta.authStatus = {}`. HouHub
+            // claims and drops it in `handle_auth_status_update` — see there for
+            // why a silent drop is not an option.
+            //
+            // (c) 1.9.0 — `account/rateLimits/read` (internal): `/status` now
+            // refreshes the rate limits before printing instead of showing
+            // whatever the last turn happened to report, prints an extra
+            // "individual spend limit" line, and flips the context line from
+            // "N% left" to "N% used". All three are agent TEXT that HouHub
+            // renders as markdown — the whole repo has no `/status` parser
+            // (`lib/codex-command-action.ts`, HouHub's only codex-text reader,
+            // handles tool-call titles and command-result envelopes, never a
+            // slash-command's reply), so this is display-only.
+            //
+            // (d) 1.9.0 — `sessionState.lastTokenUsage` is reset when a turn
+            // actually STARTS rather than when a prompt is received, so a prompt
+            // that dies before its turn opens no longer blanks the last usage.
+            // HouHub reads `usage_update` frames and is unaffected.
+            //
+            // `thread/backgroundTerminals/{list,terminate}` are the app-server
+            // half of (a) and never reach ACP. Steering STILL ships no
+            // `promptRequired` opt-in (tarball grep: zero hits ⇒ the arm below
+            // stays None), `agentFileChangeReport` / native subagent sessions
+            // are still not adopted, and there is still no `engines.node`, so
+            // the 20.0.0 floor is retained. `@openai/codex` moves ^0.152 →
+            // ^0.153.3 (one minor plus patches).
             distribution: AgentDistribution::Npx {
-                version: "1.8.0",
-                package: "@agentclientprotocol/codex-acp@1.8.0",
+                version: "1.10.0",
+                package: "@agentclientprotocol/codex-acp@1.10.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -1218,13 +1326,117 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // It advertises loadSession + sessionCapabilities.list/resume and
             // accepts wire `mcpServers` (stdio + streamable HTTP; SSE and the
             // `acp` transport are explicitly rejected), so both the resume rung
-            // and the houhub-mcp companion work out of the box. 0.3.0 adds the
-            // upstream skills chain (`skill_storage_spec` mirrors its roots)
-            // and, since 0.2.0, `--setup` terminal auth for storing the key in
-            // `$DSH_HOME/.credentials.yaml`.
+            // and the houhub-mcp companion work out of the box. Since 0.3.0 it
+            // mounts the upstream skills chain (`skill_storage_spec` mirrors
+            // its roots) and, since 0.2.0, offers `--setup` terminal auth for
+            // storing the key in `$DSH_HOME/.credentials.yaml`.
+            //
+            // 0.4.0 guards chunked tool-call headers whose later fragments
+            // repeat an explicit null/empty name (which used to overwrite the
+            // first fragment's id/name and dispatch an empty tool name); 0.5.0
+            // sends a terminal `tool_call`'s `rawInput` as the
+            // `{command, description?, cwd?}` OBJECT rather than a bare command
+            // string, i.e. the codex-acp shape HouHub's tool cards already parse.
+            //
+            // 0.6.0 is the first bump that MOVES the handshake, because its
+            // `dsh-*` deps went 0.1.0-rc.7 → 0.1.1-rc.2 and it wired up what
+            // that unlocked. Four of the five new capabilities cost HouHub
+            // nothing — they land on paths that already read the agent's own
+            // advertisement:
+            //
+            // * `sessionCapabilities.fork` is now advertised unconditionally,
+            //   so `supports_fork` flips on by itself and `acp::fork`'s
+            //   `{sessionId, cwd}` request is exactly what it accepts (it
+            //   rejects `additionalDirectories`, which HouHub never sends).
+            // * `promptCapabilities.image` went from a hardwired `false` to
+            //   "true whenever the attachment store is mounted", which the
+            //   stock composition always does — so the composer's upload path
+            //   un-gates through `effective_prompt_capabilities` with no
+            //   per-agent branch. Sending pixels to a text-only model is
+            //   refused by the agent with a message naming the model to switch
+            //   to, which is a better failure than hiding the button.
+            // * Multi-provider deployments re-encode the model config value as
+            //   `provider::model` and ship SERVER-SIDE `configOptions` groups.
+            //   `deriveModelGroups` already yields to server groups verbatim,
+            //   and single-provider installs (i.e. nearly all of them) keep
+            //   emitting bare model ids, so the selector is unaffected either
+            //   way. HouHub does not drive the new `providers/*` UNSTABLE plane;
+            //   routes are configured in `settings.yaml`, and the DeepSeek
+            //   settings panel still owns `DEEPSEEK_BASE_URL`/`DEEPSEEK_API_KEY`
+            //   for the built-in `deepseek-official` route.
+            // * `session/load` + `session/resume` + `session/fork` now answer
+            //   `-32002 Resource not found` (was `-32603`) for a session id with
+            //   no log, which `classify_load_failure` already maps to the
+            //   `resource_not_found` copy — a stale workspace id stops looking
+            //   like an agent crash.
+            //
+            // The fifth, context compaction, is the one HouHub cannot take on
+            // the wire: `compaction_update` / `compaction_summary_chunk` are
+            // gated behind a `clientCapabilities.session.compaction` that the
+            // pinned `agent-client-protocol-schema` (0.11) can neither
+            // advertise nor deserialize, so the agent correctly stays silent.
+            // Compaction still HAPPENS (auto at the window limit, or `/compact`)
+            // and still lands in the log, so `parsers::deepseek` renders it
+            // from there — see its `compaction/*` arm.
+            //
+            // What `parsers::deepseek` did have to learn is the log's two new
+            // shapes: `image` content blocks (bytes live in the content-
+            // addressed `$DSH_HOME/attachments/v1` store, the log keeps only a
+            // `sha256:` ref) and the `compaction/*` lifecycle. The three
+            // upstream layouts HouHub mirrors — `dsh-home-paths`'
+            // `resolveDshHome`, `dsh-skill-filesystem`'s roots,
+            // `dsh-session-persistence-jsonl`'s `session.jsonl[.zstd]` tree —
+            // are unchanged across rc.7 → rc.2, so nothing else moved.
+            //
+            // 0.7.0 moves NOTHING on the wire — `protocol/initialize.js`差异
+            // 只有 `AGENT_INFO.version` 一行，`@agentclientprotocol/sdk` 和上面
+            // 那三个被镜像的 `dsh-*` 依赖都停在原版本，所以上述能力断言与
+            // `parsers::deepseek` 都不用动。两处值得知道的行为变化：
+            //
+            // * `session/load` + `session/fork` 的 cwd 校验从裸字符串相等换成
+            //   `sameWorkspace()`（realpath.native，fail-closed）。这是**放宽**：
+            //   HouHub 送的工作区路径以前只要拼写与日志里记的不同就被拒——macOS
+            //   的 `/var` → `/private/var`、Windows 8.3 短名——恢复会莫名失败。
+            //   `session/list` 的 cwd 过滤同样改成按目录判定。
+            // * Windows 上模型面向的 shell 工具从 `bash` 换成 `pwsh`
+            //   (`composition/shell.js` 的 `mountNativeShell`)；非 Windows 仍是
+            //   `bash`。`dsh-tool-pwsh` 的 `presentCall` 与 `dsh-tool-bash` 逐字
+            //   同形（前台 `card: "terminal"` + `{title, description, cwd?}`，
+            //   后台才是 `card: "generic"` + 裸字符串 `rawInput`），所以 HouHub
+            //   的终端工具卡在两个平台上拿到的形状一致。
+            //
+            // 0.8.0 加的是**消息级 fork**，读的就是 claude-agent-acp 0.73.0 与
+            // codex-acp 1.8.0 那个 `_meta.jetbrains.air.fork` 块（同样先剥
+            // `:segment:\d+$`，块缺席时仍退化成尾部 fork），所以接线全在
+            // `acp::fork::resolve_fork_point` 的新 arm 里，协议层不用动：
+            //
+            // * id 侧**两种都认**：它自己盖在 message/thought chunk 上的 wire id
+            //   （`<turn>:<step>`），以及会话日志里那条 `message.id`。后者是
+            //   `parsers::deepseek` 现在记进 `agent_message_id` 的那个——上游把它
+            //   明写成「留给直接读 JSONL 的客户端」，HouHub 正是。
+            //   `dependencies` 与 0.7.0 逐字节相同（`dsh-*` 全停在 0.1.1-rc.2，
+            //   `@agentclientprotocol/sdk` 停在 1.4.0），日志布局因此没动。
+            // * 指纹侧**同时按逐条消息和逐回合两种口径算**，两边都中且指向不同回合
+            //   时报 `-32602`（而不是被 `rethrowMissingSession` 误判成 `-32002`，
+            //   那会让客户端把一条好会话从列表里摘掉）。HouHub 一个日志回合只渲染
+            //   一条 assistant 气泡，命中的是逐回合那一档；id 命中时指纹压根不看，
+            //   所以那条歧义路径实际走不到。
+            // * `initialize.js` 的 diff 只有 `AGENT_INFO.version` 一行，
+            //   `sessionCapabilities`（含无条件的 `fork: {}`）与
+            //   `promptCapabilities` 都没动，上面那串能力断言仍然成立。
+            // * `agent_message_chunk` / `agent_thought_chunk` / `user_message_chunk`
+            //   现在带 `messageId`。对 HouHub 是**惰性**的：schema crate 的
+            //   `message_id` 在没开的 `unstable_message_id` feature 后面，而整个
+            //   crate 没有 `deny_unknown_fields`，未知字段被 serde 丢掉。分叉点取
+            //   自解析出来的日志而不是 live 转写，所以也没有开它的理由。
+            //
+            // Keep `version` and `package` moving together: `version` is what
+            // the agents list shows as the upgrade target beside the installed
+            // version, so a drift leaves the Upgrade button installing one
+            // version while the row keeps calling it stale.
             distribution: AgentDistribution::Npx {
-                version: "0.7.0",
-                package: "deepseek-acp@0.7.0",
+                version: "0.8.0",
+                package: "deepseek-acp@0.8.0",
                 cmd: "deepseek-acp",
                 args: &[],
                 env: &[],
@@ -1522,8 +1734,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.73.0",
-            "@agentclientprotocol/claude-agent-acp@0.73.0",
+            "0.74.0",
+            "@agentclientprotocol/claude-agent-acp@0.74.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -1558,8 +1770,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "1.8.0",
-            "@agentclientprotocol/codex-acp@1.8.0",
+            "1.10.0",
+            "@agentclientprotocol/codex-acp@1.10.0",
             Some("20.0.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.33", "pi-acp@0.0.33", Some("22.0.0"));
@@ -1571,8 +1783,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::DeepSeek,
-            "0.7.0",
-            "deepseek-acp@0.7.0",
+            "0.8.0",
+            "deepseek-acp@0.8.0",
             Some("22.0.0"),
         );
         assert_npx_version(

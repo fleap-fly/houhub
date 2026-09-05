@@ -1,6 +1,6 @@
 //! Transcript-tail watcher: surfaces Claude Code's OUT-OF-TURN activity.
 //!
-//! Claude Code produces activity outside any houhub-driven prompt turn:
+//! Claude Code produces activity outside any HouHub-driven prompt turn:
 //! `<task-notification>` completions of async sub-agents (`Agent` launched in
 //! the background) and background shell tasks, the agent's continued work
 //! after such a notification (which can run for many minutes), and cron//loop
@@ -27,11 +27,11 @@
 //!   dies with it.
 //!
 //! * **Rendering** — new transcript records that do NOT belong to a
-//!   houhub-sent prompt turn are assembled into turns with the SAME Stage-A/
+//!   HouHub-sent prompt turn are assembled into turns with the SAME Stage-A/
 //!   Stage-B code the detail parser uses ([`ClaudeRecordAccumulator`] +
 //!   [`group_into_turns`]) and emitted as `AcpEvent::BackgroundActivity`
 //!   upserts for the frontend's overlay slice. Foreground turns are excluded
-//!   by the **prompt ledger**: every prompt houhub sends is fingerprinted, and
+//!   by the **prompt ledger**: every prompt HouHub sends is fingerprinted, and
 //!   a transcript turn whose initiating user record matches an unconsumed
 //!   fingerprint is the wire-rendered foreground turn (each fingerprint is
 //!   consumed exactly once, so a cron//loop re-fire of the SAME text later
@@ -66,8 +66,8 @@ use crate::acp::types::{AcpEvent, BackgroundSettledInfo, ConnectionStatus};
 use crate::models::agent::AgentType;
 use crate::models::message::MessageTurn;
 use crate::parsers::claude::{
-    capture_tag, capture_title_record, find_session_file, group_into_turns, is_meta_message, slash_command_display,
-    task_notification_result_regex, task_notification_status_regex,
+    capture_tag, capture_title_record, find_session_file, group_into_turns, is_meta_message,
+    slash_command_display, task_notification_result_regex, task_notification_status_regex,
     task_notification_summary_regex, task_notification_task_id_regex,
     task_notification_tool_use_id_regex, ClaudeRecordAccumulator, BACKGROUND_RESULT_MAX_CHARS,
     CONTEXT_CONTINUATION_PREFIX,
@@ -112,7 +112,42 @@ const MAX_EPISODE_MESSAGES: usize = 512;
 /// boundary rotation always wins for multi-turn episodes.
 const FORCE_ROTATE_MESSAGES: usize = MAX_EPISODE_MESSAGES * 2;
 
-/// Fingerprints of prompts houhub itself sent on this connection, so the
+/// How a transcript record supplied its turn-initiating text. Verbatim text
+/// can use the ledger's ordinary prefix match; a slash command reconstructed
+/// from tags needs the narrower command-separator normalization below.
+#[derive(Debug, PartialEq, Eq)]
+enum TurnInitiatorText {
+    Verbatim(String),
+    ReconstructedSlashCommand(String),
+}
+
+impl TurnInitiatorText {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Verbatim(text) | Self::ReconstructedSlashCommand(text) => text,
+        }
+    }
+}
+
+/// Reproduce the one lossy transformation made by [`slash_command_display`]:
+/// whitespace separating the command name from its arguments becomes one
+/// space. Whitespace *inside* the arguments remains byte-for-byte significant.
+fn reconstructed_slash_command_fingerprint(text: &str) -> Option<String> {
+    let text = text.trim();
+    let name_end = text.find(char::is_whitespace).unwrap_or(text.len());
+    let name = &text[..name_end];
+    if !name.starts_with('/') {
+        return None;
+    }
+    let args = text[name_end..].trim();
+    if args.is_empty() {
+        Some(name.to_string())
+    } else {
+        Some(format!("{name} {args}"))
+    }
+}
+
+/// Fingerprints of prompts HouHub itself sent on this connection, so the
 /// watcher can tell wire-rendered foreground turns apart from out-of-turn
 /// activity. Shared between the connection loop (writer, on every
 /// `ConnectionCommand::Prompt`) and the watcher tick (consumer). A std mutex
@@ -134,7 +169,7 @@ impl PromptLedger {
         })
     }
 
-    /// Record the fingerprint of a prompt houhub is about to send: the first
+    /// Record the fingerprint of a prompt HouHub is about to send: the first
     /// text block, trimmed. Attachment/resource blocks are excluded on
     /// purpose — the CLI may persist those differently, while the leading
     /// text lands verbatim at the start of the transcript's user record.
@@ -165,31 +200,45 @@ impl PromptLedger {
     /// Match `initiator_text` (the transcript turn's initiating user text)
     /// against the unconsumed fingerprints; on match the entry is consumed —
     /// exactly once per sent prompt, so a later same-text autonomous re-fire
-    /// finds no entry and classifies as out-of-turn. The record may carry
-    /// appended wrapper content after the sent text, hence prefix matching.
-    fn consume_matching(&self, initiator_text: &str) -> bool {
-        let text = initiator_text.trim();
+    /// finds no entry and classifies as out-of-turn. A verbatim record may
+    /// carry appended wrapper content after the sent text, hence its prefix
+    /// matching fallback.
+    ///
+    /// A slash command's initiator text is RECONSTRUCTED rather than read back:
+    /// the CLI persists the invocation as command tags, and
+    /// [`slash_command_display`] rebuilds it as `"/name" + ' ' + trimmed args`.
+    /// For that record type only, reproduce the same separator normalization on
+    /// the fingerprint. Normalizing every whitespace run would conflate
+    /// semantically different ordinary prompts and command arguments, risking
+    /// suppression of a genuine out-of-turn turn.
+    fn consume_matching(&self, initiator: &TurnInitiatorText) -> bool {
+        let text = initiator.as_str().trim();
         if text.is_empty() {
             return false;
         }
         let mut entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
         entries.retain(|e| e.recorded_at.elapsed() < LEDGER_TTL);
-        if let Some(pos) = entries
-            .iter()
-            .position(|e| text == e.fingerprint || text.starts_with(e.fingerprint.as_str()))
-        {
+        if let Some(pos) = entries.iter().position(|e| match initiator {
+            TurnInitiatorText::Verbatim(_) => {
+                text == e.fingerprint || text.starts_with(e.fingerprint.as_str())
+            }
+            TurnInitiatorText::ReconstructedSlashCommand(_) => {
+                text == e.fingerprint
+                    || reconstructed_slash_command_fingerprint(&e.fingerprint).as_deref()
+                        == Some(text)
+            }
+        }) {
             entries.remove(pos);
             return true;
         }
         false
     }
 
-    /// Fingerprint a bare string. Used for `_session/steering` injections,
-    /// which reach the agent outside `session/prompt` yet still land in the
-    /// transcript as a user record that [`group_into_turns`] reads as the
-    /// start of a turn — one the wire is already rendering, so it must
-    /// classify foreground like any prompt (see the `Steer` arm in
-    /// `connection.rs`).
+    /// Fingerprint a bare string — test convenience over
+    /// [`Self::record_prompt_blocks`]. (The `_session/steering` arm in
+    /// `connection.rs` used to be the production caller; it now records the
+    /// steered blocks directly, since a steered draft can carry attachments.)
+    #[cfg(test)]
     pub(crate) fn record_text(&self, text: &str) {
         self.record_prompt_blocks(&[crate::acp::types::PromptInputBlock::Text {
             text: text.to_string(),
@@ -370,7 +419,7 @@ struct TaskEntry {
 }
 
 /// The current out-of-turn episode: a contiguous run of transcript records
-/// not belonging to any houhub-sent prompt turn, assembled into turns via the
+/// not belonging to any HouHub-sent prompt turn, assembled into turns via the
 /// detail parser's own Stage A/B.
 struct Episode {
     /// Byte offset of the episode's initiating record — the stable base of
@@ -389,7 +438,7 @@ struct Episode {
 }
 
 enum Mode {
-    /// Records belong to a houhub-sent prompt turn — the wire renders them.
+    /// Records belong to a HouHub-sent prompt turn — the wire renders them.
     Foreground,
     /// Records are out-of-turn — the overlay renders them.
     Background,
@@ -436,7 +485,7 @@ pub(crate) struct WatchState {
     /// `Prompting` state observed at the previous tick — the edge detector for
     /// `current_turn_launched_ids` above.
     was_prompting: bool,
-    /// A houhub-sent prompt has been matched in the transcript and the model has
+    /// A HouHub-sent prompt has been matched in the transcript and the model has
     /// not answered it yet. Within that window the CLI writes the rest of the
     /// SUBMISSION — a slash command's `<local-command-stdout>`, the `isMeta`
     /// instruction `/goal` injects for the model, image metadata — and
@@ -801,7 +850,8 @@ impl WatchState {
         });
 
         let outstanding = self.tasks.len() as u32;
-        let accounting_changed = expired_any || self.last_emitted_outstanding != Some(outstanding);
+        let accounting_changed =
+            expired_any || self.last_emitted_outstanding != Some(outstanding);
         if changed_turns.is_empty() && settled.is_empty() && !accounting_changed {
             return None;
         }
@@ -1006,7 +1056,8 @@ impl WatchState {
                             .and_then(|v| v.as_str())
                             .filter(|s| !s.is_empty())
                         {
-                            let status = task.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                            let status =
+                                task.get("status").and_then(|s| s.as_str()).unwrap_or("");
                             if is_terminal_task_status(status) && self.tasks.remove(id).is_some() {
                                 self.settled_ids.insert(id.to_string());
                                 tracing::info!(
@@ -1074,7 +1125,8 @@ impl WatchState {
                         // again — the notification's own <note> documents
                         // multi-notify).
                         "SendMessage" => {
-                            let Some(to) = input.and_then(|i| i.get("to")).and_then(|t| t.as_str())
+                            let Some(to) =
+                                input.and_then(|i| i.get("to")).and_then(|t| t.as_str())
                             else {
                                 continue;
                             };
@@ -1139,9 +1191,10 @@ impl WatchState {
             self.foreground_awaiting_reply = false;
         }
 
-        if let Some(initiator_text) = turn_initiator_text(value) {
-            if ledger.consume_matching(&initiator_text) {
-                // A houhub-sent prompt: the wire renders this turn. Close any
+        if let Some(initiator) = turn_initiator_text(value) {
+            let initiator_text = initiator.as_str();
+            if ledger.consume_matching(&initiator) {
+                // A HouHub-sent prompt: the wire renders this turn. Close any
                 // open episode first (flush its final state) and go silent.
                 tracing::debug!("[bg-watch] foreground turn matched ledger");
                 self.collect_changed_turns(cwd, changed_turns);
@@ -1159,7 +1212,7 @@ impl WatchState {
             if self.foreground_awaiting_reply
                 && self.foreground_submission_id.is_some()
                 && record_submission_id(value) == self.foreground_submission_id
-                && task_notification_origin_id(&initiator_text).is_none()
+                && task_notification_origin_id(initiator_text).is_none()
             {
                 // Still inside the matched prompt's own submission — command
                 // output, the instruction `/goal` injects, image metadata. None
@@ -1191,7 +1244,7 @@ impl WatchState {
                         self.file.clone().unwrap_or_else(|| PathBuf::from("")),
                     ),
                     emitted_hashes: HashMap::new(),
-                    origin_task_id: task_notification_origin_id(&initiator_text),
+                    origin_task_id: task_notification_origin_id(initiator_text),
                 });
             }
             self.mode = Mode::Background;
@@ -1216,7 +1269,8 @@ impl WatchState {
                 // Cosmetic re-basing of the SAME continuous out-of-turn
                 // stretch (not a new initiator record) — the origin carries
                 // over unchanged.
-                let inherited_origin = self.episode.as_ref().and_then(|e| e.origin_task_id.clone());
+                let inherited_origin =
+                    self.episode.as_ref().and_then(|e| e.origin_task_id.clone());
                 self.episode = Some(Episode {
                     start_offset: self.next_episode_base(),
                     acc: ClaudeRecordAccumulator::new(
@@ -1312,7 +1366,7 @@ fn user_record_text(value: &serde_json::Value) -> Option<String> {
 ///   still rendering it — never a boundary;
 /// * everything else user-typed/injected (real prompts, `<task-notification>`
 ///   records, cron prompts) initiates.
-fn turn_initiator_text(value: &serde_json::Value) -> Option<String> {
+fn turn_initiator_text(value: &serde_json::Value) -> Option<TurnInitiatorText> {
     if value.get("type").and_then(|t| t.as_str()) != Some("user") {
         return None;
     }
@@ -1322,12 +1376,12 @@ fn turn_initiator_text(value: &serde_json::Value) -> Option<String> {
         if s.starts_with(CONTEXT_CONTINUATION_PREFIX) {
             return None;
         }
-        // A slash command persists as command tags; houhub sent the display
+        // A slash command persists as command tags; HouHub sent the display
         // form ("/name args"), so match the ledger against that.
         if let Some(display) = slash_command_display(s) {
-            return Some(display);
+            return Some(TurnInitiatorText::ReconstructedSlashCommand(display));
         }
-        return Some(s.to_string());
+        return Some(TurnInitiatorText::Verbatim(s.to_string()));
     }
 
     let arr = content.as_array()?;
@@ -1345,7 +1399,7 @@ fn turn_initiator_text(value: &serde_json::Value) -> Option<String> {
     if text.starts_with(CONTEXT_CONTINUATION_PREFIX) {
         return None;
     }
-    Some(text)
+    Some(TurnInitiatorText::Verbatim(text))
 }
 
 /// The submission a record belongs to. Claude Code stamps every user record it
@@ -1585,7 +1639,9 @@ mod tests {
         ws.tick(ledger, "/tmp", "conn-test", false, true)
     }
 
-    fn unpack(event: AcpEvent) -> (Vec<MessageTurn>, u32, Vec<BackgroundSettledInfo>, u64) {
+    fn unpack(
+        event: AcpEvent,
+    ) -> (Vec<MessageTurn>, u32, Vec<BackgroundSettledInfo>, u64) {
         match event {
             AcpEvent::BackgroundActivity {
                 turns,
@@ -1701,8 +1757,7 @@ mod tests {
         let path = temp_session(&dir);
         // Fork-time metadata at the head (post-epoch stamp), then the copied
         // history (original pre-fork stamps), then the genuinely-new prompt.
-        let queue_op =
-            r#"{"type":"queue-operation","timestamp":"2026-07-07T03:50:00.100Z","uuid":"q-1"}"#;
+        let queue_op = r#"{"type":"queue-operation","timestamp":"2026-07-07T03:50:00.100Z","uuid":"q-1"}"#;
         let copied_user = r#"{"type":"user","timestamp":"2026-07-07T03:46:00.000Z","uuid":"u-hi","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#;
         let copied_asst = r#"{"type":"assistant","timestamp":"2026-07-07T03:46:05.000Z","uuid":"a-hi","message":{"role":"assistant","content":[{"type":"text","text":"Hi!"}]}}"#;
         let new_user = r#"{"type":"user","timestamp":"2026-07-07T03:50:10.000Z","uuid":"u-hello","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}"#;
@@ -1747,7 +1802,8 @@ mod tests {
         // The flush completes: the reconstructed ack must account.
         append_raw(&path, tail);
         append_raw(&path, "\n");
-        let (_, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).expect("ack event"));
+        let (_, outstanding, ..) =
+            unpack(tick_now(&mut ws, &ledger).expect("ack event"));
         assert_eq!(outstanding, 1, "mid-flush ack must survive discovery");
     }
 
@@ -1781,7 +1837,8 @@ mod tests {
         // ahead of the baseline and re-arms the accounting.
         ws.rearm("s2".into(), epoch("2026-07-07T03:50:00.000Z"));
         ws.adopt_file(forked.clone());
-        let (_, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).expect("resume event"));
+        let (_, outstanding, ..) =
+            unpack(tick_now(&mut ws, &ledger).expect("resume event"));
         assert_eq!(
             outstanding, 1,
             "a resume written before the watcher noticed the fork must re-arm"
@@ -1821,7 +1878,8 @@ mod tests {
         assert_eq!(outstanding, 1, "post-fork resume must re-arm");
 
         write_lines(&forked, &[&notification("agentX", "completed")]);
-        let (_, outstanding, settled, _) = unpack(tick_now(&mut ws, &ledger).unwrap());
+        let (_, outstanding, settled, _) =
+            unpack(tick_now(&mut ws, &ledger).unwrap());
         assert_eq!(outstanding, 0);
         assert_eq!(settled.len(), 1);
     }
@@ -1893,7 +1951,7 @@ mod tests {
         );
     }
 
-    /// A slash command sent from houhub writes MORE than its own record: the
+    /// A slash command sent from HouHub writes MORE than its own record: the
     /// command, then `<local-command-stdout>`, then (for `/goal`) the `isMeta`
     /// STRING instruction Claude Code injects for the model — and only then the
     /// reply. Those side records are user records carrying text, so
@@ -1943,6 +2001,85 @@ mod tests {
         assert!(
             !turns.is_empty(),
             "an autonomous initiator after the reply is out-of-turn as before"
+        );
+    }
+
+    /// The command record is the only one the ledger can match, and its
+    /// initiator text is REBUILT from command tags — `slash_command_display`
+    /// joins the name and the trimmed args with a single space, whatever the
+    /// sender typed. The composer inserts a space after a command badge, so a
+    /// sender who types their own lands two, and the rebuilt text no longer
+    /// starts with the fingerprint. That miss leaves the submission window
+    /// unarmed and every following side record classifies out-of-turn, which
+    /// is the same duplicated `/goal` turn as above by a different route.
+    #[test]
+    fn a_command_matches_the_ledger_despite_a_rebuilt_separator() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_session(&dir);
+        let ledger = PromptLedger::shared();
+        // As SENT: two spaces after the command badge.
+        ledger.record_text("/goal  build a test page");
+
+        let mut ws = WatchState::new();
+        ws.session_id = Some("s1".into());
+        ws.epoch = Some(epoch("2020-01-01T00:00:00Z"));
+        ws.adopt_file(path.clone());
+
+        // As PERSISTED: the CLI trims the args, so the display form rebuilds
+        // with one space.
+        let command = r#"{"type":"user","timestamp":"2026-07-07T03:50:00.000Z","uuid":"u-cmd","promptId":"p1","message":{"role":"user","content":"<command-name>/goal</command-name>\n<command-args>build a test page</command-args>"}}"#;
+        let hook = r#"{"type":"user","timestamp":"2026-07-07T03:50:00.200Z","uuid":"u-hook","promptId":"p1","isMeta":true,"userType":"external","message":{"role":"user","content":"A session-scoped Stop hook is now active with condition: build a test page."}}"#;
+        write_lines(&path, &[command, hook, &assistant_text("a1", "On it.")]);
+        let event = tick_prompting(&mut ws, &ledger);
+        assert!(
+            event.is_none() || unpack(event.unwrap()).0.is_empty(),
+            "the wire renders this turn — a rebuilt separator must not turn it \
+             into an overlay copy"
+        );
+    }
+
+    #[test]
+    fn ledger_normalizes_only_a_reconstructed_command_separator() {
+        let ledger = PromptLedger::shared();
+        ledger.record_text("/goal  build  a test page");
+        assert!(
+            !ledger.consume_matching(&TurnInitiatorText::ReconstructedSlashCommand(
+                "/goal build a test page".into()
+            )),
+            "whitespace inside the arguments remains significant"
+        );
+        assert!(
+            ledger.consume_matching(&TurnInitiatorText::ReconstructedSlashCommand(
+                "/goal build  a test page".into()
+            ))
+        );
+        assert!(
+            !ledger.consume_matching(&TurnInitiatorText::ReconstructedSlashCommand(
+                "/goal build  a test page".into()
+            )),
+            "a reconstructed match consumes the entry exactly once"
+        );
+
+        let ledger = PromptLedger::shared();
+        ledger.record_text("build  a test page");
+        assert!(
+            !ledger.consume_matching(&TurnInitiatorText::Verbatim("build a test page".into())),
+            "ordinary prompt whitespace must remain byte-for-byte significant"
+        );
+        assert!(ledger.consume_matching(&TurnInitiatorText::Verbatim("build  a test page".into())));
+
+        let ledger = PromptLedger::shared();
+        ledger.record_text("/goal  build");
+        assert!(
+            !ledger.consume_matching(&TurnInitiatorText::ReconstructedSlashCommand(
+                "/goal builder".into()
+            )),
+            "reconstructed command arguments do not use the verbatim prefix fallback"
+        );
+        assert!(
+            ledger.consume_matching(&TurnInitiatorText::ReconstructedSlashCommand(
+                "/goal build".into()
+            ))
         );
     }
 
@@ -2077,7 +2214,7 @@ mod tests {
         let ledger = PromptLedger::shared();
         ledger.record_text("do the thing");
 
-        // On disk before discovery: houhub's first prompt, the reply, an ack.
+        // On disk before discovery: HouHub's first prompt, the reply, an ack.
         write_lines(
             &path,
             &[
@@ -2099,7 +2236,7 @@ mod tests {
         assert!(settled.is_empty());
         assert!(
             turns.is_empty(),
-            "the houhub-sent prompt classifies foreground — the wire renders it"
+            "the HouHub-sent prompt classifies foreground — the wire renders it"
         );
 
         // Its fingerprint was consumed, so a same-text out-of-turn refire
@@ -2139,7 +2276,8 @@ mod tests {
             &path,
             &[&cron_prompt("new pass"), &assistant_text("a9", "hi")],
         );
-        let (turns, outstanding, ..) = unpack(tick_now(&mut ws, &ledger).expect("turns event"));
+        let (turns, outstanding, ..) =
+            unpack(tick_now(&mut ws, &ledger).expect("turns event"));
         assert_eq!(outstanding, 0, "historical ack must NOT register");
         assert_eq!(turns.len(), 1);
     }
@@ -2390,18 +2528,11 @@ mod tests {
         let _ = tick_now(&mut ws, &ledger);
         write_lines(
             &path,
-            &[
-                &notification("shell1", "completed"),
-                &assistant_text("a1", "Done."),
-            ],
+            &[&notification("shell1", "completed"), &assistant_text("a1", "Done.")],
         );
         let (turns, outstanding, settled, _) =
             unpack(tick_now(&mut ws, &ledger).expect("settle event"));
-        assert_eq!(
-            turns.len(),
-            1,
-            "a shell follow-up has nowhere else to render"
-        );
+        assert_eq!(turns.len(), 1, "a shell follow-up has nowhere else to render");
         assert_eq!(outstanding, 0);
         assert_eq!(
             settled.len(),
@@ -2482,7 +2613,8 @@ mod tests {
                 &assistant_text("a1", "Working on it."),
             ],
         );
-        let (turns, ..) = unpack(tick_prompting(&mut ws, &ledger).expect("turns event"));
+        let (turns, ..) =
+            unpack(tick_prompting(&mut ws, &ledger).expect("turns event"));
         assert_eq!(
             turns.len(),
             1,
@@ -2517,7 +2649,8 @@ mod tests {
                 &assistant_text("a1", "Build finished cleanly."),
             ],
         );
-        let (turns, ..) = unpack(tick_prompting(&mut ws, &ledger).expect("settle event"));
+        let (turns, ..) =
+            unpack(tick_prompting(&mut ws, &ledger).expect("settle event"));
         assert_eq!(
             turns.len(),
             1,
@@ -2602,7 +2735,7 @@ mod tests {
 
     #[test]
     fn same_text_refire_without_ledger_entry_is_background() {
-        // The /loop case: houhub sent the text once (consumed), the scheduler
+        // The /loop case: HouHub sent the text once (consumed), the scheduler
         // re-fires the SAME text later — second occurrence must surface.
         let dir = tempfile::tempdir().unwrap();
         let path = temp_session(&dir);
@@ -2678,10 +2811,7 @@ mod tests {
         let more = assistant_text("a2", "step two");
         let (head, tail) = more.split_at(more.len() / 2);
         {
-            let mut f = std::fs::OpenOptions::new()
-                .append(true)
-                .open(&path)
-                .unwrap();
+            let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
             f.write_all(head.as_bytes()).unwrap();
         }
         assert!(
@@ -2690,10 +2820,7 @@ mod tests {
         );
 
         {
-            let mut f = std::fs::OpenOptions::new()
-                .append(true)
-                .open(&path)
-                .unwrap();
+            let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
             f.write_all(tail.as_bytes()).unwrap();
             f.write_all(b"\n").unwrap();
         }
@@ -2751,9 +2878,11 @@ mod tests {
     fn ledger_prefix_matches_and_consumes_once() {
         let ledger = PromptLedger::shared();
         ledger.record_text("deploy the app");
-        assert!(ledger.consume_matching("deploy the app\n<system-hint>extra</system-hint>"));
+        assert!(ledger.consume_matching(&TurnInitiatorText::Verbatim(
+            "deploy the app\n<system-hint>extra</system-hint>".into()
+        )));
         assert!(
-            !ledger.consume_matching("deploy the app"),
+            !ledger.consume_matching(&TurnInitiatorText::Verbatim("deploy the app".into())),
             "an entry is consumed exactly once"
         );
     }
@@ -2769,11 +2898,15 @@ mod tests {
             serde_json::from_str(&notification("x", "completed")).unwrap();
         assert!(turn_initiator_text(&note)
             .unwrap()
+            .as_str()
             .starts_with("<task-notification>"));
 
         // cron prompt (isMeta + string): initiates with the prompt text.
         let cron: serde_json::Value = serde_json::from_str(&cron_prompt("check weather")).unwrap();
-        assert_eq!(turn_initiator_text(&cron).as_deref(), Some("check weather"));
+        assert_eq!(
+            turn_initiator_text(&cron).as_ref().map(|text| text.as_str()),
+            Some("check weather")
+        );
 
         // context-continuation summary: never a boundary.
         let cont = format!(
@@ -2786,7 +2919,12 @@ mod tests {
         // slash command record matches via its display form.
         let cmd = r#"{"type":"user","uuid":"u-cmd","message":{"role":"user","content":"<command-name>/init</command-name><command-args>now</command-args>"}}"#;
         let cmd: serde_json::Value = serde_json::from_str(cmd).unwrap();
-        assert_eq!(turn_initiator_text(&cmd).as_deref(), Some("/init now"));
+        assert_eq!(
+            turn_initiator_text(&cmd),
+            Some(TurnInitiatorText::ReconstructedSlashCommand(
+                "/init now".into()
+            ))
+        );
     }
 
     /// The whole point of reading titles here: Claude Code's background

@@ -932,7 +932,7 @@ function DiffFileList({
   badge?: string | null
   description?: string | null
   onOpenDiff: (path: string) => Promise<void>
-  openFilePreview: (path: string) => Promise<void>
+  openFilePreview: (path: string) => Promise<unknown>
 }) {
   const t = useTranslations("Folder.fileWorkspacePanel")
   return (
@@ -2176,7 +2176,9 @@ export function FileWorkspacePanel() {
         ) : (
           <MarkdownDocumentPreview
             content={preprocessedContent}
-            fileDir={fileDir}
+            // The tab path is absolute, so the document directory is too —
+            // every local reference resolves to an absolute filesystem path.
+            fileDir={activeIo?.rootPath ?? null}
             localRefsEnabled={localRefsEnabled}
             openFilePreview={openFilePreview}
           />

@@ -1375,7 +1375,8 @@
       "localUnrecognized": "{versionText}. La versión local no es comparable; intenta actualizar para sobrescribir la instalación.",
       "upgradeAvailable": "{versionText}. Hay actualización disponible.",
       "remoteUnavailable": "{versionText}. La versión remota no está disponible por ahora.",
-      "latest": "{versionText}. Ya está en la última versión."
+      "latest": "{versionText}. Ya está en la última versión.",
+      "latestChannel": "{versionText}. Canal de última versión activado; Actualizar instala la versión más reciente."
     },
     "cline": {
       "configDescription": "Configure el proveedor de API y las credenciales de Cline. La configuración se guarda en ~/.cline/data/."
@@ -1587,7 +1588,14 @@
       }
     },
     "customAgentMcpLabel": "Compatibilidad con MCP",
-    "customAgentMcpHint": "Envía el complemento MCP integrado de houhub a este agente al iniciar la sesión: es el canal de la delegación, los comentarios en vivo y las herramientas de tareas. Desactívalo para un agente que rechaza servidores MCP y no llega a conectarse; el cambio se aplica en la próxima conexión."
+    "customAgentMcpHint": "Envía el complemento MCP integrado de houhub a este agente al iniciar la sesión: es el canal de la delegación, los comentarios en vivo y las herramientas de tareas. Desactívalo para un agente que rechaza servidores MCP y no llega a conectarse; el cambio se aplica en la próxima conexión.",
+    "adapterChannel": {
+      "label": "Versión del adaptador",
+      "description": "Instalar y Actualizar usan la versión que houhub ha revisado y fijado. Con Última pasan a instalar la versión de npm más reciente del paquete en ese momento; si esa instalación falla, houhub vuelve a la versión fijada y lo indica en el registro de instalación.",
+      "pinned": "Fijada (recomendada)",
+      "latest": "Última (sin revisar)",
+      "latestWarning": "Las versiones más recientes no están revisadas y pueden romper este agente en houhub; en ocasiones incluso se sabe que una versión está rota. El estado de versión muestra lo que quedó instalado realmente."
+    }
   },
   "SettingsPages": {
     "agentsLoading": "Cargando configuración de agentes...",
@@ -2116,7 +2124,26 @@
       "closeOthers": "Cerrar otros",
       "closeAll": "Cerrar todo",
       "hideTerminal": "Ocultar terminal ({shortcut})",
-      "openFolderFirst": "Abre primero una carpeta"
+      "openFolderFirst": "Abre primero una carpeta",
+      "keybar": {
+        "label": "Teclas virtuales del terminal",
+        "show": "Mostrar teclas virtuales",
+        "hide": "Ocultar teclas virtuales",
+        "esc": "ESC",
+        "tab": "TAB",
+        "ctrl": "CTRL",
+        "alt": "ALT",
+        "slash": "/",
+        "dash": "-",
+        "home": "HOME",
+        "end": "END",
+        "pgup": "PGUP",
+        "pgdn": "PGDN",
+        "up": "↑",
+        "down": "↓",
+        "left": "←",
+        "right": "→"
+      }
     },
     "workspaceDialog": {
       "title": "Abrir carpeta",
@@ -2753,7 +2780,8 @@
         "descriptionWithTarget": "¿Revertir cambios locales del archivo \"{name}\"?",
         "descriptionFallback": "¿Revertir cambios locales de este archivo?"
       },
-      "terminalTitle": "Consola · {name}"
+      "terminalTitle": "Consola · {name}",
+      "moreActions": "Más acciones"
     },
     "commandDropdown": {
       "loading": "Cargando...",
@@ -2841,7 +2869,8 @@
           "turnFailedEmptyProtocol": "{agent} produjo una salida que houhub no pudo analizar; la versión del agente podría no coincidir con el protocolo.",
           "turnFailedEmptyMetadata": "{agent} solo envió actualizaciones de estado en este turno (plan / modo / uso) y ninguna respuesta.",
           "detailsInAlerts": "Abre Alertas en la barra de estado y despliega los detalles para ver la salida del agente.",
-          "mcpRejectedByAgent": "{agent} rechazó la sesión con el complemento MCP de houhub adjunto: {message} Si este agente no admite MCP, desactiva «Compatibilidad con MCP» en Ajustes y vuelve a conectar."
+          "mcpRejectedByAgent": "{agent} rechazó la sesión con el complemento MCP de houhub adjunto: {message} Si este agente no admite MCP, desactiva «Compatibilidad con MCP» en Ajustes y vuelve a conectar.",
+          "turnFailedAuthRequired": "{agent} necesita que inicies sesión de nuevo antes de ejecutar este turno. Inicia sesión desde Ajustes y vuelve a enviar el mensaje."
         },
         "unableReadAgentConfig": "No se puede leer la configuración del agente: {message}",
         "connectFailedTitle": "Falló la conexión de {agent}",
@@ -2946,14 +2975,11 @@
         "mentionGroupSession": "Sesiones",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Habilidades",
-        "queueMessage": "Poner en cola",
-        "steerIntoTurn": "Insertar en el turno actual",
-        "steerQueuedInstead": "Se puso en cola: se enviará con el siguiente turno.",
-        "steerFailed": "No se pudo insertar en el turno actual",
-        "steerAttachmentsUnsupported": "Solo texto: los borradores con adjuntos pasan por la cola.",
         "toggleOn": "Activado",
         "toggleOff": "Desactivado",
-        "slashLoading": "Cargando comandos…"
+        "slashLoading": "Cargando comandos…",
+        "steerAsNote": "Enviar nota para la próxima comprobación",
+        "steerNoteFailed": "No se pudo enviar tu nota"
       },
       "messageQueue": {
         "addToQueue": "Agregar a la cola",
@@ -3223,7 +3249,8 @@
         "copiedImage": "Imagen copiada",
         "copyImageFailed": "No se pudo copiar la imagen: {message}",
         "copyImageUnsupported": "Aquí no se puede copiar esta imagen",
-        "selectionSaveAsNote": "Nota"
+        "selectionSaveAsNote": "Nota",
+        "forkNotReady": "Todavía no se puede bifurcar desde esta respuesta; inténtalo en un momento"
       },
       "liveTurnStats": {
         "thinking": "Pensando...",
@@ -3288,7 +3315,8 @@
             "child_max_turn_requests": "subagente: límite de solicitudes",
             "child_empty": "subagente sin salida",
             "child_unknown": "subagente: error",
-            "unknown": "tarea desconocida"
+            "unknown": "tarea desconocida",
+            "child_auth_required": "subagente requiere sesión"
           }
         },
         "resumed": "Reanudado",
@@ -3665,6 +3693,27 @@
         },
         "resumeDelegation": "Reanudando la tarea {task}",
         "resumeDelegationNoId": "Reanudando una tarea delegada"
+      },
+      "houhubMcpTool": {
+        "getSessionInfo": "Leyendo la sesión {session}",
+        "getSessionInfoNoId": "Leyendo una sesión",
+        "taskProgress": "Progreso: {message}",
+        "taskProgressNoMessage": "Informando el progreso de la tarea",
+        "taskComplete": "Tarea finalizada · {verdict}",
+        "taskCompleteWithSummary": "Tarea finalizada · {verdict}: {summary}",
+        "createAutomation": "Creando la automatización {name}",
+        "createAutomationNoName": "Creando una automatización",
+        "createWorkTask": "Creando la tarea de trabajo {title}",
+        "createWorkTaskNoTitle": "Creando una tarea de trabajo",
+        "resumeDelegation": "Reanudando la tarea {task}",
+        "resumeDelegationNoId": "Reanudando una tarea delegada",
+        "promptLabel": "Instrucción",
+        "verdict": {
+          "success": "correcta",
+          "needs_review": "requiere revisión",
+          "blocked": "bloqueada",
+          "unknown": "desconocido"
+        }
       }
     },
     "diffPreview": {
@@ -3716,6 +3765,17 @@
     },
     "toasts": {
       "cloneFailed": "No se pudo clonar el repositorio"
+    },
+    "fileViewer": {
+      "title": "Vista previa del archivo",
+      "description": "Un archivo referenciado en esta conversación, abierto junto a ella.",
+      "openInWorkspace": "Abrir en el espacio de trabajo",
+      "back": "Atrás",
+      "preview": "Vista previa",
+      "source": "Código",
+      "loading": "Cargando...",
+      "cannotResolve": "No se puede resolver esta ruta de archivo.",
+      "tooLargeToPreview": "Este archivo es demasiado grande para previsualizarlo aquí. Ábrelo en el espacio de trabajo."
     }
   },
   "ProjectBoot": {
@@ -4113,7 +4173,8 @@
       "linked_to_houhub": "Habilitado",
       "linked_elsewhere": "Bloqueado — existe otro vínculo",
       "blocked_by_real_directory": "Bloqueado — una habilidad personalizada ocupa este nombre",
-      "broken": "Vínculo roto"
+      "broken": "Vínculo roto",
+      "linked_to_houhub": "Habilitado"
     },
     "badges": {
       "userModified": "Modificado por el usuario"
@@ -4150,7 +4211,8 @@
       "linked_to_houhub": "Habilitado",
       "linked_elsewhere": "Bloqueado — existe otro vínculo",
       "blocked_by_real_directory": "Bloqueado — una habilidad personalizada ocupa este nombre",
-      "broken": "Vínculo roto"
+      "broken": "Vínculo roto",
+      "linked_to_houhub": "Habilitado"
     },
     "badges": {
       "userModified": "Modificado por el usuario",
@@ -4200,7 +4262,8 @@
       "linked_to_houhub": "Activado",
       "linked_elsewhere": "Bloqueado — existe otro enlace",
       "blocked_by_real_directory": "Bloqueado — una habilidad personalizada ocupa este nombre",
-      "broken": "Enlace roto"
+      "broken": "Enlace roto",
+      "linked_to_houhub": "Activado"
     },
     "badges": {
       "notSynced": "No sincronizado"
@@ -4867,7 +4930,8 @@
       "linked_to_houhub": "Habilitada",
       "linked_elsewhere": "Vinculada en otro lugar",
       "blocked_by_real_directory": "Bloqueada por una carpeta real",
-      "broken": "Enlace roto"
+      "broken": "Enlace roto",
+      "linked_to_houhub": "Habilitada"
     },
     "actions": {
       "new": "Nueva",

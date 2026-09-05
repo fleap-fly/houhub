@@ -1375,7 +1375,8 @@
       "localUnrecognized": "{versionText}. La version locale n’est pas comparable ; essayez une mise à niveau pour écraser l’installation.",
       "upgradeAvailable": "{versionText}. Mise à niveau disponible.",
       "remoteUnavailable": "{versionText}. La version distante est actuellement indisponible.",
-      "latest": "{versionText}. Déjà à jour."
+      "latest": "{versionText}. Déjà à jour.",
+      "latestChannel": "{versionText}. Le canal Dernière est actif ; Mettre à niveau installe la version la plus récente."
     },
     "cline": {
       "configDescription": "Configurez le fournisseur API et les identifiants Cline. Les paramètres sont enregistrés dans ~/.cline/data/."
@@ -1587,7 +1588,14 @@
       }
     },
     "customAgentMcpLabel": "Prise en charge de MCP",
-    "customAgentMcpHint": "Transmet le compagnon MCP intégré de houhub à cet agent au démarrage de la session — le canal derrière la délégation, le retour en direct et les outils de tâches. Désactivez-le pour un agent qui refuse les serveurs MCP et ne parvient pas à se connecter ; le changement s'applique à la prochaine connexion."
+    "customAgentMcpHint": "Transmet le compagnon MCP intégré de houhub à cet agent au démarrage de la session — le canal derrière la délégation, le retour en direct et les outils de tâches. Désactivez-le pour un agent qui refuse les serveurs MCP et ne parvient pas à se connecter ; le changement s'applique à la prochaine connexion.",
+    "adapterChannel": {
+      "label": "Version de l'adaptateur",
+      "description": "Installer et Mettre à niveau utilisent la version examinée et épinglée par houhub. Avec Dernière, c'est la version npm la plus récente du paquet qui est installée ; si cette installation échoue, houhub revient à la version épinglée et l'indique dans le journal d'installation.",
+      "pinned": "Épinglée (recommandée)",
+      "latest": "Dernière (non examinée)",
+      "latestWarning": "Les versions les plus récentes ne sont pas examinées et peuvent casser cet agent dans houhub ; il arrive même qu'une version soit connue pour être défectueuse. Le statut de version affiche ce qui est réellement installé."
+    }
   },
   "SettingsPages": {
     "agentsLoading": "Chargement des paramètres des agents...",
@@ -2116,7 +2124,26 @@
       "closeOthers": "Fermer les autres",
       "closeAll": "Tout fermer",
       "hideTerminal": "Masquer le terminal ({shortcut})",
-      "openFolderFirst": "Ouvrez d'abord un dossier"
+      "openFolderFirst": "Ouvrez d'abord un dossier",
+      "keybar": {
+        "label": "Touches virtuelles du terminal",
+        "show": "Afficher les touches virtuelles",
+        "hide": "Masquer les touches virtuelles",
+        "esc": "ESC",
+        "tab": "TAB",
+        "ctrl": "CTRL",
+        "alt": "ALT",
+        "slash": "/",
+        "dash": "-",
+        "home": "HOME",
+        "end": "END",
+        "pgup": "PGUP",
+        "pgdn": "PGDN",
+        "up": "↑",
+        "down": "↓",
+        "left": "←",
+        "right": "→"
+      }
     },
     "workspaceDialog": {
       "title": "Ouvrir un dossier",
@@ -2753,7 +2780,8 @@
         "descriptionWithTarget": "Annuler les modifications locales du fichier \"{name}\" ?",
         "descriptionFallback": "Annuler les modifications locales de ce fichier ?"
       },
-      "terminalTitle": "Console · {name}"
+      "terminalTitle": "Console · {name}",
+      "moreActions": "Plus d'actions"
     },
     "commandDropdown": {
       "loading": "Chargement...",
@@ -2841,7 +2869,8 @@
           "turnFailedEmptyProtocol": "{agent} a produit une sortie que houhub n'a pas pu analyser — la version de l'agent ne correspond peut-être pas au protocole.",
           "turnFailedEmptyMetadata": "{agent} n'a envoyé que des mises à jour d'état ce tour-ci (plan / mode / utilisation) et aucune réponse.",
           "detailsInAlerts": "Ouvrez les alertes de la barre d'état et développez les détails pour voir la sortie de l'agent.",
-          "mcpRejectedByAgent": "{agent} a refusé la session alors que le compagnon MCP de houhub était joint : {message} Si cet agent ne prend pas en charge MCP, désactivez « Prise en charge de MCP » dans les Paramètres puis reconnectez-vous."
+          "mcpRejectedByAgent": "{agent} a refusé la session alors que le compagnon MCP de houhub était joint : {message} Si cet agent ne prend pas en charge MCP, désactivez « Prise en charge de MCP » dans les Paramètres puis reconnectez-vous.",
+          "turnFailedAuthRequired": "{agent} a besoin que vous vous reconnectiez avant de pouvoir exécuter ce tour. Connectez-vous depuis les Paramètres, puis renvoyez le message."
         },
         "unableReadAgentConfig": "Impossible de lire la configuration de l'agent : {message}",
         "connectFailedTitle": "Échec de la connexion de {agent}",
@@ -2946,14 +2975,11 @@
         "mentionGroupSession": "Sessions",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Compétences",
-        "queueMessage": "Mettre en file d'attente",
-        "steerIntoTurn": "Insérer dans le tour en cours",
-        "steerQueuedInstead": "Mis en file d'attente — il sera envoyé au tour suivant.",
-        "steerFailed": "Impossible d'insérer dans le tour en cours",
-        "steerAttachmentsUnsupported": "Texte uniquement — les brouillons avec pièces jointes passent par la file d'attente.",
         "toggleOn": "Activé",
         "toggleOff": "Désactivé",
-        "slashLoading": "Chargement des commandes…"
+        "slashLoading": "Chargement des commandes…",
+        "steerAsNote": "Envoyer une note pour la prochaine vérification",
+        "steerNoteFailed": "Impossible d'envoyer votre note"
       },
       "messageQueue": {
         "addToQueue": "Mettre en file",
@@ -3223,7 +3249,8 @@
         "copiedImage": "Image copiée",
         "copyImageFailed": "Échec de la copie de l'image : {message}",
         "copyImageUnsupported": "La copie de cette image n'est pas prise en charge ici",
-        "selectionSaveAsNote": "Note"
+        "selectionSaveAsNote": "Note",
+        "forkNotReady": "Impossible de bifurquer depuis cette réponse pour le moment, réessayez dans un instant"
       },
       "liveTurnStats": {
         "thinking": "Réflexion...",
@@ -3288,7 +3315,8 @@
             "child_max_turn_requests": "sous-agent : limite de requêtes",
             "child_empty": "sous-agent sans sortie",
             "child_unknown": "sous-agent : erreur",
-            "unknown": "tâche inconnue"
+            "unknown": "tâche inconnue",
+            "child_auth_required": "sous-agent : connexion requise"
           }
         },
         "resumed": "Repris",
@@ -3665,6 +3693,27 @@
         },
         "resumeDelegation": "Reprise de la tâche {task}",
         "resumeDelegationNoId": "Reprise d'une tâche déléguée"
+      },
+      "houhubMcpTool": {
+        "getSessionInfo": "Lecture de la session {session}",
+        "getSessionInfoNoId": "Lecture d’une session",
+        "taskProgress": "Progression : {message}",
+        "taskProgressNoMessage": "Signalement de la progression",
+        "taskComplete": "Tâche terminée · {verdict}",
+        "taskCompleteWithSummary": "Tâche terminée · {verdict} : {summary}",
+        "createAutomation": "Création de l’automatisation {name}",
+        "createAutomationNoName": "Création d’une automatisation",
+        "createWorkTask": "Création de la tâche {title}",
+        "createWorkTaskNoTitle": "Création d’une tâche",
+        "resumeDelegation": "Reprise de la tâche {task}",
+        "resumeDelegationNoId": "Reprise d'une tâche déléguée",
+        "promptLabel": "Instruction",
+        "verdict": {
+          "success": "réussie",
+          "needs_review": "à relire",
+          "blocked": "bloquée",
+          "unknown": "inconnu"
+        }
       }
     },
     "diffPreview": {
@@ -3716,6 +3765,17 @@
     },
     "toasts": {
       "cloneFailed": "Échec du clonage du dépôt"
+    },
+    "fileViewer": {
+      "title": "Aperçu du fichier",
+      "description": "Un fichier référencé dans cette conversation, ouvert à côté.",
+      "openInWorkspace": "Ouvrir dans l'espace de travail",
+      "back": "Retour",
+      "preview": "Aperçu",
+      "source": "Source",
+      "loading": "Chargement...",
+      "cannotResolve": "Impossible de résoudre ce chemin de fichier.",
+      "tooLargeToPreview": "Ce fichier est trop volumineux pour être prévisualisé ici. Ouvrez-le dans l'espace de travail."
     }
   },
   "ProjectBoot": {
@@ -4113,7 +4173,8 @@
       "linked_to_houhub": "Activé",
       "linked_elsewhere": "Bloqué — un autre lien existe",
       "blocked_by_real_directory": "Bloqué — une compétence personnalisée occupe ce nom",
-      "broken": "Lien cassé"
+      "broken": "Lien cassé",
+      "linked_to_houhub": "Activé"
     },
     "badges": {
       "userModified": "Modifié par l'utilisateur"
@@ -4150,7 +4211,8 @@
       "linked_to_houhub": "Activé",
       "linked_elsewhere": "Bloqué — un autre lien existe",
       "blocked_by_real_directory": "Bloqué — une compétence personnalisée occupe ce nom",
-      "broken": "Lien cassé"
+      "broken": "Lien cassé",
+      "linked_to_houhub": "Activé"
     },
     "badges": {
       "userModified": "Modifié par l'utilisateur",
@@ -4200,7 +4262,8 @@
       "linked_to_houhub": "Activé",
       "linked_elsewhere": "Bloqué — un autre lien existe",
       "blocked_by_real_directory": "Bloqué — une compétence personnalisée occupe ce nom",
-      "broken": "Lien cassé"
+      "broken": "Lien cassé",
+      "linked_to_houhub": "Activé"
     },
     "badges": {
       "notSynced": "Non synchronisé"
@@ -4867,7 +4930,8 @@
       "linked_to_houhub": "Activée",
       "linked_elsewhere": "Liée ailleurs",
       "blocked_by_real_directory": "Bloquée par un dossier réel",
-      "broken": "Lien rompu"
+      "broken": "Lien rompu",
+      "linked_to_houhub": "Activée"
     },
     "actions": {
       "new": "Nouvelle",

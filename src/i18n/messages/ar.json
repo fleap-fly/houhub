@@ -1375,7 +1375,8 @@
       "localUnrecognized": "{versionText}. الإصدار المحلي غير قابل للمقارنة؛ جرّب الترقية للكتابة فوق التثبيت.",
       "upgradeAvailable": "{versionText}. تتوفر ترقية.",
       "remoteUnavailable": "{versionText}. الإصدار البعيد غير متاح حاليًا.",
-      "latest": "{versionText}. أنت على أحدث إصدار."
+      "latest": "{versionText}. أنت على أحدث إصدار.",
+      "latestChannel": "{versionText}. قناة الأحدث مفعّلة؛ الترقية تثبّت أحدث إصدار."
     },
     "cline": {
       "configDescription": "تكوين مزود واجهة برمجة التطبيقات وبيانات اعتماد Cline. يتم حفظ الإعدادات في ~/.cline/data/."
@@ -1587,7 +1588,14 @@
       }
     },
     "customAgentMcpLabel": "دعم MCP",
-    "customAgentMcpHint": "يرسل رفيق MCP المدمج في houhub إلى هذا الوكيل عند بدء الجلسة — وهو القناة التي تعتمد عليها الإحالة والتغذية الراجعة الحية وأدوات المهام. أوقفه مع الوكلاء الذين يرفضون خوادم MCP ويفشلون في الاتصال؛ ويسري التغيير من الاتصال التالي."
+    "customAgentMcpHint": "يرسل رفيق MCP المدمج في houhub إلى هذا الوكيل عند بدء الجلسة — وهو القناة التي تعتمد عليها الإحالة والتغذية الراجعة الحية وأدوات المهام. أوقفه مع الوكلاء الذين يرفضون خوادم MCP ويفشلون في الاتصال؛ ويسري التغيير من الاتصال التالي.",
+    "adapterChannel": {
+      "label": "إصدار المحوّل",
+      "description": "يستخدم التثبيت والترقية الإصدار الذي راجعه houhub واعتمده. عند اختيار الأحدث يُثبَّت أحدث إصدار npm للحزمة في حينه؛ وإذا فشل ذلك، يعود houhub إلى الإصدار المعتمد ويوضح ذلك في سجل التثبيت.",
+      "pinned": "الإصدار المعتمد (موصى به)",
+      "latest": "الأحدث (غير مُراجَع)",
+      "latestWarning": "أحدث الإصدارات غير مُراجَعة وقد تعطّل هذا الوكيل في houhub، بل قد يكون الإصدار الأحدث معروفًا بأنه معطوب أحيانًا. تعرض حالة الإصدار ما تم تثبيته فعليًا."
+    }
   },
   "SettingsPages": {
     "agentsLoading": "جارٍ تحميل إعدادات الوكلاء...",
@@ -2116,7 +2124,26 @@
       "closeOthers": "إغلاق البقية",
       "closeAll": "إغلاق الكل",
       "hideTerminal": "إخفاء الطرفية ({shortcut})",
-      "openFolderFirst": "افتح مجلدا أولا"
+      "openFolderFirst": "افتح مجلدا أولا",
+      "keybar": {
+        "label": "مفاتيح الطرفية الافتراضية",
+        "show": "إظهار المفاتيح الافتراضية",
+        "hide": "إخفاء المفاتيح الافتراضية",
+        "esc": "ESC",
+        "tab": "TAB",
+        "ctrl": "CTRL",
+        "alt": "ALT",
+        "slash": "/",
+        "dash": "-",
+        "home": "HOME",
+        "end": "END",
+        "pgup": "PGUP",
+        "pgdn": "PGDN",
+        "up": "↑",
+        "down": "↓",
+        "left": "←",
+        "right": "→"
+      }
     },
     "workspaceDialog": {
       "title": "فتح مجلد",
@@ -2753,7 +2780,8 @@
         "descriptionWithTarget": "التراجع عن التغييرات المحلية للملف \"{name}\"؟",
         "descriptionFallback": "التراجع عن التغييرات المحلية لهذا الملف؟"
       },
-      "terminalTitle": "الطرفية · {name}"
+      "terminalTitle": "الطرفية · {name}",
+      "moreActions": "المزيد من الإجراءات"
     },
     "commandDropdown": {
       "loading": "جارٍ التحميل...",
@@ -2841,7 +2869,8 @@
           "turnFailedEmptyProtocol": "أنتج {agent} مخرجات تعذّر على houhub تحليلها — قد لا يتوافق إصدار الوكيل مع البروتوكول.",
           "turnFailedEmptyMetadata": "أرسل {agent} تحديثات حالة فقط في هذه الجولة (الخطة / الوضع / الاستخدام) دون أي رد.",
           "detailsInAlerts": "افتح التنبيهات في شريط الحالة ووسّع التفاصيل لعرض مخرجات الوكيل.",
-          "mcpRejectedByAgent": "رفض {agent} الجلسة أثناء إرفاق رفيق MCP الخاص بـ houhub: {message} إن كان هذا الوكيل لا يدعم MCP، فأوقف «دعم MCP» من الإعدادات ثم أعد الاتصال."
+          "mcpRejectedByAgent": "رفض {agent} الجلسة أثناء إرفاق رفيق MCP الخاص بـ houhub: {message} إن كان هذا الوكيل لا يدعم MCP، فأوقف «دعم MCP» من الإعدادات ثم أعد الاتصال.",
+          "turnFailedAuthRequired": "يحتاج {agent} إلى تسجيل دخولك من جديد قبل تنفيذ هذه الجولة. سجّل الدخول من الإعدادات ثم أعد إرسال الرسالة."
         },
         "unableReadAgentConfig": "تعذر قراءة إعدادات الوكيل: {message}",
         "connectFailedTitle": "فشل اتصال {agent}",
@@ -2946,14 +2975,11 @@
         "mentionGroupSession": "الجلسات",
         "mentionGroupCommit": "عمليات الإيداع",
         "mentionGroupSkill": "المهارات",
-        "queueMessage": "إضافة إلى قائمة الانتظار",
-        "steerIntoTurn": "إدراج في الدور الحالي",
-        "steerQueuedInstead": "أُضيفت إلى قائمة الانتظار — ستُرسل مع الدور التالي.",
-        "steerFailed": "تعذّر الإدراج في الدور الحالي",
-        "steerAttachmentsUnsupported": "نص فقط — المسودات التي تحتوي على مرفقات تمر عبر قائمة الانتظار.",
         "toggleOn": "تشغيل",
         "toggleOff": "إيقاف",
-        "slashLoading": "جارٍ تحميل الأوامر…"
+        "slashLoading": "جارٍ تحميل الأوامر…",
+        "steerAsNote": "إرسال ملاحظة للفحص التالي",
+        "steerNoteFailed": "تعذّر إرسال ملاحظتك"
       },
       "messageQueue": {
         "addToQueue": "إضافة للقائمة",
@@ -3223,7 +3249,8 @@
         "copiedImage": "تم نسخ الصورة",
         "copyImageFailed": "تعذّر نسخ الصورة: {message}",
         "copyImageUnsupported": "نسخ هذه الصورة غير مدعوم هنا",
-        "selectionSaveAsNote": "ملاحظة"
+        "selectionSaveAsNote": "ملاحظة",
+        "forkNotReady": "لا يمكن التفريع من هذا الرد بعد، أعد المحاولة بعد قليل"
       },
       "liveTurnStats": {
         "thinking": "جارٍ التفكير...",
@@ -3288,7 +3315,8 @@
             "child_max_turn_requests": "الوكيل الفرعي: حد الطلبات",
             "child_empty": "الوكيل الفرعي بدون استجابة",
             "child_unknown": "الوكيل الفرعي: خطأ",
-            "unknown": "مهمة غير معروفة"
+            "unknown": "مهمة غير معروفة",
+            "child_auth_required": "الوكيل الفرعي يحتاج تسجيل دخول"
           }
         },
         "resumed": "تم الاستئناف",
@@ -3665,6 +3693,27 @@
         },
         "resumeDelegation": "استئناف المهمة {task}",
         "resumeDelegationNoId": "استئناف مهمة مفوضة"
+      },
+      "houhubMcpTool": {
+        "getSessionInfo": "قراءة المحادثة {session}",
+        "getSessionInfoNoId": "قراءة محادثة",
+        "taskProgress": "التقدم: {message}",
+        "taskProgressNoMessage": "الإبلاغ عن تقدم المهمة",
+        "taskComplete": "انتهت المهمة · {verdict}",
+        "taskCompleteWithSummary": "انتهت المهمة · {verdict}: {summary}",
+        "createAutomation": "إنشاء الأتمتة {name}",
+        "createAutomationNoName": "إنشاء أتمتة",
+        "createWorkTask": "إنشاء مهمة العمل {title}",
+        "createWorkTaskNoTitle": "إنشاء مهمة عمل",
+        "resumeDelegation": "استئناف المهمة {task}",
+        "resumeDelegationNoId": "استئناف مهمة مفوضة",
+        "promptLabel": "التعليمات",
+        "verdict": {
+          "success": "ناجحة",
+          "needs_review": "بحاجة إلى مراجعة",
+          "blocked": "متوقفة",
+          "unknown": "غير معروف"
+        }
       }
     },
     "diffPreview": {
@@ -3716,6 +3765,17 @@
     },
     "toasts": {
       "cloneFailed": "فشل استنساخ المستودع"
+    },
+    "fileViewer": {
+      "title": "معاينة الملف",
+      "description": "ملف مشار إليه في هذه المحادثة، مفتوح بجانبها.",
+      "openInWorkspace": "فتح في مساحة العمل",
+      "back": "رجوع",
+      "preview": "معاينة",
+      "source": "المصدر",
+      "loading": "جارٍ التحميل...",
+      "cannotResolve": "تعذّر تحليل مسار الملف هذا.",
+      "tooLargeToPreview": "هذا الملف أكبر من أن تتم معاينته هنا. افتحه في مساحة العمل بدلاً من ذلك."
     }
   },
   "ProjectBoot": {
@@ -4113,7 +4173,8 @@
       "linked_to_houhub": "مُفعَّل",
       "linked_elsewhere": "محظور — يوجد رابط آخر",
       "blocked_by_real_directory": "محظور — مهارة مخصصة تشغل هذا الاسم",
-      "broken": "رابط معطوب"
+      "broken": "رابط معطوب",
+      "linked_to_houhub": "مُفعَّل"
     },
     "badges": {
       "userModified": "عُدِّل من قبل المستخدم"
@@ -4150,7 +4211,8 @@
       "linked_to_houhub": "مُفعَّل",
       "linked_elsewhere": "محظور — يوجد رابط آخر",
       "blocked_by_real_directory": "محظور — مهارة مخصصة تشغل هذا الاسم",
-      "broken": "رابط معطوب"
+      "broken": "رابط معطوب",
+      "linked_to_houhub": "مُفعَّل"
     },
     "badges": {
       "userModified": "عُدِّل من قبل المستخدم",
@@ -4200,7 +4262,8 @@
       "linked_to_houhub": "مفعّل",
       "linked_elsewhere": "محظور — يوجد رابط آخر",
       "blocked_by_real_directory": "محظور — مهارة مخصصة تشغل هذا الاسم",
-      "broken": "رابط معطل"
+      "broken": "رابط معطل",
+      "linked_to_houhub": "مفعّل"
     },
     "badges": {
       "notSynced": "غير متزامن"
@@ -4867,7 +4930,8 @@
       "linked_to_houhub": "مُفعّلة",
       "linked_elsewhere": "مرتبطة في مكان آخر",
       "blocked_by_real_directory": "محجوبة بمجلد فعلي",
-      "broken": "رابط معطوب"
+      "broken": "رابط معطوب",
+      "linked_to_houhub": "مُفعّلة"
     },
     "actions": {
       "new": "جديدة",
