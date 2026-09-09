@@ -102,11 +102,13 @@ const APP_OPTIONS: { value: McpAppType; label: string }[] = [
   { value: "antigravity", label: "Google Antigravity" },
 ]
 
-// The backend SCANS one more agent than it lets you assign to: OpenClaw is read
-// back so existing entries survive, but is not an assignable target (see the
-// note in APP_OPTIONS). A scan warning can still name it, so it needs a label.
+// The backend scans more agents than it lets you assign to: OpenClaw and Pi are
+// read back so existing entries survive, but neither is an assignable target
+// (see the note in APP_OPTIONS). A scan warning can still name them, so they
+// need labels.
 const SCAN_ONLY_APP_LABELS: Partial<Record<McpAppType, string>> = {
   open_claw: "OpenClaw",
+  pi: "Pi",
 }
 
 function appLabel(app: McpAppType): string {
@@ -284,6 +286,7 @@ function appsToDraft(apps: McpAppType[]): Record<McpAppType, boolean> {
     deepseek: appSet.has("deepseek"),
     qoder: appSet.has("qoder"),
     antigravity: appSet.has("antigravity"),
+    pi: appSet.has("pi"),
   }
 }
 

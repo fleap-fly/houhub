@@ -20,6 +20,7 @@ import {
   importantFieldsFor,
   inferGrokMode,
   materializeClaudeHardeningFlags,
+  modelProviderSupportsAgent,
   patchCodexConfigTomlText,
   patchEnvByImportantKey,
   patchImportantConfigText,
@@ -74,6 +75,37 @@ function makeAgent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
     ...overrides,
   }
 }
+
+describe("model provider engine bindings", () => {
+  const provider = {
+    id: 7,
+    name: "Houflow Gateway",
+    api_url: "https://gateway.example/v1",
+    api_key: "key",
+    api_key_masked: "ke****",
+    agent_types: ["codex", "claude_code", "gemini", "pi"],
+    agent_type: "codex",
+    model: "gpt-5.6-terra",
+    models: ["gpt-5.6-terra"],
+    created_at: "2026-09-09T00:00:00Z",
+    updated_at: "2026-09-09T00:00:00Z",
+  } satisfies import("@/lib/types").ModelProviderInfo
+
+  it("uses the advertised multi-engine list instead of the legacy primary type", () => {
+    expect(modelProviderSupportsAgent(provider, "claude_code")).toBe(true)
+    expect(modelProviderSupportsAgent(provider, "gemini")).toBe(true)
+    expect(modelProviderSupportsAgent(provider, "pi")).toBe(true)
+  })
+
+  it("falls back to the legacy primary type for old provider rows", () => {
+    expect(
+      modelProviderSupportsAgent({ ...provider, agent_types: [] }, "codex")
+    ).toBe(true)
+    expect(
+      modelProviderSupportsAgent({ ...provider, agent_types: [] }, "gemini")
+    ).toBe(false)
+  })
+})
 
 // `disabled` lives only on the frontend-synthesized fix variant, not on the
 // backend FixAction member of the union — narrow before reading it.

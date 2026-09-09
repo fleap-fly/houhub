@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   providersError: null as Error | null,
   sessionTargetsError: null as Error | null,
   connectorsError: null as Error | null,
+  providerBaseUrl: "https://api.houshanai.com/v1",
   agents: [] as unknown[],
   connectedAgents: [] as unknown[],
   sessionTargets: [] as unknown[],
@@ -71,6 +72,7 @@ describe("loadHouflowControlSnapshot", () => {
     mocks.providersError = null
     mocks.sessionTargetsError = null
     mocks.connectorsError = null
+    mocks.providerBaseUrl = "https://api.houshanai.com/v1"
     mocks.agents = []
     mocks.connectedAgents = []
     mocks.sessionTargets = []
@@ -111,6 +113,18 @@ describe("loadHouflowControlSnapshot", () => {
     expect(paths()).not.toContain("/v1/providers")
     expect(paths()).not.toContain("/v1/providers/default/models")
     expect(paths()).not.toContain("/v1/providers/default/sync-models")
+  })
+
+  it("adds the OpenAI-compatible API version when the gateway returns only an origin", async () => {
+    mocks.providerBaseUrl = "https://api.houshanai.com"
+
+    const snapshot = await loadHouflowControlSnapshot(session(), secret(), {
+      gatewayCatalogMode: "read",
+    })
+
+    expect(snapshot.gateway?.provider.baseUrl).toBe(
+      "https://api.houshanai.com/v1"
+    )
   })
 
   it("keeps the cloud snapshot available when gateway model sync returns a non-JSON response", async () => {
@@ -461,7 +475,7 @@ function providerDto() {
     name: "Houflow Gateway",
     type: "openai_compatible",
     status: "active",
-    base_url: "https://api.houshanai.com/v1",
+    base_url: mocks.providerBaseUrl,
     default_model: "gpt-5",
     is_default: true,
     metadata: { gateway_attribution_ref: "houflow" },

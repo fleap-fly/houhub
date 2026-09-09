@@ -459,12 +459,28 @@ function providerFromDto(value: LLMProvider): HouflowGatewayProvider {
     name: requiredString(dto.name, "provider.name"),
     type: requiredString(dto.type, "provider.type"),
     status: requiredString(dto.status, "provider.status"),
-    baseUrl: normalizeBaseUrl(baseUrl),
+    // Agent Hub's public provider record may expose the gateway origin without
+    // its OpenAI-compatible API version. The desktop writes this value directly
+    // into each engine's native config, so keep one canonical `/v1` base URL
+    // before it reaches model-provider storage or local runtime projection.
+    baseUrl: normalizeGatewayBaseUrl(baseUrl),
     defaultModel: stringValue(dto.default_model) || null,
     isDefault: dto.is_default === true,
     source: "houflow_subscription",
     gatewayAttributionRef,
   }
+}
+
+function normalizeGatewayBaseUrl(value: string): string {
+  const normalized = normalizeBaseUrl(value)
+  const url = new URL(normalized)
+  if (url.pathname.replace(/\/+$/, "") === "") {
+    url.pathname = "/v1"
+    url.search = ""
+    url.hash = ""
+    return url.toString().replace(/\/+$/, "")
+  }
+  return normalized
 }
 
 function sessionTargetFromDto(

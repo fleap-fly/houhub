@@ -170,6 +170,20 @@ interface AgentCheckState {
   error?: string
 }
 
+/** Whether a shared model provider is valid for the selected engine. New
+ * providers advertise all supported engines in `agent_types`; old rows only
+ * have the legacy primary `agent_type`, which remains the fallback. */
+export function modelProviderSupportsAgent(
+  provider: ModelProviderInfo,
+  agentType: AgentType
+): boolean {
+  const types =
+    provider.agent_types.length > 0
+      ? provider.agent_types
+      : [provider.agent_type]
+  return types.includes(agentType)
+}
+
 const CLAUDE_AUTH_MODES = [
   "official_subscription",
   "custom",
@@ -5472,8 +5486,8 @@ export function AcpAgentSettings() {
 
   const selectedModelProviders = useMemo(() => {
     if (!selectedAgent) return []
-    return modelProviders.filter(
-      (p) => p.agent_type === selectedAgent.agent_type
+    return modelProviders.filter((provider) =>
+      modelProviderSupportsAgent(provider, selectedAgent.agent_type)
     )
   }, [modelProviders, selectedAgent])
 
