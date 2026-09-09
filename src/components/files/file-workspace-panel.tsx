@@ -36,6 +36,7 @@ import { HtmlPreview } from "@/components/files/html-preview"
 import { OfficePreview } from "@/components/files/office-preview"
 import { isHtmlPreviewable, isOfficePreviewable } from "@/lib/language-detect"
 import { DiffViewer } from "@/components/diff/diff-viewer"
+import { ImageDiffView } from "@/components/diff/image-diff-view"
 import { UnifiedDiffPreview } from "@/components/diff/unified-diff-preview"
 import {
   ContextMenu,
@@ -466,7 +467,10 @@ function createAddToChatPill(
 function hasTabContent(tab: FileWorkspaceTab): boolean {
   if (tab.kind === "rich-diff") {
     return (
-      tab.originalContent !== undefined || tab.modifiedContent !== undefined
+      tab.originalContent !== undefined ||
+      tab.modifiedContent !== undefined ||
+      // An image diff carries neither: its sides are bytes, not text.
+      tab.imageDiff !== undefined
     )
   }
   return tab.content !== ""
@@ -1959,11 +1963,15 @@ export function FileWorkspacePanel() {
       richDiffParts?.kind === "diff-commit"
         ? richDiffParts.commit.slice(0, 7)
         : ""
+    // A branch comparison's before side is that branch, not HEAD — naming it
+    // "HEAD" put someone else's bytes under this branch's name.
+    const compareBranch =
+      richDiffParts?.kind === "diff-branch" ? richDiffParts.branch : null
     const origLabel = isCommitDiff
       ? `${commitHash}~1`
       : isExternalConflictDiff
         ? t("disk")
-        : t("head")
+        : (compareBranch ?? t("head"))
     const modLabel = isCommitDiff
       ? commitHash
       : isExternalConflictDiff
@@ -1983,6 +1991,27 @@ export function FileWorkspacePanel() {
           <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
             {t("loading")}
           </div>
+        ) : activeFileTab.language === "image" ? (
+          // Binary image: the loader put bytes on the tab, not text.
+          activeFileTab.imageDiff ? (
+            <ImageDiffView
+              key={activeFileTab.id}
+              original={activeFileTab.imageDiff.original}
+              modified={activeFileTab.imageDiff.modified}
+              originalLabel={origLabel}
+              modifiedLabel={modLabel}
+              loading={activeFileTab.loading}
+              className="h-full"
+            />
+          ) : (
+            // A settled image tab with no sides is a load that failed (a
+            // timeout, say) — `rejectTab` left the reason in `content`. Showing
+            // two empty panes instead would dress the failure up as a file
+            // that simply has nothing on either side.
+            <div className="h-full flex items-center justify-center px-6 text-center text-xs text-muted-foreground">
+              {activeFileTab.content || t("loading")}
+            </div>
+          )
         ) : (
           <DiffViewer
             key={activeFileTab.id}

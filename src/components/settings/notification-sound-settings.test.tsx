@@ -21,6 +21,14 @@ function renderSection() {
   )
 }
 
+/**
+ * Unfold the section. Everything below the heading arrives collapsed, so any
+ * assertion about the knobs has to open it first.
+ */
+function expandSection() {
+  fireEvent.click(screen.getByRole("button", { name: "Notification sounds" }))
+}
+
 /** Write the key the way another window would, then announce it. */
 function writeFromAnotherWindow(prefs: NotificationSoundPrefs) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs))
@@ -39,17 +47,39 @@ describe("NotificationSoundSettingsSection", () => {
     renderSection()
 
     expect(
-      screen.getByRole("switch", { name: /enable notification sounds/i })
+      screen.getByRole("switch", { name: /notification sounds/i })
     ).not.toBeChecked()
+    // With sounds off the section IS the master switch: the heading labels it,
+    // so there is no second row (nor a card around one) saying so again — and
+    // no disclosure button, because there is nothing to unfold.
+    expect(screen.getAllByRole("switch")).toHaveLength(1)
+    expect(
+      screen.queryByRole("button", { name: "Notification sounds" })
+    ).not.toBeInTheDocument()
     // The event catalogue is only meaningful once something can play.
+    expect(screen.queryByText("Turn Complete")).not.toBeInTheDocument()
+  })
+
+  it("arrives folded even when sounds are already on", () => {
+    // The General tab is a stack of sections; an enabled one still opens as
+    // its heading line, not as a slider plus five event rows.
+    writeFromAnotherWindow({
+      ...DEFAULT_NOTIFICATION_SOUND_PREFS,
+      enabled: true,
+    })
+    renderSection()
+
+    expect(screen.getAllByRole("switch")).toHaveLength(1)
     expect(screen.queryByText("Turn Complete")).not.toBeInTheDocument()
   })
 
   it("persists the master switch and reveals the event catalogue", () => {
     renderSection()
 
+    // Switching it on unfolds the section in the same gesture — no second
+    // click needed to see what was just turned on.
     fireEvent.click(
-      screen.getByRole("switch", { name: /enable notification sounds/i })
+      screen.getByRole("switch", { name: /notification sounds/i })
     )
 
     expect(loadNotificationSoundPrefs().enabled).toBe(true)
@@ -71,6 +101,7 @@ describe("NotificationSoundSettingsSection", () => {
       enabled: true,
     })
     renderSection()
+    expandSection()
 
     expect(
       screen.getByRole("combobox", { name: "Turn Complete" })
@@ -93,7 +124,7 @@ describe("NotificationSoundSettingsSection", () => {
   it("follows a change made in another window", () => {
     renderSection()
     expect(
-      screen.getByRole("switch", { name: /enable notification sounds/i })
+      screen.getByRole("switch", { name: /notification sounds/i })
     ).not.toBeChecked()
 
     writeFromAnotherWindow({
@@ -103,8 +134,9 @@ describe("NotificationSoundSettingsSection", () => {
     })
 
     expect(
-      screen.getByRole("switch", { name: /enable notification sounds/i })
+      screen.getByRole("switch", { name: /notification sounds/i })
     ).toBeChecked()
+    expandSection()
     expect(screen.getByText("30%")).toBeInTheDocument()
   })
 
@@ -114,6 +146,7 @@ describe("NotificationSoundSettingsSection", () => {
       enabled: true,
     })
     renderSection()
+    expandSection()
 
     // A `none` tone has nothing to preview; every other row does.
     expect(

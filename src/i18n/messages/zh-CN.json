@@ -177,7 +177,33 @@
       "errorTooLarge": "图片太大（最大 16 MB）。",
       "errorUploadFailed": "设置背景图片失败。",
       "formatHint": "支持 PNG、JPEG、WebP、GIF；动图会自动播放。",
-      "errorUnsupportedFormat": "不支持的图片格式，请选择 PNG、JPEG、WebP 或 GIF。"
+      "errorUnsupportedFormat": "不支持的图片格式，请选择 PNG、JPEG、WebP 或 GIF。",
+      "market": {
+        "open": "壁纸市场",
+        "title": "壁纸市场",
+        "description": "浏览 Wallhaven 公开图库，点击即可下载并应用。",
+        "searchPlaceholder": "搜索壁纸…",
+        "categories": {
+          "all": "全部",
+          "general": "风景",
+          "anime": "二次元",
+          "people": "人物"
+        },
+        "pageInfo": "第 {page} / {lastPage} 页",
+        "prevPage": "上一页",
+        "nextPage": "下一页",
+        "refresh": "刷新",
+        "empty": "没有找到匹配的壁纸。",
+        "error": "壁纸市场加载失败。",
+        "retry": "重试",
+        "cardLabel": "应用壁纸 {id}",
+        "applied": "使用中",
+        "unavailable": "不可用",
+        "tooLarge": "超出背景图上限：{actual}（上限 {limit}）",
+        "downloadFailed": "下载失败，请重试。",
+        "appliedToast": "壁纸已应用",
+        "credit": "图片来源 wallhaven.cc · 仅 SFW 内容"
+      }
     },
     "customStyle": {
       "sectionTitle": "自定义样式",
@@ -388,7 +414,11 @@
     "updateToken": "更新令牌",
     "updateTokenTitle": "更新该账号的令牌",
     "updateTokenDescription": "替换为 {username} 保存的令牌，账号本身保持不变。由该账号触发的任务仍可继续——删除后重新添加对它们来说是另一个账号。",
-    "updateTokenSubmit": "校验并更新"
+    "updateTokenSubmit": "校验并更新",
+    "giteaTitle": "Gitea 账号",
+    "giteaDescription": "管理用于身份验证的 Gitea（及 Forgejo）账号。令牌存储在本地。",
+    "giteaTokenHint": "在 Gitea → Settings → Applications 中创建带 write:repository、write:issue 和 read:user 权限的访问令牌。",
+    "giteaNoAccounts": "还没有 Gitea 账号"
   },
   "ShortcutSettings": {
     "sectionTitle": "快捷键",
@@ -1585,6 +1615,13 @@
         "failed": "登录未完成。",
         "startFailed": "无法开始登录",
         "credentialHint": "令牌缓存在这里。把这个文件复制到其他无桌面机器，那台也就登录好了。"
+      },
+      "signOut": {
+        "title": "登录了错误的账号？",
+        "description": "Antigravity 会缓存登录时使用的 Google 账号并静默复用，所以再次登录也换不到别的账号。退出登录会清除已保存的凭据；正在运行的 Antigravity 会话会先被结束，否则它们会把旧账号写回去。",
+        "action": "退出登录",
+        "done": "已退出登录。重新登录即可选择其他账号。",
+        "failed": "退出登录失败"
       }
     },
     "customAgentMcpLabel": "MCP 支持",
@@ -1627,7 +1664,9 @@
     "restartRequired": "已保存，重启应用后生效。",
     "restartNow": "立即重启",
     "restartFailed": "重启失败：{message}",
-    "loadFailed": "加载失败：{message}"
+    "loadFailed": "加载失败：{message}",
+    "colorizeCommandOutput": "为命令输出着色",
+    "colorizeCommandOutputDescription": "强制智能体运行的命令输出 ANSI 颜色，使其在会话记录中以彩色而非纯文本呈现。对新建会话生效。"
   },
   "LoginPage": {
     "documentTitle": "登录 - houhub",
@@ -1713,7 +1752,12 @@
     "continueImport": "继续导入",
     "toasts": {
       "importFailed": "导入失败：{message}"
-    }
+    },
+    "includeDeleted": "包含已删除",
+    "includeDeletedWithCount": "包含已删除（{count}）",
+    "includeDeletedHint": "在 houhub 中删除会话只是隐藏，会话及其历史仍然保留。开启后可勾选已删除的会话，将其原地恢复。",
+    "statusDeletedRestorable": "已删除——导入即可恢复原会话",
+    "doneRestored": "已恢复"
   },
   "Folder": {
     "workspaceStatus": {
@@ -2064,6 +2108,49 @@
           "more": "更多"
         },
         "showPet": "显示宠物"
+      },
+      "mcp": {
+        "title": "houhub-mcp 服务",
+        "state": {
+          "running": "运行中",
+          "stopped": "未运行",
+          "disabled": "未启用工具",
+          "unavailable": "伴生程序缺失",
+          "unknown": "未知"
+        },
+        "hint": {
+          "running": "从这里启动的智能体可使用 houhub 自带的工具。",
+          "stopped": "Broker 套接字没有响应，伴生进程连不回 houhub。",
+          "disabled": "所有工具组都已关闭，不会注入伴生进程。",
+          "unavailable": "磁盘上找不到 houhub-mcp 可执行文件。",
+          "unknown": "无法读取状态。"
+        },
+        "socketPath": "地址",
+        "binary": "伴生程序",
+        "binaryMissing": "未找到",
+        "sessions": "智能体会话",
+        "activeDelegations": "进行中的委派",
+        "depthLimit": "深度上限",
+        "tools": "工具",
+        "groupDelegation": "多智能体委派",
+        "descDelegation": "把任务交给另一个智能体处理。",
+        "groupFeedback": "实时反馈",
+        "descFeedback": "回合进行中补充说明，不打断执行。",
+        "groupAsk": "向用户提问",
+        "descAsk": "让智能体拿不准时先问你。",
+        "groupSessions": "会话查询",
+        "descSessions": "查询历史会话及其结果。",
+        "groupAutomations": "创建自动化",
+        "descAutomations": "创建和管理定时自动化。",
+        "groupTaskboard": "创建任务",
+        "descTaskboard": "创建和管理工作任务。",
+        "start": "启动服务",
+        "starting": "正在启动…",
+        "actionFailed": "操作失败：{message}",
+        "lastError": "上次错误：{message}",
+        "loadFailed": "无法读取状态：{message}",
+        "openSettings": "打开详细设置",
+        "refresh": "刷新"
       }
     },
     "auxPanel": {
@@ -2890,7 +2977,9 @@
           "lineNoError": "{retry}",
           "lineNoErrorWithDelay": "{retry}，{delay}"
         },
-        "configOptionAdjusted": "{agent} 把{option}设成了 {actual}，而不是 {requested}"
+        "configOptionAdjusted": "{agent} 把{option}设成了 {actual}，而不是 {requested}",
+        "notificationQuestion": "{agent} 正在等你回答",
+        "notificationErrorRedacted": "{agent} 遇到错误"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -2979,7 +3068,10 @@
         "toggleOff": "关",
         "slashLoading": "正在加载命令…",
         "steerAsNote": "发送留言，供下次检查时读取",
-        "steerNoteFailed": "留言发送失败"
+        "steerNoteFailed": "留言发送失败",
+        "openLink": "打开链接",
+        "openFile": "打开文件",
+        "sendEmail": "发送邮件"
       },
       "messageQueue": {
         "addToQueue": "加入队列",
@@ -3209,7 +3301,10 @@
         "copyAbsolutePath": "复制绝对路径",
         "pathCopied": "已复制路径",
         "copyPathFailed": "复制路径失败",
-        "openFailed": "打开本地文件失败"
+        "openFailed": "打开本地文件失败",
+        "download": "下载文件",
+        "downloadSaved": "已下载 {name}",
+        "downloadFailed": "下载 {name} 失败"
       },
       "messageList": {
         "attachedResources": "附加资源",
@@ -3507,7 +3602,10 @@
           "outputMissing": "codex 截断脚本输出时丢掉了这条命令的分隔行，因此没有输出可以归属给它。",
           "sharedWith": "本段还包含 {commands} 的输出——它们的分隔行被 codex 截断丢弃了。",
           "truncated": "已截断"
-        }
+        },
+        "agentSubagentDone": "已完成",
+        "agentSubagentInterrupted": "已中断",
+        "agentSubagentUnknown": "结果未知"
       },
       "messageNav": {
         "title": "消息导航",
@@ -3618,13 +3716,16 @@
         "opSpawn": "启动子智能体",
         "opWait": "获取子智能体结果",
         "opClose": "结束子智能体",
-        "opResume": "恢复子智能体"
+        "opResume": "恢复子智能体",
+        "opList": "查看子智能体"
       },
       "contextCompaction": {
         "compacting": "正在压缩上下文…",
         "compacted": "上下文已压缩",
         "compactedTokens": "上下文已压缩 · {before} → {after} tokens",
-        "failed": "上下文压缩失败"
+        "failed": "上下文压缩失败",
+        "triggerManual": "手动触发",
+        "triggerAutomatic": "自动触发"
       },
       "sessionFailure": {
         "category": {
@@ -3654,7 +3755,9 @@
         "cardLaunchedPending": "已启动后台任务",
         "cardCompleted": "后台任务已完成",
         "cardFinishedWithStatus": "后台任务已结束（{status}）",
-        "cardResultPending": "结果尚未返回"
+        "cardResultPending": "结果尚未返回",
+        "notifySettledOne": "{agent}：一个后台任务已结束",
+        "notifySettledMany": "{agent}：{count} 个后台任务已结束"
       },
       "asyncTasks": {
         "openOutput": "输出",
@@ -3684,15 +3787,15 @@
         "createAutomationNoName": "创建自动化",
         "createWorkTask": "创建待办任务 {title}",
         "createWorkTaskNoTitle": "创建待办任务",
+        "resumeDelegation": "恢复任务 {task}",
+        "resumeDelegationNoId": "恢复委派任务",
         "promptLabel": "指令",
         "verdict": {
           "success": "成功",
           "needs_review": "待复核",
           "blocked": "受阻",
           "unknown": "未知"
-        },
-        "resumeDelegation": "恢复任务 {task}",
-        "resumeDelegationNoId": "恢复委派任务"
+        }
       },
       "houhubMcpTool": {
         "getSessionInfo": "读取会话 {session}",
@@ -3730,6 +3833,16 @@
       "viewMode": {
         "split": "切换为左右分栏视图",
         "unified": "切换为内联视图"
+      },
+      "binaryFile": "二进制文件 — 不显示内容",
+      "image": {
+        "sideBySide": "切换为左右分栏视图",
+        "swipe": "切换为滑动对比视图",
+        "swipeHandle": "图片对比滑块",
+        "noImage": "此版本没有图片",
+        "unavailable": "无法加载此侧内容",
+        "tooLarge": "图片过大，无法预览（{size}）",
+        "loading": "正在加载图片..."
       }
     },
     "conversationContextBar": {
@@ -4534,7 +4647,15 @@
       "button": "导出备份",
       "inProgress": "正在创建备份…",
       "success": "备份已创建。",
-      "started": "已开始下载备份。"
+      "started": "已开始下载备份。",
+      "degradedTitle": "部分智能体会话数据库需要特殊处理",
+      "degradedHint": "这些智能体用 SQLite 保存会话。除非下方另有说明，备份中仍包含它们。",
+      "degradedMore": "……还有 {count} 项。",
+      "degradedLevel": {
+        "recoveredOnCopy": "已在私有副本上恢复——内容完整",
+        "bareFileOnly": "未包含预写日志——最新的消息可能缺失",
+        "notArchived": "未纳入备份——拷贝期间它一直在变化"
+      }
     },
     "restore": {
       "selectFile": "选择备份文件",
@@ -4572,11 +4693,37 @@
         "scanning": "正在检查冲突…",
         "noConflicts": "不会覆盖任何已存在的文件。",
         "conflictCount": "将影响 {count} 个已存在的文件。",
-        "conflictSkipNote": "未启用覆盖时，已存在的文件将被保留（跳过）。"
+        "conflictSkipNote": "未启用覆盖时，已存在的文件将被保留（跳过）。",
+        "agentsRunning": "有 {count} 个智能体正在运行（{agents}）。请先关闭，否则会话记录会被保留在旁路目录，而不会写回原始位置。"
       },
-      "restartFailed": "恢复已就绪，但服务未能重启。请手动重启以应用此次恢复。"
+      "restartFailed": "恢复已就绪，但服务未能重启。请手动重启以应用此次恢复。",
+      "discardPending": "放弃已暂存的恢复",
+      "discarded": "已放弃暂存的恢复。",
+      "pendingBlockedHint": "已有一个恢复在等待重启生效。放弃它才能暂存另一个。",
+      "result": {
+        "title": "恢复已暂存",
+        "needsRestart": "将在下次启动时生效。当前数据会先做快照。",
+        "downgraded": "{agents} 正在运行，会话记录未写回原始位置，已保留在 {path}。",
+        "skipped": "保留了 {count} 个已存在的文件",
+        "refused": "有 {count} 个会话数据库未写回",
+        "refusedHint": "它们来自旧版备份，数据库与其预写日志是分开保存的，无法证明二者匹配。你现有的数据库未被改动——选择恢复到旁路目录即可拿到原始文件。",
+        "restartNow": "立即重启",
+        "later": "稍后"
+      }
     },
-    "remoteUnsupported": "备份与恢复作用于运行 houhub 的那台机器上的数据。你当前连接的是远程工作区——请直接在该服务器上管理其备份。"
+    "remoteUnsupported": "备份与恢复作用于运行 houhub 的那台机器上的数据。你当前连接的是远程工作区——请直接在该服务器上管理其备份。",
+    "progress": {
+      "cancel": "取消"
+    },
+    "snapshots": {
+      "title": "恢复前快照",
+      "hint": "每次恢复都会先为当前数据做快照，保留最近两份。",
+      "empty": "暂无快照。",
+      "rollback": "回退到这份",
+      "unsupported": "仅可查看",
+      "rollbackConfirmTitle": "回退到这份快照？",
+      "rollbackConfirmBody": "这会用该快照替换当前数据并重启。被替换的数据会先做快照。"
+    }
   },
   "backup": {
     "restore": {
@@ -5365,7 +5512,12 @@
     "settingsCompactCommand": "压缩命令",
     "settingsCompactCommandHint": "留空则按智能体自身提供的命令（或已知默认值）自动选择。",
     "settingsCompactCommandPlaceholder": "/compact",
-    "eventContextCompact": "上下文压缩"
+    "eventContextCompact": "上下文压缩",
+    "notifyReviewRedacted": "有任务等待验收",
+    "notifyFailedRedacted": "有任务失败",
+    "phaseCompact": "压缩上下文",
+    "mergeSubmitting": "启动中…",
+    "compactingNote": "正在压缩会话上下文…"
   },
   "TokenUsage": {
     "title": "Token 用量",
@@ -5564,7 +5716,7 @@
     "noRemote": "该文件夹没有可识别的代码托管远端（origin）",
     "errors": {
       "noAccount": "还没有为 {host} 配置 {provider} 账号。请在「设置 → 版本控制」中添加后再加载该仓库。",
-      "unsupportedHost": "仓库面板目前仅支持 GitHub 和 GitLab，而 {host} 不是其中任何一种。如果它是自建的 GitHub Enterprise 或 GitLab 实例，请在「设置 → 版本控制」中为它添加账号。",
+      "unsupportedHost": "仓库面板目前仅支持 GitHub、GitLab 和 Gitea，而 {host} 不是其中任何一种。如果它是自建的 GitHub Enterprise、GitLab、Gitea 或 Forgejo 实例，请在「设置 → 版本控制」中为它添加账号。",
       "wrongForge": "{host} 实际上是 {provider}，此前被误判为另一种代码托管服务。已自动更正，请重新加载。"
     },
     "addAccount": "添加账号",
@@ -5828,6 +5980,102 @@
     "confirmDeleteCancel": "取消",
     "confirmDeleteConfirm": "删除",
     "canvasActions": "画布操作",
-    "mergeIntoNewRegion": "新建区域"
+    "mergeIntoNewRegion": "新建区域",
+    "addFileCard": "文件卡片",
+    "addTerminalCard": "终端卡片",
+    "searchFiles": "搜索文件…",
+    "searchFilesIn": "在 {folder} 中搜索…",
+    "searchingFiles": "搜索中…",
+    "noFiles": "未找到文件",
+    "noOpenFiles": "没有已打开的文件——输入以搜索",
+    "browseForFile": "浏览…",
+    "filePreview": "预览",
+    "fileSource": "源码",
+    "reloadFile": "重新加载",
+    "removeFileCard": "移除文件卡片",
+    "restartTerminal": "重启终端",
+    "removeTerminalCard": "移除终端卡片",
+    "terminalNoDirectory": "这张卡片没有工作目录",
+    "confirmDeleteTerminals": "{count} 个正在运行的终端会被关闭，其中的进程也会一并结束。",
+    "confirmDeleteNotesAndTerminals": "你写下的 {notes} 条便签将被永久删除，另有 {terminals} 个正在运行的终端会被结束。"
+  },
+  "DesktopNotificationSettings": {
+    "title": "桌面通知",
+    "description": "智能体需要你时弹出系统通知。设置只对当前设备生效，其它浏览器或机器上是独立的。",
+    "permissionTitle": "通知权限",
+    "permissionGranted": "已授权",
+    "permissionDenied": "已拒绝",
+    "permissionDefault": "尚未请求",
+    "permissionUnsupported": "不可用",
+    "permissionManagedByOs": "由系统管理",
+    "permissionGrantedHint": "当前浏览器会显示来自 HouHub 的通知。",
+    "permissionDeniedHint": "当前浏览器正在拦截 HouHub 的通知。只能在浏览器的站点设置里重新开启——网页无法再次弹窗请求。",
+    "permissionDefaultHint": "还没有向当前浏览器请求过权限。在你允许之前不会有任何通知。",
+    "permissionUnsupportedHint": "通知需要安全上下文。请通过 HTTPS 或 localhost 访问该服务。",
+    "permissionManagedByOsHint": "桌面版通过系统通知中心发送，而系统不会告诉应用 HouHub 是否被允许。发一条测试通知即可确认。",
+    "identityTitle": "投递身份",
+    "identityHint": "系统把这些通知记在这个 App 名下，生效的是它自己的通知开关。",
+    "identityDegradedHint": "无法使用 HouHub 自己的标识，系统改以 {bundleId} 的身份投递，生效的是那个 App 的通知开关。把 HouHub 安装到「应用程序」文件夹即可恢复。",
+    "requestPermission": "允许通知",
+    "permissionGrantedToast": "通知已允许。",
+    "permissionDeniedToast": "通知被拒绝。请在浏览器的站点设置里重新开启。",
+    "openSystemSettings": "打开系统设置",
+    "openSystemSettingsFailed": "无法打开系统通知设置。",
+    "sendTest": "发送测试通知",
+    "testTitle": "HouHub",
+    "testBody": "桌面通知已生效。",
+    "testSent": "测试通知已发送。",
+    "testFailed": "测试通知发送失败。",
+    "whenTitle": "通知时机",
+    "whenHint": "副屏上的窗口虽然可见，但并未聚焦——如果你从来收不到通知，选「窗口未聚焦时」。",
+    "whenAlways": "总是通知",
+    "whenUnfocused": "窗口未聚焦时",
+    "whenHidden": "窗口不可见时",
+    "hideBody": "隐藏通知内容",
+    "hideBodyHint": "用一句通用文案代替智能体输出。通知中心会把内容保留在应用之外，会话关掉了也还在。标题仍会显示文件夹名，好让你知道该回到哪个窗口。",
+    "eventsTitle": "事件",
+    "eventsHint": "关掉不想被打断的事件。同一事件在数秒内重复触发时只通知一次。",
+    "eventBackgroundTask": "后台任务",
+    "eventWorkTask": "待办任务"
+  },
+  "DeepSeekModelEditor": {
+    "title": "模型列表",
+    "description": "DeepSeek 会话可切换的模型。保存在 harness 的设置文档里，代理在启动时读取——保存后对之后新建的会话生效。",
+    "inheritedBadge": "代理默认",
+    "inheritedHint": "尚未保存过列表，这些是代理内置的模型。保存会把它们固定下来，之后升级代理也不再自动变化。文件：",
+    "storedHint": "已保存在 harness 设置文档中。这份列表之外的键、以及它们周围的注释都不会被改动。文件：",
+    "unreadable": "无法在这里安全地编辑该设置文档（会有丢失已有内容的风险），请手动编辑。",
+    "invalidStored": "代理拒绝了这份已保存的列表，在修好之前，会话用的都是它内置的模型：",
+    "loading": "正在读取设置文档…",
+    "loadFailed": "无法读取设置文档。",
+    "empty": "没有模型。添加一个，或直接保存以退回代理内置列表。",
+    "addModel": "添加模型",
+    "remove": "删除模型",
+    "advanced": "更多",
+    "save": "保存模型列表",
+    "saving": "保存中…",
+    "restoreDefaults": "使用代理默认",
+    "fieldId": "模型 id",
+    "fieldName": "显示名称",
+    "fieldContextWindow": "上下文窗口",
+    "fieldDescription": "描述",
+    "fieldMaxTokens": "最大输出 token",
+    "fieldAcceptsImages": "接受图片",
+    "fieldImageDetail": "图片精度",
+    "fieldImagePixelBudget": "图片像素预算",
+    "fieldImageMaxBytes": "图片字节上限",
+    "placeholderId": "deepseek-v4-flash",
+    "placeholderName": "选择器中显示的名字",
+    "placeholderInherit": "代理默认",
+    "errorMissingId": "每个模型都需要一个 id。",
+    "errorDuplicateId": "有两个模型都叫“{id}”。",
+    "errorBadContextWindow": "“{id}”的上下文窗口必须是大于 0 的整数。",
+    "errorBadMaxTokens": "“{id}”的最大输出 token 必须是大于 0 的整数。",
+    "errorBadImageLimit": "“{id}”的图片限制必须是大于 0 的整数。",
+    "warnSingleModel": "只有一个模型时，代理不会再提供模型选择器。",
+    "warnLaunchModelMissing": "新会话会以“{model}”启动，而它不在这个列表里。可以把它加进来，或在上方环境变量里设置 {variable}。",
+    "toastSaved": "模型列表已保存",
+    "toastRestored": "已改用代理内置模型列表",
+    "toastSaveFailed": "保存模型列表失败"
   }
 }

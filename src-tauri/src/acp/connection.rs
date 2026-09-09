@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use sacp::schema::{
@@ -53,11 +54,120 @@ use crate::acp::types::{
 use crate::models::agent::AgentType;
 use crate::network::proxy;
 use crate::logging::throttle::{LeadingEdgeThrottle, LAG_LOG_WINDOW};
-use crate::web::event_bridge::{emit_with_state, EventEmitter};
+use crate::web::event_bridge::{emit_with_state, emit_with_state_gated, EventEmitter};
 
-const DEFAULT_COMMAND_COLOR_ENV: [(&str, &str); 1] = [("CLICOLOR_FORCE", "1")];
+/// Injected into the agent process only when the user has opted in — see
+/// [`force_command_color_enabled`] for why it is not a default.
+///
+/// Four variables because no single one reaches the toolchain an agent actually
+/// shells out to, and a toggle that leaves the common commands plain is one
+/// users reasonably read as broken. Each covers a different half of a decision
+/// some tool makes:
+///
+/// - `CLICOLOR` — the BSD *enable* flag. `CLICOLOR_FORCE` on its own is NOT one:
+///   in BSD `ls` the two conditions are separate (`getenv("CLICOLOR")` decides
+///   whether color exists at all, `getenv("CLICOLOR_FORCE")` only waives the
+///   `isatty` requirement), so forcing without enabling leaves a bare `ls`
+///   monochrome. Verified on macOS 26.6: `CLICOLOR_FORCE=1 FORCE_COLOR=1
+///   TERM=xterm-256color ls` emits zero escapes; adding `CLICOLOR=1` colors it.
+/// - `CLICOLOR_FORCE` — the waiver above, and the convention Go/Rust CLIs
+///   (`gh` via go-gh, ripgrep) read as "force". An agent's stdout is a pipe, so
+///   without it every `isatty` check answers no.
+/// - `FORCE_COLOR` — what Node's `supports-color` reads, and so what `pnpm`,
+///   `next`, `eslint`, `vitest` and the rest of the npm toolchain honor. That
+///   family ignores both `CLICOLOR*` variables entirely, which is why the
+///   toggle used to do nothing for the build command most people run first.
+/// - `TERM` — not a color flag, a precondition for the others. BSD `ls` resolves
+///   its palette through `tgetent(getenv("TERM"))` and stays monochrome when
+///   TERM names nothing, which is the normal case for a houhub launched from
+///   Finder rather than from a shell. `supports-color` reads it too, and answers
+///   256 colors for a `-256color` suffix where `FORCE_COLOR=1` alone caps at 16.
+///
+/// `TERM` is the one entry here that OVERRIDES an inherited value rather than
+/// filling in a missing one (`merge_agent_env` lists what a launch sets;
+/// everything else is inherited). That is deliberate: the agent's stdout is a
+/// pipe to houhub and never a terminal, so an inherited `TERM` describes the
+/// shell that happened to start houhub — `screen-256color` under tmux, nothing
+/// at all under Finder — not anything the agent is attached to. Pinning one
+/// known-good entry is what makes the toggle behave the same in a packaged app
+/// as in `pnpm tauri dev`. A per-agent env row still outranks all four.
+const DEFAULT_COMMAND_COLOR_ENV: [(&str, &str); 4] = [
+    ("CLICOLOR", "1"),
+    ("CLICOLOR_FORCE", "1"),
+    ("FORCE_COLOR", "1"),
+    ("TERM", "xterm-256color"),
+];
+
+/// Whether launches force color out of agent-run commands. Mirrors
+/// `SystemTerminalSettings.colorize_command_output`, applied at startup and on
+/// every save.
+///
+/// A process global rather than a handle threaded through the launch path
+/// because [`merge_agent_env`] is a sync function with a dozen callers (down to
+/// `antigravity_launch_env`, which the settings panel calls with no connection
+/// in hand), and it already reads two other ambient sources the same way —
+/// `proxy::current_proxy_env_vars` and `prepend_officecli_path`.
+static FORCE_COMMAND_COLOR: AtomicBool = AtomicBool::new(false);
+
+/// Whether a launch should put [`DEFAULT_COMMAND_COLOR_ENV`] in the agent's
+/// environment.
+///
+/// **Off by default**, which is a behavior change: launches used to force
+/// `CLICOLOR_FORCE` unconditionally. The feature it buys is real — houhub
+/// preserves ANSI through tool-call output streaming ([`trim_partial_ansi_tail`])
+/// so the transcript's `<Terminal>` card renders command output in color — but
+/// the cost was paid by everything else in the process tree.
+///
+/// houhub cannot scope the force to the output it renders. Agents like Claude
+/// Code run their bash tool IN-PROCESS, so the commands whose color shows up in
+/// the card are not spawned by houhub at all; the only reachable lever is the
+/// agent's own environment, which every descendant inherits. So the same
+/// variables that color the terminal card also color the output the agent pipes
+/// into `jq` — and neither force flag can be vetoed downstream: `CLICOLOR_FORCE`
+/// is by ecosystem convention the one color variable `NO_COLOR` cannot override
+/// (`gh`, via go-gh, computes `forced || (!disabled && isTTY)`), and
+/// `supports-color` reads `FORCE_COLOR` before it reads anything else. `gh pr
+/// list --json number` emits ANSI *inside* the JSON, and the parse fails.
+///
+/// The quieter cost is that the agent captures those escapes into its OWN
+/// context: every command it runs spends tokens on escape sequences and risks
+/// the model misreading output it needs to parse. That is charged on every turn
+/// whether or not anyone looks at the colored card, which is why the default is
+/// off rather than on-with-an-escape-hatch.
+///
+/// Users who want the colored transcript turn it on in General Settings. A
+/// per-agent row still wins over every variable this injects — `runtime_env`
+/// outranks these defaults in [`merge_agent_env`] — so one agent can be exempted
+/// while the toggle stays on globally. Exempt it with EMPTY values, not `0`: the
+/// BSD pair is presence-checked (`CLICOLOR_FORCE=0` still reads as forced —
+/// verified on macOS 26.6), and an empty value is what the spawn layer turns
+/// into `env_remove`, the same convention `child_env_value` documents in
+/// [`crate::acp::file_system_runtime`].
+pub fn force_command_color_enabled() -> bool {
+    FORCE_COMMAND_COLOR.load(Ordering::Relaxed)
+}
+
+/// Point live launches at the current setting. Called once at startup from the
+/// persisted row and again on every save, so an already-running app picks the
+/// change up on its next connection without a restart.
+pub fn set_force_command_color(enabled: bool) {
+    FORCE_COMMAND_COLOR.store(enabled, Ordering::Relaxed);
+}
 
 fn merge_agent_env(
+    env: &[(&'static str, &'static str)],
+    runtime_env: &BTreeMap<String, String>,
+) -> Vec<(String, String)> {
+    merge_agent_env_with_color(force_command_color_enabled(), env, runtime_env)
+}
+
+/// [`merge_agent_env`] with the color decision handed in.
+///
+/// Split out for the same reason as [`antigravity_acp_dir_with_inherited`]: the
+/// setting lives in a process global, and a test that wrote it would silently
+/// race every other test in this module that merges an env.
+fn merge_agent_env_with_color(
+    force_color: bool,
     env: &[(&'static str, &'static str)],
     runtime_env: &BTreeMap<String, String>,
 ) -> Vec<(String, String)> {
@@ -65,8 +175,10 @@ fn merge_agent_env(
     // to keep precedence while avoiding repeated O(n) scans.
     let mut merged = BTreeMap::<String, String>::new();
 
-    for (key, value) in DEFAULT_COMMAND_COLOR_ENV {
-        merged.insert(key.to_string(), value.to_string());
+    if force_color {
+        for (key, value) in DEFAULT_COMMAND_COLOR_ENV {
+            merged.insert(key.to_string(), value.to_string());
+        }
     }
 
     for (key, value) in env {
@@ -690,6 +802,69 @@ pub fn antigravity_launch_env(runtime_env: &BTreeMap<String, String>) -> Vec<(St
 /// method id before acting on it.
 pub fn is_antigravity_auth_method(method_id: &str) -> bool {
     ANTIGRAVITY_AUTH_METHODS.contains(&method_id)
+}
+
+/// What houhub can say about the method the ACP server will authenticate with.
+///
+/// Three states, and [`Unreadable`](Self::Unreadable) is emphatically not a
+/// flavor of [`Absent`](Self::Absent). The server parses Hjson and houhub only
+/// strict JSON, so a file houhub cannot read is one the SERVER can — it names a
+/// method, houhub just cannot see which. Collapsing the two would let a caller
+/// treat "I have no idea" as "there is nothing there", which for the sign-out
+/// means aiming `logout` at a flavor with nothing to clear and reporting the
+/// `{}` it answers as a success.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AntigravityAuthType {
+    /// The file names this method, in its canonical spelling.
+    Declared(String),
+    /// No file, or a file that names no method. The server has nothing to
+    /// infer from either, and falls back to its own defaults.
+    Absent,
+    /// houhub could not read or parse it. The server still can.
+    Unreadable,
+}
+
+/// The `auth.type` the ACP server will actually authenticate with, read from
+/// the file the server reads it from.
+///
+/// Deliberately NOT the method in the stored row. The two normally agree —
+/// every launch runs [`sync_antigravity_settings_file`] — but the file is the
+/// only thing the server consults (`_infer_auth_state`), so it is also what
+/// decides which flavor of credential a sign-out actually clears.
+pub fn antigravity_effective_auth_type(
+    runtime_env: &BTreeMap<String, String>,
+) -> AntigravityAuthType {
+    let Ok(acp_dir) = antigravity_acp_dir_for_env(runtime_env) else {
+        // The directory itself cannot be named, so neither can the file.
+        return AntigravityAuthType::Unreadable;
+    };
+    let parsed = match read_antigravity_settings(&acp_dir.join("settings.json")) {
+        // `Ok(None)` is specifically "no such file", which IS positive
+        // knowledge: there is no method there to find.
+        Ok(None) => return AntigravityAuthType::Absent,
+        Ok(Some(parsed)) => parsed,
+        Err(_) => return AntigravityAuthType::Unreadable,
+    };
+    parsed
+        .get("auth")
+        .and_then(|auth| auth.get("type"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        // The server resolves the legacy spelling before it tests membership,
+        // so a caller matching on canonical ids would otherwise miss it.
+        .map(|value| AntigravityAuthType::Declared(
+            canonical_antigravity_auth_method(value).to_string(),
+        ))
+        .unwrap_or(AntigravityAuthType::Absent)
+}
+
+/// The pre-rebrand `vertex-ai` spelling resolved to the id houhub uses.
+fn canonical_antigravity_auth_method(method: &str) -> &str {
+    match method {
+        "vertex-ai" => "agent-platform",
+        other => other,
+    }
 }
 
 /// `<GEMINI_HOME>/antigravity-acp` for a launch carrying `runtime_env`, for
@@ -4326,7 +4501,7 @@ pub struct DelegationInjection {
 /// injection — never paper over with a phantom path, because that fails
 /// inside the agent's MCP spawn loop and may take the entire ACP session
 /// down on stricter agents.
-fn locate_houhub_mcp_binary() -> Option<PathBuf> {
+pub fn locate_houhub_mcp_binary() -> Option<PathBuf> {
     let filename = if cfg!(windows) {
         "houhub-mcp.exe"
     } else {
@@ -10713,14 +10888,23 @@ const CODEX_SUBAGENT_FALLBACK_NAME: &str = "subagent";
 /// for a spawn any more, so dropping this left a codex sub-agent completely
 /// invisible while it ran — nothing appeared in the timeline until the session
 /// was reopened and the rollout re-parsed.
+#[derive(Debug)]
 enum CodexSubagentActivity {
     /// Not a codex sub-agent activity — handle the call normally.
     None,
     /// A sub-agent was launched. Carries the Agent-card input to render it with.
-    Started(String),
-    /// A later lifecycle marker (`interacted` / `interrupted`). Still dropped:
-    /// they carry no content of their own and would each open a SECOND capsule
-    /// with the same name and no way to tell it apart from the launch.
+    Started {
+        thread_id: Option<String>,
+        input: String,
+    },
+    /// The child reached a terminal state (`completed` / `interrupted`). Carries
+    /// no card of its own — its `toolCallId` is a synthetic id houhub has never
+    /// seen (`subagent-completed-<uuid>`), so rendering it would open a SECOND
+    /// capsule with the same name and no way to tell it from the launch. It is
+    /// forwarded onto the LAUNCH capsule instead, keyed by `threadId`.
+    Terminal { thread_id: String, kind: String },
+    /// A mid-life marker (`interacted`). Still dropped: it carries no content of
+    /// its own and says nothing the launch capsule does not already say.
     Other,
 }
 
@@ -10732,9 +10916,10 @@ enum CodexSubagentActivity {
 /// the task text is encrypted on this wire.
 ///
 /// The capsule settles as soon as codex acknowledges the launch, NOT when the
-/// child finishes: the activity item's own lifecycle is the spawn's, and codex
-/// forwards nothing else about the child over ACP. A child's eventual result
-/// reaches the timeline as the parent's next message.
+/// child finishes: the activity item's own lifecycle is the spawn's. codex DOES
+/// say so later, with a `completed` / `interrupted` activity of its own — see
+/// [`CodexSubagentActivity::Terminal`], which is routed back onto the launch
+/// capsule rather than rendered.
 fn classify_codex_subagent_activity(
     agent_type: AgentType,
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
@@ -10748,10 +10933,26 @@ fn classify_codex_subagent_activity(
     else {
         return CodexSubagentActivity::None;
     };
+    let thread_id = subagent
+        .get("threadId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
     // A status-only follow-up carries the same meta with the same `activity`,
     // so this classification is stable across the call's whole lifetime.
-    if subagent.get("activity").and_then(|v| v.as_str()) != Some("started") {
-        return CodexSubagentActivity::Other;
+    match subagent.get("activity").and_then(|v| v.as_str()) {
+        Some("started") => {}
+        // Without a thread id there is no capsule to attribute the outcome to,
+        // so it degrades to the old drop rather than opening a stray card.
+        Some(kind @ ("completed" | "interrupted")) => {
+            return match thread_id {
+                Some(thread_id) => CodexSubagentActivity::Terminal {
+                    thread_id: thread_id.to_string(),
+                    kind: kind.to_string(),
+                },
+                None => CodexSubagentActivity::Other,
+            };
+        }
+        _ => return CodexSubagentActivity::Other,
     }
     let name = subagent
         .get("path")
@@ -10765,11 +10966,7 @@ fn classify_codex_subagent_activity(
         "subagent_type".to_string(),
         serde_json::Value::String(name.to_string()),
     );
-    if let Some(thread_id) = subagent
-        .get("threadId")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(thread_id) = thread_id {
         input.insert(
             "agent_id".to_string(),
             serde_json::Value::String(thread_id.to_string()),
@@ -10781,7 +10978,74 @@ fn classify_codex_subagent_activity(
         crate::parsers::codex::CODEX_SUBAGENT_LAUNCH_KEY.to_string(),
         serde_json::Value::Bool(true),
     );
-    CodexSubagentActivity::Started(serde_json::Value::Object(input).to_string())
+    CodexSubagentActivity::Started {
+        thread_id: thread_id.map(str::to_string),
+        input: serde_json::Value::Object(input).to_string(),
+    }
+}
+
+/// Re-stamp a launch capsule's input with the child's terminal state.
+///
+/// The card's whole meaning lives in its `rawInput` — that is where both the
+/// live path and the rollout parser put `agent_id` and the launch marker — so
+/// the outcome is delivered the same way, by re-sending the input it already
+/// has plus one key. Deliberately NOT `_meta`: that field is replace-on-update
+/// (`SessionState::upsert_tool_call`), so a meta-only patch would drop whatever
+/// codex-acp had put there, whereas `rawInput` is parsed and swapped in whole.
+fn codex_subagent_terminal_input(launch_input: &str, kind: &str) -> String {
+    let mut obj = serde_json::from_str::<serde_json::Value>(launch_input)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    obj.insert(
+        crate::parsers::codex::CODEX_SUBAGENT_STATE_KEY.to_string(),
+        serde_json::Value::String(kind.to_string()),
+    );
+    serde_json::Value::Object(obj).to_string()
+}
+
+/// Deliver a codex sub-agent's terminal state onto the capsule that launched it.
+///
+/// GATED on that capsule still being live, and the gate must be a gate: a child
+/// can outlive the turn that spawned it, and once `TurnComplete` has cleared
+/// `active_tool_calls` an update naming the launch id would be materialized from
+/// nothing by `upsert_tool_call`'s insert-on-miss — a card that exists only in
+/// memory, disappears on refresh, and says nothing. Probing with a read lock
+/// first would not help: the turn can complete in the window before the write
+/// lock is taken, which is why `emit_with_state_gated` evaluates the predicate
+/// under the same lock as the apply.
+///
+/// Nothing is lost when the gate refuses: the rollout carries the same
+/// `SubAgentActivity`, and the parser stamps the same key on reload.
+async fn settle_codex_subagent_launch(
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    cb_state: &CodeBuddyLiveState,
+    thread_id: &str,
+    kind: &str,
+) {
+    let Some((launch_id, launch_input)) = cb_state.codex_subagent_launches.get(thread_id) else {
+        return;
+    };
+    let launch_id = launch_id.clone();
+    emit_with_state_gated(
+        state,
+        emitter,
+        AcpEvent::ToolCallUpdate {
+            tool_call_id: launch_id.clone(),
+            title: None,
+            status: None,
+            content: None,
+            raw_input: Some(codex_subagent_terminal_input(launch_input, kind)),
+            raw_output: None,
+            raw_output_append: None,
+            locations: None,
+            meta: None,
+            images: None,
+        },
+        |s| s.active_tool_calls.contains_key(&launch_id),
+    )
+    .await;
 }
 
 /// True when a `session/request_permission` is codex's Plan-mode review gate
@@ -11366,6 +11630,19 @@ struct CodeBuddyLiveState {
     /// dropped so the card doesn't double-render; tracked by id because a later
     /// status-only update may drop the `x.ai/tool` meta that first identified it.
     grok_ask_tool_ids: HashSet<String>,
+    /// Codex sub-agent thread id → the launch capsule that spawned it, paired
+    /// with the `rawInput` that capsule was announced with.
+    ///
+    /// codex reports a child's completion as a `subAgentActivity` of its own,
+    /// under a synthetic tool-call id (`subagent-completed-<uuid>`) that shares
+    /// nothing with the launch except the thread id — so this is the only way
+    /// back to the card that should carry the outcome. Keeping the input too
+    /// avoids reconstructing it: the outcome is delivered by re-sending it with
+    /// one key added (`codex_subagent_terminal_input`).
+    ///
+    /// NOT cleared per turn, for the same reason the grok sub-agent map is not:
+    /// a child legitimately outlives the turn that launched it.
+    codex_subagent_launches: HashMap<String, (String, String)>,
     /// Grok `spawn_subagent` tool_call ids ever announced on this connection
     /// (dedupe for the pending queue + status tracking on meta-less updates).
     grok_spawn_seen: HashSet<String>,
@@ -12018,11 +12295,22 @@ struct AuthStatusUpdateNotification {
 
 /// Claim `_auth/status_update` and drop it, loudly enough to be greppable.
 ///
-/// codex-acp pushes this unconditionally — once right after the `initialize`
-/// response, then on every authenticate / logout / session create, and whenever
-/// the app-server reports `account/updated`. It is not gated on anything HouHub
-/// advertises; the agent merely ANNOUNCES the channel with
-/// `agentCapabilities._meta.authStatus = {}`.
+/// Two agents push it, both unconditionally. codex-acp 1.9.0: once right after
+/// the `initialize` response, then on every authenticate / logout / session
+/// create, and whenever the app-server reports `account/updated`.
+/// claude-agent-acp 0.75.0: the same points PLUS one codex does not have — the
+/// start of every user prompt, which fires an async `claude auth status --json`
+/// probe (5s timeout), so a push can land MID-TURN and a consumer must not
+/// assume the channel is quiet while a turn is open. Neither is gated on
+/// anything houhub advertises; the agent merely ANNOUNCES the channel with
+/// `agentCapabilities._meta.authStatus = {}`, and houhub registers this handler
+/// for every agent rather than per type, so a third adopter is already claimed.
+///
+/// Both push only when the payload DIFFERS from the last one sent, so the
+/// absence of a push means "unchanged", never "not signed in". Claude draws one
+/// more distinction worth keeping: it stays SILENT when it cannot determine the
+/// identity at all (probe failed, timed out, unparseable), and reserves
+/// `kind: "none"` for a known signed-OUT state.
 ///
 /// A handler is registered rather than letting it fall through because falling
 /// through is not free. sacp walks the handler chain, finds no claimant (the
@@ -12035,11 +12323,12 @@ struct AuthStatusUpdateNotification {
 /// the bump from introducing that.
 ///
 /// Nothing consumes the payload yet, and that is a deliberate stop: the status
-/// describes the AGENT-owned login only (routing HouHub itself configured through
-/// `providers/set` is explicitly excluded upstream), and every failure it could
-/// warn about already arrives as an AIR `sessionFailure` carrying an actionable
-/// `login`. The shape is recorded here so a future consumer does not have to
-/// re-derive it:
+/// describes the AGENT-owned login only (on codex, routing houhub itself
+/// configured through `providers/set` is explicitly excluded upstream), and on
+/// both agents every failure it could warn about already arrives as an AIR
+/// `sessionFailure` carrying an actionable `login` — claude 0.74.0 additionally
+/// rejects the prompt with `authRequired`. The shape is recorded here so a
+/// future consumer does not have to re-derive it:
 ///
 ///   {"authStatus": {"kind": "account" | "api_key" | "external" | "gateway"
 ///                           | "none",
@@ -12050,14 +12339,17 @@ struct AuthStatusUpdateNotification {
 ///                   "vendor"?: {…}}}
 ///
 /// Observed against a live 1.10.0 whose `~/.codex/config.toml` selects a custom
-/// provider: `{"kind":"gateway","label":"Custom model gateway","detail":"HouHub"}`.
+/// provider: `{"kind":"gateway","label":"Custom model gateway","detail":"houhub"}`.
+/// Against a live claude-agent-acp 0.75.1 with no credential:
+/// `{"kind":"none","label":"Not logged in"}`.
 /// The payload is NOT logged whole: `account.email` and `account.organization`
 /// are the signed-in person's identity, and HouHub's log file is user-visible
 /// (and shipped in diagnostics). `kind` and `label` are the two fields that
 /// answer "which identity is this connection using", and neither identifies a
-/// person — `label` is one of a fixed vocabulary ("ChatGPT Pro", "OpenAI API
-/// key", "Custom model gateway", "Not logged in") plus, for a gateway, the
-/// provider id the user configured locally.
+/// person — `label` is one of a fixed per-agent vocabulary ("ChatGPT Pro",
+/// "OpenAI API key", "Custom model gateway", "Not logged in" on codex; "Claude
+/// Max", "Anthropic API key", "AWS Bedrock", "Not logged in" on claude) plus,
+/// for a gateway, the provider id the user configured locally.
 fn handle_auth_status_update(agent_type: AgentType, notif: AuthStatusUpdateNotification) {
     let field = |key: &str| {
         notif
@@ -12350,16 +12642,33 @@ async fn emit_conversation_update(
         SessionUpdate::ToolCall(tc) => {
             // codex-acp #304 surfaces codex `subAgentActivity` as a live
             // `tool_call`. A launch becomes an Agent capsule (its own rawInput
-            // is orchestration bookkeeping, so it is replaced wholesale); the
-            // other lifecycle markers stay dropped. See
-            // `classify_codex_subagent_activity`.
+            // is orchestration bookkeeping, so it is replaced wholesale); a
+            // terminal marker is folded back onto that capsule; the rest stay
+            // dropped. See `classify_codex_subagent_activity`.
+            let mut codex_subagent_thread = None;
             let codex_subagent = match classify_codex_subagent_activity(agent_type, tc.meta.as_ref())
             {
                 CodexSubagentActivity::None => None,
-                CodexSubagentActivity::Started(input) => Some(input),
+                CodexSubagentActivity::Started { thread_id, input } => {
+                    codex_subagent_thread = thread_id;
+                    Some(input)
+                }
+                CodexSubagentActivity::Terminal { thread_id, kind } => {
+                    settle_codex_subagent_launch(state, emitter, cb_state, &thread_id, &kind).await;
+                    return;
+                }
                 CodexSubagentActivity::Other => return,
             };
             let tool_call_id = tc.tool_call_id.to_string();
+            // Remember which capsule owns this child, so its eventual
+            // `completed` / `interrupted` (announced under a synthetic id of its
+            // own) can be routed back here.
+            if let (Some(thread_id), Some(input)) = (codex_subagent_thread, codex_subagent.as_ref())
+            {
+                cb_state
+                    .codex_subagent_launches
+                    .insert(thread_id, (tool_call_id.clone(), input.clone()));
+            }
             // Grok emits a redundant `tool_call` for its native ask_user_question
             // alongside the blocking `_x.ai/ask_user_question` ext request Houhub
             // answers with the interactive card; drop it here (remembering the id so
@@ -12543,14 +12852,30 @@ async fn emit_conversation_update(
             // Symmetric with the `ToolCall` arm: the follow-up carries the same
             // `_meta.codex.subagent`, so it classifies identically — a launch's
             // completion is forwarded (settling its capsule), any other
-            // lifecycle marker's is dropped like its opening frame was.
+            // lifecycle marker's is dropped like its opening frame was. A
+            // terminal marker can arrive on either frame, so both route it.
+            let mut codex_subagent_thread = None;
             let codex_subagent =
                 match classify_codex_subagent_activity(agent_type, tcu.meta.as_ref()) {
                     CodexSubagentActivity::None => None,
-                    CodexSubagentActivity::Started(input) => Some(input),
+                    CodexSubagentActivity::Started { thread_id, input } => {
+                        codex_subagent_thread = thread_id;
+                        Some(input)
+                    }
+                    CodexSubagentActivity::Terminal { thread_id, kind } => {
+                        settle_codex_subagent_launch(state, emitter, cb_state, &thread_id, &kind)
+                            .await;
+                        return;
+                    }
                     CodexSubagentActivity::Other => return,
                 };
             let tool_call_id = tcu.tool_call_id.to_string();
+            if let (Some(thread_id), Some(input)) = (codex_subagent_thread, codex_subagent.as_ref())
+            {
+                cb_state
+                    .codex_subagent_launches
+                    .insert(thread_id, (tool_call_id.clone(), input.clone()));
+            }
             // Suppress the redundant update stream for grok's ask_user_question
             // (see the ToolCall arm): match the tracked id, or the meta on a late
             // update that still carries it.
@@ -13321,7 +13646,7 @@ mod tests {
         meta: Option<&serde_json::Map<String, serde_json::Value>>,
     ) -> Option<serde_json::Value> {
         match classify_codex_subagent_activity(agent_type, meta) {
-            CodexSubagentActivity::Started(input) => {
+            CodexSubagentActivity::Started { input, .. } => {
                 Some(serde_json::from_str(&input).expect("valid JSON"))
             }
             _ => None,
@@ -13377,14 +13702,40 @@ mod tests {
             classify_codex_subagent_activity(AgentType::ClaudeCode, Some(&started)),
             CodexSubagentActivity::None
         ));
-        // Later lifecycle markers stay dropped: they carry no content and would
-        // open a second, indistinguishable capsule for the same sub-agent.
-        for kind in ["interacted", "interrupted"] {
-            let other = meta_map(serde_json::json!({
+        // A mid-life marker stays dropped: it carries no content and would open
+        // a second, indistinguishable capsule for the same sub-agent.
+        let interacted = meta_map(serde_json::json!({
+            "codex": { "subagent": { "threadId": "t1", "path": "/root/x", "activity": "interacted" } }
+        }));
+        assert!(matches!(
+            classify_codex_subagent_activity(AgentType::Codex, Some(&interacted)),
+            CodexSubagentActivity::Other
+        ));
+        // A terminal marker is not dropped — it is the only live signal that the
+        // child stopped working, and it is routed onto the LAUNCH capsule (its
+        // own `toolCallId` is a synthetic `subagent-completed-<uuid>` houhub has
+        // never seen), keyed by the thread id.
+        for kind in ["completed", "interrupted"] {
+            let terminal = meta_map(serde_json::json!({
                 "codex": { "subagent": { "threadId": "t1", "path": "/root/x", "activity": kind } }
             }));
+            match classify_codex_subagent_activity(AgentType::Codex, Some(&terminal)) {
+                CodexSubagentActivity::Terminal {
+                    thread_id,
+                    kind: got,
+                } => {
+                    assert_eq!(thread_id, "t1");
+                    assert_eq!(got, kind);
+                }
+                other => panic!("{kind} should be terminal, got {other:?}"),
+            }
+            // Without a thread id there is no capsule to attribute it to, so it
+            // degrades to the old drop rather than opening a stray card.
+            let anonymous = meta_map(serde_json::json!({
+                "codex": { "subagent": { "path": "/root/x", "activity": kind } }
+            }));
             assert!(matches!(
-                classify_codex_subagent_activity(AgentType::Codex, Some(&other)),
+                classify_codex_subagent_activity(AgentType::Codex, Some(&anonymous)),
                 CodexSubagentActivity::Other
             ));
         }
@@ -13409,7 +13760,49 @@ mod tests {
     }
 
     #[test]
-    fn codex_plan_review_detection_is_agent_and_kind_gated() {
+    fn codex_subagent_terminal_state_is_added_to_the_launch_input() {
+        // The outcome rides `rawInput`, not `_meta`: `upsert_tool_call` replaces
+        // meta wholesale but parses and swaps in a fresh raw_input, so re-sending
+        // the launch's own input plus one key is the only patch that cannot drop
+        // what codex-acp already put on the card.
+        let launch = serde_json::json!({
+            "subagent_type": "history_limits",
+            "agent_id": "01a07fc2-db62",
+            crate::parsers::codex::CODEX_SUBAGENT_LAUNCH_KEY: true,
+        })
+        .to_string();
+        let settled: serde_json::Value =
+            serde_json::from_str(&codex_subagent_terminal_input(&launch, "completed"))
+                .expect("valid JSON");
+        assert_eq!(
+            settled,
+            serde_json::json!({
+                "subagent_type": "history_limits",
+                "agent_id": "01a07fc2-db62",
+                crate::parsers::codex::CODEX_SUBAGENT_LAUNCH_KEY: true,
+                // The parser stamps the same key on reload, so the card reads
+                // identically live and after a refresh.
+                crate::parsers::codex::CODEX_SUBAGENT_STATE_KEY: "completed",
+            })
+        );
+        // A launch whose input never parsed still yields a usable card rather
+        // than propagating the damage.
+        let recovered: serde_json::Value =
+            serde_json::from_str(&codex_subagent_terminal_input("not json", "interrupted"))
+                .expect("valid JSON");
+        assert_eq!(
+            recovered,
+            serde_json::json!({
+                crate::parsers::codex::CODEX_SUBAGENT_STATE_KEY: "interrupted",
+            })
+        );
+    }
+
+    #[test]
+    fn codex_plan_review_detected_only_for_codex_plan_review_meta() {
+        // codex-acp #351: `_meta.codex.kind = "plan_review"` on the permission
+        // REQUEST marks the Plan-mode review gate whose tool call was never
+        // announced.
         let review = meta_map(serde_json::json!({
             "codex": { "kind": "plan_review", "planItemId": "item-1" }
         }));
@@ -14832,6 +15225,102 @@ mod tests {
         std::fs::write(&path, r#"{"auth":{"type":"oauth-business"},"keep":1}"#).unwrap();
         let parsed = read_antigravity_settings(&path).unwrap().unwrap();
         assert_eq!(parsed["keep"], 1);
+    }
+
+    /// The sign-out asks this instead of reading the stored row, because the
+    /// row is not what the server infers from. Getting it wrong means aiming
+    /// `logout` at a flavor that has nothing to clear — which it answers `{}`
+    /// to, so the mistake would be reported to the user as a sign-out.
+    #[test]
+    fn antigravity_effective_auth_type_reads_the_file_the_server_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let acp_dir = dir.path().join("antigravity-acp");
+        std::fs::create_dir_all(&acp_dir).unwrap();
+        let path = acp_dir.join("settings.json");
+        let home = || {
+            BTreeMap::from([(
+                "GEMINI_HOME".to_string(),
+                dir.path().to_string_lossy().to_string(),
+            )])
+        };
+
+        let declared = |method: &str| AntigravityAuthType::Declared(method.to_string());
+
+        // No file at all: positive knowledge that there is no method to find,
+        // so the server has nothing to infer from and clears both flavors.
+        assert_eq!(
+            antigravity_effective_auth_type(&home()),
+            AntigravityAuthType::Absent
+        );
+
+        std::fs::write(&path, r#"{"auth":{"type":"oauth-business"}}"#).unwrap();
+        assert_eq!(
+            antigravity_effective_auth_type(&home()),
+            declared("oauth-business")
+        );
+
+        // The FILE wins over the row, which is the whole reason this exists:
+        // the two can disagree (a hand edit, a sync houhub was refused) and only
+        // one of them is what the agent authenticates with.
+        let mut disagreeing = antigravity_runtime("oauth-personal");
+        disagreeing.extend(home());
+        assert_eq!(
+            antigravity_effective_auth_type(&disagreeing),
+            declared("oauth-business")
+        );
+
+        // The legacy spelling resolves, as it does server-side before the
+        // membership test — otherwise a caller matching canonical ids would
+        // read `vertex-ai` as "some OAuth method" and sign out of nothing.
+        std::fs::write(&path, r#"{"auth":{"type":"vertex-ai"}}"#).unwrap();
+        assert_eq!(
+            antigravity_effective_auth_type(&home()),
+            declared("agent-platform")
+        );
+
+        // An `auth` block with no type, and a blank one, are both "no method" —
+        // still positive knowledge, because houhub read the file.
+        std::fs::write(&path, r#"{"auth":{"scopes":[]}}"#).unwrap();
+        assert_eq!(
+            antigravity_effective_auth_type(&home()),
+            AntigravityAuthType::Absent
+        );
+        std::fs::write(&path, r#"{"auth":{"type":"   "}}"#).unwrap();
+        assert_eq!(
+            antigravity_effective_auth_type(&home()),
+            AntigravityAuthType::Absent
+        );
+
+        // Hjson: the server reads it and houhub does not, so the method is
+        // whatever that file says. NOT `Absent` — this is the distinction the
+        // whole enum exists for. A caller that treated it as "nothing there"
+        // would sign out of a `gemini-api-key` connection, clear nothing, and
+        // be told `{}`.
+        std::fs::write(&path, "{\n  // mine\n  \"auth\": {\"type\": \"oauth-personal\"},\n}\n")
+            .unwrap();
+        assert_eq!(
+            antigravity_effective_auth_type(&home()),
+            AntigravityAuthType::Unreadable
+        );
+
+        // And a home that cannot be named at all is unknown for the same
+        // reason: there is a file somewhere, houhub just cannot say where.
+        // Platform-native key, as in the path tests below: `child_home_dir`
+        // reads `USERPROFILE` on Windows (`expanduser` never consults `HOME`
+        // there), so blanking `HOME` removes nothing, the fallback lands on the
+        // runner's real profile, and the answer flips to `Absent`.
+        #[cfg(windows)]
+        let home_key = "USERPROFILE";
+        #[cfg(not(windows))]
+        let home_key = "HOME";
+        let unnameable = BTreeMap::from([
+            (home_key.to_string(), String::new()),
+            ("GEMINI_HOME".to_string(), String::new()),
+        ]);
+        assert_eq!(
+            antigravity_effective_auth_type(&unnameable),
+            AntigravityAuthType::Unreadable
+        );
     }
 
     #[test]
@@ -19045,6 +19534,86 @@ mod tests {
         let (p2, append) = cache.consume("t1", "fresh+more").expect("emit");
         assert!(append, "should detect extension of freshly seeded entry");
         assert_eq!(p2, "+more");
+    }
+
+    // ─── merge_agent_env_with_color ─────────────────────────────────────
+
+    fn merged_value<'a>(merged: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        merged
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// The default launch must NOT force color — with EVERY variable checked,
+    /// not just the first one. Both force flags are unvetoable downstream
+    /// (`CLICOLOR_FORCE` outranks `NO_COLOR` by convention; `supports-color`
+    /// reads `FORCE_COLOR` first), so injecting either leaves no way for an
+    /// agent-run `gh … --json` to get parseable output back.
+    ///
+    /// `TERM` is here for a different reason: it is the one entry that
+    /// overwrites an inherited value rather than filling in a missing one, so
+    /// leaking it into the default path would change what every un-opted-in
+    /// launch reports about its terminal.
+    #[test]
+    fn merge_agent_env_omits_the_color_env_by_default() {
+        let merged = merge_agent_env_with_color(false, &[], &BTreeMap::new());
+        for key in ["CLICOLOR", "CLICOLOR_FORCE", "FORCE_COLOR", "TERM"] {
+            assert_eq!(merged_value(&merged, key), None, "{key} must not be set");
+        }
+    }
+
+    /// All four, because they cover disjoint decisions: `CLICOLOR` enables color
+    /// for the BSD family at all, `CLICOLOR_FORCE` waives the `isatty` check
+    /// that family (and go-gh) makes, `FORCE_COLOR` covers everything npm-based
+    /// (which ignores both `CLICOLOR*` outright), and `TERM` is what the
+    /// terminfo lookup needs before any of them can pick a palette.
+    ///
+    /// Splitting `CLICOLOR` out is not pedantry: with the other three but not
+    /// it, a bare `ls` still comes back monochrome, which is the exact symptom
+    /// this setting exists to fix.
+    #[test]
+    fn merge_agent_env_injects_the_whole_color_env_when_opted_in() {
+        let merged = merge_agent_env_with_color(true, &[], &BTreeMap::new());
+        assert_eq!(merged_value(&merged, "CLICOLOR"), Some("1"));
+        assert_eq!(merged_value(&merged, "CLICOLOR_FORCE"), Some("1"));
+        assert_eq!(merged_value(&merged, "FORCE_COLOR"), Some("1"));
+        assert_eq!(merged_value(&merged, "TERM"), Some("xterm-256color"));
+    }
+
+    /// The opt-in is a DEFAULT, not an override: a per-agent env row still
+    /// wins — for every injected variable, so the escape hatch is not half a
+    /// hatch. A user who turned the toggle on globally can exempt one agent and
+    /// get machine-parseable output back from it.
+    ///
+    /// Empty rather than `"0"` for the BSD pair on purpose: those are
+    /// presence-checked, so `CLICOLOR_FORCE=0` still reads as forced. An empty
+    /// value is what the spawn layer turns into `env_remove`, and this asserts
+    /// the row reaches the merge intact so that removal can happen.
+    #[test]
+    fn runtime_env_still_outranks_the_color_default() {
+        let runtime_env = BTreeMap::from([
+            ("CLICOLOR".to_string(), String::new()),
+            ("CLICOLOR_FORCE".to_string(), String::new()),
+            ("FORCE_COLOR".to_string(), "0".to_string()),
+            ("TERM".to_string(), "dumb".to_string()),
+        ]);
+        let merged = merge_agent_env_with_color(true, &[], &runtime_env);
+        assert_eq!(merged_value(&merged, "CLICOLOR"), Some(""));
+        assert_eq!(merged_value(&merged, "CLICOLOR_FORCE"), Some(""));
+        assert_eq!(merged_value(&merged, "FORCE_COLOR"), Some("0"));
+        assert_eq!(merged_value(&merged, "TERM"), Some("dumb"));
+    }
+
+    /// Turning the toggle off must not disturb anything else the merge does —
+    /// the registry env and the per-agent row still land.
+    #[test]
+    fn merge_agent_env_without_color_keeps_other_layers() {
+        let runtime_env = BTreeMap::from([("FROM_ROW".to_string(), "row".to_string())]);
+        let merged =
+            merge_agent_env_with_color(false, &[("FROM_REGISTRY", "registry")], &runtime_env);
+        assert_eq!(merged_value(&merged, "FROM_REGISTRY"), Some("registry"));
+        assert_eq!(merged_value(&merged, "FROM_ROW"), Some("row"));
     }
 
     // ─── trim_partial_ansi_tail ─────────────────────────────────────────

@@ -45,6 +45,8 @@ export const STORAGE_KEY_WORKSPACE_BG_PANEL_OPACITY =
 // 写/换/删图后 bump，让 workspace 窗口经 storage 事件重新读盘。不需预水合。
 export const STORAGE_KEY_WORKSPACE_BG_IMAGE_VERSION =
   "houhub-workspace-bg-image-version"
+export const STORAGE_KEY_WORKSPACE_BG_SOURCE_URL =
+  "houhub-workspace-bg-source-url"
 
 // 自定义样式（外观设置页）。全部需要预水合 —— 少一帧就会看到「基底预设 → 用户配色」
 // 的跳变，比没有这个功能更糟。

@@ -177,7 +177,33 @@
       "errorTooLarge": "الصورة كبيرة جدًا (16 ميجابايت كحد أقصى).",
       "errorUploadFailed": "فشل تعيين صورة الخلفية.",
       "formatHint": "‏PNG وJPEG وWebP وGIF. تُشغَّل الصور المتحركة تلقائيًا.",
-      "errorUnsupportedFormat": "صيغة صورة غير مدعومة. اختر ملف PNG أو JPEG أو WebP أو GIF."
+      "errorUnsupportedFormat": "صيغة صورة غير مدعومة. اختر ملف PNG أو JPEG أو WebP أو GIF.",
+      "market": {
+        "open": "سوق الخلفيات",
+        "title": "سوق الخلفيات",
+        "description": "تصفح معرض Wallhaven العام؛ انقر للتنزيل والتطبيق.",
+        "searchPlaceholder": "ابحث عن خلفيات…",
+        "categories": {
+          "all": "الكل",
+          "general": "مناظر",
+          "anime": "أنمي",
+          "people": "أشخاص"
+        },
+        "pageInfo": "صفحة {page} من {lastPage}",
+        "prevPage": "السابق",
+        "nextPage": "التالي",
+        "refresh": "تحديث",
+        "empty": "لا توجد خلفيات مطابقة.",
+        "error": "فشل تحميل سوق الخلفيات.",
+        "retry": "إعادة المحاولة",
+        "cardLabel": "تطبيق الخلفية {id}",
+        "applied": "قيد الاستخدام",
+        "unavailable": "غير متاح",
+        "tooLarge": "أكبر من أن تُستخدم كخلفية: {actual} (الحد {limit})",
+        "downloadFailed": "فشل التنزيل، حاول مجددًا.",
+        "appliedToast": "تم تطبيق الخلفية",
+        "credit": "الصور من wallhaven.cc · محتوى آمن فقط"
+      }
     },
     "customStyle": {
       "sectionTitle": "نمط مخصص",
@@ -388,7 +414,11 @@
     "updateToken": "تحديث الرمز",
     "updateTokenTitle": "تحديث رمز هذا الحساب",
     "updateTokenDescription": "يستبدل الرمز المحفوظ لـ {username} مع الإبقاء على الحساب نفسه. تظل المهام التي أُنشئت بهذا الحساب تعمل — أما حذفه وإضافته من جديد فيُنشئ حسابًا آخر بالنسبة لها.",
-    "updateTokenSubmit": "تحقّق وحدّث"
+    "updateTokenSubmit": "تحقّق وحدّث",
+    "giteaTitle": "حسابات Gitea",
+    "giteaDescription": "إدارة حسابات Gitea (و Forgejo) للمصادقة. يتم تخزين الرموز محليًا.",
+    "giteaTokenHint": "أنشئ رمز وصول بنطاقات write:repository و write:issue و read:user من Gitea → Settings → Applications.",
+    "giteaNoAccounts": "لا يوجد حساب Gitea بعد"
   },
   "ShortcutSettings": {
     "sectionTitle": "الاختصارات",
@@ -1585,6 +1615,13 @@
         "failed": "لم يكتمل تسجيل الدخول.",
         "startFailed": "تعذّر بدء تسجيل الدخول",
         "credentialHint": "يُخزَّن الرمز هنا. انسخ هذا الملف إلى جهاز آخر بلا سطح مكتب لتسجيل دخوله أيضاً."
+      },
+      "signOut": {
+        "title": "هل سجّلت الدخول بحساب خاطئ؟",
+        "description": "يحتفظ Antigravity بحساب Google الذي سجّل الدخول به ويعيد استخدامه بصمت، لذا فإن تسجيل الدخول مرة أخرى لا يصل إلى حساب آخر. يؤدي تسجيل الخروج إلى حذف بيانات الاعتماد المخزّنة، وتُنهى جلسات Antigravity الجارية أولاً، وإلا فإنها ستعيد كتابة الحساب القديم.",
+        "action": "تسجيل الخروج",
+        "done": "تم تسجيل الخروج. سجّل الدخول مرة أخرى لاختيار حساب آخر.",
+        "failed": "تعذّر تسجيل الخروج"
       }
     },
     "customAgentMcpLabel": "دعم MCP",
@@ -1627,7 +1664,9 @@
     "restartRequired": "تم الحفظ. أعد تشغيل التطبيق ليصبح التغيير نافذًا.",
     "restartNow": "إعادة التشغيل الآن",
     "restartFailed": "فشل إعادة التشغيل: {message}",
-    "loadFailed": "فشل التحميل: {message}"
+    "loadFailed": "فشل التحميل: {message}",
+    "colorizeCommandOutput": "تلوين مُخرجات الأوامر",
+    "colorizeCommandOutputDescription": "فرض ألوان ANSI على الأوامر التي تنفّذها الوكلاء، بحيث تظهر مخرجاتها ملوّنة في السجل بدلاً من نص عادي. يسري على الجلسات الجديدة."
   },
   "LoginPage": {
     "documentTitle": "تسجيل الدخول - houhub",
@@ -1713,7 +1752,12 @@
     "continueImport": "متابعة الاستيراد",
     "toasts": {
       "importFailed": "فشل الاستيراد: {message}"
-    }
+    },
+    "includeDeleted": "تضمين المحذوفة",
+    "includeDeletedWithCount": "تضمين المحذوفة ({count})",
+    "includeDeletedHint": "حذف الجلسة في houhub يخفيها فقط — المحادثة وسجلها ما زالا موجودين. فعّل هذا الخيار لتحديد الجلسات المحذوفة واستعادتها في مكانها.",
+    "statusDeletedRestorable": "محذوفة — استيرادها يستعيد المحادثة الأصلية",
+    "doneRestored": "مستعادة"
   },
   "Folder": {
     "workspaceStatus": {
@@ -2064,6 +2108,49 @@
           "more": "المزيد"
         },
         "showPet": "إظهار الحيوان الأليف"
+      },
+      "mcp": {
+        "title": "خدمة houhub-mcp",
+        "state": {
+          "running": "قيد التشغيل",
+          "stopped": "متوقفة",
+          "disabled": "لا أدوات مفعّلة",
+          "unavailable": "المرافق مفقود",
+          "unknown": "غير معروف"
+        },
+        "hint": {
+          "running": "الوكلاء المشغّلون من هنا يمكنهم استخدام أدوات houhub.",
+          "stopped": "مقبس الوسيط لا يستجيب.",
+          "disabled": "جميع مجموعات الأدوات معطّلة.",
+          "unavailable": "ملف houhub-mcp التنفيذي غير موجود على القرص.",
+          "unknown": "تعذّرت قراءة الحالة."
+        },
+        "socketPath": "العنوان",
+        "binary": "المرافق",
+        "binaryMissing": "غير موجود",
+        "sessions": "الجلسات",
+        "activeDelegations": "التفويضات",
+        "depthLimit": "حد العمق",
+        "tools": "الأدوات",
+        "groupDelegation": "التفويض",
+        "descDelegation": "يسلّم مهمة إلى وكيل آخر.",
+        "groupFeedback": "الملاحظات الحية",
+        "descFeedback": "يضيف ملاحظات دون مقاطعة الدور.",
+        "groupAsk": "سؤال المستخدم",
+        "descAsk": "يدع الوكيل يسألك قبل أن يقرر.",
+        "groupSessions": "الاطلاع على الجلسات",
+        "descSessions": "يبحث في الجلسات السابقة ونتائجها.",
+        "groupAutomations": "إنشاء أتمتة",
+        "descAutomations": "ينشئ الأتمتة المجدولة ويديرها.",
+        "groupTaskboard": "إنشاء مهمة",
+        "descTaskboard": "ينشئ مهام العمل ويديرها.",
+        "start": "بدء الخدمة",
+        "starting": "جارٍ البدء…",
+        "actionFailed": "فشلت العملية: {message}",
+        "lastError": "آخر خطأ: {message}",
+        "loadFailed": "تعذّرت قراءة الحالة: {message}",
+        "openSettings": "فتح الإعدادات الكاملة",
+        "refresh": "تحديث"
       }
     },
     "auxPanel": {
@@ -2890,7 +2977,9 @@
           "lineNoError": "{retry}",
           "lineNoErrorWithDelay": "{retry}، {delay}"
         },
-        "configOptionAdjusted": "ضبط {agent} {option} على {actual} بدلاً من {requested}"
+        "configOptionAdjusted": "ضبط {agent} {option} على {actual} بدلاً من {requested}",
+        "notificationQuestion": "{agent} ينتظر إجابتك",
+        "notificationErrorRedacted": "واجه {agent} خطأً"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -2979,7 +3068,10 @@
         "toggleOff": "إيقاف",
         "slashLoading": "جارٍ تحميل الأوامر…",
         "steerAsNote": "إرسال ملاحظة للفحص التالي",
-        "steerNoteFailed": "تعذّر إرسال ملاحظتك"
+        "steerNoteFailed": "تعذّر إرسال ملاحظتك",
+        "openLink": "فتح الرابط",
+        "openFile": "فتح الملف",
+        "sendEmail": "إرسال بريد"
       },
       "messageQueue": {
         "addToQueue": "إضافة للقائمة",
@@ -3497,7 +3589,10 @@
           "outputMissing": "اقتطع codex مُخرَج النص البرمجي وأزال الفاصل الخاص بهذا الأمر، لذا تعذّر نسب أي مُخرَج إليه.",
           "sharedWith": "يحتوي هذا المقطع أيضًا على مُخرَج {commands} — إذ اقتطع codex الفواصل الخاصة بها.",
           "truncated": "مقتطع"
-        }
+        },
+        "agentSubagentDone": "انتهى",
+        "agentSubagentInterrupted": "تمت مقاطعته",
+        "agentSubagentUnknown": "النتيجة غير معروفة"
       },
       "messageNav": {
         "title": "تنقل الرسائل",
@@ -3608,13 +3703,16 @@
         "opSpawn": "بدء تشغيل الوكيل الفرعي",
         "opWait": "جلب نتيجة الوكيل الفرعي",
         "opClose": "إغلاق الوكيل الفرعي",
-        "opResume": "استئناف الوكيل الفرعي"
+        "opResume": "استئناف الوكيل الفرعي",
+        "opList": "سرد الوكلاء الفرعيين"
       },
       "contextCompaction": {
         "compacting": "جارٍ ضغط السياق…",
         "compacted": "تم ضغط السياق",
         "compactedTokens": "تم ضغط السياق · {before} → {after} رمز",
-        "failed": "فشل ضغط السياق"
+        "failed": "فشل ضغط السياق",
+        "triggerManual": "تم التشغيل يدويًا",
+        "triggerAutomatic": "تم التشغيل تلقائيًا"
       },
       "sessionFailure": {
         "category": {
@@ -3644,7 +3742,9 @@
         "cardLaunchedPending": "بدأت مهمة الخلفية",
         "cardCompleted": "اكتملت مهمة الخلفية",
         "cardFinishedWithStatus": "انتهت مهمة الخلفية ({status})",
-        "cardResultPending": "لم تصل النتيجة بعد"
+        "cardResultPending": "لم تصل النتيجة بعد",
+        "notifySettledOne": "{agent}: انتهت مهمة في الخلفية",
+        "notifySettledMany": "{agent}: انتهت {count} مهمات في الخلفية"
       },
       "asyncTasks": {
         "openOutput": "المخرجات",
@@ -3665,7 +3765,10 @@
         "copyAbsolutePath": "نسخ المسار المطلق",
         "pathCopied": "تم نسخ المسار",
         "copyPathFailed": "فشل نسخ المسار",
-        "openFailed": "فشل فتح الملف المحلي"
+        "openFailed": "فشل فتح الملف المحلي",
+        "download": "تنزيل ملف",
+        "downloadSaved": "تم تنزيل {name}",
+        "downloadFailed": "فشل تنزيل {name}"
       },
       "jsonTree": {
         "viewRaw": "عرض JSON الخام",
@@ -3684,15 +3787,15 @@
         "createAutomationNoName": "إنشاء أتمتة",
         "createWorkTask": "إنشاء مهمة العمل {title}",
         "createWorkTaskNoTitle": "إنشاء مهمة عمل",
+        "resumeDelegation": "استئناف المهمة {task}",
+        "resumeDelegationNoId": "استئناف مهمة مفوضة",
         "promptLabel": "التعليمات",
         "verdict": {
           "success": "ناجحة",
           "needs_review": "بحاجة إلى مراجعة",
           "blocked": "متوقفة",
           "unknown": "غير معروف"
-        },
-        "resumeDelegation": "استئناف المهمة {task}",
-        "resumeDelegationNoId": "استئناف مهمة مفوضة"
+        }
       },
       "houhubMcpTool": {
         "getSessionInfo": "قراءة المحادثة {session}",
@@ -3730,6 +3833,16 @@
       "viewMode": {
         "split": "التبديل إلى العرض جنباً إلى جنب",
         "unified": "التبديل إلى العرض المضمّن"
+      },
+      "binaryFile": "ملف ثنائي — لا يتم عرض المحتوى",
+      "image": {
+        "sideBySide": "التبديل إلى العرض جنباً إلى جنب",
+        "swipe": "التبديل إلى عرض التمرير",
+        "swipeHandle": "شريط تمرير مقارنة الصور",
+        "noImage": "لا توجد صورة في هذه المراجعة",
+        "unavailable": "تعذر تحميل هذا الجانب",
+        "tooLarge": "الصورة كبيرة جدًا للمعاينة ({size})",
+        "loading": "جارٍ تحميل الصور..."
       }
     },
     "conversationContextBar": {
@@ -4534,7 +4647,15 @@
       "button": "تصدير النسخة الاحتياطية",
       "inProgress": "جارٍ إنشاء النسخة الاحتياطية…",
       "success": "تم إنشاء النسخة الاحتياطية.",
-      "started": "بدأ تنزيل النسخة الاحتياطية."
+      "started": "بدأ تنزيل النسخة الاحتياطية.",
+      "degradedTitle": "احتاجت بعض قواعد بيانات جلسات الوكلاء إلى معالجة خاصة",
+      "degradedHint": "تحفظ هذه الوكلاء جلساتها في SQLite. ما لم يُذكر خلاف ذلك أدناه، فهي مضمَّنة في النسخة الاحتياطية.",
+      "degradedMore": "…و{count} غيرها.",
+      "degradedLevel": {
+        "recoveredOnCopy": "استُعيدت من نسخة خاصة — كاملة",
+        "bareFileOnly": "أُرشفت بدون سجل الكتابة المسبقة — قد تنقص أحدث الرسائل",
+        "notArchived": "لم تُؤرشف — ظلت تتغير أثناء النسخ"
+      }
     },
     "restore": {
       "selectFile": "اختر ملف النسخة الاحتياطية",
@@ -4572,11 +4693,37 @@
         "scanning": "جارٍ التحقق من التعارضات…",
         "noConflicts": "لن تتم الكتابة فوق أي ملف موجود.",
         "conflictCount": "سيتأثر {count} من الملفات الموجودة.",
-        "conflictSkipNote": "تُحفظ الملفات الموجودة (تُتخطى) ما لم تفعّل الكتابة فوقها."
+        "conflictSkipNote": "تُحفظ الملفات الموجودة (تُتخطى) ما لم تفعّل الكتابة فوقها.",
+        "agentsRunning": "يعمل {count} من الوكلاء ({agents}). أغلقها أولًا، وإلا فستُحفظ سجلات المحادثات في مجلد جانبي بدل إعادتها إلى مواضعها الأصلية."
       },
-      "restartFailed": "تم تجهيز الاستعادة، لكن تعذّر إعادة تشغيل الخادم. أعد تشغيله يدويًا لتطبيقها."
+      "restartFailed": "تم تجهيز الاستعادة، لكن تعذّر إعادة تشغيل الخادم. أعد تشغيله يدويًا لتطبيقها.",
+      "discardPending": "تجاهل الاستعادة المُجهَّزة",
+      "discarded": "تم تجاهل الاستعادة المُجهَّزة.",
+      "pendingBlockedHint": "توجد بالفعل استعادة مُجهَّزة تنتظر إعادة التشغيل. تجاهلها لتجهيز أخرى.",
+      "result": {
+        "title": "تم تجهيز الاستعادة",
+        "needsRestart": "ستُطبَّق عند التشغيل التالي. تُؤخذ لقطة من بياناتك الحالية أولًا.",
+        "downgraded": "كان {agents} قيد التشغيل، لذلك لم تُكتب سجلات المحادثات في مواضعها الأصلية، بل حُفظت في {path}.",
+        "skipped": "أُبقي على {count} من الملفات الموجودة",
+        "refused": "لم تُكتب {count} من قواعد بيانات الجلسات",
+        "refusedHint": "هي من نسخة احتياطية أقدم كانت تحفظ قاعدة البيانات وسجل الكتابة المسبقة منفصلين، ولا يمكن إثبات تطابقهما. لم تُمسّ قواعد بياناتك الحالية — استعِد إلى مجلد جانبي للحصول على الملفات الأصلية.",
+        "restartNow": "إعادة التشغيل الآن",
+        "later": "لاحقًا"
+      }
     },
-    "remoteUnsupported": "يعمل النسخ الاحتياطي والاستعادة على بيانات الجهاز الذي يشغّل houhub. أنت متصل بمساحة عمل بعيدة — أدِر نسخها الاحتياطية من ذلك الخادم مباشرة."
+    "remoteUnsupported": "يعمل النسخ الاحتياطي والاستعادة على بيانات الجهاز الذي يشغّل houhub. أنت متصل بمساحة عمل بعيدة — أدِر نسخها الاحتياطية من ذلك الخادم مباشرة.",
+    "progress": {
+      "cancel": "إلغاء"
+    },
+    "snapshots": {
+      "title": "لقطات ما قبل الاستعادة",
+      "hint": "تأخذ كل استعادة لقطة من بياناتك الحالية أولًا، ويُحتفظ بأحدث لقطتين.",
+      "empty": "لا توجد لقطات بعد.",
+      "rollback": "العودة إلى هذه",
+      "unsupported": "للاطلاع فقط",
+      "rollbackConfirmTitle": "العودة إلى هذه اللقطة؟",
+      "rollbackConfirmBody": "سيستبدل هذا بياناتك الحالية باللقطة ثم يعيد التشغيل. تُؤخذ لقطة من البيانات المستبدَلة أولًا."
+    }
   },
   "backup": {
     "restore": {
@@ -5365,7 +5512,12 @@
     "settingsCompactCommand": "أمر الضغط",
     "settingsCompactCommandHint": "اتركه فارغًا لاستخدام الأمر الذي يوفّره الوكيل أو قيمته الافتراضية المعروفة.",
     "settingsCompactCommandPlaceholder": "/compact",
-    "eventContextCompact": "ضغط السياق"
+    "eventContextCompact": "ضغط السياق",
+    "notifyReviewRedacted": "هناك مهمة جاهزة للمراجعة",
+    "notifyFailedRedacted": "فشلت إحدى المهمات",
+    "phaseCompact": "ضغط السياق",
+    "mergeSubmitting": "جارٍ البدء…",
+    "compactingNote": "جارٍ ضغط سياق الجلسة…"
   },
   "TokenUsage": {
     "title": "استهلاك الرموز",
@@ -5564,7 +5716,7 @@
     "noRemote": "لا يحتوي هذا المجلد على remote معروف (origin)",
     "errors": {
       "noAccount": "لا يوجد حساب {provider} مُهيّأ للمضيف {host}. أضف حسابًا من الإعدادات ← التحكم بالإصدارات لتحميل هذا المستودع.",
-      "unsupportedHost": "لوحة المستودع تدعم GitHub و GitLab فقط، و{host} لا يُعرَف كأي منهما. إذا كان مثيلًا مستضافًا ذاتيًا من GitHub Enterprise أو GitLab، فأضف له حسابًا من الإعدادات ← التحكم بالإصدارات.",
+      "unsupportedHost": "لوحة المستودع تدعم GitHub و GitLab و Gitea فقط، و{host} لا يُعرَف كأي منها. إذا كان مثيلًا مستضافًا ذاتيًا من GitHub Enterprise أو GitLab أو Gitea أو Forgejo، فأضف له حسابًا من الإعدادات ← التحكم بالإصدارات.",
       "wrongForge": "{host} هو {provider}، وليس المنصة التي كان مصنّفًا ضمنها. تم تصحيح الاكتشاف — أعد التحميل للمحاولة مجددًا."
     },
     "addAccount": "إضافة حساب",
@@ -5828,6 +5980,102 @@
     "confirmDeleteCancel": "إلغاء",
     "confirmDeleteConfirm": "حذف",
     "canvasActions": "إجراءات اللوحة",
-    "mergeIntoNewRegion": "منطقة جديدة"
+    "mergeIntoNewRegion": "منطقة جديدة",
+    "addFileCard": "بطاقة ملف",
+    "addTerminalCard": "بطاقة طرفية",
+    "searchFiles": "البحث عن الملفات…",
+    "searchFilesIn": "البحث في {folder}…",
+    "searchingFiles": "جارٍ البحث…",
+    "noFiles": "لم يتم العثور على ملفات",
+    "noOpenFiles": "لا توجد ملفات مفتوحة — اكتب للبحث",
+    "browseForFile": "استعراض…",
+    "filePreview": "معاينة",
+    "fileSource": "المصدر",
+    "reloadFile": "إعادة التحميل",
+    "removeFileCard": "إزالة بطاقة الملف",
+    "restartTerminal": "إعادة تشغيل الطرفية",
+    "removeTerminalCard": "إزالة بطاقة الطرفية",
+    "terminalNoDirectory": "لا يوجد دليل عمل لهذه البطاقة",
+    "confirmDeleteTerminals": "سيتم إغلاق {count} من الطرفيات قيد التشغيل وإنهاء عملياتها.",
+    "confirmDeleteNotesAndTerminals": "سيتم حذف {notes} من الملاحظات التي كتبتها نهائيًا، وإنهاء {terminals} من الطرفيات قيد التشغيل."
+  },
+  "DesktopNotificationSettings": {
+    "title": "إشعارات سطح المكتب",
+    "description": "إظهار إشعار من النظام عندما يحتاجك أحد الوكلاء. الإعداد خاص بكل جهاز — وهو مستقل في أي متصفح أو جهاز آخر.",
+    "permissionTitle": "الإذن",
+    "permissionGranted": "مسموح",
+    "permissionDenied": "محظور",
+    "permissionDefault": "لم يُطلب بعد",
+    "permissionUnsupported": "غير متاح",
+    "permissionManagedByOs": "يديره النظام",
+    "permissionGrantedHint": "سيعرض هذا المتصفح إشعارات HouHub.",
+    "permissionDeniedHint": "يحجب هذا المتصفح إشعارات HouHub. لا يمكن التراجع إلا من إعدادات الموقع في المتصفح — لا تستطيع الصفحة أن تسأل مرة أخرى.",
+    "permissionDefaultHint": "لم يُسأل هذا المتصفح بعد. لن تصل أي إشعارات حتى تسمح بها.",
+    "permissionUnsupportedHint": "تحتاج الإشعارات إلى سياق آمن. افتح هذا الخادم عبر HTTPS أو على localhost.",
+    "permissionManagedByOsHint": "يرسل تطبيق سطح المكتب عبر مركز إشعارات النظام، والنظام لا يخبرنا إن كان HouHub مسموحًا له. أرسل اختبارًا لتعرف.",
+    "identityTitle": "يُرسل باسم",
+    "identityHint": "يسجّل النظام هذه الإشعارات باسم هذا التطبيق، والمفاتيح السارية هي مفاتيحه هو.",
+    "identityDegradedHint": "تعذّر استخدام معرّف HouHub الخاص، لذا يرسلها النظام باسم {bundleId} وتسري مفاتيح ذلك التطبيق. ثبّت HouHub في مجلد التطبيقات لاستعادة هويته.",
+    "requestPermission": "السماح بالإشعارات",
+    "permissionGrantedToast": "تم السماح بالإشعارات.",
+    "permissionDeniedToast": "تم حجب الإشعارات. أعد تفعيلها من إعدادات الموقع في متصفحك.",
+    "openSystemSettings": "فتح إعدادات النظام",
+    "openSystemSettingsFailed": "تعذر فتح إعدادات إشعارات النظام.",
+    "sendTest": "إرسال اختبار",
+    "testTitle": "HouHub",
+    "testBody": "إشعارات سطح المكتب تعمل.",
+    "testSent": "تم إرسال إشعار الاختبار.",
+    "testFailed": "تعذر إرسال إشعار الاختبار.",
+    "whenTitle": "وقت الإشعار",
+    "whenHint": "النافذة على شاشة ثانية مرئية لكنها غير نشطة — اختر «النافذة غير نشطة» إن كانت الإشعارات لا تصل أبدًا.",
+    "whenAlways": "دائمًا",
+    "whenUnfocused": "النافذة غير نشطة",
+    "whenHidden": "النافذة غير مرئية",
+    "hideBody": "إخفاء محتوى الإشعار",
+    "hideBodyHint": "إظهار سطر عام بدل مخرجات الوكيل. يحتفظ مركز الإشعارات بالمحتوى خارج التطبيق، حتى بعد إغلاق المحادثة. يظل العنوان يذكر اسم المجلد لتعرف إلى أي نافذة تعود.",
+    "eventsTitle": "الأحداث",
+    "eventsHint": "أوقف أي حدث لا تريده أن يقاطعك. تُدمج تكرارات الحدث نفسه خلال ثوانٍ في إشعار واحد.",
+    "eventBackgroundTask": "مهمة في الخلفية",
+    "eventWorkTask": "مهمة عمل"
+  },
+  "DeepSeekModelEditor": {
+    "title": "قائمة النماذج",
+    "description": "النماذج التي يمكن لجلسة DeepSeek التبديل بينها. تُحفظ في مستند إعدادات الـ harness الذي يقرأه الوكيل عند الإقلاع — ويسري الحفظ على الجلسات التي تبدأ بعده.",
+    "inheritedBadge": "افتراضيات الوكيل",
+    "inheritedHint": "لا توجد قائمة محفوظة بعد، لذا هذه هي نماذج الوكيل المدمجة. الحفظ يثبّتها، ولن تغيّرها إصدارات الوكيل اللاحقة من تلقاء نفسها. الملف:",
+    "storedHint": "محفوظة في مستند إعدادات الـ harness. تبقى المفاتيح خارج هذه القائمة — والتعليقات المحيطة بها — كما هي. الملف:",
+    "unreadable": "لا يمكن تحرير مستند الإعدادات هذا من هنا دون المخاطرة بما يحتويه. حرّره يدويًا.",
+    "invalidStored": "يرفض الوكيل هذه القائمة المحفوظة، لذا تعمل الجلسات بنماذجه المدمجة إلى أن تُصلَح:",
+    "loading": "جارٍ قراءة مستند الإعدادات…",
+    "loadFailed": "تعذّرت قراءة مستند الإعدادات.",
+    "empty": "لا توجد نماذج. أضف واحدًا، أو احفظ للعودة إلى قائمة الوكيل المدمجة.",
+    "addModel": "إضافة نموذج",
+    "remove": "إزالة النموذج",
+    "advanced": "المزيد",
+    "save": "حفظ قائمة النماذج",
+    "saving": "جارٍ الحفظ…",
+    "restoreDefaults": "استخدام افتراضيات الوكيل",
+    "fieldId": "معرّف النموذج",
+    "fieldName": "الاسم المعروض",
+    "fieldContextWindow": "نافذة السياق",
+    "fieldDescription": "الوصف",
+    "fieldMaxTokens": "أقصى رموز للمخرجات",
+    "fieldAcceptsImages": "يقبل الصور",
+    "fieldImageDetail": "تفاصيل الصورة",
+    "fieldImagePixelBudget": "حد وحدات البكسل",
+    "fieldImageMaxBytes": "حد البايتات",
+    "placeholderId": "deepseek-v4-flash",
+    "placeholderName": "يظهر في المُحدِّد",
+    "placeholderInherit": "افتراضي الوكيل",
+    "errorMissingId": "كل نموذج يحتاج إلى معرّف.",
+    "errorDuplicateId": "نموذجان يحملان المعرّف “{id}”.",
+    "errorBadContextWindow": "يجب أن تكون نافذة سياق “{id}” عددًا صحيحًا أكبر من صفر.",
+    "errorBadMaxTokens": "يجب أن يكون أقصى رموز مخرجات “{id}” عددًا صحيحًا أكبر من صفر.",
+    "errorBadImageLimit": "يجب أن تكون حدود صور “{id}” أعدادًا صحيحة أكبر من صفر.",
+    "warnSingleModel": "مع نموذج واحد فقط، يتوقف الوكيل عن عرض مُحدِّد النماذج أصلًا.",
+    "warnLaunchModelMissing": "تبدأ الجلسات الجديدة على “{model}” وهو غير موجود في هذه القائمة. أضِفه، أو اضبط {variable} في متغيّرات البيئة أعلاه.",
+    "toastSaved": "تم حفظ قائمة النماذج",
+    "toastRestored": "يجري استخدام قائمة نماذج الوكيل المدمجة",
+    "toastSaveFailed": "تعذّر حفظ قائمة النماذج"
   }
 }

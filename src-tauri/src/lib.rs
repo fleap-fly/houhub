@@ -63,7 +63,8 @@ mod tauri_app {
         canvas as canvas_commands,
         chat_authoring as chat_authoring_commands, chat_channel as chat_channel_commands,
         conversations,
-        custom_skills as custom_skills_commands, delegation as delegation_commands,
+        custom_skills as custom_skills_commands,
+        deepseek_settings as deepseek_settings_commands, delegation as delegation_commands,
         experts as experts_commands, feedback as feedback_commands, file_io, folder_commands,
         folder_links, forge as forge_commands, folders, houflow as houflow_commands, logging as logging_commands, mcp as mcp_commands, open_in,
         model_provider as model_provider_commands, notification,
@@ -582,18 +583,20 @@ mod tauri_app {
                     });
                 }
 
-                // Push the persisted default shell into the ACP terminal
-                // runtime BEFORE any background task that can spawn an agent
-                // (the chat-channel dispatcher below is one). The handle is
-                // read at terminal-create time, so a late seed would only ever
-                // be a narrow race — but "seeded before anything can connect"
-                // is cheap to guarantee here and matches server startup, which
-                // seeds before it binds.
+                // Push the persisted terminal settings into their live
+                // runtimes BEFORE any background task that can spawn an agent
+                // (the chat-channel dispatcher below is one). For the shell
+                // handle a late seed would only ever be a narrow race, since
+                // it is read at terminal-create time; the command-color flag
+                // is read while BUILDING a launch's env, so a late seed there
+                // would silently hand the first agent of the run the wrong
+                // one. "Seeded before anything can connect" covers both, and
+                // matches server startup, which seeds before it binds.
                 {
                     let db_for_shell = app.state::<db::AppDatabase>().conn.clone();
                     let shell_config = app.state::<ConnectionManager>().terminal_shell_config();
                     tauri::async_runtime::block_on(async move {
-                        crate::commands::system_settings::apply_persisted_terminal_shell_config(
+                        crate::commands::system_settings::apply_persisted_terminal_settings(
                             &db_for_shell,
                             &shell_config,
                         )
@@ -824,9 +827,19 @@ mod tauri_app {
                             ),
                         ),
                     );
+                    // Bind through the service handle rather than a bare
+                    // `listener.run` spawn: it keeps the bind error and the
+                    // accept-loop handle around, which is what lets the
+                    // workspace status indicator report why the broker socket
+                    // is down and rebind it without an app restart.
+                    let service = crate::acp::delegation::service::DelegationService::new(
+                        listener,
+                        socket_path,
+                    );
+                    crate::acp::delegation::service::install(service.clone());
                     tauri::async_runtime::spawn(async move {
-                        if let Err(e) = listener.run(socket_path).await {
-                            tracing::info!("[delegation] listener exited: {e}");
+                        if let Err(e) = service.start().await {
+                            tracing::error!("[delegation] listener failed to start: {e}");
                         }
                     });
                     broker
@@ -1222,6 +1235,7 @@ mod tauri_app {
                 folders::git_diff_with_branch,
                 folders::git_show_diff,
                 folders::git_show_file,
+                folders::git_show_file_base64,
                 folders::git_commit,
                 folders::git_rollback_file,
                 folders::git_add_files,
@@ -1322,6 +1336,9 @@ mod tauri_app {
                 background_commands::background_read,
                 background_commands::background_set,
                 background_commands::background_clear,
+                background_commands::background_market_search,
+                background_commands::background_market_asset,
+                background_commands::background_market_download,
                 app_update_commands::app_update_state,
                 app_update_commands::perform_app_update,
                 app_update_commands::restart_app,
@@ -1349,6 +1366,9 @@ mod tauri_app {
                 logging_commands::open_logs_dir,
                 delegation_commands::get_delegation_settings,
                 delegation_commands::set_delegation_settings,
+                crate::commands::mcp_service::get_houhub_mcp_service_status,
+                crate::commands::mcp_service::start_houhub_mcp_service,
+                crate::commands::mcp_service::set_houhub_mcp_tool_group,
                 feedback_commands::get_feedback_settings,
                 feedback_commands::set_feedback_settings,
                 feedback_commands::submit_session_feedback,
@@ -1364,6 +1384,8 @@ mod tauri_app {
                 version_control::update_git_settings,
                 version_control::get_github_accounts,
                 version_control::validate_github_token,
+                version_control::validate_gitlab_token,
+                version_control::validate_gitea_token,
                 version_control::update_github_accounts,
                 version_control::save_account_token,
                 version_control::get_account_token,
@@ -1405,6 +1427,8 @@ mod tauri_app {
                 acp_commands::acp_update_hermes_config,
                 acp_commands::acp_update_kimi_code_config,
                 acp_commands::acp_fetch_kimi_models,
+                deepseek_settings_commands::acp_load_deepseek_model_catalog,
+                deepseek_settings_commands::acp_update_deepseek_model_catalog,
                 acp_commands::acp_update_pi_config,
                 acp_commands::acp_load_pi_config,
                 acp_commands::acp_validate_pi_command,
@@ -1412,6 +1436,7 @@ mod tauri_app {
                 acp_commands::acp_antigravity_login_start,
                 acp_commands::acp_antigravity_login_finish,
                 acp_commands::acp_antigravity_login_cancel,
+                acp_commands::acp_antigravity_sign_out,
                 acp_commands::acp_pi_project_trust_state,
                 acp_commands::acp_pi_set_project_trust,
                 acp_commands::acp_pi_acknowledge_project_trust,
@@ -1554,6 +1579,7 @@ mod tauri_app {
                 terminal_commands::terminal_spawn,
                 terminal_commands::terminal_write,
                 terminal_commands::terminal_resize,
+                terminal_commands::terminal_snapshot,
                 terminal_commands::terminal_kill,
                 terminal_commands::terminal_list,
                 mcp_commands::mcp_scan_local,
@@ -1565,13 +1591,20 @@ mod tauri_app {
                 mcp_commands::mcp_set_server_apps,
                 mcp_commands::mcp_remove_server,
                 notification::send_notification,
+                notification::notification_identity,
+                notification::open_system_notification_settings,
                 file_io::save_binary_file,
                 file_io::save_text_file,
                 backup::backup_create,
-                backup::backup_inspect,
+                backup::backup_prepare_source,
+                backup::backup_release_source,
                 backup::backup_scan_external_conflicts,
                 backup::backup_restore_stage,
                 backup::backup_cancel,
+                backup::backup_list_safety_snapshots,
+                backup::backup_rollback,
+                backup::backup_discard_pending,
+                backup::backup_active_agents,
                 chat_channel_commands::list_chat_channels,
                 chat_channel_commands::create_chat_channel,
                 chat_channel_commands::update_chat_channel,

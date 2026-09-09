@@ -226,6 +226,14 @@ function getAllowedExternalProtocol(rawUrl: string): string | null {
   return ALLOWED_EXTERNAL_PROTOCOLS.has(protocol) ? protocol : null
 }
 
+/** Whether the shared opener has a valid route for this token. */
+export function canOpenLinkOrFile(rawUrl: string): boolean {
+  return (
+    parseLocalFileTarget(rawUrl) !== null ||
+    getAllowedExternalProtocol(rawUrl) !== null
+  )
+}
+
 /**
  * True when `window.open` reaches a real browser tab. Tauri webviews, including
  * remote-workspace windows, must route ordinary external links through the

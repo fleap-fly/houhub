@@ -177,7 +177,33 @@
       "errorTooLarge": "画像が大きすぎます（最大 16 MB）。",
       "errorUploadFailed": "背景画像の設定に失敗しました。",
       "formatHint": "PNG・JPEG・WebP・GIF に対応しています。アニメーション画像は自動で再生されます。",
-      "errorUnsupportedFormat": "対応していない画像形式です。PNG・JPEG・WebP・GIF から選んでください。"
+      "errorUnsupportedFormat": "対応していない画像形式です。PNG・JPEG・WebP・GIF から選んでください。",
+      "market": {
+        "open": "壁紙マーケット",
+        "title": "壁紙マーケット",
+        "description": "Wallhaven の公開ギャラリーを閲覧し、クリックでダウンロードして適用。",
+        "searchPlaceholder": "壁紙を検索…",
+        "categories": {
+          "all": "すべて",
+          "general": "風景",
+          "anime": "アニメ",
+          "people": "人物"
+        },
+        "pageInfo": "{page} / {lastPage} ページ",
+        "prevPage": "前へ",
+        "nextPage": "次へ",
+        "refresh": "更新",
+        "empty": "一致する壁紙がありません。",
+        "error": "壁紙マーケットの読み込みに失敗しました。",
+        "retry": "再試行",
+        "cardLabel": "壁紙 {id} を適用",
+        "applied": "使用中",
+        "unavailable": "利用不可",
+        "tooLarge": "背景に使うには大きすぎます：{actual}（上限 {limit}）",
+        "downloadFailed": "ダウンロードに失敗しました。再試行してください。",
+        "appliedToast": "壁紙を適用しました",
+        "credit": "画像提供 wallhaven.cc · SFW のみ"
+      }
     },
     "customStyle": {
       "sectionTitle": "カスタムスタイル",
@@ -388,7 +414,11 @@
     "updateToken": "トークンを更新",
     "updateTokenTitle": "このアカウントのトークンを更新",
     "updateTokenDescription": "{username} に保存されているトークンを置き換えます。アカウント自体はそのままなので、このアカウントで作成したタスクは動き続けます（削除して追加し直すと別のアカウントになります）。",
-    "updateTokenSubmit": "検証して更新"
+    "updateTokenSubmit": "検証して更新",
+    "giteaTitle": "Gitea アカウント",
+    "giteaDescription": "認証用の Gitea（および Forgejo）アカウントを管理します。トークンはローカルに保存されます。",
+    "giteaTokenHint": "Gitea → Settings → Applications で write:repository、write:issue、read:user スコープ付きのアクセストークンを作成してください。",
+    "giteaNoAccounts": "Gitea アカウントがまだありません"
   },
   "ShortcutSettings": {
     "sectionTitle": "ショートカット",
@@ -1585,6 +1615,13 @@
         "failed": "サインインが完了しませんでした。",
         "startFailed": "サインインを開始できませんでした",
         "credentialHint": "トークンはここにキャッシュされます。このファイルを別のデスクトップなしマシンにコピーすれば、そちらもサインイン済みになります。"
+      },
+      "signOut": {
+        "title": "間違ったアカウントでサインインしましたか？",
+        "description": "Antigravity はサインインした Google アカウントをキャッシュして黙って再利用するため、再度サインインしても別のアカウントには切り替わりません。サインアウトすると保存された認証情報が破棄されます。実行中の Antigravity セッションは先に終了します。そのままだと古いアカウントが書き戻されるためです。",
+        "action": "サインアウト",
+        "done": "サインアウトしました。サインインし直すと別のアカウントを選べます。",
+        "failed": "サインアウトできませんでした"
       }
     },
     "customAgentMcpLabel": "MCP サポート",
@@ -1627,7 +1664,9 @@
     "restartRequired": "保存しました。再起動後に反映されます。",
     "restartNow": "今すぐ再起動",
     "restartFailed": "再起動に失敗しました: {message}",
-    "loadFailed": "読み込みに失敗しました: {message}"
+    "loadFailed": "読み込みに失敗しました: {message}",
+    "colorizeCommandOutput": "コマンド出力に色を付ける",
+    "colorizeCommandOutputDescription": "エージェントが実行するコマンドに ANSI カラーを強制し、その出力をトランスクリプト上でプレーンテキストではなくカラーで表示します。新しいセッションから有効になります。"
   },
   "LoginPage": {
     "documentTitle": "ログイン - houhub",
@@ -1713,7 +1752,12 @@
     "continueImport": "続けてインポート",
     "toasts": {
       "importFailed": "インポートに失敗しました: {message}"
-    }
+    },
+    "includeDeleted": "削除済みを含める",
+    "includeDeletedWithCount": "削除済みを含める（{count}）",
+    "includeDeletedHint": "houhub でセッションを削除しても非表示になるだけで、会話と履歴は残っています。オンにすると削除済みセッションを選択して元の場所に復元できます。",
+    "statusDeletedRestorable": "削除済み — インポートすると元の会話が復元されます",
+    "doneRestored": "復元済み"
   },
   "Folder": {
     "workspaceStatus": {
@@ -2064,6 +2108,49 @@
           "more": "その他"
         },
         "showPet": "ペットを表示"
+      },
+      "mcp": {
+        "title": "houhub-mcp サービス",
+        "state": {
+          "running": "実行中",
+          "stopped": "停止中",
+          "disabled": "ツール無効",
+          "unavailable": "コンパニオン未検出",
+          "unknown": "不明"
+        },
+        "hint": {
+          "running": "ここから起動したエージェントは houhub のツールを使えます。",
+          "stopped": "Broker ソケットが応答していません。",
+          "disabled": "すべてのツールグループが無効です。",
+          "unavailable": "houhub-mcp の実行ファイルが見つかりません。",
+          "unknown": "状態を読み取れませんでした。"
+        },
+        "socketPath": "アドレス",
+        "binary": "コンパニオン",
+        "binaryMissing": "見つかりません",
+        "sessions": "セッション",
+        "activeDelegations": "委任",
+        "depthLimit": "深さ上限",
+        "tools": "ツール",
+        "groupDelegation": "委任",
+        "descDelegation": "タスクを別のエージェントに任せます。",
+        "groupFeedback": "ライブフィードバック",
+        "descFeedback": "実行を止めずに補足を送れます。",
+        "groupAsk": "ユーザーに質問",
+        "descAsk": "判断に迷ったら質問させます。",
+        "groupSessions": "セッション参照",
+        "descSessions": "過去のセッションと結果を調べます。",
+        "groupAutomations": "自動化を作成",
+        "descAutomations": "定期自動化を作成・管理します。",
+        "groupTaskboard": "タスクを作成",
+        "descTaskboard": "作業タスクを作成・管理します。",
+        "start": "サービスを起動",
+        "starting": "起動中…",
+        "actionFailed": "操作に失敗しました: {message}",
+        "lastError": "前回のエラー: {message}",
+        "loadFailed": "状態を取得できませんでした: {message}",
+        "openSettings": "詳細設定を開く",
+        "refresh": "更新"
       }
     },
     "auxPanel": {
@@ -2890,7 +2977,9 @@
           "lineNoError": "{retry}",
           "lineNoErrorWithDelay": "{retry}、{delay}"
         },
-        "configOptionAdjusted": "{agent} は{option}を {requested} ではなく {actual} にしました"
+        "configOptionAdjusted": "{agent} は{option}を {requested} ではなく {actual} にしました",
+        "notificationQuestion": "{agent} が回答を待っています",
+        "notificationErrorRedacted": "{agent} でエラーが発生しました"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -2979,7 +3068,10 @@
         "toggleOff": "オフ",
         "slashLoading": "コマンドを読み込み中…",
         "steerAsNote": "次の確認用にメモを送信",
-        "steerNoteFailed": "メモを送信できませんでした"
+        "steerNoteFailed": "メモを送信できませんでした",
+        "openLink": "リンクを開く",
+        "openFile": "ファイルを開く",
+        "sendEmail": "メールを送信"
       },
       "messageQueue": {
         "addToQueue": "キューに追加",
@@ -3497,7 +3589,10 @@
           "outputMissing": "codex がスクリプト出力を切り詰めた際にこのコマンドの区切り行が失われたため、出力を割り当てられませんでした。",
           "sharedWith": "この範囲には {commands} の出力も含まれます — 区切り行が codex により切り捨てられました。",
           "truncated": "切り詰め済み"
-        }
+        },
+        "agentSubagentDone": "完了",
+        "agentSubagentInterrupted": "中断",
+        "agentSubagentUnknown": "結果不明"
       },
       "messageNav": {
         "title": "メッセージナビ",
@@ -3608,13 +3703,16 @@
         "opSpawn": "サブエージェントを起動中",
         "opWait": "サブエージェントの結果を取得中",
         "opClose": "サブエージェントを終了中",
-        "opResume": "サブエージェントを再開中"
+        "opResume": "サブエージェントを再開中",
+        "opList": "サブエージェント一覧"
       },
       "contextCompaction": {
         "compacting": "コンテキストを圧縮しています…",
         "compacted": "コンテキストを圧縮しました",
         "compactedTokens": "コンテキストを圧縮 · {before} → {after} トークン",
-        "failed": "コンテキストの圧縮に失敗しました"
+        "failed": "コンテキストの圧縮に失敗しました",
+        "triggerManual": "手動で実行",
+        "triggerAutomatic": "自動で実行"
       },
       "sessionFailure": {
         "category": {
@@ -3644,7 +3742,9 @@
         "cardLaunchedPending": "バックグラウンドタスクを開始しました",
         "cardCompleted": "バックグラウンドタスクが完了しました",
         "cardFinishedWithStatus": "バックグラウンドタスクが終了しました（{status}）",
-        "cardResultPending": "結果はまだ返っていません"
+        "cardResultPending": "結果はまだ返っていません",
+        "notifySettledOne": "{agent}：バックグラウンドタスクが完了しました",
+        "notifySettledMany": "{agent}：{count} 件のバックグラウンドタスクが完了しました"
       },
       "asyncTasks": {
         "openOutput": "出力",
@@ -3665,7 +3765,10 @@
         "copyAbsolutePath": "絶対パスをコピー",
         "pathCopied": "パスをコピーしました",
         "copyPathFailed": "パスのコピーに失敗しました",
-        "openFailed": "ローカルファイルを開けませんでした"
+        "openFailed": "ローカルファイルを開けませんでした",
+        "download": "ファイルをダウンロード",
+        "downloadSaved": "{name} をダウンロードしました",
+        "downloadFailed": "{name} のダウンロードに失敗しました"
       },
       "jsonTree": {
         "viewRaw": "生の JSON を表示",
@@ -3684,15 +3787,15 @@
         "createAutomationNoName": "自動化を作成中",
         "createWorkTask": "作業タスク {title} を作成中",
         "createWorkTaskNoTitle": "作業タスクを作成中",
+        "resumeDelegation": "タスク {task} を再開中",
+        "resumeDelegationNoId": "委任タスクを再開中",
         "promptLabel": "プロンプト",
         "verdict": {
           "success": "成功",
           "needs_review": "要確認",
           "blocked": "ブロック",
           "unknown": "不明"
-        },
-        "resumeDelegation": "タスク {task} を再開中",
-        "resumeDelegationNoId": "委任タスクを再開中"
+        }
       },
       "houhubMcpTool": {
         "getSessionInfo": "セッション {session} を読み取り中",
@@ -3730,6 +3833,16 @@
       "viewMode": {
         "split": "左右分割ビューに切り替え",
         "unified": "インラインビューに切り替え"
+      },
+      "binaryFile": "バイナリファイル — 内容は表示されません",
+      "image": {
+        "sideBySide": "左右分割ビューに切り替え",
+        "swipe": "スワイプ比較ビューに切り替え",
+        "swipeHandle": "画像比較スライダー",
+        "noImage": "このリビジョンに画像はありません",
+        "unavailable": "この側を読み込めませんでした",
+        "tooLarge": "画像が大きすぎてプレビューできません（{size}）",
+        "loading": "画像を読み込み中..."
       }
     },
     "conversationContextBar": {
@@ -4534,7 +4647,15 @@
       "button": "バックアップを書き出す",
       "inProgress": "バックアップを作成中…",
       "success": "バックアップを作成しました。",
-      "started": "バックアップのダウンロードを開始しました。"
+      "started": "バックアップのダウンロードを開始しました。",
+      "degradedTitle": "一部のエージェントのセッションデータベースは特別な処理が必要でした",
+      "degradedHint": "これらのエージェントはセッションを SQLite に保存します。下記に別段の記載がない限り、バックアップには含まれています。",
+      "degradedMore": "…ほか {count} 件。",
+      "degradedLevel": {
+        "recoveredOnCopy": "専用のコピー上で復旧済み — 完全です",
+        "bareFileOnly": "先行書き込みログなしで保存 — 最新のメッセージが欠けている可能性があります",
+        "notArchived": "バックアップに含まれていません — コピー中に変化し続けたため"
+      }
     },
     "restore": {
       "selectFile": "バックアップファイルを選択",
@@ -4572,11 +4693,37 @@
         "scanning": "競合を確認中…",
         "noConflicts": "既存のファイルは上書きされません。",
         "conflictCount": "既存のファイル {count} 件が影響を受けます。",
-        "conflictSkipNote": "上書きを有効にしない限り、既存ファイルは保持（スキップ）されます。"
+        "conflictSkipNote": "上書きを有効にしない限り、既存ファイルは保持（スキップ）されます。",
+        "agentsRunning": "{count} 個のエージェントが実行中です（{agents}）。先に終了してください。そうしないと、記録は元の場所に書き戻されず別フォルダーに保存されます。"
       },
-      "restartFailed": "復元は準備できましたが、サーバーを再起動できませんでした。手動で再起動して復元を適用してください。"
+      "restartFailed": "復元は準備できましたが、サーバーを再起動できませんでした。手動で再起動して復元を適用してください。",
+      "discardPending": "保留中の復元を破棄",
+      "discarded": "保留中の復元を破棄しました。",
+      "pendingBlockedHint": "再起動を待っている復元がすでにあります。別のものを準備するには、これを破棄してください。",
+      "result": {
+        "title": "復元を準備しました",
+        "needsRestart": "次回の起動時に適用されます。現在のデータは先にスナップショットが取られます。",
+        "downgraded": "{agents} が実行中だったため、会話の記録は元の場所に書き戻されず {path} に保存されました。",
+        "skipped": "既存のファイル {count} 件をそのまま残しました",
+        "refused": "{count} 件のセッションデータベースは書き戻されませんでした",
+        "refusedHint": "古いバックアップのもので、データベースと先行書き込みログが別々に保存されており、両者が対応することを証明できません。既存のデータベースは変更していません — 別フォルダーへの復元を選べば元のファイルを取得できます。",
+        "restartNow": "今すぐ再起動",
+        "later": "あとで"
+      }
     },
-    "remoteUnsupported": "バックアップと復元は houhub を実行しているマシンのデータを対象とします。現在リモートワークスペースに接続中です。そのサーバー上で直接バックアップを管理してください。"
+    "remoteUnsupported": "バックアップと復元は houhub を実行しているマシンのデータを対象とします。現在リモートワークスペースに接続中です。そのサーバー上で直接バックアップを管理してください。",
+    "progress": {
+      "cancel": "キャンセル"
+    },
+    "snapshots": {
+      "title": "復元前のスナップショット",
+      "hint": "復元のたびに現在のデータのスナップショットを取り、新しい 2 件を保持します。",
+      "empty": "スナップショットはまだありません。",
+      "rollback": "これに戻す",
+      "unsupported": "閲覧のみ",
+      "rollbackConfirmTitle": "このスナップショットに戻しますか？",
+      "rollbackConfirmBody": "現在のデータをこのスナップショットで置き換えて再起動します。置き換えられるデータは先にスナップショットが取られます。"
+    }
   },
   "backup": {
     "restore": {
@@ -5365,7 +5512,12 @@
     "settingsCompactCommand": "コンパクトコマンド",
     "settingsCompactCommandHint": "空欄ならエージェントが提供するコマンド（または既知の既定値）を自動で使います。",
     "settingsCompactCommandPlaceholder": "/compact",
-    "eventContextCompact": "コンテキスト圧縮"
+    "eventContextCompact": "コンテキスト圧縮",
+    "notifyReviewRedacted": "レビュー待ちのタスクがあります",
+    "notifyFailedRedacted": "タスクが失敗しました",
+    "phaseCompact": "コンテキスト圧縮",
+    "mergeSubmitting": "開始中…",
+    "compactingNote": "セッションのコンテキストを圧縮中…"
   },
   "TokenUsage": {
     "title": "トークン使用量",
@@ -5564,7 +5716,7 @@
     "noRemote": "このフォルダには認識できるリモート（origin）がありません",
     "errors": {
       "noAccount": "{host} の {provider} アカウントが設定されていません。「設定 → バージョン管理」で追加するとこのリポジトリを読み込めます。",
-      "unsupportedHost": "リポジトリパネルは GitHub と GitLab にのみ対応しており、{host} はそのどちらとしても認識できません。自己ホスト型の GitHub Enterprise または GitLab インスタンスであれば、「設定 → バージョン管理」でアカウントを追加してください。",
+      "unsupportedHost": "リポジトリパネルは GitHub、GitLab、Gitea にのみ対応しており、{host} はそのいずれとしても認識できません。自己ホスト型の GitHub Enterprise、GitLab、Gitea、Forgejo インスタンスであれば、「設定 → バージョン管理」でアカウントを追加してください。",
       "wrongForge": "{host} は {provider} でした。別のフォージとして扱われていましたが、判定を修正しました。再読み込みしてください。"
     },
     "addAccount": "アカウントを追加",
@@ -5828,6 +5980,102 @@
     "confirmDeleteCancel": "キャンセル",
     "confirmDeleteConfirm": "削除",
     "canvasActions": "キャンバス操作",
-    "mergeIntoNewRegion": "新しい領域"
+    "mergeIntoNewRegion": "新しい領域",
+    "addFileCard": "ファイルカード",
+    "addTerminalCard": "ターミナルカード",
+    "searchFiles": "ファイルを検索…",
+    "searchFilesIn": "{folder} 内を検索…",
+    "searchingFiles": "検索中…",
+    "noFiles": "ファイルが見つかりません",
+    "noOpenFiles": "開いているファイルはありません — 入力して検索",
+    "browseForFile": "参照…",
+    "filePreview": "プレビュー",
+    "fileSource": "ソース",
+    "reloadFile": "再読み込み",
+    "removeFileCard": "ファイルカードを削除",
+    "restartTerminal": "ターミナルを再起動",
+    "removeTerminalCard": "ターミナルカードを削除",
+    "terminalNoDirectory": "このカードには作業ディレクトリがありません",
+    "confirmDeleteTerminals": "実行中のターミナル {count} 個が閉じられ、そのプロセスも終了します。",
+    "confirmDeleteNotesAndTerminals": "書き込んだメモ {notes} 件が完全に削除され、実行中のターミナル {terminals} 個も終了します。"
+  },
+  "DesktopNotificationSettings": {
+    "title": "デスクトップ通知",
+    "description": "エージェントが応答を待っているときに OS 通知を表示します。設定はデバイスごとで、別のブラウザやマシンとは独立しています。",
+    "permissionTitle": "通知の許可",
+    "permissionGranted": "許可済み",
+    "permissionDenied": "ブロック中",
+    "permissionDefault": "未リクエスト",
+    "permissionUnsupported": "利用できません",
+    "permissionManagedByOs": "システムが管理",
+    "permissionGrantedHint": "このブラウザは HouHub の通知を表示します。",
+    "permissionDeniedHint": "このブラウザは HouHub の通知をブロックしています。解除できるのはブラウザのサイト設定だけで、ページから再度要求することはできません。",
+    "permissionDefaultHint": "このブラウザにはまだ確認していません。許可するまで通知は届きません。",
+    "permissionUnsupportedHint": "通知にはセキュアコンテキストが必要です。HTTPS または localhost 経由でアクセスしてください。",
+    "permissionManagedByOsHint": "デスクトップ版はシステムの通知センター経由で送信しますが、HouHub が許可されているかを OS は返しません。テスト送信で確かめてください。",
+    "identityTitle": "配信元アプリ",
+    "identityHint": "システムはこれらの通知をこのアプリのものとして扱います。実際に効くのはそのアプリ自身の通知スイッチです。",
+    "identityDegradedHint": "HouHub 自身の識別子を取得できなかったため、システムは {bundleId} として配信し、そのアプリの通知スイッチが適用されます。HouHub をアプリケーションフォルダにインストールすると元に戻ります。",
+    "requestPermission": "通知を許可",
+    "permissionGrantedToast": "通知を許可しました。",
+    "permissionDeniedToast": "通知がブロックされました。ブラウザのサイト設定から再度有効にしてください。",
+    "openSystemSettings": "システム設定を開く",
+    "openSystemSettingsFailed": "システムの通知設定を開けませんでした。",
+    "sendTest": "テスト送信",
+    "testTitle": "HouHub",
+    "testBody": "デスクトップ通知は正常に動作しています。",
+    "testSent": "テスト通知を送信しました。",
+    "testFailed": "テスト通知を送信できませんでした。",
+    "whenTitle": "通知するタイミング",
+    "whenHint": "サブモニターのウィンドウは見えていてもフォーカスされていません。通知が届かない場合は「ウィンドウが未フォーカスのとき」を選んでください。",
+    "whenAlways": "常に",
+    "whenUnfocused": "ウィンドウが未フォーカスのとき",
+    "whenHidden": "ウィンドウが見えていないとき",
+    "hideBody": "通知の本文を隠す",
+    "hideBodyHint": "エージェントの出力の代わりに汎用の一文を表示します。通知センターは内容をアプリの外に保持し、会話を閉じても残ります。どのウィンドウに戻ればよいか分かるよう、タイトルにはフォルダー名が残ります。",
+    "eventsTitle": "イベント",
+    "eventsHint": "邪魔してほしくないイベントをオフにします。数秒以内の同じイベントは 1 つにまとめられます。",
+    "eventBackgroundTask": "バックグラウンドタスク",
+    "eventWorkTask": "ワークタスク"
+  },
+  "DeepSeekModelEditor": {
+    "title": "モデル一覧",
+    "description": "DeepSeek セッションで切り替えられるモデルです。harness の設定ドキュメントに保存され、エージェントは起動時に読み込みます——保存後に開始されたセッションから反映されます。",
+    "inheritedBadge": "エージェント既定",
+    "inheritedHint": "まだ一覧が保存されていないため、これはエージェント内蔵のモデルです。保存すると固定され、以降のエージェント更新でも自動では変わりません。ファイル：",
+    "storedHint": "harness の設定ドキュメントに保存されています。この一覧の外にあるキーと、その周りのコメントはそのまま残ります。ファイル：",
+    "unreadable": "この設定ドキュメントは、既存の内容を失わずにここから編集することができません。手動で編集してください。",
+    "invalidStored": "保存されているこの一覧はエージェントに拒否されています。直すまでセッションは内蔵モデルで動きます：",
+    "loading": "設定ドキュメントを読み込み中…",
+    "loadFailed": "設定ドキュメントを読み込めませんでした。",
+    "empty": "モデルがありません。追加するか、そのまま保存してエージェント内蔵の一覧に戻してください。",
+    "addModel": "モデルを追加",
+    "remove": "モデルを削除",
+    "advanced": "詳細",
+    "save": "モデル一覧を保存",
+    "saving": "保存中…",
+    "restoreDefaults": "エージェント既定を使う",
+    "fieldId": "モデル id",
+    "fieldName": "表示名",
+    "fieldContextWindow": "コンテキストウィンドウ",
+    "fieldDescription": "説明",
+    "fieldMaxTokens": "最大出力トークン",
+    "fieldAcceptsImages": "画像を受け付ける",
+    "fieldImageDetail": "画像の精細度",
+    "fieldImagePixelBudget": "画像ピクセル上限",
+    "fieldImageMaxBytes": "画像バイト上限",
+    "placeholderId": "deepseek-v4-flash",
+    "placeholderName": "選択時に表示される名前",
+    "placeholderInherit": "エージェント既定",
+    "errorMissingId": "すべてのモデルに id が必要です。",
+    "errorDuplicateId": "「{id}」という id のモデルが 2 つあります。",
+    "errorBadContextWindow": "「{id}」のコンテキストウィンドウは 0 より大きい整数にしてください。",
+    "errorBadMaxTokens": "「{id}」の最大出力トークンは 0 より大きい整数にしてください。",
+    "errorBadImageLimit": "「{id}」の画像上限は 0 より大きい整数にしてください。",
+    "warnSingleModel": "モデルが 1 つだけの場合、エージェントはモデル選択そのものを表示しなくなります。",
+    "warnLaunchModelMissing": "新しいセッションは「{model}」で開始されますが、この一覧にありません。追加するか、上の環境変数で {variable} を設定してください。",
+    "toastSaved": "モデル一覧を保存しました",
+    "toastRestored": "エージェント内蔵のモデル一覧を使用します",
+    "toastSaveFailed": "モデル一覧を保存できませんでした"
   }
 }

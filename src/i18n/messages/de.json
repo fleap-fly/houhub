@@ -177,7 +177,33 @@
       "errorTooLarge": "Bild ist zu groß (max. 16 MB).",
       "errorUploadFailed": "Hintergrundbild konnte nicht festgelegt werden.",
       "formatHint": "PNG, JPEG, WebP und GIF. Animierte Bilder werden automatisch abgespielt.",
-      "errorUnsupportedFormat": "Nicht unterstütztes Bildformat. Wähle ein PNG, JPEG, WebP oder GIF."
+      "errorUnsupportedFormat": "Nicht unterstütztes Bildformat. Wähle ein PNG, JPEG, WebP oder GIF.",
+      "market": {
+        "open": "Hintergrund-Markt",
+        "title": "Hintergrund-Markt",
+        "description": "Durchsuche die öffentliche Wallhaven-Galerie; per Klick herunterladen und anwenden.",
+        "searchPlaceholder": "Hintergründe suchen…",
+        "categories": {
+          "all": "Alle",
+          "general": "Landschaften",
+          "anime": "Anime",
+          "people": "Personen"
+        },
+        "pageInfo": "Seite {page} von {lastPage}",
+        "prevPage": "Zurück",
+        "nextPage": "Weiter",
+        "refresh": "Aktualisieren",
+        "empty": "Keine passenden Hintergründe gefunden.",
+        "error": "Der Hintergrund-Markt konnte nicht geladen werden.",
+        "retry": "Erneut versuchen",
+        "cardLabel": "Hintergrund {id} anwenden",
+        "applied": "In Verwendung",
+        "unavailable": "Nicht verfügbar",
+        "tooLarge": "Zu groß für einen Hintergrund: {actual} (Grenze {limit})",
+        "downloadFailed": "Download fehlgeschlagen. Bitte erneut versuchen.",
+        "appliedToast": "Hintergrund angewendet",
+        "credit": "Bilder von wallhaven.cc · nur SFW"
+      }
     },
     "customStyle": {
       "sectionTitle": "Eigener Stil",
@@ -388,7 +414,11 @@
     "updateToken": "Token aktualisieren",
     "updateTokenTitle": "Token dieses Kontos aktualisieren",
     "updateTokenDescription": "Ersetzt den für {username} gespeicherten Token und behält das Konto. Mit diesem Konto gestartete Aufgaben funktionieren weiter — entfernen und neu hinzufügen ergibt für sie ein anderes Konto.",
-    "updateTokenSubmit": "Prüfen und aktualisieren"
+    "updateTokenSubmit": "Prüfen und aktualisieren",
+    "giteaTitle": "Gitea-Konten",
+    "giteaDescription": "Gitea- (und Forgejo-)Konten für die Authentifizierung verwalten. Token werden lokal gespeichert.",
+    "giteaTokenHint": "Erstellen Sie unter Gitea → Settings → Applications einen Access Token mit den Scopes write:repository, write:issue und read:user.",
+    "giteaNoAccounts": "Noch kein Gitea-Konto"
   },
   "ShortcutSettings": {
     "sectionTitle": "Kurzbefehle",
@@ -1585,6 +1615,13 @@
         "failed": "Die Anmeldung wurde nicht abgeschlossen.",
         "startFailed": "Anmeldung konnte nicht gestartet werden",
         "credentialHint": "Das Token liegt hier. Kopiere diese Datei auf weitere Rechner ohne Desktop, um sie ebenfalls anzumelden."
+      },
+      "signOut": {
+        "title": "Mit dem falschen Konto angemeldet?",
+        "description": "Antigravity speichert das angemeldete Google-Konto zwischen und verwendet es stillschweigend weiter, sodass eine erneute Anmeldung kein anderes Konto erreicht. Beim Abmelden werden die gespeicherten Anmeldedaten verworfen; laufende Antigravity-Sitzungen werden zuvor beendet, da sie sonst das alte Konto zurückschreiben würden.",
+        "action": "Abmelden",
+        "done": "Abgemeldet. Melde dich erneut an, um ein anderes Konto zu wählen.",
+        "failed": "Abmelden fehlgeschlagen"
       }
     },
     "customAgentMcpLabel": "MCP-Unterstützung",
@@ -1627,7 +1664,9 @@
     "restartRequired": "Gespeichert. Starten Sie die App neu, damit die Änderung wirksam wird.",
     "restartNow": "Jetzt neu starten",
     "restartFailed": "Neustart fehlgeschlagen: {message}",
-    "loadFailed": "Laden fehlgeschlagen: {message}"
+    "loadFailed": "Laden fehlgeschlagen: {message}",
+    "colorizeCommandOutput": "Befehlsausgabe einfärben",
+    "colorizeCommandOutputDescription": "Erzwingt ANSI-Farben in den Befehlen, die Agenten ausführen, sodass deren Ausgabe im Verlauf farbig statt als reiner Text erscheint. Gilt ab neuen Sitzungen."
   },
   "LoginPage": {
     "documentTitle": "Anmelden - houhub",
@@ -1713,7 +1752,12 @@
     "continueImport": "Weiter importieren",
     "toasts": {
       "importFailed": "Import fehlgeschlagen: {message}"
-    }
+    },
+    "includeDeleted": "Gelöschte einbeziehen",
+    "includeDeletedWithCount": "Gelöschte einbeziehen ({count})",
+    "includeDeletedHint": "Das Löschen einer Sitzung in houhub blendet sie nur aus – Unterhaltung und Verlauf bleiben erhalten. Aktiviere dies, um gelöschte Sitzungen auszuwählen und an Ort und Stelle wiederherzustellen.",
+    "statusDeletedRestorable": "Gelöscht – beim Importieren wird die ursprüngliche Unterhaltung wiederhergestellt",
+    "doneRestored": "Wiederhergestellt"
   },
   "Folder": {
     "workspaceStatus": {
@@ -2064,6 +2108,49 @@
           "more": "Mehr"
         },
         "showPet": "Pet anzeigen"
+      },
+      "mcp": {
+        "title": "houhub-mcp-Dienst",
+        "state": {
+          "running": "Läuft",
+          "stopped": "Läuft nicht",
+          "disabled": "Keine Tools aktiv",
+          "unavailable": "Companion fehlt",
+          "unknown": "Unbekannt"
+        },
+        "hint": {
+          "running": "Hier gestartete Agenten können houhubs Tools nutzen.",
+          "stopped": "Der Broker-Socket antwortet nicht.",
+          "disabled": "Alle Tool-Gruppen sind ausgeschaltet.",
+          "unavailable": "Die houhub-mcp-Binärdatei fehlt auf der Festplatte.",
+          "unknown": "Der Status konnte nicht gelesen werden."
+        },
+        "socketPath": "Adresse",
+        "binary": "Companion",
+        "binaryMissing": "Nicht gefunden",
+        "sessions": "Sitzungen",
+        "activeDelegations": "Delegationen",
+        "depthLimit": "Max. Tiefe",
+        "tools": "Tools",
+        "groupDelegation": "Delegation",
+        "descDelegation": "Gibt eine Aufgabe an einen anderen Agenten ab.",
+        "groupFeedback": "Live-Feedback",
+        "descFeedback": "Ergänzt Hinweise, ohne den Zug zu unterbrechen.",
+        "groupAsk": "Rückfrage stellen",
+        "descAsk": "Lässt den Agenten vor einer Entscheidung nachfragen.",
+        "groupSessions": "Sitzungsabfrage",
+        "descSessions": "Schlägt frühere Sitzungen und Ergebnisse nach.",
+        "groupAutomations": "Automatisierung erstellen",
+        "descAutomations": "Erstellt und verwaltet geplante Automationen.",
+        "groupTaskboard": "Aufgabe erstellen",
+        "descTaskboard": "Erstellt und verwaltet Arbeitsaufgaben.",
+        "start": "Dienst starten",
+        "starting": "Wird gestartet…",
+        "actionFailed": "Fehlgeschlagen: {message}",
+        "lastError": "Letzter Fehler: {message}",
+        "loadFailed": "Status konnte nicht gelesen werden: {message}",
+        "openSettings": "Alle Einstellungen öffnen",
+        "refresh": "Aktualisieren"
       }
     },
     "auxPanel": {
@@ -2890,7 +2977,9 @@
           "lineNoError": "{retry}",
           "lineNoErrorWithDelay": "{retry}, {delay}"
         },
-        "configOptionAdjusted": "{agent} hat {option} auf {actual} statt {requested} gesetzt"
+        "configOptionAdjusted": "{agent} hat {option} auf {actual} statt {requested} gesetzt",
+        "notificationQuestion": "{agent} wartet auf deine Antwort",
+        "notificationErrorRedacted": "{agent} ist auf einen Fehler gestoßen"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -2979,7 +3068,10 @@
         "toggleOff": "Aus",
         "slashLoading": "Befehle werden geladen…",
         "steerAsNote": "Notiz für die nächste Prüfung senden",
-        "steerNoteFailed": "Deine Notiz konnte nicht gesendet werden"
+        "steerNoteFailed": "Deine Notiz konnte nicht gesendet werden",
+        "openLink": "Link öffnen",
+        "openFile": "Datei öffnen",
+        "sendEmail": "E-Mail senden"
       },
       "messageQueue": {
         "addToQueue": "Zur Warteschlange",
@@ -3497,7 +3589,10 @@
           "outputMissing": "Codex hat die Skriptausgabe gekürzt und dabei das Trennzeichen dieses Befehls entfernt, sodass ihm keine Ausgabe zugeordnet werden konnte.",
           "sharedWith": "Enthält auch die Ausgabe von {commands} – codex hat deren Trennzeichen abgeschnitten.",
           "truncated": "gekürzt"
-        }
+        },
+        "agentSubagentDone": "Fertig",
+        "agentSubagentInterrupted": "Unterbrochen",
+        "agentSubagentUnknown": "Ausgang unbekannt"
       },
       "messageNav": {
         "title": "Nachrichtennavigation",
@@ -3608,13 +3703,16 @@
         "opSpawn": "Sub-Agent wird gestartet",
         "opWait": "Sub-Agent-Ergebnis wird abgerufen",
         "opClose": "Sub-Agent wird geschlossen",
-        "opResume": "Sub-Agent wird fortgesetzt"
+        "opResume": "Sub-Agent wird fortgesetzt",
+        "opList": "Sub-Agenten auflisten"
       },
       "contextCompaction": {
         "compacting": "Kontext wird komprimiert…",
         "compacted": "Kontext komprimiert",
         "compactedTokens": "Kontext komprimiert · {before} → {after} Tokens",
-        "failed": "Kontextkomprimierung fehlgeschlagen"
+        "failed": "Kontextkomprimierung fehlgeschlagen",
+        "triggerManual": "Manuell ausgelöst",
+        "triggerAutomatic": "Automatisch ausgelöst"
       },
       "sessionFailure": {
         "category": {
@@ -3644,7 +3742,9 @@
         "cardLaunchedPending": "Hintergrundaufgabe gestartet",
         "cardCompleted": "Hintergrundaufgabe abgeschlossen",
         "cardFinishedWithStatus": "Hintergrundaufgabe beendet ({status})",
-        "cardResultPending": "Ergebnis steht noch aus"
+        "cardResultPending": "Ergebnis steht noch aus",
+        "notifySettledOne": "{agent}: Eine Hintergrundaufgabe ist fertig",
+        "notifySettledMany": "{agent}: {count} Hintergrundaufgaben sind fertig"
       },
       "asyncTasks": {
         "openOutput": "Ausgabe",
@@ -3665,7 +3765,10 @@
         "copyAbsolutePath": "Absoluten Pfad kopieren",
         "pathCopied": "Pfad kopiert",
         "copyPathFailed": "Pfad konnte nicht kopiert werden",
-        "openFailed": "Lokale Datei konnte nicht geöffnet werden"
+        "openFailed": "Lokale Datei konnte nicht geöffnet werden",
+        "download": "Datei herunterladen",
+        "downloadSaved": "{name} heruntergeladen",
+        "downloadFailed": "Herunterladen von {name} fehlgeschlagen"
       },
       "jsonTree": {
         "viewRaw": "Rohes JSON anzeigen",
@@ -3684,15 +3787,15 @@
         "createAutomationNoName": "Automatisierung wird erstellt",
         "createWorkTask": "Arbeitsaufgabe {title} wird erstellt",
         "createWorkTaskNoTitle": "Arbeitsaufgabe wird erstellt",
+        "resumeDelegation": "Aufgabe {task} wird fortgesetzt",
+        "resumeDelegationNoId": "Delegierte Aufgabe wird fortgesetzt",
         "promptLabel": "Anweisung",
         "verdict": {
           "success": "erfolgreich",
           "needs_review": "Prüfung nötig",
           "blocked": "blockiert",
           "unknown": "unbekannt"
-        },
-        "resumeDelegation": "Aufgabe {task} wird fortgesetzt",
-        "resumeDelegationNoId": "Delegierte Aufgabe wird fortgesetzt"
+        }
       },
       "houhubMcpTool": {
         "getSessionInfo": "Sitzung {session} wird gelesen",
@@ -3730,6 +3833,16 @@
       "viewMode": {
         "split": "Zur Zwei-Spalten-Ansicht wechseln",
         "unified": "Zur Inline-Ansicht wechseln"
+      },
+      "binaryFile": "Binärdatei — Inhalt wird nicht angezeigt",
+      "image": {
+        "sideBySide": "Zur Zwei-Spalten-Ansicht wechseln",
+        "swipe": "Zur Wisch-Ansicht wechseln",
+        "swipeHandle": "Schieberegler für Bildvergleich",
+        "noImage": "Kein Bild in dieser Revision",
+        "unavailable": "Diese Seite konnte nicht geladen werden",
+        "tooLarge": "Bild zu groß für die Vorschau ({size})",
+        "loading": "Bilder werden geladen..."
       }
     },
     "conversationContextBar": {
@@ -4534,7 +4647,15 @@
       "button": "Sicherung exportieren",
       "inProgress": "Sicherung wird erstellt…",
       "success": "Sicherung erstellt.",
-      "started": "Download der Sicherung gestartet."
+      "started": "Download der Sicherung gestartet.",
+      "degradedTitle": "Einige Sitzungsdatenbanken von Agenten brauchten eine Sonderbehandlung",
+      "degradedHint": "Diese Agenten speichern ihre Sitzungen in SQLite. Sofern unten nichts anderes steht, sind sie in der Sicherung enthalten.",
+      "degradedMore": "…und {count} weitere.",
+      "degradedLevel": {
+        "recoveredOnCopy": "aus einer eigenen Kopie wiederhergestellt – vollständig",
+        "bareFileOnly": "ohne Write-Ahead-Log gesichert – die neuesten Nachrichten fehlen womöglich",
+        "notArchived": "nicht gesichert – sie veränderte sich während des Kopierens laufend"
+      }
     },
     "restore": {
       "selectFile": "Sicherungsdatei auswählen",
@@ -4572,11 +4693,37 @@
         "scanning": "Konflikte werden geprüft…",
         "noConflicts": "Es werden keine vorhandenen Dateien überschrieben.",
         "conflictCount": "{count} vorhandene Datei(en) wären betroffen.",
-        "conflictSkipNote": "Vorhandene Dateien bleiben erhalten (übersprungen), sofern du das Überschreiben nicht aktivierst."
+        "conflictSkipNote": "Vorhandene Dateien bleiben erhalten (übersprungen), sofern du das Überschreiben nicht aktivierst.",
+        "agentsRunning": "{count} Agent(en) laufen ({agents}). Schließe sie zuerst, sonst landen die Verläufe in einem Nebenordner statt an ihrem ursprünglichen Ort."
       },
-      "restartFailed": "Wiederherstellung vorbereitet, aber der Server konnte nicht neu starten. Starte ihn manuell neu, um sie anzuwenden."
+      "restartFailed": "Wiederherstellung vorbereitet, aber der Server konnte nicht neu starten. Starte ihn manuell neu, um sie anzuwenden.",
+      "discardPending": "Vorbereitete Wiederherstellung verwerfen",
+      "discarded": "Die vorbereitete Wiederherstellung wurde verworfen.",
+      "pendingBlockedHint": "Es wartet bereits eine vorbereitete Wiederherstellung auf einen Neustart. Verwirf sie, um eine andere vorzubereiten.",
+      "result": {
+        "title": "Wiederherstellung vorbereitet",
+        "needsRestart": "Sie wird beim nächsten Start angewendet. Von deinen aktuellen Daten wird vorher eine Momentaufnahme angelegt.",
+        "downgraded": "{agents} liefen, daher wurden die Gesprächsverläufe nicht an ihren ursprünglichen Ort zurückgeschrieben, sondern unter {path} abgelegt.",
+        "skipped": "{count} vorhandene Datei(en) wurden beibehalten",
+        "refused": "{count} Sitzungsdatenbank(en) wurden nicht zurückgeschrieben",
+        "refusedHint": "Sie stammen aus einer älteren Sicherung, die Datenbank und Write-Ahead-Log getrennt ablegte; dass beide zusammengehören, lässt sich nicht belegen. Deine vorhandenen Datenbanken blieben unangetastet – stelle in einen Nebenordner wieder her, um die Rohdateien zu erhalten.",
+        "restartNow": "Jetzt neu starten",
+        "later": "Später"
+      }
     },
-    "remoteUnsupported": "Sicherung & Wiederherstellung wirken auf die Daten des Rechners, auf dem houhub läuft. Du bist mit einem entfernten Arbeitsbereich verbunden – verwalte dessen Sicherungen direkt auf jenem Server."
+    "remoteUnsupported": "Sicherung & Wiederherstellung wirken auf die Daten des Rechners, auf dem houhub läuft. Du bist mit einem entfernten Arbeitsbereich verbunden – verwalte dessen Sicherungen direkt auf jenem Server.",
+    "progress": {
+      "cancel": "Abbrechen"
+    },
+    "snapshots": {
+      "title": "Momentaufnahmen vor der Wiederherstellung",
+      "hint": "Jede Wiederherstellung legt zuerst eine Momentaufnahme deiner aktuellen Daten an. Die beiden neuesten werden aufbewahrt.",
+      "empty": "Noch keine Momentaufnahmen.",
+      "rollback": "Hierauf zurücksetzen",
+      "unsupported": "Nur ansehen",
+      "rollbackConfirmTitle": "Auf diese Momentaufnahme zurücksetzen?",
+      "rollbackConfirmBody": "Damit werden deine aktuellen Daten durch die Momentaufnahme ersetzt und die App startet neu. Von den ersetzten Daten wird vorher eine Momentaufnahme angelegt."
+    }
   },
   "backup": {
     "restore": {
@@ -5365,7 +5512,12 @@
     "settingsCompactCommand": "Komprimierungsbefehl",
     "settingsCompactCommandHint": "Leer lassen, um den vom Agenten angebotenen Befehl bzw. dessen bekannten Standard zu verwenden.",
     "settingsCompactCommandPlaceholder": "/compact",
-    "eventContextCompact": "Kontext-Komprimierung"
+    "eventContextCompact": "Kontext-Komprimierung",
+    "notifyReviewRedacted": "Eine Aufgabe wartet auf die Abnahme",
+    "notifyFailedRedacted": "Eine Aufgabe ist fehlgeschlagen",
+    "phaseCompact": "Kontextverdichtung",
+    "mergeSubmitting": "Wird gestartet …",
+    "compactingNote": "Sitzungskontext wird verdichtet …"
   },
   "TokenUsage": {
     "title": "Token-Verbrauch",
@@ -5564,7 +5716,7 @@
     "noRemote": "Dieser Ordner hat kein erkennbares Forge-Remote (origin)",
     "errors": {
       "noAccount": "Für {host} ist kein {provider}-Konto konfiguriert. Füge unter Einstellungen → Versionskontrolle eines hinzu, um dieses Repository zu laden.",
-      "unsupportedHost": "Das Repository-Panel unterstützt nur GitHub und GitLab, und {host} wird als keines von beiden erkannt. Falls es sich um eine selbst gehostete GitHub-Enterprise- oder GitLab-Instanz handelt, füge unter Einstellungen → Versionskontrolle ein Konto dafür hinzu.",
+      "unsupportedHost": "Das Repository-Panel unterstützt nur GitHub, GitLab und Gitea, und {host} wird als keines davon erkannt. Falls es sich um eine selbst gehostete GitHub-Enterprise-, GitLab-, Gitea- oder Forgejo-Instanz handelt, füge unter Einstellungen → Versionskontrolle ein Konto dafür hinzu.",
       "wrongForge": "{host} ist ein {provider} und nicht die Forge, als die es eingestuft war. Die Erkennung wurde korrigiert — neu laden, um es erneut zu versuchen."
     },
     "addAccount": "Konto hinzufügen",
@@ -5828,6 +5980,102 @@
     "confirmDeleteCancel": "Abbrechen",
     "confirmDeleteConfirm": "Löschen",
     "canvasActions": "Leinwand-Aktionen",
-    "mergeIntoNewRegion": "Neuer Bereich"
+    "mergeIntoNewRegion": "Neuer Bereich",
+    "addFileCard": "Dateikarte",
+    "addTerminalCard": "Terminalkarte",
+    "searchFiles": "Dateien suchen…",
+    "searchFilesIn": "In {folder} suchen…",
+    "searchingFiles": "Wird gesucht…",
+    "noFiles": "Keine Dateien gefunden",
+    "noOpenFiles": "Keine Dateien geöffnet – tippen zum Suchen",
+    "browseForFile": "Durchsuchen…",
+    "filePreview": "Vorschau",
+    "fileSource": "Quelltext",
+    "reloadFile": "Neu laden",
+    "removeFileCard": "Dateikarte entfernen",
+    "restartTerminal": "Terminal neu starten",
+    "removeTerminalCard": "Terminalkarte entfernen",
+    "terminalNoDirectory": "Diese Karte hat kein Arbeitsverzeichnis",
+    "confirmDeleteTerminals": "{count} laufende Terminal(s) werden geschlossen und ihre Prozesse beendet.",
+    "confirmDeleteNotesAndTerminals": "{notes} von dir geschriebene Notiz(en) werden endgültig gelöscht und {terminals} laufende Terminal(s) beendet."
+  },
+  "DesktopNotificationSettings": {
+    "title": "Desktop-Benachrichtigungen",
+    "description": "Zeigt eine Systembenachrichtigung, wenn ein Agent dich braucht. Die Einstellung gilt pro Gerät — in einem anderen Browser oder auf einem anderen Rechner ist sie unabhängig.",
+    "permissionTitle": "Berechtigung",
+    "permissionGranted": "Erlaubt",
+    "permissionDenied": "Blockiert",
+    "permissionDefault": "Nicht angefragt",
+    "permissionUnsupported": "Nicht verfügbar",
+    "permissionManagedByOs": "Vom System verwaltet",
+    "permissionGrantedHint": "Dieser Browser zeigt Benachrichtigungen von HouHub an.",
+    "permissionDeniedHint": "Dieser Browser blockiert Benachrichtigungen von HouHub. Nur die Website-Einstellungen des Browsers können das aufheben — eine Seite kann nicht erneut fragen.",
+    "permissionDefaultHint": "Dieser Browser wurde noch nicht gefragt. Bis du zustimmst, bleiben Benachrichtigungen aus.",
+    "permissionUnsupportedHint": "Benachrichtigungen brauchen einen sicheren Kontext. Rufe diesen Server über HTTPS oder auf localhost auf.",
+    "permissionManagedByOsHint": "Die Desktop-App sendet über die Mitteilungszentrale des Systems, die nicht zurückmeldet, ob HouHub erlaubt ist. Sende einen Test, um es herauszufinden.",
+    "identityTitle": "Zugestellt als",
+    "identityHint": "Das System ordnet diese Mitteilungen dieser App zu – es gelten deren eigene Schalter.",
+    "identityDegradedHint": "HouHubs eigene Kennung konnte nicht belegt werden, daher stellt das System sie als {bundleId} zu, und die Schalter jener App gelten. Installiere HouHub in den Programme-Ordner, um die eigene Identität wiederherzustellen.",
+    "requestPermission": "Benachrichtigungen erlauben",
+    "permissionGrantedToast": "Benachrichtigungen erlaubt.",
+    "permissionDeniedToast": "Benachrichtigungen wurden blockiert. Aktiviere sie in den Website-Einstellungen deines Browsers erneut.",
+    "openSystemSettings": "Systemeinstellungen öffnen",
+    "openSystemSettingsFailed": "Die Benachrichtigungseinstellungen des Systems konnten nicht geöffnet werden.",
+    "sendTest": "Test senden",
+    "testTitle": "HouHub",
+    "testBody": "Desktop-Benachrichtigungen funktionieren.",
+    "testSent": "Testbenachrichtigung gesendet.",
+    "testFailed": "Die Testbenachrichtigung konnte nicht gesendet werden.",
+    "whenTitle": "Benachrichtigen wenn",
+    "whenHint": "Ein Fenster auf dem zweiten Monitor ist sichtbar, aber nicht fokussiert — wähle „Fenster ist nicht fokussiert“, wenn nie etwas ankommt.",
+    "whenAlways": "Immer",
+    "whenUnfocused": "Fenster ist nicht fokussiert",
+    "whenHidden": "Fenster ist nicht sichtbar",
+    "hideBody": "Inhalt ausblenden",
+    "hideBodyHint": "Zeigt eine allgemeine Zeile statt der Agentenausgabe. Die Mitteilungszentrale behält den Inhalt außerhalb der App, auch nachdem die Unterhaltung geschlossen wurde. Der Titel nennt weiterhin den Ordner, damit du weißt, zu welchem Fenster du zurückmusst.",
+    "eventsTitle": "Ereignisse",
+    "eventsHint": "Schalte Ereignisse ab, die dich nicht unterbrechen sollen. Wiederholungen desselben Ereignisses innerhalb weniger Sekunden werden zu einer Benachrichtigung zusammengefasst.",
+    "eventBackgroundTask": "Hintergrundaufgabe",
+    "eventWorkTask": "Arbeitsaufgabe"
+  },
+  "DeepSeekModelEditor": {
+    "title": "Modellliste",
+    "description": "Die Modelle, zwischen denen eine DeepSeek-Sitzung wechseln kann. Sie stehen im Einstellungsdokument des Harness, das der Agent beim Start liest – gespeicherte Änderungen greifen für danach gestartete Sitzungen.",
+    "inheritedBadge": "Agent-Standard",
+    "inheritedHint": "Es ist noch keine Liste gespeichert, dies sind die eingebauten Modelle des Agenten. Speichern legt sie fest; spätere Agent-Versionen ändern sie dann nicht mehr von selbst. Datei:",
+    "storedHint": "Im Einstellungsdokument des Harness gespeichert. Schlüssel außerhalb dieser Liste – und die Kommentare darum herum – bleiben unangetastet. Datei:",
+    "unreadable": "Dieses Einstellungsdokument lässt sich von hier aus nicht bearbeiten, ohne den vorhandenen Inhalt zu gefährden. Bitte von Hand bearbeiten.",
+    "invalidStored": "Der Agent weist diese gespeicherte Liste zurück; bis sie korrigiert ist, laufen Sitzungen auf seinen eingebauten Modellen:",
+    "loading": "Einstellungsdokument wird gelesen…",
+    "loadFailed": "Das Einstellungsdokument konnte nicht gelesen werden.",
+    "empty": "Keine Modelle. Füge eines hinzu oder speichere, um auf die eingebaute Liste des Agenten zurückzufallen.",
+    "addModel": "Modell hinzufügen",
+    "remove": "Modell entfernen",
+    "advanced": "Mehr",
+    "save": "Modellliste speichern",
+    "saving": "Wird gespeichert…",
+    "restoreDefaults": "Agent-Standard verwenden",
+    "fieldId": "Modell-ID",
+    "fieldName": "Anzeigename",
+    "fieldContextWindow": "Kontextfenster",
+    "fieldDescription": "Beschreibung",
+    "fieldMaxTokens": "Max. Ausgabe-Tokens",
+    "fieldAcceptsImages": "Nimmt Bilder an",
+    "fieldImageDetail": "Bilddetail",
+    "fieldImagePixelBudget": "Pixelbudget",
+    "fieldImageMaxBytes": "Byte-Obergrenze",
+    "placeholderId": "deepseek-v4-flash",
+    "placeholderName": "Wird in der Auswahl angezeigt",
+    "placeholderInherit": "Agent-Standard",
+    "errorMissingId": "Jedes Modell braucht eine ID.",
+    "errorDuplicateId": "Zwei Modelle haben dieselbe ID „{id}“.",
+    "errorBadContextWindow": "Das Kontextfenster von „{id}“ muss eine ganze Zahl größer als null sein.",
+    "errorBadMaxTokens": "Die maximalen Ausgabe-Tokens von „{id}“ müssen eine ganze Zahl größer als null sein.",
+    "errorBadImageLimit": "Die Bildgrenzen von „{id}“ müssen ganze Zahlen größer als null sein.",
+    "warnSingleModel": "Bei nur einem Modell bietet der Agent gar keine Modellauswahl mehr an.",
+    "warnLaunchModelMissing": "Neue Sitzungen starten mit „{model}“, das nicht in dieser Liste steht. Füge es hinzu oder setze {variable} in den Umgebungsvariablen oben.",
+    "toastSaved": "Modellliste gespeichert",
+    "toastRestored": "Es wird die eingebaute Modellliste des Agenten verwendet",
+    "toastSaveFailed": "Die Modellliste konnte nicht gespeichert werden"
   }
 }

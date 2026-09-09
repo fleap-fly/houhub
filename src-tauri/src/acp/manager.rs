@@ -51,6 +51,161 @@ const USER_PROMPT_PREVIEW_MAX_CHARS: usize = 500;
 /// use the same process-tree termination mechanism.
 const DISCONNECT_ALL_GRACE: Duration = Duration::from_millis(500);
 
+/// How long the polite signal gets before [`kill_tree_and_wait`] escalates to
+/// `SIGKILL`. Counted from the first signal, which itself only lands after
+/// [`DISCONNECT_ALL_GRACE`] of graceful shutdown, so anything still here has
+/// already had a second to leave of its own accord.
+const ESCALATE_TO_SIGKILL_AFTER: Duration = Duration::from_millis(500);
+
+/// How often that sweep re-checks while it waits.
+const CONFIRM_GONE_POLL: Duration = Duration::from_millis(50);
+
+/// How long that sweep waits after `SIGKILL` for the reap to land. `kill(2)`
+/// returns once the signal is queued, not once the target has been descheduled,
+/// so on another core it can still be executing — briefly. Bounded tightly
+/// because the wait can also end in no answer at all: a child that has already
+/// exited but that nobody has reaped yet never zeroes its cell.
+const SIGKILL_SETTLE: Duration = Duration::from_millis(200);
+
+/// What one pass of [`kill_tree_pass`] established about the target itself.
+#[derive(Debug, PartialEq, Eq)]
+enum KillPass {
+    /// The OS says there is no such process — the only report that positively
+    /// means "not running".
+    AlreadyGone,
+    /// The signal was delivered to the target.
+    Signalled,
+    /// Neither could be established.
+    Failed,
+}
+
+/// One signal pass over the process tree rooted at `pid`, reporting what
+/// happened to the target itself (its descendants are killed either way).
+///
+/// `signal` is a `kill_tree` signal name; Windows ignores it and terminates
+/// unconditionally. Blocking — call from `spawn_blocking`.
+fn kill_tree_pass(pid: u32, signal: &str) -> KillPass {
+    let config = kill_tree::Config {
+        signal: signal.to_string(),
+        ..Default::default()
+    };
+    match kill_tree::blocking::kill_tree_with_config(pid, &config) {
+        Ok(outputs) => outputs
+            .iter()
+            .find_map(|o| match o {
+                kill_tree::Output::MaybeAlreadyTerminated { process_id, .. }
+                    if *process_id == pid =>
+                {
+                    Some(KillPass::AlreadyGone)
+                }
+                kill_tree::Output::Killed { process_id, .. } if *process_id == pid => {
+                    Some(KillPass::Signalled)
+                }
+                _ => None,
+            })
+            .unwrap_or(KillPass::Failed),
+        Err(e) => {
+            tracing::debug!("[ACP] kill_tree pid={pid} signal={signal}: {e}");
+            KillPass::Failed
+        }
+    }
+}
+
+/// Wait for `on_exit` to zero a connection's pid cell. `true` if it did within
+/// roughly `budget` — the check follows the sleep, so the transition it sees
+/// can be up to one poll late. Costs nothing per poll: no signal, no
+/// process-table walk.
+fn wait_for_reap(cell: &std::sync::atomic::AtomicU32, budget: Duration) -> bool {
+    let started = std::time::Instant::now();
+    while started.elapsed() < budget {
+        std::thread::sleep(CONFIRM_GONE_POLL);
+        if cell.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Kill the process tree behind a connection's live pid cell and wait for the
+/// target to stop running. Two signals at most: `SIGTERM`, then `SIGKILL` if
+/// that was not enough.
+///
+/// `kill_tree` returns as soon as the signal is delivered, and its default
+/// `SIGTERM` is both catchable and ignorable, so "the call returned" is not
+/// "the agent is finished". That does not matter at quit — the OS cleans up
+/// whatever is left — but it does for a caller that is about to touch state the
+/// agent also writes (see [`ConnectionManager::disconnect_by_agent_type`]). So:
+/// signal, give it the grace it deserves, then escalate.
+///
+/// Between the signals it waits on the pid CELL rather than re-signalling.
+/// A second `SIGTERM` buys nothing — the first was delivered — while each extra
+/// pass re-walks the whole process table and re-aims at a pid NUMBER that, once
+/// the target exits, the OS is free to hand to something else.
+///
+/// The pid is loaded from the cell HERE, at the last possible moment, for the
+/// reasons [`ConnectionManager::disconnect_all`] spells out. A cell reading
+/// zero needs nothing: `on_exit` only zeroes it on a real reap, and a child
+/// that never spawned has nothing to kill.
+///
+/// What `true` means, exactly, weakest case first:
+/// - `SIGKILL` was delivered and [`SIGKILL_SETTLE`] passed without the reap
+///   landing. `SIGKILL` cannot be caught, ignored or blocked, so the process
+///   cannot run userspace code again; it is either unreaped, or stuck in an
+///   uninterruptible syscall and will die on the way out of it. An in-flight
+///   write already issued to the kernel may still complete.
+/// - Or the reap landed, or the OS reported no such process. Then it is gone
+///   outright.
+///
+/// `false` means the ESCALATION did not land: the `SIGKILL` pass came back with
+/// neither a delivery nor a no-such-process. An earlier `SIGTERM` may well have
+/// been delivered — see the call site for what is done about it.
+///
+/// One hazard survives all of this, and cannot be closed from here: between the
+/// target exiting and its cell being zeroed, the pid NUMBER may be recycled, and
+/// the escalation would then signal whatever now holds it. It is the same
+/// exposure `disconnect_all` accepts — narrowed here to a single signal, where
+/// re-probing in the wait loop would have spent one per poll — and closing it
+/// properly needs a handle rather than a number: a pidfd, a process group, a job
+/// object, all of them decided at spawn time.
+///
+/// Note the asymmetry: "the pid is out of the process table" is deliberately
+/// NOT the bar, because it is not waitable. A child that has already exited but
+/// has not been reaped yet answers signals exactly like a live one, so a
+/// wait-for-the-pid-to-vanish loop would burn its whole window on a process
+/// that died instantly.
+///
+/// Scope: this tracks the ROOT. Each pass re-walks and signals the whole tree,
+/// but a descendant that ignores `SIGTERM` and outlives its parent is
+/// reparented out of that tree and left to the OS — the same limit
+/// `disconnect_all` has always had. Fine for the sign-out this exists for: the
+/// credential lives in the agent process itself, not in the MCP servers it
+/// starts. Closing it properly would mean giving every agent a process group or
+/// a job object at spawn time.
+///
+/// Blocking — call from `spawn_blocking`.
+fn kill_tree_and_wait(cell: &std::sync::atomic::AtomicU32) -> bool {
+    let pid = cell.load(std::sync::atomic::Ordering::SeqCst);
+    if pid == 0 {
+        return true;
+    }
+    if kill_tree_pass(pid, "SIGTERM") == KillPass::AlreadyGone {
+        return true;
+    }
+    if wait_for_reap(cell, ESCALATE_TO_SIGKILL_AFTER) {
+        return true;
+    }
+
+    if kill_tree_pass(pid, "SIGKILL") == KillPass::Failed {
+        // Neither gone nor reachable: someone else owns that pid now (recycled
+        // onto another user's process, say), so it is not ours to wait for.
+        // Reported, not acted on — retrying would not change the answer.
+        tracing::warn!("[ACP] pid={pid} could not be signalled or confirmed gone");
+        return false;
+    }
+    wait_for_reap(cell, SIGKILL_SETTLE);
+    true
+}
+
 /// True for ids in the parsers' turn-id namespace (`turn-<digits>`), which every
 /// parser assigns via `format!("turn-{}", n)`. A broadcast `message_id` must
 /// never land here: it would collide with a persisted transcript turn id and let
@@ -209,8 +364,62 @@ async fn wait_for_session_started(
     (outcome, start.elapsed())
 }
 
+/// A connection that has left the map while its process may still be running.
+struct DrainingChild {
+    agent: AgentType,
+    /// The connection's live pid cell. `on_spawn` publishes the pid and
+    /// `on_exit` zeroes it on a real reap.
+    pid: Arc<std::sync::atomic::AtomicU32>,
+    parked_at: std::time::Instant,
+}
+
+type DrainingChildren = Vec<DrainingChild>;
+
+/// How long a child whose pid reads zero is still treated as possibly running.
+///
+/// Zero is ambiguous: it means "reaped" AND "not spawned yet". A connection
+/// torn down mid-spawn can publish a live pid moments later, so dropping it
+/// immediately would hide a real writer. The grace resolves the ambiguity in
+/// the safe direction — a false positive only downgrades a restore to the side
+/// location, while a false negative unlinks a file an agent is writing.
+const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Drop entries that are provably finished: pid back to zero and long enough
+/// ago that it cannot be a spawn still in flight.
+fn prune_reaped(draining: &mut DrainingChildren) {
+    draining.retain(|c| {
+        c.pid.load(std::sync::atomic::Ordering::SeqCst) != 0
+            || c.parked_at.elapsed() < DRAIN_GRACE
+    });
+}
+
 pub struct ConnectionManager {
     pub(crate) connections: Arc<Mutex<HashMap<String, AgentConnection>>>,
+    /// Connections whose teardown was requested but whose child process has
+    /// not been reaped yet.
+    ///
+    /// `disconnect` drops the map entry immediately and only then signals the
+    /// child, so without this an agent that is still exiting — and still able
+    /// to append to its transcript — is invisible to the backup restore gate,
+    /// which would then unlink files it is still writing.
+    ///
+    /// Each entry holds the connection's live `child_pid` cell. `on_exit`
+    /// zeroes it on a REAL reap; a connection that merely ended keeps its pid,
+    /// because `ChildGuard::drop` signals the tree without waiting. So
+    /// "non-zero" is exactly the codebase's existing definition of "this
+    /// process may still be running", the same one the shutdown backstop
+    /// relies on. Pruned on every push and every read, so it stays small.
+    draining: Arc<Mutex<DrainingChildren>>,
+    /// Read-held for the whole of `spawn_agent`, write-held while a backup
+    /// restore writes transcripts back to the agents' own directories.
+    ///
+    /// Enumerating live connections and then writing is a check-then-use with
+    /// a gap wide enough to drive through: staging a large archive takes
+    /// minutes, and automations, the work-task engine and MCP delegation all
+    /// start connections without a user clicking anything. Taking the write
+    /// lock BEFORE enumerating closes it — no connection can appear between
+    /// the count and the writes.
+    external_restore_lock: Arc<tokio::sync::RwLock<()>>,
     /// Per-(agent, working_dir, session_id) async mutex. Held across the
     /// dedup-lookup + spawn + SessionStarted-wait critical section so two
     /// concurrent `spawn_agent` calls for the same logical session can't
@@ -287,6 +496,8 @@ impl ConnectionManager {
     pub fn new() -> Self {
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
+            external_restore_lock: Arc::new(tokio::sync::RwLock::new(())),
+            draining: Arc::new(Mutex::new(Vec::new())),
             spawn_locks: Arc::new(Mutex::new(HashMap::new())),
             spawn_handshake_timeout: spawn_handshake_timeout_from_env(),
             terminal_shell_config: TerminalShellRuntimeConfig::new(),
@@ -302,6 +513,8 @@ impl ConnectionManager {
     pub fn clone_ref(&self) -> Self {
         Self {
             connections: self.connections.clone(),
+            external_restore_lock: self.external_restore_lock.clone(),
+            draining: self.draining.clone(),
             spawn_locks: self.spawn_locks.clone(),
             spawn_handshake_timeout: self.spawn_handshake_timeout,
             terminal_shell_config: self.terminal_shell_config.clone(),
@@ -350,6 +563,8 @@ impl ConnectionManager {
     fn with_spawn_handshake_timeout(timeout: Duration) -> Self {
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
+            external_restore_lock: Arc::new(tokio::sync::RwLock::new(())),
+            draining: Arc::new(Mutex::new(Vec::new())),
             spawn_locks: Arc::new(Mutex::new(HashMap::new())),
             spawn_handshake_timeout: timeout,
             terminal_shell_config: TerminalShellRuntimeConfig::new(),
@@ -461,6 +676,12 @@ impl ConnectionManager {
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
     ) -> Result<String, AcpError> {
+        // Held for the whole establishment. A restore writing back to the
+        // agents' own directories takes the write side, so it can never see an
+        // empty connection list and then have one appear underneath it. Not
+        // re-entrant: nothing reachable from here calls `spawn_agent` again.
+        let _restore_guard = self.external_restore_lock.read().await;
+
         // Connection dedup: when resuming an agent session (session_id is
         // Some), look for a live AgentConnection that already represents
         // the same external session in the same working_dir for the same
@@ -2094,17 +2315,64 @@ impl ConnectionManager {
     }
 
     pub async fn disconnect(&self, conn_id: &str) -> Result<(), AcpError> {
-        let cmd_tx = {
+        let removed = {
+            // The map lock is held ACROSS the handoff into `draining`, and
+            // readers take it in the same order, so an observer can never see
+            // the connection in neither place.
             let mut connections = self.connections.lock().await;
-            connections.remove(conn_id).map(|conn| conn.cmd_tx)
+            let removed = connections.remove(conn_id);
+            if let Some(conn) = &removed {
+                self.park_draining(conn).await;
+            }
+            removed
         };
-        if let Some(cmd_tx) = cmd_tx {
+        if let Some(conn) = removed {
             tracing::info!("[ACP] disconnect connection={}", conn_id);
-            let _ = cmd_tx.send(ConnectionCommand::Disconnect).await;
+            let _ = conn.cmd_tx.send(ConnectionCommand::Disconnect).await;
             Ok(())
         } else {
             Err(AcpError::ConnectionNotFound(conn_id.into()))
         }
+    }
+
+    /// Remember a connection's child until it is provably finished. Call while
+    /// holding the connections lock, immediately after removing the entry.
+    async fn park_draining(&self, conn: &AgentConnection) {
+        let mut draining = self.draining.lock().await;
+        prune_reaped(&mut draining);
+        draining.push(DrainingChild {
+            agent: conn.agent_type,
+            pid: conn.child_pid.clone(),
+            parked_at: std::time::Instant::now(),
+        });
+    }
+
+    /// Every agent that could still be writing to its own files: connected or
+    /// prompting, plus any whose connection is gone but whose process is not.
+    ///
+    /// Taken under the connections lock so the `disconnect` handoff into
+    /// `draining` is atomic from here — otherwise a restore could look between
+    /// the two and conclude nothing is running.
+    pub async fn live_or_draining_agent_names(&self) -> Vec<String> {
+        let connections = self.connections.lock().await;
+        let mut names: Vec<String> = connections
+            .values()
+            .filter(|c| {
+                matches!(
+                    c.status,
+                    ConnectionStatus::Connecting
+                        | ConnectionStatus::Connected
+                        | ConnectionStatus::Prompting
+                )
+            })
+            .map(|c| c.agent_type.to_string())
+            .collect();
+        let mut draining = self.draining.lock().await;
+        prune_reaped(&mut draining);
+        names.extend(draining.iter().map(|c| c.agent.to_string()));
+        names.sort();
+        names.dedup();
+        names
     }
 
     /// Probe an agent for the modes / config_options it advertises on a fresh
@@ -2325,6 +2593,9 @@ impl ConnectionManager {
             let mut txs = Vec::with_capacity(ids.len());
             for id in ids {
                 if let Some(conn) = connections.remove(&id) {
+                    // Same handoff as `disconnect`: closing a window leaves
+                    // the agents exiting, not exited.
+                    self.park_draining(&conn).await;
                     txs.push(conn.cmd_tx);
                 }
             }
@@ -2340,6 +2611,134 @@ impl ConnectionManager {
             owner_window_label,
             disconnected
         );
+        disconnected
+    }
+
+    /// End every live connection running `agent_type` and report how many there
+    /// were, not returning until this agent's processes — the ones just ended
+    /// AND any it already had exiting — have been put past running, as far as
+    /// the OS lets that be established ([`kill_tree_and_wait`] is precise about
+    /// where that stops).
+    ///
+    /// Added for the Antigravity sign-out, and the reason is the shape of that
+    /// agent's credential store rather than anything about connections. An
+    /// Antigravity process caches its OAuth credentials in memory and writes
+    /// them back to the keychain (or token file) on every silent refresh,
+    /// behind a lock that is per-PROCESS. So a connection still running while
+    /// the credential is cleared will, at its next token expiry, helpfully
+    /// restore the account the user just signed out of — or overwrite the one
+    /// they signed in as afterwards.
+    ///
+    /// That is why this borrows [`Self::disconnect_all`]'s shape rather than
+    /// [`Self::disconnect_by_owner_window`]'s, despite reading like the latter.
+    /// The caller needs "those processes are gone", not "those processes were
+    /// asked to go", and it differs from the shutdown backstop in the two ways
+    /// that follow from exactly that:
+    ///
+    /// - It sweeps the `draining` list, not just the map. A connection an
+    ///   earlier `disconnect` (or a closed window) already removed is invisible
+    ///   in the map while its process is still exiting — and that process holds
+    ///   the same in-memory credential. Only `draining` knows about it, and
+    ///   nothing else would ever kill it.
+    /// - It waits for each process to be past acting, escalating to `SIGKILL`;
+    ///   see [`kill_tree_and_wait`] for what that does and does not establish.
+    ///   `kill_tree` on its own returns as soon as `SIGTERM` is delivered, and
+    ///   `SIGTERM` can be caught or ignored, so its return says nothing about
+    ///   whether the agent is still there to write the credential back.
+    ///
+    /// Everything `disconnect_all` says about `try_send`, about sleeping the
+    /// WHOLE grace window, and about loading each pid only afterwards applies
+    /// verbatim. In particular the pid must not be read early: a connection
+    /// still `Connecting` reads zero now and publishes a live pid moments later,
+    /// and that is exactly the child that would go on to rewrite the credential.
+    ///
+    /// The return value counts the LIVE connections ended, not the processes
+    /// swept — a drainer was disconnected by whoever parked it, and counting it
+    /// again here would report a teardown that did not happen. A pid the sweep
+    /// could not settle is logged, not raised. On unix that means `kill(2)`
+    /// answered something other than `ESRCH` — in practice `EPERM`, i.e. that
+    /// pid is not ours to signal, which points at a recycled number rather than
+    /// a surviving agent, though it does not prove either. Weighed against
+    /// refusing to return on it, which would strand the sign-out in exactly the
+    /// dead end it exists to undo: the agent restoring a credential costs the
+    /// user another press of the button, and never signing out costs them the
+    /// account.
+    ///
+    /// Callers that need no new connection to appear behind them must hold
+    /// [`Self::lock_out_new_connections`] BEFORE calling, as `disconnect_all`'s
+    /// shutdown caller does by construction.
+    pub async fn disconnect_by_agent_type(&self, agent_type: AgentType) -> usize {
+        let cmd_txs: Vec<tokio::sync::mpsc::Sender<ConnectionCommand>> = {
+            let mut connections = self.connections.lock().await;
+            let ids: Vec<String> = connections
+                .iter()
+                .filter(|(_, conn)| conn.agent_type == agent_type)
+                .map(|(id, _)| id.clone())
+                .collect();
+
+            let mut txs = Vec::with_capacity(ids.len());
+            for id in ids {
+                if let Some(conn) = connections.remove(&id) {
+                    // Same handoff as every other teardown: the entry goes
+                    // immediately, so the child is parked as draining to stay
+                    // visible while it exits — and, here, to be swept below.
+                    self.park_draining(&conn).await;
+                    txs.push(conn.cmd_tx);
+                }
+            }
+            txs
+        };
+
+        let disconnected = cmd_txs.len();
+        for cmd_tx in &cmd_txs {
+            let _ = cmd_tx.try_send(ConnectionCommand::Disconnect);
+        }
+        tracing::info!(
+            "[ACP] disconnect by agent type agent={:?} count={}",
+            agent_type, disconnected
+        );
+
+        // Every child that could still be running as this agent: the ones just
+        // parked above AND the ones an earlier teardown left draining. Cells,
+        // not pids — each pid is loaded at the last possible moment, inside the
+        // sweep.
+        let pid_cells: Vec<Arc<std::sync::atomic::AtomicU32>> = {
+            let mut draining = self.draining.lock().await;
+            prune_reaped(&mut draining);
+            draining
+                .iter()
+                .filter(|c| c.agent == agent_type)
+                .map(|c| c.pid.clone())
+                .collect()
+        };
+        if pid_cells.is_empty() {
+            return disconnected;
+        }
+
+        tokio::time::sleep(DISCONNECT_ALL_GRACE).await;
+
+        match tokio::task::spawn_blocking(move || {
+            pid_cells
+                .iter()
+                .filter(|cell| !kill_tree_and_wait(cell))
+                .count()
+        })
+        .await
+        {
+            Ok(0) => {}
+            Ok(unconfirmed) => tracing::warn!(
+                "[ACP] disconnect by agent type agent={:?}: {} process(es) could not be confirmed gone",
+                agent_type, unconfirmed
+            ),
+            // Only reachable if the sweep panicked or the runtime is shutting
+            // down under it. Nothing to retry against — but it must not pass
+            // silently for "everything was confirmed".
+            Err(e) => tracing::warn!(
+                "[ACP] disconnect by agent type agent={:?}: sweep did not finish: {e}",
+                agent_type
+            ),
+        }
+
         disconnected
     }
 
@@ -2418,6 +2817,15 @@ impl ConnectionManager {
         .await;
 
         disconnected
+    }
+
+    /// Block new connections from being established until the returned guard
+    /// is dropped. The caller must enumerate live connections only AFTER
+    /// holding this, never before.
+    pub async fn lock_out_new_connections(
+        &self,
+    ) -> tokio::sync::OwnedRwLockWriteGuard<()> {
+        self.external_restore_lock.clone().write_owned().await
     }
 
     pub async fn list_connections(&self) -> Vec<ConnectionInfo> {
@@ -2649,6 +3057,11 @@ impl ConnectionManager {
         // AFTER the admission checks above so a rejected steer never triggers
         // file reads, and BEFORE the shield below so a failure aborts with no
         // side effects.
+        // Whether the caller sent a real draft rather than bare text. Read
+        // BEFORE `blocks` is consumed below, and the sole gate on recording a
+        // block list at all: a text-only steer must keep producing exactly the
+        // note it always produced.
+        let had_blocks = blocks.is_some();
         let wire_blocks = match blocks {
             Some(mut blocks) => {
                 crate::acp::prompt_hydration::hydrate_prompt_blocks(
@@ -2681,6 +3094,31 @@ impl ConnectionManager {
             }
             None => vec![PromptInputBlock::Text { text: text.clone() }],
         };
+        // Project what the user sent for the broadcast, AFTER hydration and
+        // from the same bytes the agent gets — the contract an ordinary prompt
+        // already follows (`user_blocks_from_prompt` at the `UserMessage`
+        // emit). Without it the note reaches the live transcript as `text`
+        // alone, which is the composer's DISPLAY form: a steered image would
+        // render as words about an image until a reload replaced it with the
+        // agent's own copy.
+        //
+        // `None` for a text-only steer, so that path's note is unchanged and
+        // the frontend keeps rendering it from `text`.
+        //
+        // Filtered on the ATTACHMENT bytes rather than on `blocks.is_some()`: a
+        // draft that projects down to text alone says nothing `text` does not
+        // already say, and recording a list for it would put one on a note the
+        // field's contract calls text-only.
+        //
+        // No budget check here on purpose — the per-turn attachment bound lives
+        // at the single authorized writer (`SessionState::apply_event`'s
+        // `FeedbackSubmitted` arm), where the check and the append share one
+        // critical section. Enforcing it here would be a read, an agent
+        // round-trip, then a write: concurrent steers would both read the same
+        // total and both pass it.
+        let record_blocks = had_blocks
+            .then(|| crate::acp::user_blocks_from_prompt(&wire_blocks))
+            .filter(|projected| crate::acp::feedback::attachment_bytes(projected) > 0);
         let conn_id_for_task = conn_id.to_string();
         let handle = tokio::spawn(async move {
             let outcome: Result<FeedbackItem, AcpError> = async {
@@ -2718,8 +3156,12 @@ impl ConnectionManager {
                         state.write().await.native_steering_available = false;
                     }
                 }
-                let item =
-                    FeedbackItem::new_delivered(uuid::Uuid::new_v4().to_string(), text, created_at);
+                let item = FeedbackItem::new_delivered(
+                    uuid::Uuid::new_v4().to_string(),
+                    text,
+                    created_at,
+                    record_blocks,
+                );
                 // Ungated on purpose — see the invariant on this fn's doc.
                 emit_with_state(
                     &state,
@@ -3672,6 +4114,144 @@ impl SessionPlanApprovalAccess for ConnectionManagerPlanApprovalLookup {
 mod tests {
     use super::*;
     use crate::acp::connection::AgentConnection;
+
+    /// An agent that has left the connection map but not yet exited can still
+    /// be appending to the transcript a restore is about to unlink, so the
+    /// gate has to see it. `disconnect` drops the map entry immediately, which
+    /// is why the pid is parked separately rather than the entry being kept.
+    #[tokio::test]
+    async fn disconnect_keeps_a_live_child_visible_after_the_map_entry_is_gone() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let pid = {
+            let conns = mgr.connections.lock().await;
+            conns.get("c1").unwrap().child_pid.clone()
+        };
+        pid.store(4242, SeqCst); // spawned
+
+        mgr.disconnect("c1").await.unwrap();
+        assert!(
+            mgr.list_connections().await.is_empty(),
+            "the map entry goes immediately — that is the whole problem"
+        );
+        assert_eq!(
+            mgr.live_or_draining_agent_names().await,
+            vec!["Claude Code".to_string()]
+        );
+    }
+
+    /// Closing a window tears down its agents the same way, and leaves them
+    /// exiting rather than exited.
+    #[tokio::test]
+    async fn closing_a_window_also_keeps_its_children_visible() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        {
+            let conns = mgr.connections.lock().await;
+            conns.get("c1").unwrap().child_pid.store(777, SeqCst);
+        }
+        assert_eq!(mgr.disconnect_by_owner_window("test-window").await, 1);
+        assert_eq!(
+            mgr.live_or_draining_agent_names().await,
+            vec!["Codex CLI".to_string()]
+        );
+    }
+
+    /// The Antigravity sign-out ends that agent's connections and nobody
+    /// else's. Precision is the point: their processes would write the cleared
+    /// credential back on their next refresh, while an unrelated agent's
+    /// session has nothing to do with it and must survive.
+    #[tokio::test]
+    async fn disconnecting_one_agent_type_leaves_the_others_running() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("agy1", AgentType::Antigravity, None, EventEmitter::Noop)
+            .await;
+        mgr.insert_test_connection("agy2", AgentType::Antigravity, None, EventEmitter::Noop)
+            .await;
+        mgr.insert_test_connection("cdx", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+
+        assert_eq!(
+            mgr.disconnect_by_agent_type(AgentType::Antigravity).await,
+            2
+        );
+        let left: Vec<String> = mgr
+            .list_connections()
+            .await
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(left, vec!["cdx".to_string()]);
+
+        // And they leave exiting, not exited — the same handoff every other
+        // teardown makes, so the shutdown backstop can still reach them. They
+        // are out of the map yet still named here, alongside the live Codex.
+        assert_eq!(
+            mgr.live_or_draining_agent_names().await,
+            vec!["Codex CLI".to_string(), "Google Antigravity".to_string()]
+        );
+
+        // Nothing of that type left: a second pass is a no-op rather than an
+        // error, which is what makes the sign-out safe to retry.
+        assert_eq!(
+            mgr.disconnect_by_agent_type(AgentType::Antigravity).await,
+            0
+        );
+    }
+
+    /// A pid of zero means BOTH "reaped" and "not spawned yet", so a
+    /// connection torn down mid-spawn — which can publish a live pid moments
+    /// later — must not be dismissed. It ages out instead.
+    #[tokio::test]
+    async fn a_child_that_has_not_published_a_pid_is_still_assumed_live() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        mgr.disconnect("c1").await.unwrap();
+        assert_eq!(
+            mgr.live_or_draining_agent_names().await,
+            vec!["Codex CLI".to_string()],
+            "within the grace window an unpublished pid counts as running"
+        );
+
+        // Backdate past the grace: now zero can only mean finished.
+        {
+            let mut draining = mgr.draining.lock().await;
+            for child in draining.iter_mut() {
+                child.parked_at = std::time::Instant::now() - DRAIN_GRACE * 2;
+            }
+        }
+        assert!(mgr.live_or_draining_agent_names().await.is_empty());
+        assert_eq!(
+            mgr.draining.lock().await.len(),
+            0,
+            "reading prunes, so the list cannot grow without bound"
+        );
+    }
+
+    /// `spawn_agent` takes the read side of `external_restore_lock` as its
+    /// very first statement, so holding the write side is what makes a backup
+    /// restore's "are any agents running?" check a real gate rather than a
+    /// check-then-use with a multi-minute gap.
+    #[tokio::test]
+    async fn lock_out_new_connections_blocks_connection_establishment() {
+        let mgr = ConnectionManager::new();
+        let guard = mgr.lock_out_new_connections().await;
+        assert!(
+            mgr.external_restore_lock.try_read().is_err(),
+            "no connection may be established while the lockout is held"
+        );
+        drop(guard);
+        assert!(mgr.external_restore_lock.try_read().is_ok());
+    }
+    // Test-only: the budget itself is enforced at the append in
+    // `SessionState::apply_event`, so nothing in this module's production code
+    // names it — only the tests that pin the bound do.
+    use crate::acp::feedback::MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN;
     use crate::acp::session_state::SessionState;
     use crate::acp::types::ConnectionStatus;
     use crate::web::event_bridge::{EventEmitter, WebEvent, WebEventBroadcaster};
@@ -3846,6 +4426,131 @@ mod tests {
 
         let _ = kill_tree::blocking::kill_tree(child.id());
         let _ = child.wait();
+    }
+
+    /// The Antigravity sign-out needs "no process of this agent is running",
+    /// and a child an earlier `disconnect` left draining is exactly the one the
+    /// map cannot see. It was asked to go — `disconnect` sends and returns —
+    /// but nothing ever checked that it went, and while it lives it still holds
+    /// the credential the sign-out is about to clear.
+    ///
+    /// The test connection's command receiver is dropped, so the graceful path
+    /// is unavailable: this process can only die from the sweep.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn disconnect_by_agent_type_sweeps_a_child_left_draining_by_an_earlier_teardown() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut child, gpid) = spawn_process_tree(&dir.path().join("g.pid")).await;
+
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("agy-old", AgentType::Antigravity, None, EventEmitter::Noop)
+            .await;
+        mgr.connections
+            .lock()
+            .await
+            .get("agy-old")
+            .unwrap()
+            .child_pid
+            .store(child.id(), std::sync::atomic::Ordering::SeqCst);
+
+        // Out of the map, into `draining` — a closed tab, say.
+        mgr.disconnect("agy-old").await.unwrap();
+        assert!(mgr.list_connections().await.is_empty());
+
+        // Nothing live to end, so nothing to report — but its process is still
+        // there, and that is what has to be gone.
+        assert_eq!(
+            mgr.disconnect_by_agent_type(AgentType::Antigravity).await,
+            0
+        );
+        assert!(
+            wait_until_dead(gpid).await,
+            "grandchild {gpid} survived — a draining child of the same agent was never swept"
+        );
+        let _ = child.wait();
+    }
+
+    /// `kill_tree` sends `SIGTERM` and returns; `SIGTERM` can be caught or
+    /// ignored. So "the kill call returned" is not "the agent is gone", and the
+    /// sign-out's whole premise is that it IS gone before the credential goes.
+    /// A process that ignores `SIGTERM` must still end up dead, via `SIGKILL`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn disconnect_by_agent_type_escalates_to_sigkill_for_a_child_that_ignores_sigterm() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut child, gpid) = spawn_sigterm_proof_tree(&dir.path().join("g.pid")).await;
+
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("agy", AgentType::Antigravity, None, EventEmitter::Noop)
+            .await;
+        mgr.connections
+            .lock()
+            .await
+            .get("agy")
+            .unwrap()
+            .child_pid
+            .store(child.id(), std::sync::atomic::Ordering::SeqCst);
+
+        assert_eq!(
+            mgr.disconnect_by_agent_type(AgentType::Antigravity).await,
+            1
+        );
+
+        // The target is this test's own child, so how it died is readable, and
+        // signal 9 is the escalation: it ignores SIGTERM, so nothing softer did
+        // this. `try_wait` rather than `wait` because it does not block — a
+        // status from it means the process was dead by the time the sweep
+        // returned, not merely that it died eventually. (Strictly it means
+        // "dead a few microseconds after", which is as close to the ordering as
+        // a caller outside the process can observe.)
+        use std::os::unix::process::ExitStatusExt;
+        let status = child
+            .try_wait()
+            .expect("read the target's status")
+            .expect("target was still running when the sweep returned");
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "target survived SIGTERM and was never SIGKILLed"
+        );
+        assert!(
+            wait_until_dead(gpid).await,
+            "grandchild {gpid} survived — the escalation reached the target but not its tree"
+        );
+    }
+
+    /// Like [`spawn_process_tree`], but both levels ignore `SIGTERM`: the shell
+    /// sets it to `SIG_IGN`, which `sleep` then inherits across `exec`. Stands
+    /// in for an agent that traps it and takes its time — or never leaves.
+    #[cfg(unix)]
+    async fn spawn_sigterm_proof_tree(pidfile: &std::path::Path) -> (std::process::Child, i32) {
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "trap '' TERM; sleep 30 & echo $! > '{}'; wait",
+                pidfile.display()
+            ))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sh");
+        for _ in 0..150 {
+            if let Ok(raw) = std::fs::read_to_string(pidfile) {
+                if let Ok(pid) = raw.trim().parse::<i32>() {
+                    return (child, pid);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // SIGTERM would bounce off, so the bail-out path has to use SIGKILL.
+        let config = kill_tree::Config {
+            signal: "SIGKILL".to_string(),
+            ..Default::default()
+        };
+        let _ = kill_tree::blocking::kill_tree_with_config(child.id(), &config);
+        let _ = child.wait();
+        panic!("grandchild never recorded its pid");
     }
 
     /// Build a broadcaster + subscribed receiver. Subscribing here (not lazily
@@ -7542,6 +8247,31 @@ mod tests {
         })
     }
 
+    /// [`answer_steer`] for a test that submits more than once: answers `n`
+    /// Steer commands with the same outcome. The loop is what makes concurrent
+    /// submits resolvable — each waits on its own reply channel, so a
+    /// single-shot answerer would leave the second one hanging.
+    /// Takes a bare [`SteerOutcome`] (which is `Copy`) rather than the
+    /// `Result` [`answer_steer`] accepts, because `AcpError` is not `Clone` and
+    /// a repeated answerer has to hand out the same value more than once. No
+    /// caller needs a repeated FAILURE.
+    fn answer_steer_n(
+        mut rx: tokio::sync::mpsc::Receiver<ConnectionCommand>,
+        outcome: SteerOutcome,
+        n: usize,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            for _ in 0..n {
+                match rx.recv().await {
+                    Some(ConnectionCommand::Steer { reply, .. }) => {
+                        let _ = reply.send(Ok(outcome));
+                    }
+                    _ => panic!("expected a Steer command"),
+                }
+            }
+        })
+    }
+
     /// The note's instant must precede the injection reaching the agent. The
     /// adapter hands the text to the agent BEFORE it answers `injected`, so the
     /// agent can write its own transcript copy of the message while this call
@@ -7610,6 +8340,11 @@ mod tests {
                 text: "ship it".into()
             }]
         );
+        // ...and so does the NOTE: a text-only steer records no block list, so
+        // every consumer keeps rendering it from `text` alone. This is the
+        // half that keeps the attachment support below from changing the
+        // historical path.
+        assert_eq!(item.blocks, None);
 
         let state = mgr.get_state("c1").await.unwrap();
         {
@@ -7627,8 +8362,12 @@ mod tests {
     #[tokio::test]
     async fn native_submit_with_blocks_carries_the_draft_and_records_the_text() {
         // A draft with an image attachment steers as its full block list (the
-        // wire payload) while the recorded note stays the display text — the
-        // strip/snapshot/broadcast never carry image bytes.
+        // wire payload) while the recorded note's `text` stays the display
+        // form. The note ALSO carries the projected blocks, because `text` is
+        // what the composer collapsed the attachment into: without them the
+        // live transcript renders a sentence about an image where the image
+        // should be, and only a reload (which reads the agent's own copy) puts
+        // it back. Projection matches an ordinary prompt's `user_message`.
         let mgr = ConnectionManager::new();
         let rx = mgr
             .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
@@ -7652,8 +8391,177 @@ mod tests {
             .unwrap();
         assert_eq!(item.status, FeedbackStatus::Delivered);
         assert_eq!(item.text, "make it match this mock");
+        // The note carries the image, so the live transcript can render it at
+        // the point the user sent it rather than waiting for a reload.
+        assert_eq!(
+            item.blocks,
+            Some(vec![
+                crate::acp::types::UserMessageBlock::Text {
+                    text: "make it match this mock".into()
+                },
+                crate::acp::types::UserMessageBlock::Image {
+                    data: "aGk=".into(),
+                    mime_type: "image/png".into(),
+                },
+            ])
+        );
         // The wire carried the caller's blocks verbatim, attachment included.
         assert_eq!(fake_loop.await.unwrap(), draft);
+    }
+
+    #[tokio::test]
+    async fn a_draft_that_projects_to_text_alone_records_no_block_list() {
+        // `blocks` means "this note carried more than its text". A draft whose
+        // projection is text-only says nothing `text` does not, so recording a
+        // list for it would put one on a note the field's contract calls
+        // text-only — and the frontend would key its dedup on that list.
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+
+        let item = mgr
+            .submit_feedback(
+                "c1",
+                "just words".into(),
+                Some(vec![PromptInputBlock::Text {
+                    text: "just words".into(),
+                }]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(item.blocks, None);
+        // The wire still carried what the caller sent — only the RECORD is
+        // trimmed, so the agent's input is untouched.
+        assert_eq!(
+            fake_loop.await.unwrap(),
+            vec![PromptInputBlock::Text {
+                text: "just words".into()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn steer_attachments_past_the_per_turn_budget_are_not_retained() {
+        // The budget guards what OUTLIVES the event: `SessionState.feedback`,
+        // which every snapshot is rebuilt from. So it is enforced at the append
+        // — the single authorized writer, where the check and the push share
+        // one critical section — not at the submit site, where a read, an agent
+        // round-trip and a write would let two concurrent steers both pass it.
+        //
+        // Past the budget the note still DELIVERS and the event still carries
+        // its blocks to whoever is attached right now; only the retained copy
+        // drops them, so a reconnect renders it from `text` like any text-only
+        // steer.
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+
+        let huge = "A".repeat(MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN + 1);
+        let item = mgr
+            .submit_feedback(
+                "c1",
+                "one enormous screenshot".into(),
+                Some(vec![PromptInputBlock::Image {
+                    data: huge,
+                    mime_type: "image/png".into(),
+                    uri: None,
+                }]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            item.status,
+            FeedbackStatus::Delivered,
+            "over budget is not a rejection — the agent already has the content"
+        );
+
+        // The RETAINED note is the one that had to shed the attachment.
+        let state = mgr.get_state("c1").await.unwrap();
+        {
+            let s = state.read().await;
+            assert_eq!(s.feedback.len(), 1);
+            assert_eq!(
+                s.feedback[0].blocks, None,
+                "an over-budget attachment must not be kept for the turn"
+            );
+            assert_eq!(s.feedback[0].text, "one enormous screenshot");
+        }
+
+        // And the wire was never trimmed: the budget governs what houhub KEEPS,
+        // not what the agent receives.
+        let sent = fake_loop.await.unwrap();
+        assert!(matches!(
+            sent.as_slice(),
+            [PromptInputBlock::Image { data, .. }]
+                if data.len() == MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN + 1
+        ));
+    }
+
+    #[tokio::test]
+    async fn concurrent_over_budget_steers_cannot_both_be_retained() {
+        // The interleaving a submit-site check could not stop: two steers whose
+        // attachments each fit the budget alone but not together. The append is
+        // serialized by the state write lock, so the second one sees the first
+        // already retained and sheds its own blocks.
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        let fake_loop = answer_steer_n(rx, SteerOutcome::Injected, 2);
+
+        // Two thirds of the budget each: either alone is admissible, the pair
+        // is not.
+        let half = "A".repeat((MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN / 3) * 2);
+        let shot = |text: &str| {
+            let data = half.clone();
+            let text = text.to_string();
+            let mgr = &mgr;
+            async move {
+                mgr.submit_feedback(
+                    "c1",
+                    text,
+                    Some(vec![PromptInputBlock::Image {
+                        data,
+                        mime_type: "image/png".into(),
+                        uri: None,
+                    }]),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let (a, b) = tokio::join!(shot("first"), shot("second"));
+        assert_eq!(a.status, FeedbackStatus::Delivered);
+        assert_eq!(b.status, FeedbackStatus::Delivered);
+        fake_loop.await.unwrap();
+
+        let state = mgr.get_state("c1").await.unwrap();
+        let s = state.read().await;
+        assert_eq!(s.feedback.len(), 2, "both notes are still recorded");
+        let retained: usize = s
+            .feedback
+            .iter()
+            .filter_map(|f| f.blocks.as_deref())
+            .map(crate::acp::feedback::attachment_bytes)
+            .sum();
+        assert!(
+            retained <= MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN,
+            "the aggregate bound holds across concurrent steers: retained={retained}"
+        );
+        assert_eq!(
+            s.feedback.iter().filter(|f| f.blocks.is_some()).count(),
+            1,
+            "exactly one of the pair keeps its attachment"
+        );
     }
 
     #[test]
