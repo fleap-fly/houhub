@@ -71,15 +71,23 @@ pub enum McpAppType {
     Qoder,
     /// Serializes as `antigravity`, matching `AgentType::as_wire`.
     Antigravity,
-    /// Serializes as `pi`, matching `AgentType::as_wire`. Scan-only: Pi itself
-    /// has no native MCP support; this represents the optional extension config
-    /// that can be inspected and round-tripped without being sent over ACP.
+    /// Serializes as `pi`, matching `AgentType::as_wire`. Scan-only: houhub
+    /// reads and round-trips the pi MCP EXTENSION's config, but pi is not an
+    /// assignable target and gets no MCP over the ACP wire. See the pi section
+    /// below.
     Pi,
 }
 
-/// Every app touched by the local-MCP write paths, in their stable order.
-/// Keeping one exhaustive list prevents a newly discovered source from being
-/// left behind by either reassignment or remove-from-everywhere operations.
+/// Every app the local-MCP write paths walk, in the order they walk it.
+///
+/// `mcp_upsert_local_server` means "these agents and NO others": it upserts into
+/// each targeted app and REMOVES the server from each of the rest, so an app
+/// missing here silently keeps a stale entry that the next scan reports as a
+/// live assignment. `mcp_remove_server`'s "remove from everywhere" branch has
+/// the same requirement, and missing an app there is what makes an uninstalled
+/// server come back on the next refresh. Both used to keep their own hand-typed
+/// copy of this list; one shared constant plus [`tests::all_mcp_apps_is_exhaustive`]
+/// (which fails to compile when a variant is added) is what keeps them honest.
 const ALL_MCP_APPS: [McpAppType; 15] = [
     McpAppType::ClaudeCode,
     McpAppType::Codex,
@@ -116,7 +124,7 @@ pub struct LocalMcpSourceWarning {
     pub message: String,
 }
 
-/// A local scan: every server HouHub could read, plus a warning per source it
+/// A local scan: every server houhub could read, plus a warning per source it
 /// could not.
 ///
 /// Deliberately not a bare `Vec<LocalMcpServer>` with a fail-fast error. These
@@ -461,6 +469,7 @@ pub async fn mcp_upsert_local_server(
             "none of the selected agents can host this MCP server's transport (e.g. Codex does not support SSE)",
         ));
     }
+
     // Nothing below is reversible, and the walk REMOVES the server from every
     // non-target agent, so a target whose config cannot take it has to be
     // caught before the first write rather than halfway through.
@@ -565,7 +574,7 @@ fn normalize_apps(apps: Vec<McpAppType>) -> Vec<McpAppType> {
 /// Whether `app`'s on-disk config can faithfully host `canonical_spec`. Codex's
 /// config.toml has only stdio and streamable-HTTP transports, so it cannot host an
 /// SSE server — writing one would persist a url-only entry that Codex loads as HTTP
-/// and HouHub then reads back as `http`, silently reclassifying the shared canonical
+/// and houhub then reads back as `http`, silently reclassifying the shared canonical
 /// spec. Write paths preflight-exclude such (app, spec) pairs instead of writing a
 /// misrepresented entry or aborting the whole multi-agent operation. See issue #325.
 fn app_can_host_spec(app: McpAppType, canonical_spec: &Value) -> bool {
@@ -768,12 +777,12 @@ fn cline_config_path() -> PathBuf {
 }
 
 /// Read a file that is absent for most users, distinguishing "nobody has
-/// configured this agent" from "this agent's config exists and HouHub could not
+/// configured this agent" from "this agent's config exists and houhub could not
 /// read it".
 ///
 /// The absence test is the read itself, not `Path::exists()`: `exists()`
 /// answers `false` for ANY failed stat — a permission wall on a parent
-/// directory, a symlink loop — so it would report a file HouHub simply could not
+/// directory, a symlink loop — so it would report a file houhub simply could not
 /// open as an empty config. `scan_local_servers` would then leave that agent
 /// out with no warning, and `require_complete_scan` would wave through a
 /// reassignment that strips the server from the agents it COULD read and then
@@ -806,13 +815,13 @@ fn read_json_file(path: &Path) -> Result<Value, AppCommandError> {
     // JSON-backed source.
     //
     // The writers share this reader, so an agent that truncates its config
-    // before rewriting it can be caught mid-write and have HouHub start from
+    // before rewriting it can be caught mid-write and have houhub start from
     // `{}` — and unlike the ordinary stale read this subsystem already lives
     // with (nothing locks these files), that one loses settings even when the
     // agent's rewrite changed nothing. It is accepted deliberately: the window
     // is one non-atomic rewrite wide, while REFUSING empty files would leave a
     // user whose config is PERSISTENTLY 0 bytes — the reported case — unable to
-    // assign a server to that agent at all, and HouHub cannot tell the two
+    // assign a server to that agent at all, and houhub cannot tell the two
     // apart from a single read.
     if raw.trim().is_empty() {
         return Ok(json!({}));
@@ -1335,10 +1344,10 @@ fn codex_entry_to_canonical(id: &str, value: &toml::Value) -> Result<Value, AppC
 
     // Codex's native `[mcp_servers.*]` tables carry no `type` key — the transport
     // is implied by the keys present (`command` = stdio, `url` = streamable HTTP).
-    // Honor an explicit `type` when present (older app output or hand-written
+    // Honor an explicit `type` when present (older houhub output or hand-written
     // configs), but when it is absent infer the transport from the keys rather
     // than blindly assuming stdio, which would drop every url-only HTTP server
-    // (including the ones HouHub now writes). See issue #325.
+    // (including the ones houhub now writes). See issue #325.
     let raw_type = table
         .get("type")
         .and_then(toml::Value::as_str)
@@ -1596,7 +1605,7 @@ fn canonical_to_codex_entry(spec: &Value) -> Result<toml::Value, AppCommandError
         "sse" => {
             // Codex's config.toml has only stdio and streamable-HTTP transports — it
             // cannot represent SSE. Reject rather than degrade to a bare `url`, which
-            // Codex would load as HTTP and HouHub would then read back as `http`,
+            // Codex would load as HTTP and houhub would then read back as `http`,
             // silently reclassifying the shared canonical spec (and defeating the ACP
             // wire-path SSE capability gate). Batch callers preflight-exclude Codex
             // from an SSE server's targets (see `app_can_host_spec`); this is the
@@ -1792,9 +1801,7 @@ fn codebuddy_config_path() -> PathBuf {
 }
 
 fn codebuddy_settings_path() -> PathBuf {
-    home_dir_or_default()
-        .join(".codebuddy")
-        .join("settings.json")
+    home_dir_or_default().join(".codebuddy").join("settings.json")
 }
 
 fn read_codebuddy_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
@@ -2356,13 +2363,13 @@ fn read_cline_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
     Ok(out)
 }
 
-/// Convert HouHub canonical spec into a Cline `mcpServers` entry.
+/// Convert houhub's canonical spec into a Cline `mcpServers` entry.
 ///
 /// Cline validates each entry with a zod union whose `type` is a literal enum of
 /// exactly `stdio | sse | streamableHttp` — it does NOT accept the canonical
 /// `http`. Worse, `mcpServers` is validated as one `z.record`, so a single
 /// rejected entry makes Cline load *zero* servers. Remap `http` → `streamableHttp`
-/// (which HouHub reader collapses straight back to canonical `http` via
+/// (which houhub's reader collapses straight back to canonical `http` via
 /// `normalize_mcp_type`); stdio/sse already match Cline's literals and pass
 /// through untouched. See issue #325.
 fn canonical_to_cline_entry(spec: &Value) -> Result<Value, AppCommandError> {
@@ -2609,9 +2616,41 @@ fn remove_deepseek_server_at(path: &Path, id: &str) -> Result<bool, AppCommandEr
     Ok(removed)
 }
 
-// Pi MCP adapters use an extension-owned mcp.json. Discover and round-trip
-// existing entries, but keep Pi out of assignable marketplace targets: Pi has
-// no native MCP support and pi-acp does not forward ACP mcpServers to extensions.
+// ---------------------------------------------------------------------------
+// pi  (<PI_CODING_AGENT_DIR|~/.pi/agent>/mcp.json  →  top-level `mcpServers`)
+//
+// The odd one out: this file belongs to neither pi nor houhub but to a
+// THIRD-PARTY pi extension — pi itself has no MCP support, and the extension is
+// what reads `mcpServers` and mounts the servers. The schema it accepts is
+// Claude Code's (`command`/`args`/`env` | `url`/`headers`), which is houhub's
+// canonical shape, so no translation layer is needed (issue #653).
+//
+// SCAN-ONLY, in both directions:
+//
+//   - Not an assignable target. `APP_OPTIONS` in `mcp-settings.tsx` omits pi, so
+//     no checkbox can add a server here; the settings page carries an existing
+//     `pi` assignment forward on save instead (`hiddenLegacyApps`), exactly as
+//     it does for OpenClaw. Writing here for a user without the extension would
+//     create a file nothing on the machine reads.
+//   - Still fully round-trippable. `Pi` IS in `ALL_MCP_APPS`, so editing an
+//     entry rewrites it in place and "uninstall" clears it — without that, a
+//     removed server would reappear at the next scan.
+//   - Nothing reaches pi over the wire. `read_servers_for_agent_type` returns an
+//     empty map for `AgentType::Pi` on purpose (pi-acp drops `session/new`'s
+//     `mcpServers`); do NOT wire it to `read_pi_servers` to "fix" the asymmetry.
+//
+// Registered LAST in `local_mcp_readers`, so on an id shared with an assignable
+// agent that agent's spec wins the merge — and a later save writes THAT spec
+// into this file. Any extension-specific key on the losing pi entry is lost
+// (Kimi has a `KIMI_SHARED_KEYS` carve-out for the same hazard; pi gets none
+// because the extension's schema beyond `mcpServers` is not pinned anywhere).
+//
+// Resolves the agent dir from the PROCESS env, like pi's `settings.json` /
+// `auth.json` / `models.json` writers in `commands::acp` — a per-agent BYO
+// `PI_CODING_AGENT_DIR` override is not visible here, the same known limitation
+// those three already have.
+// ---------------------------------------------------------------------------
+
 fn pi_mcp_path() -> PathBuf {
     super::acp::pi_agent_dir().join("mcp.json")
 }
@@ -2629,12 +2668,12 @@ fn read_pi_servers_at(path: &Path) -> Result<BTreeMap<String, Value>, AppCommand
     };
 
     for (id, spec) in servers {
-        match canonicalize_spec(spec, "Pi config") {
+        match canonicalize_spec(spec, "pi config") {
             Ok(normalized) => {
                 out.insert(id.to_string(), normalized);
             }
             Err(err) => {
-                tracing::warn!("[MCP] skip invalid Pi MCP entry id={id}: {err}");
+                tracing::warn!("[MCP] skip invalid pi MCP entry id={id}: {err}");
             }
         }
     }
@@ -2652,7 +2691,7 @@ fn upsert_pi_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCom
         root = json!({});
     }
 
-    let canonical = canonicalize_spec(spec, "Pi write")?;
+    let canonical = canonicalize_spec(spec, "pi write")?;
 
     let obj = root.as_object_mut().ok_or_else(|| {
         mcp_configuration_invalid(format!("invalid JSON root in {}", path.display()))
@@ -3055,7 +3094,7 @@ fn local_mcp_readers() -> [LocalMcpReader; 15] {
             read_antigravity_servers,
         ),
         LocalMcpReader::new("Qoder", McpAppType::Qoder, read_qoder_servers),
-        LocalMcpReader::new("Pi", McpAppType::Pi, read_pi_servers),
+        LocalMcpReader::new("pi", McpAppType::Pi, read_pi_servers),
     ]
 }
 
@@ -3063,7 +3102,7 @@ fn local_mcp_readers() -> [LocalMcpReader; 15] {
 /// be read into a warning instead of failing the whole scan.
 ///
 /// These files belong to the other agents and to the user, so any of them can be
-/// empty, half-written or hand-edited into something HouHub cannot parse. A
+/// empty, half-written or hand-edited into something houhub cannot parse. A
 /// fail-fast `?` here meant one such file hid every OTHER agent's servers too
 /// (issue #632: an empty `~/.gemini/config/mcp_config.json` emptied the entire
 /// local MCP list). The broken source drops out; the rest of the scan stands.
@@ -3075,7 +3114,7 @@ fn scan_local_servers_from_readers(readers: &[LocalMcpReader]) -> LocalMcpScan {
     let mut warnings: Vec<LocalMcpSourceWarning> = Vec::new();
     // OpenClaw is the one agent that shares a key with Kimi (`auth`), so keep
     // what its own config declares: below, that is what tells Kimi's pass an
-    // OpenClaw setting from an echo HouHub once wrote into some other agent's
+    // OpenClaw setting from an echo houhub once wrote into some other agent's
     // file — and it has to be the VALUE, since the agent that wins the merge may
     // carry neither. See `KIMI_SHARED_KEYS`.
     let mut openclaw_declares: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
@@ -3220,8 +3259,8 @@ pub fn read_servers_for_agent_type(
         AgentType::Grok => read_grok_servers(),
         AgentType::Cursor => read_cursor_servers(),
         // pi-acp drops ACP-wire MCP and pi has no native MCP (it needs a
-        // third-party extension), so HouHub manages no MCP servers for Pi.
-        // Scanning the extension file must not change ACP forwarding.
+        // third-party extension). Scanning its extension config must not
+        // change the servers forwarded to a pi ACP session.
         AgentType::Pi => Ok(BTreeMap::new()),
         // deepseek-acp has no native MCP config file: it takes servers only
         // as `session/new`'s `mcpServers`. `$DSH_HOME/mcp.json` is houhub's own
@@ -3267,22 +3306,21 @@ fn read_kimi_code_servers() -> Result<BTreeMap<String, Value>, AppCommandError> 
     read_kimi_code_servers_at(&kimi_code_mcp_json_path())
 }
 
-/// Convert one Kimi `mcpServers` entry into HouHub canonical spec.
+/// Convert one Kimi `mcpServers` entry into houhub's canonical spec.
 ///
 /// Kimi Code validates `mcp.json` with a Zod discriminated union keyed on
 /// `transport` (`stdio`/`http`/`sse`): `command` ⇒ stdio, and a url-only remote
 /// entry DEFAULTS to streamable HTTP — it never infers SSE from the URL path, and
-/// `type` is not a recognized field (silently stripped). Mirror that so HouHub
+/// `type` is not a recognized field (silently stripped). Mirror that so houhub
 /// classifies an entry the way Kimi actually will: stdio from `command`; otherwise
 /// a `url` is remote with transport taken from an explicit `transport` key (only
 /// `sse` yields SSE), else HTTP. `type` is intentionally NOT consulted for remote
 /// (Kimi ignores it). `transport` is then dropped from the canonical spec so it
 /// can't leak into another agent's config on a cross-agent sync. See issue #325.
 ///
-/// Schema last checked against 0.39.0: unchanged since 0.23.3 apart from the
-/// optional `runtime_id` stdio field 0.38.0 added.
-/// Schema last checked against 0.40.1 (byte-identical to 0.39.1): unchanged
-/// since 0.23.3 apart from the optional `runtime_id` stdio field 0.38.0 added.
+/// Schema last checked against 0.42.0: unchanged since 0.23.3 apart from the
+/// optional `runtime_id` stdio field 0.38.0 added. 0.42.0 rewrote the agent
+/// loop but left `mcpCore/config-schema.ts` byte-identical.
 fn kimi_code_entry_to_canonical(spec: &Value, id: &str) -> Result<Value, AppCommandError> {
     let Some(obj) = spec.as_object() else {
         return canonicalize_spec(spec, "Kimi Code config");
@@ -3301,10 +3339,7 @@ fn kimi_code_entry_to_canonical(spec: &Value, id: &str) -> Result<Value, AppComm
     // Read the discriminant into an owned value first so the map isn't borrowed when
     // we mutate it below. `transport` absent ⇒ infer; present-but-non-string or an
     // unknown literal ⇒ reject (as Kimi would).
-    let explicit_transport = obj
-        .get("transport")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let explicit_transport = obj.get("transport").and_then(Value::as_str).map(str::to_string);
     if obj.contains_key("transport") {
         let canonical_type = match explicit_transport.as_deref() {
             Some("stdio") => "stdio",
@@ -3317,10 +3352,7 @@ fn kimi_code_entry_to_canonical(spec: &Value, id: &str) -> Result<Value, AppComm
                 )));
             }
         };
-        obj.insert(
-            "type".to_string(),
-            Value::String(canonical_type.to_string()),
-        );
+        obj.insert("type".to_string(), Value::String(canonical_type.to_string()));
     }
     obj.remove("transport");
     canonicalize_spec(&Value::Object(obj), &format!("Kimi Code config '{id}'"))
@@ -3369,7 +3401,7 @@ fn is_kimi_timeout_ms(value: &Value) -> bool {
     ms.fract() == 0.0 && (1.0..=f64::from(i32::MAX)).contains(&ms)
 }
 
-/// The `mcp.json` fields Kimi models that no other agent HouHub writes models —
+/// The `mcp.json` fields Kimi models that no other agent houhub writes models —
 /// checked against every per-server schema in this file plus OpenClaw's
 /// `McpServerConfig` and Cline's `McpServerRegistration`, the two richest. That
 /// exclusivity is what lets Kimi's copy be authoritative for them in
@@ -3389,7 +3421,7 @@ const KIMI_OWNED_KEYS: &[&str] = &[
 /// `McpServerConfig`. For these the OWNER's value wins, with Kimi's as the
 /// fallback — `scan_local_servers` collects it during the OpenClaw pass and
 /// hands it to `merge_kimi_extension_fields`. A copy held by any OTHER agent is
-/// only an echo HouHub once wrote there and never wins, so removing the key in
+/// only an echo houhub once wrote there and never wins, so removing the key in
 /// either owner's config still takes effect.
 const KIMI_SHARED_KEYS: &[&str] = &["auth"];
 
@@ -3420,7 +3452,7 @@ fn is_kimi_extension_field(key: &str, value: &Value, stdio: bool) -> bool {
 /// Resolve the Kimi-only fields of the canonical spec a server resolved to from
 /// Kimi's own copy.
 ///
-/// HouHub keeps ONE canonical spec per server across every agent, and
+/// houhub keeps ONE canonical spec per server across every agent, and
 /// `scan_local_servers` resolves a server present in several agents to the FIRST
 /// agent's copy. A server that also lives in, say, Codex's config would
 /// otherwise surface as Codex's projection, which never carried Kimi's fields —
@@ -3431,7 +3463,7 @@ fn is_kimi_extension_field(key: &str, value: &Value, stdio: bool) -> bool {
 /// removed it, not that some other agent's reader never had it.
 ///
 /// For [`KIMI_OWNED_KEYS`] Kimi's copy wins outright, its ABSENCE included.
-/// Those keys mean nothing to any other agent, but HouHub's permissive writers do
+/// Those keys mean nothing to any other agent, but houhub's permissive writers do
 /// copy them into other agents' config files — so an earlier-scanned agent can
 /// hold a stale echo of one, and letting that echo stand would pin the canonical
 /// spec to a value the user has since changed or deleted in Kimi's own
@@ -3471,7 +3503,7 @@ fn merge_kimi_extension_fields(
     }
 }
 
-/// Convert HouHub's canonical spec into a Kimi `mcpServers` entry.
+/// Convert houhub's canonical spec into a Kimi `mcpServers` entry.
 ///
 /// Kimi Code keys the transport off a `transport` field (Zod
 /// discriminated union), defaulting a url-only remote entry to streamable HTTP — an
@@ -3499,7 +3531,7 @@ fn canonical_to_kimi_code_entry(spec: &Value) -> Result<Value, AppCommandError> 
     // carry Kimi-compatible types; `type` is kept but Kimi ignores/strips it.
     // See issue #325.
     //
-    // `is_kimi_extension_field` covers the keys Kimi models but HouHub has no UI
+    // `is_kimi_extension_field` covers the keys Kimi models but houhub has no UI
     // for. They exist on disk when the user set them through Kimi's own
     // `/mcp-config`, and dropping them would quietly break that server — an
     // OAuth'd remote losing its `auth`, or a `runtime_id`/`executor` entry
@@ -3517,10 +3549,7 @@ fn canonical_to_kimi_code_entry(spec: &Value) -> Result<Value, AppCommandError> 
         }
     }
     if let Some(transport) = transport {
-        out.insert(
-            "transport".to_string(),
-            Value::String(transport.to_string()),
-        );
+        out.insert("transport".to_string(), Value::String(transport.to_string()));
     }
     Ok(Value::Object(out))
 }
@@ -3529,7 +3558,11 @@ fn upsert_kimi_code_server(id: &str, spec: &Value) -> Result<(), AppCommandError
     upsert_kimi_code_server_at(&kimi_code_mcp_json_path(), id, spec)
 }
 
-fn upsert_kimi_code_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
+fn upsert_kimi_code_server_at(
+    path: &Path,
+    id: &str,
+    spec: &Value,
+) -> Result<(), AppCommandError> {
     let mut root = read_json_file(path)?;
     if !root.is_object() {
         root = json!({});
@@ -3621,10 +3654,7 @@ fn write_grok_root_toml_at(path: &Path, root: &toml::Value) -> Result<(), AppCom
         fs::create_dir_all(parent).map_err(AppCommandError::io)?;
     }
     let serialized = toml::to_string_pretty(root).map_err(|e| {
-        mcp_configuration_invalid(format!(
-            "failed to serialize TOML for {}: {e}",
-            path.display()
-        ))
+        mcp_configuration_invalid(format!("failed to serialize TOML for {}: {e}", path.display()))
     })?;
     fs::write(path, format!("{serialized}\n")).map_err(AppCommandError::io)
 }
@@ -3645,10 +3675,7 @@ fn canonical_to_grok_entry(spec: &Value) -> Result<toml::Value, AppCommandError>
             let command = obj.get("command").and_then(Value::as_str).ok_or_else(|| {
                 mcp_invalid_input("Grok conversion: stdio MCP spec missing command")
             })?;
-            table.insert(
-                "command".to_string(),
-                toml::Value::String(command.to_string()),
-            );
+            table.insert("command".to_string(), toml::Value::String(command.to_string()));
             if let Some(args) = obj.get("args").and_then(Value::as_array) {
                 let values = args
                     .iter()
@@ -3757,15 +3784,8 @@ fn grok_entry_to_canonical(id: &str, value: &toml::Value) -> Result<Value, AppCo
         || (has_url && explicit_type != Some("stdio"));
 
     if is_remote {
-        let canonical_type = if explicit_type == Some("sse") {
-            "sse"
-        } else {
-            "http"
-        };
-        spec.insert(
-            "type".to_string(),
-            Value::String(canonical_type.to_string()),
-        );
+        let canonical_type = if explicit_type == Some("sse") { "sse" } else { "http" };
+        spec.insert("type".to_string(), Value::String(canonical_type.to_string()));
         if let Some(url) = table.get("url").and_then(toml::Value::as_str) {
             spec.insert("url".to_string(), Value::String(url.trim().to_string()));
         }
@@ -3906,10 +3926,7 @@ fn remove_grok_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError>
         return Ok(false);
     };
     let mut removed = false;
-    if let Some(mcp_servers) = table
-        .get_mut("mcp_servers")
-        .and_then(toml::Value::as_table_mut)
-    {
+    if let Some(mcp_servers) = table.get_mut("mcp_servers").and_then(toml::Value::as_table_mut) {
         removed |= mcp_servers.remove(id).is_some();
         if mcp_servers.is_empty() {
             table.remove("mcp_servers");
@@ -3982,7 +3999,7 @@ fn read_cursor_servers_at(path: &Path) -> Result<BTreeMap<String, Value>, AppCom
     Ok(out)
 }
 
-/// Convert HouHub's canonical spec into a Cursor `mcpServers` entry: only the
+/// Convert houhub's canonical spec into a Cursor `mcpServers` entry: only the
 /// fields Cursor models, shape-discriminated (no `type`/`transport` key).
 fn canonical_to_cursor_entry(spec: &Value) -> Result<Value, AppCommandError> {
     let canonical = canonicalize_spec(spec, "Cursor write")?;
@@ -6135,6 +6152,131 @@ mod tests {
     }
 
     #[test]
+    fn pi_mcp_source_is_registered() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mcp.json");
+        let raw = json!({"mcpServers": {
+            "shared": {"command": "pi-shared"},
+            "pi-only": {"command": "npx", "args": ["-y", "test-mcp"],
+                        "env": {"TEST_KEY": "fixture"}},
+            "remote": {"url": "https://example.test/mcp", "headers": {"X-Test": "fixture"}},
+            "invalid": {"command": ""}
+        }})
+        .to_string();
+        fs::write(&path, &raw).unwrap();
+        temp_env::with_var("PI_CODING_AGENT_DIR", Some(dir.path()), || {
+            let pi = local_mcp_readers()
+                .into_iter()
+                .find(|reader| serde_json::to_value(reader.app).unwrap() == json!("pi"))
+                .expect("pi must be a registered scan source");
+            let scan = scan_local_servers_from_readers(&[
+                LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, test_claude_servers),
+                pi,
+            ]);
+            assert!(scan.warnings.is_empty());
+            assert_eq!(scan.servers.len(), 4);
+            let shared = scan
+                .servers
+                .iter()
+                .find(|server| server.id == "shared")
+                .unwrap();
+            assert_eq!(shared.apps, [McpAppType::ClaudeCode, McpAppType::Pi]);
+            assert_eq!(shared.spec["command"], "claude-wins");
+            let local = scan
+                .servers
+                .iter()
+                .find(|server| server.id == "pi-only")
+                .unwrap();
+            assert_eq!(local.apps, [McpAppType::Pi]);
+            assert_eq!(local.spec["type"], "stdio");
+            assert_eq!(local.spec["args"], json!(["-y", "test-mcp"]));
+            assert_eq!(local.spec["env"]["TEST_KEY"], "fixture");
+            let remote = scan
+                .servers
+                .iter()
+                .find(|server| server.id == "remote")
+                .unwrap();
+            assert_eq!(remote.spec["type"], "http");
+            assert_eq!(remote.spec["headers"]["X-Test"], "fixture");
+            // Discovery must neither rewrite the extension's file nor change ACP forwarding.
+            assert_eq!(fs::read_to_string(&path).unwrap(), raw);
+            assert!(
+                read_servers_for_agent_type(crate::models::agent::AgentType::Pi)
+                    .unwrap()
+                    .is_empty()
+            );
+        });
+    }
+
+    #[test]
+    fn pi_mcp_missing_empty_and_invalid_configs_follow_scan_policy() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mcp.json");
+        assert!(read_pi_servers_at(&path).unwrap().is_empty());
+        assert!(!remove_pi_server_at(&path, "missing").unwrap());
+        assert!(!path.exists());
+        for raw in ["", "  \n", "{}", r#"{"mcpServers":{}}"#] {
+            fs::write(&path, raw).unwrap();
+            assert!(read_pi_servers_at(&path).unwrap().is_empty());
+        }
+        fs::write(&path, "{broken").unwrap();
+        temp_env::with_var("PI_CODING_AGENT_DIR", Some(dir.path()), || {
+            let scan = scan_local_servers_from_readers(&[
+                LocalMcpReader::new("pi", McpAppType::Pi, read_pi_servers),
+                LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, test_claude_servers),
+            ]);
+            assert_eq!(scan.servers.len(), 2);
+            assert_eq!(scan.warnings.len(), 1);
+            assert_eq!(scan.warnings[0].app, McpAppType::Pi);
+            assert!(scan.warnings[0].message.contains(path.to_str().unwrap()));
+            assert!(require_complete_scan(&scan).is_err());
+            assert!(
+                upsert_server_for_app(McpAppType::Pi, "test", &json!({"command": "test"})).is_err()
+            );
+            assert_eq!(fs::read_to_string(&path).unwrap(), "{broken");
+        });
+    }
+
+    #[test]
+    fn pi_mcp_edit_and_remove_preserve_other_extension_settings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mcp.json");
+        let original = json!({
+            "settings": {"toolPrefix": "mcp"},
+            "mcpServers": {
+                "existing": {"command": "keep-me", "extensionOption": true},
+                "editable": {"command": "before", "extensionOption": {"enabled": true}}
+            }
+        });
+        fs::write(&path, original.to_string()).unwrap();
+        temp_env::with_var("PI_CODING_AGENT_DIR", Some(dir.path()), || {
+            let mut spec = read_pi_servers().unwrap().remove("editable").unwrap();
+            spec["command"] = json!("after");
+            upsert_server_for_app(McpAppType::Pi, "editable", &spec).unwrap();
+            let edited = read_json_file(&path).unwrap();
+            assert_eq!(edited["settings"], original["settings"]);
+            assert_eq!(
+                edited["mcpServers"]["existing"],
+                original["mcpServers"]["existing"]
+            );
+            assert_eq!(edited["mcpServers"]["editable"]["command"], "after");
+            assert_eq!(
+                edited["mcpServers"]["editable"]["extensionOption"],
+                json!({"enabled": true})
+            );
+            assert!(remove_server_for_app(McpAppType::Pi, "editable").unwrap());
+            assert!(!remove_server_for_app(McpAppType::Pi, "editable").unwrap());
+            let removed = read_json_file(&path).unwrap();
+            assert_eq!(removed["settings"], original["settings"]);
+            assert_eq!(
+                removed["mcpServers"]["existing"],
+                original["mcpServers"]["existing"]
+            );
+            assert!(removed["mcpServers"].get("editable").is_none());
+        });
+    }
+
+    #[test]
     fn best_effort_scan_keeps_valid_sources_around_a_failed_source() {
         let readers = [
             LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, test_claude_servers),
@@ -6188,7 +6330,7 @@ mod tests {
 
         // The list survives the broken source; a reassignment computed from that
         // same list must not, or Antigravity is dropped from the "keep it here"
-        // set purely because HouHub could not read it.
+        // set purely because houhub could not read it.
         let err = require_complete_scan(&scan_local_servers_from_readers(&readers))
             .expect_err("writers must stay fail-closed on a degraded scan");
         assert!(
@@ -6691,7 +6833,7 @@ mod tests {
                 .contains_key("ctx7"));
         }
 
-        // A file with actual content that is not JSON is still an error: HouHub
+        // A file with actual content that is not JSON is still an error: houhub
         // must not overwrite something the user wrote and it failed to read.
         let broken = dir.path().join("broken.json");
         std::fs::write(&broken, "{ not json").expect("seed broken");
@@ -6701,7 +6843,7 @@ mod tests {
     #[test]
     fn a_config_that_cannot_be_stat_ed_is_an_error_not_an_empty_one() {
         // Absence is decided by the read, not by `Path::exists()`: `exists()`
-        // answers `false` for any failed stat, so a config HouHub cannot open
+        // answers `false` for any failed stat, so a config houhub cannot open
         // would be reported as "this agent has none" — silently, with no
         // warning for `require_complete_scan` to refuse a reassignment on.
         let dir = tempfile::tempdir().expect("tempdir");
@@ -7008,9 +7150,18 @@ mod tests {
 
     #[test]
     fn all_mcp_apps_is_exhaustive() {
-        // The shared list drives both write paths' "and no others" semantics.
-        // This arm-less match makes adding a new app type a compile-time
-        // decision instead of silently leaving stale configuration behind.
+        // `ALL_MCP_APPS` drives BOTH write paths' "and no others" semantics:
+        // `mcp_upsert_local_server` removes the server from every app it lists
+        // but was not handed, and `mcp_remove_server`'s `apps: None` branch
+        // deletes it from every app it lists. An app missing from it fails
+        // SILENTLY — the stale entry stays on disk and the very next scan
+        // reports it as a live assignment, so an "uninstalled" server reappears
+        // on refresh. Nothing else catches that: the per-app dispatchers are
+        // exhaustive `match`es, but a constant is just data.
+        //
+        // The `match` below is the guard. It has no `_` arm, so adding a
+        // variant to `McpAppType` stops COMPILING here until whoever added it
+        // decides — deliberately — whether the write paths must reach it.
         for app in ALL_MCP_APPS {
             match app {
                 McpAppType::ClaudeCode
@@ -7031,13 +7182,28 @@ mod tests {
             }
         }
 
+        // No duplicates: `mcp_upsert_local_server` walks this list once per app,
+        // so a repeat would upsert (or remove) the same file twice per save.
         let unique = ALL_MCP_APPS.iter().copied().collect::<BTreeSet<_>>();
-        assert_eq!(unique.len(), ALL_MCP_APPS.len());
+        assert_eq!(
+            unique.len(),
+            ALL_MCP_APPS.len(),
+            "ALL_MCP_APPS must not repeat an app"
+        );
+
+        // Every app the scan can ATTRIBUTE a server to must also be one the
+        // write paths can reach; otherwise the UI shows an assignment houhub can
+        // neither edit nor clear. (The reverse is allowed: a write-only target
+        // with no reader would just never show up.)
         let scannable = local_mcp_readers()
             .iter()
             .map(|reader| reader.app)
             .collect::<BTreeSet<_>>();
-        assert!(scannable.is_subset(&unique));
+        assert!(
+            scannable.is_subset(&unique),
+            "every scanned source must be writable: {:?}",
+            scannable.difference(&unique).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -7089,8 +7255,11 @@ mod tests {
         // file also holds unrelated `[cli]`/`[ui]` sections that must survive.
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "[cli]\nauto_update = true\n\n[ui]\nyolo = false\n")
-            .expect("seed config");
+        std::fs::write(
+            &path,
+            "[cli]\nauto_update = true\n\n[ui]\nyolo = false\n",
+        )
+        .expect("seed config");
 
         // Missing entry → no servers; removing is a no-op.
         assert!(read_grok_servers_at(&path).expect("read seed").is_empty());
@@ -7134,9 +7303,7 @@ mod tests {
         let remote = servers.get("remote").expect("remote present");
         assert_eq!(remote.get("type").and_then(Value::as_str), Some("http"));
         assert_eq!(
-            remote
-                .pointer("/headers/Authorization")
-                .and_then(Value::as_str),
+            remote.pointer("/headers/Authorization").and_then(Value::as_str),
             Some("Bearer xyz")
         );
         let linear = servers.get("linear").expect("linear present");
@@ -7324,7 +7491,7 @@ mod tests {
 
     #[test]
     fn codex_entry_infers_transport_when_type_absent() {
-        // Native Codex tables (and HouHub post-#325 output) carry no `type`;
+        // Native Codex tables (and houhub's own post-#325 output) carry no `type`;
         // the reader must infer it from the transport keys, not assume stdio (which
         // silently dropped every url-only server). Mirrors the issue's config.
         let http = codex_entry("url = \"https://mcp.exa.ai/mcp\"\n");
@@ -7395,7 +7562,7 @@ mod tests {
             .expect("sse entry");
         assert_eq!(sse.get("type").and_then(Value::as_str), Some("sse"));
 
-        // And HouHub reads `streamableHttp` straight back to canonical `http`.
+        // And houhub reads `streamableHttp` straight back to canonical `http`.
         let round_trip = canonicalize_spec(
             &json!({"type": "streamableHttp", "url": "https://mcp.exa.ai/mcp"}),
             "test",
@@ -7407,7 +7574,7 @@ mod tests {
     #[test]
     fn canonical_to_kimi_code_entry_pins_remote_transport() {
         // Kimi 0.23.3 keys the transport off `transport` (defaulting url-only to
-        // HTTP), so HouHub must emit an explicit `transport` or an SSE server silently
+        // HTTP), so houhub must emit an explicit `transport` or an SSE server silently
         // downgrades to HTTP (#325). stdio is left as-is (Kimi infers it from
         // `command`).
         let sse = canonical_to_kimi_code_entry(&json!({"type": "sse", "url": "https://x/stream"}))
@@ -7442,9 +7609,8 @@ mod tests {
         );
 
         // Full writer→reader round-trip stays canonical and transport-free.
-        let written =
-            canonical_to_kimi_code_entry(&json!({"type": "sse", "url": "https://x/stream"}))
-                .expect("write sse");
+        let written = canonical_to_kimi_code_entry(&json!({"type": "sse", "url": "https://x/stream"}))
+            .expect("write sse");
         let back = kimi_code_entry_to_canonical(&written, "srv").expect("read back");
         assert_eq!(back.get("type").and_then(Value::as_str), Some("sse"));
         assert!(back.get("transport").is_none());
@@ -7469,10 +7635,12 @@ mod tests {
         assert_eq!(http_url.get("type").and_then(Value::as_str), Some("http"));
 
         // An on-disk `type` with NO `transport` does not classify: Kimi strips `type`
-        // and infers HTTP from the url, so HouHub must too (not report it as SSE).
-        let stale_type =
-            kimi_code_entry_to_canonical(&json!({"type": "sse", "url": "https://host/mcp"}), "s")
-                .expect("type-without-transport");
+        // and infers HTTP from the url, so houhub must too (not report it as SSE).
+        let stale_type = kimi_code_entry_to_canonical(
+            &json!({"type": "sse", "url": "https://host/mcp"}),
+            "s",
+        )
+        .expect("type-without-transport");
         assert_eq!(stale_type.get("type").and_then(Value::as_str), Some("http"));
 
         // Explicit `transport: "sse"` yields SSE (and `type` is ignored, matching
@@ -7499,11 +7667,10 @@ mod tests {
             );
         }
         // A non-string transport is rejected too (Kimi's literals are exact).
-        assert!(kimi_code_entry_to_canonical(
-            &json!({"url": "https://host/mcp", "transport": 3}),
-            "s"
-        )
-        .is_err());
+        assert!(
+            kimi_code_entry_to_canonical(&json!({"url": "https://host/mcp", "transport": 3}), "s")
+                .is_err()
+        );
 
         // The `transport` discriminant wins over the entry's key shape: an explicit
         // `sse` on an entry that ALSO carries `command` is SSE (Kimi ignores the
@@ -7513,10 +7680,7 @@ mod tests {
             "s",
         )
         .expect("transport wins over command");
-        assert_eq!(
-            sse_over_cmd.get("type").and_then(Value::as_str),
-            Some("sse")
-        );
+        assert_eq!(sse_over_cmd.get("type").and_then(Value::as_str), Some("sse"));
     }
 
     #[test]
@@ -7533,14 +7697,8 @@ mod tests {
         .expect("http entry");
         let obj = entry.as_object().expect("object");
         assert_eq!(obj.get("transport").and_then(Value::as_str), Some("http"));
-        assert!(
-            !obj.contains_key("enabled"),
-            "wrong-typed enabled must be dropped"
-        );
-        assert!(
-            !obj.contains_key("autoApprove"),
-            "foreign key must be dropped"
-        );
+        assert!(!obj.contains_key("enabled"), "wrong-typed enabled must be dropped");
+        assert!(!obj.contains_key("autoApprove"), "foreign key must be dropped");
 
         // A correctly-typed `enabled` bool is preserved.
         let ok = canonical_to_kimi_code_entry(&json!({
@@ -7548,18 +7706,16 @@ mod tests {
         }))
         .expect("http entry");
         assert_eq!(
-            ok.as_object()
-                .and_then(|o| o.get("enabled"))
-                .and_then(Value::as_bool),
+            ok.as_object().and_then(|o| o.get("enabled")).and_then(Value::as_bool),
             Some(true)
         );
     }
 
     #[test]
     fn kimi_code_entry_preserves_kimi_only_fields_through_a_round_trip() {
-        // Fields Kimi models but HouHub has no UI for must survive read→write:
+        // Fields Kimi models but houhub has no UI for must survive read→write:
         // dropping them breaks a server the user configured through Kimi's own
-        // `/mcp-config` the first time they touch it in HouHub's editor.
+        // `/mcp-config` the first time they touch it in houhub's editor.
         let on_disk = json!({
             "command": "npx",
             "args": ["-y", "server"],
@@ -7623,7 +7779,7 @@ mod tests {
         assert_eq!(obj.get("args"), Some(&json!(["-y", "ctx7"])));
 
         // Kimi's copy is authoritative for the keys it owns, absence included:
-        // HouHub's permissive writers copy them into other agents' files, so an
+        // houhub's permissive writers copy them into other agents' files, so an
         // earlier-scanned agent's stale copy must not pin the canonical spec.
         let mut stale = json!({
             "type": "stdio",
@@ -7679,7 +7835,7 @@ mod tests {
         );
 
         // But the same value in an agent that does NOT model `auth` is only an
-        // echo HouHub wrote there, so removing it in Kimi must take effect.
+        // echo houhub wrote there, so removing it in Kimi must take effect.
         let mut echo = json!({
             "type": "http",
             "url": "https://host/mcp",
@@ -7777,7 +7933,7 @@ mod tests {
         let obj = after["remote"].as_object().expect("object");
         assert!(
             !obj.contains_key("bearerTokenEnvVar"),
-            "removing a field in HouHub's editor must reach disk"
+            "removing a field in houhub's editor must reach disk"
         );
         assert_eq!(obj.get("auth").and_then(Value::as_str), Some("oauth"));
     }
@@ -7817,7 +7973,7 @@ mod tests {
 
     #[test]
     fn codex_entry_rejects_both_command_and_url() {
-        // Codex hard-errors on a mixed-transport entry; HouHub must reject it rather
+        // Codex hard-errors on a mixed-transport entry; houhub must reject it rather
         // than silently classify as stdio and drop the `url` (#325).
         let both = codex_entry("command = \"npx\"\nurl = \"https://x/mcp\"\n");
         assert!(codex_entry_to_canonical("mixed", &both).is_err());
@@ -7847,10 +8003,7 @@ mod tests {
         .as_table()
         .cloned()
         .expect("table");
-        assert_eq!(
-            entry.get("enabled").and_then(toml::Value::as_bool),
-            Some(true)
-        );
+        assert_eq!(entry.get("enabled").and_then(toml::Value::as_bool), Some(true));
         for dropped in [
             "type",
             "required",

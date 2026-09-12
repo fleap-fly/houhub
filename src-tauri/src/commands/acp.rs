@@ -12146,9 +12146,7 @@ pub(crate) async fn acp_prepare_npx_agent_core(
 
     let meta = registry::get_agent_meta(agent_type);
     let result = match meta.distribution {
-        registry::AgentDistribution::Npx {
-            package, cmd: _, ..
-        } => {
+        registry::AgentDistribution::Npx { package, cmd, .. } => {
             let default = agent_setting_service::AgentDefaultInput {
                 agent_type,
                 registry_id: registry::registry_id_for(agent_type).to_string(),
@@ -12258,6 +12256,39 @@ pub(crate) async fn acp_prepare_npx_agent_core(
                     pinned_spec
                 }
             };
+
+            // For a bootstrap-wrapper package (hermes-agent), npm metadata
+            // existing does NOT mean the agent can run: a skipped or broken
+            // postinstall leaves a shim that exits "runtime is not ready".
+            // Verify the binary a launch would resolve actually answers
+            // `--version` BEFORE recording success — the same resolution
+            // order connect uses, so an official-installer CLI on PATH
+            // legitimately satisfies the check. Without this, a broken
+            // install is recorded as installed and only fails at connect
+            // time with an opaque error.
+            if npm_package_requires_scripts(&install_spec) {
+                emit_agent_install_event(
+                    emitter,
+                    &task_id,
+                    AgentInstallEventKind::Log,
+                    format!("Verifying the {} runtime...", meta.name),
+                );
+                let runtime_ok = match resolve_npx_command(cmd).await {
+                    Some(bin) => system_probed_version(agent_type, &bin, None)
+                        .await
+                        .is_some(),
+                    None => false,
+                };
+                if !runtime_ok {
+                    return Err(AcpError::protocol(format!(
+                        "{} installed, but its runtime did not bootstrap (`{cmd} --version` \
+                         does not answer). If your npm config sets ignore-scripts, allow \
+                         scripts for this package and reinstall; otherwise retry, or use \
+                         the official installer and HouHub will pick up the PATH `{cmd}`.",
+                        meta.name
+                    )));
+                }
+            }
 
             emit_agent_install_event(
                 emitter,

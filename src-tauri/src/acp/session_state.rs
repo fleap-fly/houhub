@@ -246,9 +246,12 @@ pub struct SessionState {
     pub connection_id: String,
     pub conversation_id: Option<i32>,
     pub external_id: Option<String>,
-    /// Wall-clock instant `external_id` last changed. The transcript watcher
-    /// uses this as its re-arm epoch so fork/load records appended before the
-    /// next poll still belong to the current session.
+    /// Wall-clock instant `external_id` last CHANGED value (SessionStarted
+    /// for a new/loaded/forked session). The transcript watcher uses this as
+    /// its re-arm epoch: records appended to the (forked) transcript between
+    /// the session change and the watcher's next poll tick must still count
+    /// as this session's — an epoch taken at the tick itself would classify
+    /// them as copied history and drop them.
     pub external_id_changed_at: Option<std::time::SystemTime>,
     pub agent_type: AgentType,
     pub working_dir: Option<PathBuf>,
@@ -301,22 +304,25 @@ pub struct SessionState {
     /// Size is human-bounded (one entry per note the user types this turn).
     pub feedback: Vec<FeedbackItem>,
 
-    /// Launched-but-unresolved background tasks mirrored from
-    /// `AcpEvent::BackgroundActivity`. Non-zero keeps the ACP connection alive
-    /// while background work is still owned by the agent process.
+    /// Launched-but-unresolved background tasks (async sub-agents + background
+    /// shell tasks), mirrored from the transcript watcher's authoritative
+    /// accounting via `AcpEvent::BackgroundActivity` (`apply_event` is the only
+    /// writer). Drives `has_active_background_work()` — the idle-sweep
+    /// exemption that keeps the agent CLI alive through a silent background
+    /// build (killing the connection kills the CLI, and the background work
+    /// dies with it). Carried on `to_snapshot()` so a client attaching
+    /// mid-episode recovers the pending count without replaying events.
     pub background_outstanding: u32,
-    /// Last watcher heartbeat that updated `background_outstanding`.
+    /// Instant of the most recent `BackgroundActivity` event. Bounds the sweep
+    /// exemption: if the watcher stops reporting (task died, bug) the
+    /// exemption lapses after `background_keepalive_max_age()` instead of
+    /// pinning the connection alive forever. Backend-internal; not serialized.
     pub background_activity_at: Option<DateTime<Utc>>,
 
     // ACP 协商出的能力
     pub modes: Option<SessionModeStateInfo>,
     pub current_mode: Option<String>,
     pub config_options: Option<Vec<SessionConfigOptionInfo>>,
-    /// HouHub's optional Pi provider binding. These are backend-only launch
-    /// facts used to keep the Pi model selector and persisted preferences
-    /// aligned with the provider selected in Agent Settings.
-    pub(crate) pi_bound_provider: Option<String>,
-    pub(crate) pi_bound_model: Option<String>,
     /// Grok only: per-model reasoning-effort specs, parsed from the top-level
     /// `models` of the session-establishment response (guaranteed on
     /// `session/new`; opportunistic on resume/fork). Grok never re-sends this on
@@ -325,10 +331,43 @@ pub struct SessionState {
     /// non-Grok agents and when the response carried no `models` (flat fallback).
     /// Backend-internal — not serialized.
     pub grok_model_specs: Option<std::collections::HashMap<String, GrokModelSpec>>,
-    /// Config-option values asserted while establishing this session. The
-    /// ledger is connection-scoped and cleared after the first user prompt;
-    /// it prevents an agent's post-handshake default push from undoing a
-    /// preference replay during the short establishment race.
+
+    /// pi only: the session prelude pi-acp reports as `_meta.piAcp.startupInfo`
+    /// on `session/new`, held until the matching `agent_message_chunk` arrives
+    /// so that chunk can be recognized and dropped instead of rendering as the
+    /// assistant's opening words (see `pi_take_startup_banner`).
+    ///
+    /// `Some` only between `session/new` and that first chunk: it is taken on
+    /// the match, so a later chunk that happens to repeat the text is prose and
+    /// renders. `None` for every other agent, for `session/load` / `session/fork`
+    /// (pi-acp sets the prelude in `newSession` only), and when pi's
+    /// `quietStartup` setting suppressed the prelude at the source.
+    /// Backend-internal — not serialized.
+    pub pi_startup_banner: Option<String>,
+
+    /// HouHub's optional Pi provider binding. These are backend-only launch
+    /// facts used to keep the Pi model selector and persisted preferences
+    /// aligned with the provider selected in Agent Settings.
+    pub(crate) pi_bound_provider: Option<String>,
+    pub(crate) pi_bound_model: Option<String>,
+
+    /// Config-option values houhub asserted while establishing this session
+    /// (`apply_preferred_session_options`) and the agent confirmed — the user's
+    /// saved preferences on a connect, the parent's selectors on a fork.
+    ///
+    /// Kept only until the user's first prompt, to arbitrate ONE race: an agent
+    /// may re-pin its own model AFTER answering our `set_config_option`, and the
+    /// resulting `config_option_update` push is indistinguishable from the user
+    /// picking that model themselves. Claude does exactly this on the resume
+    /// that re-establishes a forked session — the push lands ~2ms after our
+    /// apply and silently reverts it, and effort follows because a model switch
+    /// re-scopes the effort option. Before the user has said anything, such a
+    /// push can only be establishment noise, so the connection re-asserts once
+    /// (see `take_asserted_config_drift`). Once a prompt is sent, every push is
+    /// attributable to what the user asked for — `/model` typed in chat is one —
+    /// so the map is cleared and the agent wins from then on.
+    ///
+    /// Backend-internal — not serialized, not carried on `to_snapshot()`.
     pub asserted_config_values: BTreeMap<String, String>,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub fork_supported: bool,
@@ -612,9 +651,10 @@ impl SessionState {
             modes: None,
             current_mode: None,
             config_options: None,
+            grok_model_specs: None,
+            pi_startup_banner: None,
             pi_bound_provider: None,
             pi_bound_model: None,
-            grok_model_specs: None,
             asserted_config_values: BTreeMap::new(),
             prompt_capabilities: None,
             fork_supported: false,
@@ -1283,6 +1323,11 @@ impl SessionState {
                 }
             }
             AcpEvent::BackgroundActivity { outstanding, .. } => {
+                // Mirror the watcher's authoritative accounting so the idle
+                // sweeps can exempt this connection while background work is
+                // pending. The turns/settled payloads are frontend-only; the
+                // trailing `last_activity_at = now` below additionally resets
+                // the backend idle timer on every batch of transcript activity.
                 self.background_outstanding = *outstanding;
                 self.background_activity_at = Some(Utc::now());
             }
@@ -1347,8 +1392,17 @@ impl SessionState {
         self.last_activity_at = Utc::now();
     }
 
-    /// Whether background work is still active enough that idle sweeps must not
-    /// disconnect this ACP process.
+    /// Whether this connection has launched background work (async sub-agent /
+    /// background shell task) that hasn't settled yet — the idle sweeps must
+    /// not reap it (disconnecting drops the `sacp` connection, which
+    /// terminates the agent CLI process, which kills the background work).
+    ///
+    /// Bounded by `background_keepalive_max_age()`: the exemption requires a
+    /// `BackgroundActivity` event within the window, so a wedged/dead watcher
+    /// can't pin a connection alive forever. (The watcher itself also expires
+    /// tasks past the same age and emits `outstanding: 0`, which resets
+    /// `background_outstanding` here — this check is the belt to that
+    /// suspenders.)
     pub fn has_active_background_work(&self, now: DateTime<Utc>) -> bool {
         // OR, not a sum. The two sources — the transcript watcher's
         // `background_outstanding` and the AIR async-task table — observe
@@ -1800,8 +1854,11 @@ impl SessionState {
     }
 }
 
-/// Max age after the last background watcher heartbeat before the idle-sweep
-/// exemption lapses. `0` disables the exemption.
+/// Max age of the background keep-alive: how long a connection with
+/// launched-but-unresolved background work stays exempt from the idle sweeps
+/// after the LAST `BackgroundActivity` event. Configurable via
+/// `HOUHUB_ACP_BACKGROUND_KEEPALIVE_MAX_SECS` (seconds; invalid → default 3600;
+/// `0` disables the exemption entirely). Read once per process.
 pub(crate) fn background_keepalive_max_age() -> chrono::Duration {
     static SECS: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     let secs = *SECS.get_or_init(|| {
@@ -1857,7 +1914,12 @@ pub struct LiveSessionSnapshot {
     /// wire so every snapshot stays byte-identical with the pre-feature shape.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub feedback: Vec<FeedbackItem>,
-    /// Launched-but-unresolved background tasks accounted from the transcript.
+    /// Launched-but-unresolved background tasks (see
+    /// `SessionState.background_outstanding`) — lets a client attaching
+    /// mid-episode (web reconnect, new window) recover the pending count the
+    /// one-shot `BackgroundActivity` events won't replay for it. `#[serde(
+    /// default)]` so older payloads deserialize to `0`; skipped when `0` so the
+    /// common no-background case keeps the wire shape byte-identical.
     #[serde(default, skip_serializing_if = "u32_is_zero")]
     pub background_outstanding: u32,
     /// Whether this agent has the `check_user_feedback` tool (see
@@ -1925,6 +1987,7 @@ pub struct LiveSessionSnapshot {
     pub event_seq: u64,
 }
 
+/// `skip_serializing_if` helper for `LiveSessionSnapshot.background_outstanding`.
 fn u32_is_zero(v: &u32) -> bool {
     *v == 0
 }
@@ -2183,7 +2246,7 @@ mod tests {
 
     /// Only the spawn frame carries a task's identity, so it is the only one
     /// allowed to create a row: a progress delta for an id we never saw
-    /// announced means HouHub failed to read the announcement, and a row with a
+    /// announced means houhub failed to read the announcement, and a row with a
     /// placeholder name and no type is worse than no row at all.
     #[test]
     fn async_task_rows_are_created_only_by_a_spawn_delta() {

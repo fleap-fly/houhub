@@ -50,9 +50,12 @@ pub struct AgentExecutionStats {
     /// Tool calls extracted from the subagent's own JSONL transcript.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub tool_calls: Vec<AgentToolCall>,
-    /// The child's own session id when a sub-agent runs as a standalone
-    /// session on disk (Grok's native sub-agents). The history UI can open it
-    /// directly even though the child is hidden from the sidebar.
+    /// The child's own session id, when the sub-agent ran as a standalone
+    /// session on disk rather than as chunks folded into the parent's stream
+    /// (Grok: every `spawn_subagent` child is a full session directory). Lets
+    /// the Agent card offer to open that transcript — `get_conversation`
+    /// resolves it directly even though the session is hidden from the list.
+    /// Absent for agents whose sub-agents have no separate session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_session_id: Option<String>,
 }
@@ -108,8 +111,26 @@ pub enum ContentBlock {
         tool_use_id: Option<String>,
         tool_name: String,
         input_preview: Option<String>,
-        /// Agent-reported lifecycle status when the transcript provides one.
-        /// `None` means the parser has no affirmative status to report.
+        /// The agent's own tool-call status (`pending` / `in_progress` /
+        /// `completed` / `failed`) when the transcript records one.
+        ///
+        /// OPTIONAL, and `None` means UNKNOWN — never "settled". A reader may
+        /// only act on an affirmative value, so every parser that can't honestly
+        /// supply one keeps its existing behavior. This exists because absence
+        /// of output is NOT evidence of liveness: an empty result still writes a
+        /// `ToolResult`, grok backfills `output_preview` only for non-empty
+        /// output, and a codex code-mode script that never `text()`s a call
+        /// settles with none. A viewer polling a RUNNING session's transcript
+        /// from disk (the grok `spawn_subagent` dialog) has no other way to tell
+        /// a call that is still working from one that finished.
+        ///
+        /// Deliberately NOT derived from codex's `ScriptStatus`: that is
+        /// script-level — a script can still be running after its first inner
+        /// call already completed — so copying it onto recovered inner calls
+        /// would manufacture a permanent spinner. The one codex card that does
+        /// carry a status is an MCP call rebuilt from its OWN semantic
+        /// `item_completed` record, which yields a per-call terminal outcome
+        /// (`completed` / `failed`) that the wrapper script's status cannot.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<String>,
         /// ACP extensibility metadata associated with the tool call. The
@@ -132,9 +153,13 @@ pub enum ContentBlock {
         is_error: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         agent_stats: Option<AgentExecutionStats>,
-        /// Images returned in a tool result, such as a Read of an image or a
-        /// multi-page PDF. Historical replay renders these like live ACP image
-        /// output instead of losing them behind a generic tool row.
+        /// Images returned in a tool result (e.g. Claude Code's `Read` of a
+        /// PNG/JPEG, or a multi-page PDF read returning one image per page).
+        /// The agent JSONL embeds these as base64 `image` content blocks; the
+        /// adapter renders them in-position as image cards so the historical
+        /// (JSONL replay) path matches the live ACP stream, which surfaces the
+        /// same bytes via `ToolCallState.images`. Empty for the common
+        /// text-only tool result.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<ImageData>,
     },
@@ -206,7 +231,7 @@ pub struct MessageTurn {
     /// most parsers (event-log time vs. full turn span).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<DateTime<Utc>>,
-    /// The id the AGENT knows this turn's message by, when HouHub can name it
+    /// The id the AGENT knows this turn's message by, when houhub can name it
     /// the same way the agent does. `id` above is positional (`turn-3`) and
     /// names nothing an agent could look up.
     ///

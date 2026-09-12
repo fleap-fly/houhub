@@ -13,6 +13,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::{watch, Mutex, Notify, RwLock};
 use tokio::task::JoinHandle;
 
+use crate::terminal::shell_flavor::{classify_shell_family, ShellFamily};
+
 type TerminalMap = HashMap<String, Arc<TerminalInstance>>;
 const DEFAULT_OUTPUT_BYTE_LIMIT: u64 = 1_000_000;
 /// After the child process exits, wait up to this long for the stdout/stderr
@@ -390,27 +392,12 @@ async fn own_terminal_process(terminal: Arc<TerminalInstance>, mut child: tokio:
         .send_replace(TerminalCompletion::Exited(exit_status));
 }
 
-pub struct TerminalRuntime {
-    terminals: Mutex<TerminalMap>,
-    /// Base environment merged into every spawned terminal command before
-    /// the agent's per-request `env` is applied. This is where the houhub
-    /// git credential helper (`GIT_CONFIG_*`) lives so an agent that runs
-    /// `git push` via the ACP `terminal/create` tool inherits the same
-    /// auth path the agent process itself does. Per-request env from the
-    /// agent overrides on key collision so an agent can still scrub or
-    /// override anything explicitly.
-    base_env: BTreeMap<String, String>,
-    /// Fallback working directory applied to spawned terminals when the
-    /// agent's `terminal/create` request omits `cwd`. The connection layer
-    /// sets this to the session's resolved working directory so terminals
-    /// default to the folder the conversation runs in instead of HouHub's own
-    /// process cwd (often "/" on desktop, the dev crate dir in development).
-    /// `None` leaves the process cwd inherited (legacy behavior).
-    default_cwd: Option<PathBuf>,
-    default_shell: TerminalShellRuntimeConfig,
-}
-
 /// Shared, hot-swappable default shell for ACP terminal requests.
+///
+/// The setting is owned by [`crate::acp::manager::ConnectionManager`] and
+/// cloned into every connection runtime. Reading it when a terminal is created
+/// means a change in General Settings also affects already-running model
+/// sessions.
 #[derive(Clone, Default)]
 pub struct TerminalShellRuntimeConfig {
     inner: Arc<RwLock<Option<String>>>,
@@ -428,6 +415,29 @@ impl TerminalShellRuntimeConfig {
     pub async fn set(&self, default_shell: Option<String>) {
         *self.inner.write().await = default_shell;
     }
+}
+
+pub struct TerminalRuntime {
+    terminals: Mutex<TerminalMap>,
+    /// Base environment merged into every spawned terminal command before
+    /// the agent's per-request `env` is applied. This is where the HouHub
+    /// git credential helper (`GIT_CONFIG_*`) lives so an agent that runs
+    /// `git push` via the ACP `terminal/create` tool inherits the same
+    /// auth path the agent process itself does. Per-request env from the
+    /// agent overrides on key collision so an agent can still scrub or
+    /// override anything explicitly.
+    base_env: BTreeMap<String, String>,
+    /// Fallback working directory applied to spawned terminals when the
+    /// agent's `terminal/create` request omits `cwd`. The connection layer
+    /// sets this to the session's resolved working directory so terminals
+    /// default to the folder the conversation runs in instead of HouHub's own
+    /// process cwd (often "/" on desktop, the dev crate dir in development).
+    /// `None` leaves the process cwd inherited (legacy behavior).
+    default_cwd: Option<PathBuf>,
+    /// The current General Settings default shell. Structured ACP requests
+    /// still direct-exec real programs, while shell command lines and shell
+    /// builtins use this selected shell as their fallback.
+    default_shell: TerminalShellRuntimeConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -460,7 +470,13 @@ impl TerminalRuntime {
         self
     }
 
-    pub fn with_default_shell_config(mut self, default_shell: TerminalShellRuntimeConfig) -> Self {
+    /// Use a shared General Settings shell value for ACP terminal fallbacks.
+    /// The config is read at command creation time so existing connections pick
+    /// up setting changes without being restarted.
+    pub fn with_default_shell_config(
+        mut self,
+        default_shell: TerminalShellRuntimeConfig,
+    ) -> Self {
         self.default_shell = default_shell;
         self
     }
@@ -541,14 +557,15 @@ impl TerminalRuntime {
         // as unrunnable (`NotFound`, or `InvalidFilename` when the whole line is
         // longer than the OS path limit — grok crams `<shell> -lc "<script>"`
         // into `command`, so a multi-KB heredoc exceeds PATH_MAX and the direct
-        // exec fails with ENAMETOOLONG, not ENOENT) AND the request looks like a
-        // whole shell line crammed into `command` (empty args + embedded
-        // whitespace, the shape CodeBuddy and grok send) do we retry through the
-        // platform shell so its `&&`, pipes, `$VAR`, and globs evaluate. A path
-        // that long can never be a real executable, so rerouting it is always at
-        // least as correct. Deciding off a real failed spawn — rather than a
-        // pre-spawn `which` guess that runs in HouHub's own cwd/env — means we
-        // never reroute a command that would otherwise have run.
+        // exec fails with ENAMETOOLONG, not ENOENT) do we retry through a shell.
+        // Whole shell lines (empty args + embedded whitespace, the shape
+        // CodeBuddy and grok send) always qualify. A bare no-argv command
+        // additionally qualifies when the fallback shell resolves names the OS
+        // cannot — PowerShell's `Get-ChildItem`, cmd's `dir`. A path that long
+        // can never be a real executable, so rerouting it is always at least as
+        // correct. Deciding off a real failed spawn — rather than a pre-spawn
+        // `which` guess that runs in HouHub's own cwd/env — means we never
+        // reroute a command that would otherwise have run.
         //
         // A spawn the kernel refuses with `ETXTBSY` is retried in place instead
         // (see `spawn_retrying_exec_busy`): the program *is* runnable, it is
@@ -559,11 +576,22 @@ impl TerminalRuntime {
         direct.args(&request.args);
         self.configure_command(&mut direct, &request);
 
+        // Resolve the fallback shell before the spawn attempt so the retry
+        // decision can depend on which dialect it speaks. Keying off the shell
+        // family rather than "did the user configure something" means picking
+        // `/bin/sh` explicitly behaves exactly like leaving the setting on its
+        // default, which is the only defensible reading of that choice.
         let fallback_shell = self
             .default_shell
             .snapshot()
             .await
             .unwrap_or_else(default_platform_shell);
+        // A structured ACP request normally names an executable plus argv, so
+        // preserve direct execution for it. Reconstructing argv as shell text
+        // needs shell-specific quoting, so argful requests never fall back.
+        let can_retry_through_shell = request.args.is_empty()
+            && (request.command.contains(char::is_whitespace)
+                || classify_shell_family(&fallback_shell).resolves_bare_builtins());
         let spawned = crate::process::spawn_retrying_exec_busy(|| direct.spawn()).await;
         let mut child = match spawned {
             Ok(child) => child,
@@ -571,9 +599,7 @@ impl TerminalRuntime {
                 if matches!(
                     err.kind(),
                     std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidFilename
-                )
-                    && request.args.is_empty()
-                    && request.command.contains(char::is_whitespace) =>
+                ) && can_retry_through_shell =>
             {
                 let mut shell = shell_wrapped_command(&fallback_shell, &request.command);
                 self.configure_command(&mut shell, &request);
@@ -815,6 +841,9 @@ where
     }
 }
 
+/// Preserve the platform shell used by ACP before configurable shells were
+/// introduced. General Settings only changes this behavior after an explicit
+/// shell selection.
 #[cfg(not(windows))]
 fn default_platform_shell() -> String {
     "/bin/sh".to_string()
@@ -822,24 +851,45 @@ fn default_platform_shell() -> String {
 
 #[cfg(windows)]
 fn default_platform_shell() -> String {
-    std::env::var("COMSPEC")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "cmd.exe".to_string())
-}
-
-/// Wrap a full shell command line so it executes through the selected shell.
-#[cfg(not(windows))]
-fn shell_wrapped_command(shell: &str, line: &str) -> tokio::process::Command {
-    let mut command = crate::process::tokio_command(shell);
-    command.arg("-c").arg(line);
-    command
+    default_windows_platform_shell(std::env::var("COMSPEC").ok())
 }
 
 #[cfg(windows)]
+fn default_windows_platform_shell(comspec: Option<String>) -> String {
+    comspec
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "cmd.exe".to_string())
+}
+
+/// Wrap a command line through the configured shell, or the legacy platform
+/// shell when no preference has been selected. The agent's line is always a
+/// single argv element, never concatenated into a larger script.
+///
+/// Deliberately NOT here: a UTF-8 preamble for the Windows arms. This runtime
+/// decodes captured output as UTF-8 while Windows PowerShell 5.1 and cmd write
+/// redirected output in the OEM code page, so non-ASCII output can arrive
+/// garbled (`decode_available_utf8` renders it lossily rather than failing).
+/// The obvious fixes — `chcp 65001` for cmd, `[Console]::OutputEncoding` for
+/// PowerShell — both need a console, and `crate::process::tokio_command`
+/// spawns with `CREATE_NO_WINDOW`, so they would fail and add a diagnostic to
+/// the agent's captured output without changing the encoding. The built-in
+/// terminal can set them only because it runs its shell under a PTY. Fixing
+/// this needs a redirected-stream-aware approach, not a command-line preamble.
 fn shell_wrapped_command(shell: &str, line: &str) -> tokio::process::Command {
     let mut command = crate::process::tokio_command(shell);
-    command.arg("/C").arg(line);
+
+    match classify_shell_family(shell) {
+        ShellFamily::PowerShell => {
+            command.args(["-NoLogo", "-NoProfile", "-Command", line]);
+        }
+        ShellFamily::Cmd => {
+            command.args(["/D", "/S", "/C", line]);
+        }
+        ShellFamily::Posix => {
+            command.arg("-c").arg(line);
+        }
+    }
     command
 }
 
@@ -909,6 +959,102 @@ fn decode_available_utf8(pending: &mut Vec<u8>) -> String {
     output
 }
 
+#[cfg(test)]
+mod shell_config_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn default_shell_config_hot_swaps() {
+        let config = TerminalShellRuntimeConfig::new();
+        assert_eq!(config.snapshot().await, None);
+
+        config.set(Some("pwsh.exe".to_string())).await;
+        assert_eq!(config.snapshot().await.as_deref(), Some("pwsh.exe"));
+    }
+
+    fn wrapped_argv(shell: &str, line: &str) -> (String, Vec<String>) {
+        let command = shell_wrapped_command(shell, line);
+        let std_command = command.as_std();
+        (
+            std_command.get_program().to_string_lossy().to_string(),
+            std_command
+                .get_args()
+                .map(|value| value.to_string_lossy().to_string())
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn powershell_fallback_uses_the_selected_executable() {
+        let (program, args) = wrapped_argv("pwsh.exe", "Get-ChildItem");
+
+        assert_eq!(program, "pwsh.exe");
+        assert_eq!(
+            args,
+            vec![
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Get-ChildItem".to_string(),
+            ]
+        );
+    }
+
+    /// A cmd-flavored shell gets cmd's own convention. Pinned because the
+    /// classifier's Windows fallthrough now routes unrecognized `COMSPEC`
+    /// values here rather than to POSIX `-c`.
+    ///
+    /// The line is passed verbatim as its own argv element — see
+    /// `shell_wrapped_command` for why no UTF-8 preamble is prepended.
+    #[test]
+    fn cmd_fallback_uses_the_cmd_convention_verbatim() {
+        let (program, args) = wrapped_argv("cmd.exe", "dir \"a b\"");
+
+        assert_eq!(program, "cmd.exe");
+        assert_eq!(
+            args,
+            vec![
+                "/D".to_string(),
+                "/S".to_string(),
+                "/C".to_string(),
+                "dir \"a b\"".to_string(),
+            ]
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn posix_fallback_passes_the_line_verbatim() {
+        let (program, args) = wrapped_argv("/bin/sh", "echo hi && echo bye");
+
+        assert_eq!(program, "/bin/sh");
+        assert_eq!(
+            args,
+            vec!["-c".to_string(), "echo hi && echo bye".to_string()]
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unset_shell_keeps_the_legacy_posix_default() {
+        assert_eq!(default_platform_shell(), "/bin/sh");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unset_shell_keeps_the_legacy_windows_default() {
+        assert_eq!(
+            default_windows_platform_shell(Some("  C:\\Windows\\System32\\cmd.exe  ".to_string())),
+            "C:\\Windows\\System32\\cmd.exe"
+        );
+        assert_eq!(
+            default_windows_platform_shell(Some("  ".to_string())),
+            "cmd.exe"
+        );
+        assert_eq!(default_windows_platform_shell(None), "cmd.exe");
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -916,7 +1062,7 @@ mod tests {
 
     /// Regression: when an ACP agent calls `terminal/create` (e.g. to run
     /// `git push`), the runtime's base env — populated by the connection
-    /// layer with the houhub credential helper's `GIT_CONFIG_*` keys —
+    /// layer with the HouHub credential helper's `GIT_CONFIG_*` keys —
     /// must reach the spawned process. Per-request `env` from the agent
     /// still wins on key collision so the agent can scrub or override
     /// specific keys for individual commands.
@@ -1010,6 +1156,49 @@ mod tests {
         out.output
     }
 
+    /// The shell handle is shared with a live connection, so changing General
+    /// Settings after the agent connects affects its next shell command.
+    #[tokio::test]
+    async fn shell_fallback_uses_the_live_selected_shell() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let shell = dir.path().join("selected-shell");
+        std::fs::write(
+            &shell,
+            "#!/bin/sh\nprintf '%s\\n' selected-shell\nexec /bin/sh \"$@\"\n",
+        )
+        .expect("write shell");
+        let mut permissions = std::fs::metadata(&shell)
+            .expect("shell metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&shell, permissions).expect("make shell executable");
+
+        let config = TerminalShellRuntimeConfig::new();
+        let runtime = TerminalRuntime::with_base_env(BTreeMap::new())
+            .with_default_shell_config(config.clone());
+        config
+            .set(Some(shell.to_string_lossy().to_string()))
+            .await;
+
+        let session_id = SessionId::new("selected-shell".to_string());
+        let request = CreateTerminalRequest::new(
+            session_id.clone(),
+            "printf 'command-output\\n'".to_string(),
+        );
+        let output = run_and_capture(&runtime, &session_id, request).await;
+
+        assert!(
+            output.contains("selected-shell"),
+            "configured shell did not run; got:\n{output}"
+        );
+        assert!(
+            output.contains("command-output"),
+            "configured shell did not execute the command; got:\n{output}"
+        );
+    }
+
     /// A `terminal/create` that omits `cwd` defaults to the runtime's
     /// configured working directory rather than HouHub's own process cwd.
     #[tokio::test]
@@ -1051,6 +1240,30 @@ mod tests {
         );
     }
 
+    /// Regression guard for the *selection* made in `create_terminal`, not
+    /// just for `default_platform_shell()` in isolation: with nothing
+    /// configured the fallback must be the POSIX platform shell, never the
+    /// host's login shell. Agents emit `sh` syntax while `$SHELL` may be
+    /// fish/csh/nu, which reject `export`, `2>&1`, and heredocs.
+    ///
+    /// `$0` names the shell that actually interpreted the line, so this fails
+    /// if the call site ever goes back to `resolve_shell()` — on a zsh host it
+    /// reports `/bin/zsh`.
+    #[tokio::test]
+    async fn unset_default_runs_the_platform_shell_not_the_login_shell() {
+        let runtime = TerminalRuntime::with_base_env(BTreeMap::new());
+
+        let session_id = SessionId::new("unset-default-shell".to_string());
+        let request =
+            CreateTerminalRequest::new(session_id.clone(), "echo \"ran-under=$0\"".to_string());
+        let output = run_and_capture(&runtime, &session_id, request).await;
+
+        assert!(
+            output.contains("ran-under=/bin/sh"),
+            "unset default did not run through /bin/sh; got:\n{output}"
+        );
+    }
+
     /// A whitespace-bearing command with empty args runs through the shell. A
     /// direct exec would ENOENT trying to run a program literally named with
     /// spaces — this is the shape CodeBuddy sends.
@@ -1069,11 +1282,35 @@ mod tests {
 
         // Genuine shell operators must evaluate, not be passed as literal args.
         let session_id = SessionId::new("shell-ops".to_string());
-        let request = CreateTerminalRequest::new(session_id.clone(), "true && echo OK".to_string());
+        let request =
+            CreateTerminalRequest::new(session_id.clone(), "true && echo OK".to_string());
         let output = run_and_capture(&runtime, &session_id, request).await;
         assert!(
             output.contains("OK"),
             "shell operators did not evaluate; got:\n{output}"
+        );
+    }
+
+    /// A whole shell line longer than the OS path limit still runs through the
+    /// shell. grok crams `<shell> -lc "<script>"` into `command` with empty
+    /// args; a multi-KB heredoc makes the direct exec fail with ENAMETOOLONG →
+    /// `ErrorKind::InvalidFilename` (not `NotFound`), which the fallback guard
+    /// must also catch. The marker exceeds Linux's PATH_MAX (4096) so the direct
+    /// exec fails with ENAMETOOLONG on both macOS (1024) and Linux — a sub-limit
+    /// line would return `NotFound` and silently exercise the other branch.
+    #[tokio::test]
+    async fn overlong_command_line_falls_back_to_shell() {
+        let runtime = TerminalRuntime::with_base_env(BTreeMap::new());
+
+        let session_id = SessionId::new("overlong-cmd".to_string());
+        let marker = "x".repeat(5000);
+        let request =
+            CreateTerminalRequest::new(session_id.clone(), format!("echo {marker}"));
+        let output = run_and_capture(&runtime, &session_id, request).await;
+        assert!(
+            output.contains(&marker),
+            "overlong command line did not run via the shell fallback; got {} bytes",
+            output.len()
         );
     }
 
@@ -1104,7 +1341,8 @@ mod tests {
         let runtime = TerminalRuntime::with_base_env(BTreeMap::new());
 
         let session_id = SessionId::new("direct-exec".to_string());
-        let mut request = CreateTerminalRequest::new(session_id.clone(), "/bin/echo".to_string());
+        let mut request =
+            CreateTerminalRequest::new(session_id.clone(), "/bin/echo".to_string());
         request.args = vec!["hello world".into()];
         let output = run_and_capture(&runtime, &session_id, request).await;
         assert!(

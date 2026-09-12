@@ -35,6 +35,8 @@ import { rehypePluginsAllowingHouhub } from "./rehype-allow-houhub"
 import { remarkTrimCjkAutolinkTail } from "./remark-cjk-autolink-tail"
 import { remarkRewriteFileUriLinks } from "./remark-file-uri-links"
 import { remarkRestoreWindowsPaths } from "./remark-windows-paths"
+import { remarkLocalImages } from "./remark-local-images"
+import { markdownLocalImageComponents } from "./markdown-local-image"
 import { MATH_FENCE_PAD, useStreamdownPlugins } from "./streamdown-plugins"
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
@@ -422,6 +424,7 @@ function containerPrefixEnd(
 const remarkPlugins = [
   ...Object.values(defaultRemarkPlugins),
   remarkRestoreWindowsPaths,
+  remarkLocalImages,
   remarkRewriteFileUriLinks,
   remarkTrimCjkAutolinkTail,
 ]
@@ -495,6 +498,7 @@ function MessageResponseImpl({
       components={{
         ...props.components,
         ...markdownLinkComponents,
+        ...markdownLocalImageComponents,
         ...mermaidComponents,
       }}
     >

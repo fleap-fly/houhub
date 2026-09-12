@@ -2754,8 +2754,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   0%,
   100% {
     box-shadow:
-      var(--tw-ring-offset-shadow, 0 0 #0000),
-      var(--tw-ring-shadow, 0 0 #0000);
+      var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000);
   }
   50% {
     box-shadow:

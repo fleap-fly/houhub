@@ -2717,10 +2717,13 @@ export function MessageInput({
     }
   }, [setDragActiveIfChanged])
 
-  const removeAttachment = useCallback((id: string) => {
-    setAttachments((prev) => prev.filter((item) => item.id !== id))
-    attachmentEngine.removeAttachment(id)
-  }, [attachmentEngine])
+  const removeAttachment = useCallback(
+    (id: string) => {
+      setAttachments((prev) => prev.filter((item) => item.id !== id))
+      attachmentEngine.removeAttachment(id)
+    },
+    [attachmentEngine]
+  )
 
   const buildDraft = useCallback((): PromptDraft | null => {
     const editor = editorRef.current?.getEditor()
