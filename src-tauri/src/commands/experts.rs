@@ -1014,7 +1014,8 @@ pub async fn experts_list_all_install_statuses() -> Result<Vec<ExpertInstallStat
                 Err(_) => continue,
             };
             let state = classify_link(&link_path, &expected);
-            let target_path = read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
+            let target_path =
+                read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
             out.push(ExpertInstallStatus {
                 expert_id: meta.id.clone(),
                 agent_type: agent,
@@ -1089,6 +1090,7 @@ mod tests {
             skills_dir: None,
             source: Default::default(),
             version_probe: None,
+            supports_mcp: true,
         };
         let agent = crate::models::agent::AgentType::custom("experts-pack-agent").unwrap();
 

@@ -91,6 +91,13 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   wait_agent: "task",
   close_agent: "task",
   update_plan: "task",
+  // Grok
+  // The native sub-agent launcher. The history parser rewrites it to "Agent"
+  // and the live path classifies it from `rawInput.subagent_type`; this alias
+  // is the belt-and-braces for any path where only the raw name survives
+  // (`x.ai/tool.name` fallback with no rawInput). The freeform `\bagent\b`
+  // matcher can NOT catch it — "subagent" has no word boundary before "agent".
+  spawn_subagent: "agent",
   create_goal: "create_goal",
   "functions.create_goal": "create_goal",
   update_goal: "update_goal",
@@ -99,7 +106,6 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   // houhub multi-agent delegation MCP tools (server prefix varies by host)
   delegate_to_agent: "delegate_to_agent",
   "mcp__houhub-mcp__delegate_to_agent": "delegate_to_agent",
-  mcp__houhub_mcp__delegate_to_agent: "delegate_to_agent",
   "mcp__houhub-delegate__delegate_to_agent": "delegate_to_agent",
   mcp__houhub__delegate_to_agent: "delegate_to_agent",
   get_delegation_status: "get_delegation_status",
@@ -120,7 +126,6 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   // the bare `check_user_feedback` name, dropping the `mcp__houhub_mcp` namespace.
   check_user_feedback: "check_user_feedback",
   "mcp__houhub-mcp__check_user_feedback": "check_user_feedback",
-  mcp__houhub_mcp__check_user_feedback: "check_user_feedback",
   mcp__houhub__check_user_feedback: "check_user_feedback",
   // OpenCode
   delegate_task: "task",
@@ -137,7 +142,6 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   // houhub-mcp ask-user-question companion tool (server prefix varies by host;
   // the suffix rule in `normalizeToolName` covers the other separators)
   "mcp__houhub-mcp__ask_user_question": "question",
-  mcp__houhub_mcp__ask_user_question: "question",
   lsp_diagnostics: "lsp",
   lsp_document_symbols: "lsp",
   lsp_goto_definition: "lsp",
@@ -253,6 +257,53 @@ function hasAnyKey(obj: Record<string, unknown>, keys: string[]): boolean {
   )
 }
 
+/**
+ * Wire spellings that mean the same argument as one of the canonical
+ * (snake_case) keys every tool card reads. OpenCode names its tool arguments in
+ * camelCase and its ACP adapter forwards them verbatim, so the LIVE stream
+ * carries `filePath` / `oldString` where the history parser has already
+ * rewritten them (`parsers/opencode.rs::normalize_tool_call`) — the renderers
+ * only ever learned the canonical names, so a live Write card lost its path and
+ * a live Edit card lost its diff. `include` → `glob` is the same one-sided
+ * rename the history parser applies to OpenCode's grep filter.
+ */
+const TOOL_INPUT_KEY_ALIASES: ReadonlyArray<readonly [string, string]> = [
+  ["filePath", "file_path"],
+  ["notebookPath", "notebook_path"],
+  ["oldString", "old_string"],
+  ["newString", "new_string"],
+  ["newSource", "new_source"],
+  ["replaceAll", "replace_all"],
+  ["editMode", "edit_mode"],
+  ["cellType", "cell_type"],
+  ["include", "glob"],
+]
+
+/**
+ * Fill in canonical argument names an agent spelled differently on the wire.
+ *
+ * Only writes a canonical key that is ABSENT (or null/undefined) on the input,
+ * so it can never override what an agent actually sent — which makes it a
+ * no-op on every payload that was already normalized in Rust (all history) and
+ * on every agent that speaks snake_case natively. Returns the SAME object when
+ * nothing had to be added, so `useMemo` consumers keep their reference.
+ */
+export function aliasToolInputKeys(
+  parsed: Record<string, unknown> | null
+): Record<string, unknown> | null {
+  if (!parsed) return parsed
+  let out: Record<string, unknown> | null = null
+  for (const [alias, canonical] of TOOL_INPUT_KEY_ALIASES) {
+    const value = parsed[alias]
+    if (value === undefined || value === null) continue
+    const existing = parsed[canonical]
+    if (existing !== undefined && existing !== null) continue
+    out ??= { ...parsed }
+    out[canonical] = value
+  }
+  return out ?? parsed
+}
+
 function inferFromInput(
   rawInput: string | null | undefined,
   kind: string | null | undefined,
@@ -321,7 +372,20 @@ function inferFromInput(
     ])
   )
     return "bash"
-  if (hasAnyKey(parsed, ["old_string", "new_string", "replace_all"]))
+  // OpenCode names these arguments in camelCase on the wire, and its ACP
+  // adapter forwards them verbatim, so the live stream sees `oldString` where
+  // the history parser has already rewritten them to snake_case
+  // (`parsers/opencode.rs::normalize_tool_call`).
+  if (
+    hasAnyKey(parsed, [
+      "old_string",
+      "new_string",
+      "replace_all",
+      "oldString",
+      "newString",
+      "replaceAll",
+    ])
+  )
     return "edit"
   if (hasAnyKey(parsed, ["changes"])) return "edit"
   if (hasAnyKey(parsed, ["todos"])) return "todowrite"
@@ -361,7 +425,15 @@ function inferFromInput(
     )
   }
 
-  const hasPath = hasAnyKey(parsed, ["file_path", "notebook_path", "path"])
+  // `filePath` is OpenCode's spelling; `session-files.ts` already counts it as
+  // a path key, so recognising it here keeps classification and file tallies
+  // agreeing on the same payload.
+  const hasPath = hasAnyKey(parsed, [
+    "file_path",
+    "notebook_path",
+    "path",
+    "filePath",
+  ])
   if (hasPath) {
     // Check write-specific input keys first — they take priority over
     // kind/title because ACP ToolKind::Edit ("edit") is a category that
@@ -446,8 +518,6 @@ export function normalizeToolName(toolName: string): string {
   if (/[^a-z0-9]task_complete$/.test(canonical)) return "task_complete"
   if (/[^a-z0-9]create_automation$/.test(canonical)) return "create_automation"
   if (/[^a-z0-9]create_work_task$/.test(canonical)) return "create_work_task"
-  if (/[^a-z0-9]create_goal$/.test(canonical)) return "create_goal"
-  if (/[^a-z0-9]update_goal$/.test(canonical)) return "update_goal"
 
   // houhub-mcp ask-user-question companion tool. Same host-prefix story as the
   // delegation tools above (`mcp__<server>__ask_user_question`,
@@ -487,20 +557,6 @@ const DELEGATION_COMPANION_TOOLS: ReadonlySet<string> = new Set([
   "resume_delegation",
 ])
 
-const WORKBENCH_COMPANION_TOOLS: ReadonlySet<string> = new Set([
-  "get_session_info",
-  "task_progress",
-  "task_complete",
-  "create_automation",
-  "create_work_task",
-])
-
-const MCP_COMPANION_TOOLS = new Set([
-  ...DELEGATION_COMPANION_TOOLS,
-  ...WORKBENCH_COMPANION_TOOLS,
-  "check_user_feedback",
-])
-
 export function inferLiveToolName(params: {
   title?: string | null
   kind?: string | null
@@ -523,8 +579,12 @@ export function inferLiveToolName(params: {
 
   // Grok plan-mode tools carry their authoritative identity in
   // `_meta["x.ai/tool"].kind` (`enter_plan`/`exit_plan`), while their human
-  // title mutates across the lifecycle. Resolve them ahead of title fallbacks
-  // so streaming and historical rendering use the same PlanModeCard.
+  // `title` MUTATES across the lifecycle (`enter_plan_mode` → "Plan: Enter" →
+  // "Plan mode entered"). Resolve them to the canonical name here, ahead of the
+  // title-based fallbacks below, so the live stream routes into the same
+  // <PlanModeCard> (and its tool-group run-break) the historical path resolves
+  // from `x.ai/tool.name`. Scoped to plan-mode so every other Grok tool keeps
+  // its existing resolution. See `extractGrokPlanModeToolName`.
   const grokPlanMode = extractGrokPlanModeToolName(params.meta)
   if (grokPlanMode) return grokPlanMode
 
@@ -539,40 +599,28 @@ export function inferLiveToolName(params: {
 
   // The houhub-mcp delegation companion tools carry their authoritative identity
   // in `meta.claudeCode.toolName` — claude-agent-acp sets it to the raw
-  // `mcp__<server>__<tool>` name for every MCP call. Resolve them FIRST, ahead
-  // of `inferFromInput`, so the live stream routes into the same delegation
-  // cards the historical path resolves from the raw tool name. Without this,
-  // `cancel_delegation` (input `{task_id}`) gets misclassified by
-  // `inferFromInput` as the generic "task" tool (shown as "任务" with no detail),
-  // and `get_delegation_status` (input `{task_ids}`) falls through unclassified —
-  // both need meta to resolve to the canonical companion tool name.
+  // `mcp__<server>__<tool>` name for every MCP call — and, on Qoder, in
+  // `meta.qoder.toolName`. Resolve them FIRST, ahead of `inferFromInput`, so the
+  // live stream routes into the same delegation cards the historical path
+  // resolves from the raw tool name. Without this, `cancel_delegation` (input
+  // `{task_id}`) gets misclassified by `inferFromInput` as the generic "task"
+  // tool (shown as "任务" with no detail), and `get_delegation_status` (input
+  // `{task_ids}`) falls through unclassified — both need meta to resolve to the
+  // canonical companion tool name.
   // Scoped to these three so the documented input-shape-first ordering below
   // (notably Claude Code's `Task` → "agent" via `subagent_type`, whose meta
   // name is "Task" — not a delegation tool) is preserved for everything else.
   const metaToolName = extractClaudeCodeToolName(params.meta)
-  if (metaToolName) {
-    const normalizedMeta = normalizeToolName(metaToolName)
-    if (DELEGATION_COMPANION_TOOLS.has(normalizedMeta)) return normalizedMeta
-  }
-
-  // Qoder places the MCP tool identity under `_meta.qoder.toolName` instead
-  // of Claude Code's namespace. This is authoritative on the opening frame;
-  // resolving it before input-shape heuristics prevents `{task_id}` from
-  // becoming the generic `task` tool and keeps the workbench companions
-  // standalone through every adapter pass.
   const qoderToolName = extractQoderToolName(params.meta)
-  let normalizedQoderTool: string | null = null
-  if (qoderToolName) {
-    const normalizedQoder = normalizeToolName(qoderToolName)
-    normalizedQoderTool = normalizedQoder.toLowerCase()
-    if (MCP_COMPANION_TOOLS.has(normalizedQoderTool)) {
-      return normalizedQoderTool
-    }
+  for (const candidate of [metaToolName, qoderToolName]) {
+    if (!candidate) continue
+    const normalizedMeta = normalizeToolName(candidate)
+    if (DELEGATION_COMPANION_TOOLS.has(normalizedMeta)) return normalizedMeta
   }
 
   // The delegation broker stamps `meta["houhub.delegation"]` onto the parent's
   // `delegate_to_agent` tool call (meta_writer.rs) — an authoritative,
-  // HouHub-minted marker no other tool ever carries. It is the ONLY live
+  // houhub-minted marker no other tool ever carries. It is the ONLY live
   // identity signal on hosts whose wire loses the MCP tool name entirely:
   // Cursor announces MCP calls as title "MCP: tool" with empty rawInput and
   // never resends either, so when the broker claims the call and writes the
@@ -630,7 +678,6 @@ export function inferLiveToolName(params: {
   // title. We deliberately do NOT run `normalizeToolName` here: its live-title
   // heuristic rewrites `memory_recall` to `memory_re`.
   if (metaToolName) return metaToolName.toLowerCase()
-  if (normalizedQoderTool) return normalizedQoderTool
 
   // Grok stamps the authoritative tool name in `_meta["x.ai/tool"].name` while
   // its `title` MUTATES across the lifecycle. A background-task poll is the
@@ -646,6 +693,28 @@ export function inferLiveToolName(params: {
   // `use_tool` exclusion.
   const grokToolName = extractGrokToolName(params.meta)
   if (grokToolName) return normalizeToolName(grokToolName)
+
+  // Qoder stamps the authoritative tool name in `_meta.qoder.toolName` on EVERY
+  // `tool_call` (`AOn` in its ACP bridge), while the `title` it ships for an MCP
+  // call is a human sentence — `"<tool> (<server> MCP Server)"` — that no
+  // suffix/alias rule can collapse. Without this, every houhub-mcp companion but
+  // `delegate_to_agent` (rescued by the broker's `houhub.delegation` marker
+  // above) fell through to the generic tool shell: `get_session_info` /
+  // `task_progress` / `check_user_feedback` kept the sentence as their "name",
+  // so their cards never matched — while the historical path, which reads the
+  // raw `mcp__houhub-mcp__<tool>` name straight out of the transcript, rendered
+  // them correctly. Same placement as the Grok override: AFTER `inferFromInput`,
+  // so every input-shape classification Qoder's own tools rely on is preserved
+  // (`Agent` → "agent" via `subagent_type`, `TodoWrite` → "todowrite" via
+  // `todos`, …) and this only decides the cases where the input shape is silent.
+  //
+  // Lower-cased for the same reason the claude-agent-acp branch above is: Qoder
+  // names its native tools in CamelCase (`ExitPlanMode`, `Workflow`), and
+  // `normalizeToolName` passes an unmatched name through with its case intact —
+  // but every other return here is lower-case, and some consumers compare
+  // case-sensitively. Display is unaffected: the header prefers the ACP `title`,
+  // which Qoder always sends.
+  if (qoderToolName) return normalizeToolName(qoderToolName).toLowerCase()
 
   // codex-acp ≥1.1.8 Plan-mode review gate. The backend seeds this tool call
   // from the `session/request_permission` (see `is_codex_plan_review`), so it
@@ -676,15 +745,26 @@ function extractClaudeCodeToolName(
   return trimmed.length > 0 ? trimmed : null
 }
 
+/**
+ * Qoder's authoritative tool name from `_meta.qoder.toolName` — the raw SDK name
+ * (`Bash`, `TodoWrite`, `mcp__houhub-mcp__get_delegation_status`, …) its ACP
+ * bridge attaches to every `tool_call` it emits, and the same name its history
+ * parser reads back out of the transcript. Unlike `title`, it neither mutates
+ * across the call's lifecycle nor gets rewritten into a human sentence.
+ *
+ * Only the OPENING `tool_call` carries it — Qoder's `tool_call_update` frames
+ * ship status/output only — which is fine: the reducer preserves a block's meta
+ * when an update omits it.
+ */
 function extractQoderToolName(
   meta: Record<string, unknown> | null | undefined
 ): string | null {
   if (!meta || typeof meta !== "object") return null
   const qoder = (meta as Record<string, unknown>).qoder
   if (!qoder || typeof qoder !== "object") return null
-  const toolName = (qoder as Record<string, unknown>).toolName
-  if (typeof toolName !== "string") return null
-  const trimmed = toolName.trim()
+  const name = (qoder as Record<string, unknown>).toolName
+  if (typeof name !== "string") return null
+  const trimmed = name.trim()
   return trimmed.length > 0 ? trimmed : null
 }
 

@@ -51,7 +51,7 @@ pub struct CheckItem {
 /// `None` on [`PreflightResult`] for every non-adapter agent.
 #[derive(Debug, Clone, Serialize)]
 pub struct AdapterInfo {
-    /// npm spec HouHub installs, e.g. "@agentclientprotocol/claude-agent-acp@0.74.0".
+    /// npm spec houhub installs, e.g. "@agentclientprotocol/claude-agent-acp@0.75.1".
     pub adapter_package: String,
     /// Command the launch gate resolves, e.g. "claude-agent-acp".
     pub adapter_cmd: String,
@@ -381,9 +381,10 @@ fn build_node_version_check(current_version: Option<&str>, required: &str) -> Ch
     }
 }
 
-/// Preflight for `Uvx` agents (Python ACP agents launched via `uvx`, e.g.
-/// Hermes). Passes when either the `uv` tool runner is resolvable, or — as a
-/// fallback — the agent's own CLI is already installed on PATH.
+/// Preflight for `Uvx` agents (custom ACP agents distributed as Python
+/// packages and launched via `uvx`). Passes when either the `uv` tool runner
+/// is resolvable, or — as a fallback — the agent's own CLI is already
+/// installed on PATH.
 async fn check_uv_environment(
     uv_required: Option<&str>,
     system_cmd: Option<(&str, &[&str])>,
@@ -464,18 +465,12 @@ async fn run_uv_version(uvx_path: &std::path::Path) -> Option<String> {
 /// `Warn` (not `Fail`): recent uv releases are backward compatible for the
 /// `uvx --from <pkg>==<ver>` invocation, so an old uv should not hard-block.
 fn build_uv_version_check(current: Option<&str>, required: &str) -> CheckItem {
-    match (
-        current.and_then(parse_node_version),
-        parse_node_version(required),
-    ) {
+    match (current.and_then(parse_node_version), parse_node_version(required)) {
         (Some(cur), Some(req)) if cur >= req => CheckItem {
             check_id: "uv_version".into(),
             label: "uv version".into(),
             status: CheckStatus::Pass,
-            message: format!(
-                "uv {} meets the minimum requirement (>={required})",
-                current.unwrap_or("")
-            ),
+            message: format!("uv {} meets the minimum requirement (>={required})", current.unwrap_or("")),
             fixes: vec![],
         },
         (Some(_), Some(_)) => CheckItem {
@@ -495,6 +490,15 @@ fn build_uv_version_check(current: Option<&str>, required: &str) -> CheckItem {
             message: format!("Cannot parse uv version; recommended >={required}"),
             fixes: vec![],
         },
+    }
+}
+
+/// The registry `dir_entry` for a binary agent (None for single-file agents
+/// and non-binary distributions).
+fn binary_dir_entry(agent_type: AgentType) -> Option<registry::BinaryDirEntry> {
+    match registry::get_agent_meta(agent_type).distribution {
+        AgentDistribution::Binary { dir_entry, .. } => dir_entry,
+        _ => None,
     }
 }
 
@@ -554,16 +558,19 @@ async fn check_binary_environment(
                     fixes: vec![],
                 }
             }
-            // Every binary agent can launch from a user-installed CLI on PATH
-            // or ~/.local/bin when no managed cache exists. Match the connect
-            // gate so preflight does not report a false missing-install warning.
-            Ok(None) if crate::commands::acp::resolve_system_agent_binary(cmd).is_some() => {
+            // Dir-tree agents (Cursor): a user-installed CLI on PATH /
+            // ~/.local/bin is launchable as-is — the connect path falls back
+            // to it — so report ready instead of a misleading warn.
+            Ok(None)
+                if binary_dir_entry(agent_type).is_some()
+                    && crate::commands::acp::resolve_system_agent_binary(cmd).is_some() =>
+            {
                 CheckItem {
                     check_id: "binary_cached".into(),
                     label: "Binary cache".into(),
                     status: CheckStatus::Pass,
                     message: format!(
-                        "Using the system-installed {cmd} (HouHub-managed download also available)"
+                        "Using the system-installed {cmd} (houhub-managed download also available)"
                     ),
                     fixes: vec![],
                 }

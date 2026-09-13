@@ -390,7 +390,7 @@
     "loadFailed": "Échec du chargement des paramètres : {message}",
     "gitAccount": {
       "sectionTitle": "Comptes serveur Git",
-      "sectionDescription": "Gérez les identifiants pour les serveurs Git non GitHub (GitLab, Bitbucket, auto-hébergé, etc.).",
+      "sectionDescription": "Gérez les identifiants des serveurs Git qui n'ont pas leur propre section (Bitbucket, auto-hébergés, etc.).",
       "noAccounts": "Aucun compte de serveur Git configuré.",
       "addAccount": "Ajouter un compte",
       "addTitle": "Ajouter un compte Git",
@@ -1642,7 +1642,7 @@
   "GeneralSettings": {
     "loading": "Chargement...",
     "sectionTitle": "Général",
-    "sectionDescription": "Préférences centralisées pour le terminal par défaut, l’accélération du rendu, les sons de notification et la délégation multi-agents.",
+    "sectionDescription": "Préférences centralisées pour le terminal par défaut, l’accélération du rendu, les notifications et la délégation multi-agents.",
     "terminalTitle": "Terminal par défaut",
     "terminalDescription": "Choisissez le shell utilisé à l'ouverture de nouveaux onglets de terminal depuis la barre de terminal ou l'arborescence des fichiers. Les agents l'utilisent aussi lorsqu'ils demandent à houhub d'exécuter une ligne de commande complète.",
     "defaultTerminalShell": "Shell par défaut",
@@ -1659,7 +1659,7 @@
     "terminalShellNotInstalled": "non installé",
     "terminalShellNotFoundWarning": "Ce chemin n’existe pas sur cet hôte.",
     "terminalCurrentShell": "Actuellement utilisé : {path}",
-    "renderingDescription": "Désactivez l’accélération matérielle si l’application affiche un écran noir ou des défauts de rendu (fréquent sur certaines GPU AMD ou GPU Intel intégrées). N’a d’effet que sur la version Windows de bureau.",
+    "renderingDescription": "Désactivez l’accélération matérielle si l’application affiche un écran noir ou des défauts de rendu (fréquent sur certaines GPU AMD ou GPU Intel intégrées sous Windows, et avec le pilote propriétaire NVIDIA sous Linux). N’a d’effet que sur les versions de bureau Windows et Linux.",
     "disableHardwareAcceleration": "Désactiver l’accélération matérielle",
     "renderingSaveFailed": "Échec de l’enregistrement des paramètres de rendu : {message}",
     "restartRequired": "Enregistré. Redémarrez l’application pour appliquer la modification.",
@@ -3454,7 +3454,7 @@
         "agentSessionLoading": "Chargement de la transcription du sous-agent…",
         "agentSessionEmpty": "Le sous-agent n'a encore rien écrit.",
         "agentFallbackTitle": "Démarrage du sous-agent…",
-        "agentCodexLaunchOnly": "Lancé. Codex ne signale plus la progression de ce sous-agent : son résultat arrivera sous forme de message dans cette conversation.",
+        "agentCodexLaunchOnly": "Lancé. Codex n'a pas encore signalé l'issue de ce sous-agent : ouvrez sa session pour suivre le travail.",
         "agentStatsBash": "Commandes",
         "agentStatsRead": "Fichiers lus",
         "agentStatsSearch": "Recherches",
@@ -3776,27 +3776,6 @@
         "viewTree": "Afficher l'arborescence",
         "fields": "{count, plural, one {# champ} other {# champs}}",
         "items": "{count, plural, one {# élément} other {# éléments}}"
-      },
-      "houhubMcpTool": {
-        "getSessionInfo": "Lecture de la session {session}",
-        "getSessionInfoNoId": "Lecture d’une session",
-        "taskProgress": "Progression : {message}",
-        "taskProgressNoMessage": "Signalement de la progression",
-        "taskComplete": "Tâche terminée · {verdict}",
-        "taskCompleteWithSummary": "Tâche terminée · {verdict} : {summary}",
-        "createAutomation": "Création de l’automatisation {name}",
-        "createAutomationNoName": "Création d’une automatisation",
-        "createWorkTask": "Création de la tâche {title}",
-        "createWorkTaskNoTitle": "Création d’une tâche",
-        "resumeDelegation": "Reprise de la tâche {task}",
-        "resumeDelegationNoId": "Reprise d'une tâche déléguée",
-        "promptLabel": "Instruction",
-        "verdict": {
-          "success": "réussie",
-          "needs_review": "à relire",
-          "blocked": "bloquée",
-          "unknown": "inconnu"
-        }
       },
       "houhubMcpTool": {
         "getSessionInfo": "Lecture de la session {session}",
@@ -4287,8 +4266,7 @@
       "linked_to_houhub": "Activé",
       "linked_elsewhere": "Bloqué — un autre lien existe",
       "blocked_by_real_directory": "Bloqué — une compétence personnalisée occupe ce nom",
-      "broken": "Lien cassé",
-      "linked_to_houhub": "Activé"
+      "broken": "Lien cassé"
     },
     "badges": {
       "userModified": "Modifié par l'utilisateur"
@@ -4325,8 +4303,7 @@
       "linked_to_houhub": "Activé",
       "linked_elsewhere": "Bloqué — un autre lien existe",
       "blocked_by_real_directory": "Bloqué — une compétence personnalisée occupe ce nom",
-      "broken": "Lien cassé",
-      "linked_to_houhub": "Activé"
+      "broken": "Lien cassé"
     },
     "badges": {
       "userModified": "Modifié par l'utilisateur",
@@ -4376,8 +4353,7 @@
       "linked_to_houhub": "Activé",
       "linked_elsewhere": "Bloqué — un autre lien existe",
       "blocked_by_real_directory": "Bloqué — une compétence personnalisée occupe ce nom",
-      "broken": "Lien cassé",
-      "linked_to_houhub": "Activé"
+      "broken": "Lien cassé"
     },
     "badges": {
       "notSynced": "Non synchronisé"
@@ -5078,8 +5054,7 @@
       "linked_to_houhub": "Activée",
       "linked_elsewhere": "Liée ailleurs",
       "blocked_by_real_directory": "Bloquée par un dossier réel",
-      "broken": "Lien rompu",
-      "linked_to_houhub": "Activée"
+      "broken": "Lien rompu"
     },
     "actions": {
       "new": "Nouvelle",

@@ -31,6 +31,7 @@ import {
 import {
   STORAGE_KEY_THEME_COLOR,
   STORAGE_KEY_ZOOM_LEVEL,
+  STORAGE_KEY_WELCOME_QUICK_ACTIONS,
   STORAGE_KEY_UI_FONT,
   STORAGE_KEY_UI_FONT_CUSTOM,
   STORAGE_KEY_UI_FONT_STACK,
@@ -39,7 +40,6 @@ import {
   STORAGE_KEY_EDITOR_FONT_SIZE,
   STORAGE_KEY_EDITOR_LIGATURES,
   STORAGE_KEY_EDITOR_WORD_WRAP,
-  STORAGE_KEY_WELCOME_QUICK_ACTIONS,
   STORAGE_KEY_TERMINAL_FONT,
   STORAGE_KEY_TERMINAL_FONT_CUSTOM,
   STORAGE_KEY_TERMINAL_FONT_SIZE,
@@ -114,6 +114,9 @@ type AppearanceContextValue = {
   setThemeColor: (color: ThemeColor) => void
   zoomLevel: ZoomLevel
   setZoomLevel: (zoom: ZoomLevel) => void
+  /** 新会话欢迎页是否显示「模式选择区域」（QuickActions 快捷卡片），默认开启 */
+  showWelcomeQuickActions: boolean
+  setShowWelcomeQuickActions: (on: boolean) => void
   /** 界面字体（普通组件，驱动 --font-sans） */
   uiFont: FontSelection
   setUiFont: (id: string, custom?: string) => void
@@ -129,12 +132,9 @@ type AppearanceContextValue = {
   setTerminalFontSize: (size: FontSize) => void
   editorLigatures: boolean
   setEditorLigatures: (on: boolean) => void
-  /** 编辑器自动换行（作用于 Monaco wordWrap） */
+  /** 编辑器自动换行（作用于代码编辑器 Monaco 的 wordWrap 选项） */
   editorWordWrap: boolean
   setEditorWordWrap: (on: boolean) => void
-  /** 新会话欢迎页是否显示模式选择快捷卡片，默认开启。 */
-  showWelcomeQuickActions: boolean
-  setShowWelcomeQuickActions: (on: boolean) => void
   terminalLigatures: boolean
   setTerminalLigatures: (on: boolean) => void
   /** Workspace 背景图片总开关。关闭时不加载图片、不触发任何表面半透明。 */
@@ -365,6 +365,11 @@ export function AppearanceProvider({
       : DEFAULT_ZOOM_LEVEL
   })
 
+  // 新会话「模式选择区域」显示开关：默认开启，键缺失即回退为 true。
+  // QuickActions 仅在欢迎态客户端渲染，此处同步读 localStorage 不会造成首帧闪烁。
+  const [showWelcomeQuickActions, setShowWelcomeQuickActionsState] =
+    useState<boolean>(() => readBool(STORAGE_KEY_WELCOME_QUICK_ACTIONS, true))
+
   // 字体偏好的初始值从 localStorage 读 id/custom（视觉已由 inline 脚本就位，
   // 这里只是回填选中态，不会造成闪烁）。
   const [uiFont, setUiFontState] = useState<FontSelection>(() =>
@@ -400,8 +405,6 @@ export function AppearanceProvider({
   const [editorWordWrap, setEditorWordWrapState] = useState<boolean>(() =>
     readBool(STORAGE_KEY_EDITOR_WORD_WRAP, false)
   )
-  const [showWelcomeQuickActions, setShowWelcomeQuickActionsState] =
-    useState<boolean>(() => readBool(STORAGE_KEY_WELCOME_QUICK_ACTIONS, true))
   const [terminalLigatures, setTerminalLigaturesState] = useState<boolean>(() =>
     readBool(STORAGE_KEY_TERMINAL_LIGATURES, false)
   )
@@ -511,6 +514,11 @@ export function AppearanceProvider({
     [setZoomLevel]
   )
 
+  const setShowWelcomeQuickActions = useCallback((on: boolean) => {
+    setShowWelcomeQuickActionsState(on)
+    persist(STORAGE_KEY_WELCOME_QUICK_ACTIONS, on ? "1" : "0")
+  }, [])
+
   const setUiFont = useCallback((id: string, custom = "") => {
     setUiFontState({ id, custom })
     const stack = resolveFontStack(id, custom, "sans")
@@ -552,11 +560,6 @@ export function AppearanceProvider({
   const setEditorWordWrap = useCallback((on: boolean) => {
     setEditorWordWrapState(on)
     persist(STORAGE_KEY_EDITOR_WORD_WRAP, on ? "1" : "0")
-  }, [])
-
-  const setShowWelcomeQuickActions = useCallback((on: boolean) => {
-    setShowWelcomeQuickActionsState(on)
-    persist(STORAGE_KEY_WELCOME_QUICK_ACTIONS, on ? "1" : "0")
   }, [])
 
   const setTerminalLigatures = useCallback((on: boolean) => {
@@ -887,7 +890,6 @@ export function AppearanceProvider({
       STORAGE_KEY_EDITOR_FONT_SIZE,
       STORAGE_KEY_EDITOR_LIGATURES,
       STORAGE_KEY_EDITOR_WORD_WRAP,
-      STORAGE_KEY_WELCOME_QUICK_ACTIONS,
       STORAGE_KEY_TERMINAL_FONT,
       STORAGE_KEY_TERMINAL_FONT_CUSTOM,
       STORAGE_KEY_TERMINAL_FONT_SIZE,
@@ -920,9 +922,6 @@ export function AppearanceProvider({
       )
       setEditorLigaturesState(readBool(STORAGE_KEY_EDITOR_LIGATURES, false))
       setEditorWordWrapState(readBool(STORAGE_KEY_EDITOR_WORD_WRAP, false))
-      setShowWelcomeQuickActionsState(
-        readBool(STORAGE_KEY_WELCOME_QUICK_ACTIONS, true)
-      )
       setTerminalLigaturesState(readBool(STORAGE_KEY_TERMINAL_LIGATURES, false))
       // 仅界面字体落到 --font-sans；编辑器/终端字体由各自组件读取 provider 状态后应用。
       document.documentElement.style.setProperty(
@@ -949,6 +948,12 @@ export function AppearanceProvider({
           document.documentElement.style.fontSize = `${(16 * zoom) / 100}px`
           syncTrafficLightPosition(zoom)
         }
+      }
+      // "0" 是合法值，故不做 newValue 真值判断，交给 readBool 处理 null→默认。
+      if (e.key === STORAGE_KEY_WELCOME_QUICK_ACTIONS) {
+        setShowWelcomeQuickActionsState(
+          readBool(STORAGE_KEY_WELCOME_QUICK_ACTIONS, true)
+        )
       }
       if (e.key && FONT_KEYS.has(e.key)) {
         rehydrateFonts()
@@ -1052,6 +1057,8 @@ export function AppearanceProvider({
         setThemeColor,
         zoomLevel,
         setZoomLevel,
+        showWelcomeQuickActions,
+        setShowWelcomeQuickActions,
         uiFont,
         setUiFont,
         editorFont,
@@ -1066,8 +1073,6 @@ export function AppearanceProvider({
         setEditorLigatures,
         editorWordWrap,
         setEditorWordWrap,
-        showWelcomeQuickActions,
-        setShowWelcomeQuickActions,
         terminalLigatures,
         setTerminalLigatures,
         workspaceBgEnabled,

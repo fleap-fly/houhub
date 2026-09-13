@@ -390,7 +390,7 @@
     "loadFailed": "설정 로드 실패: {message}",
     "gitAccount": {
       "sectionTitle": "Git 서버 계정",
-      "sectionDescription": "GitHub 이외의 Git 서버 자격 증명을 관리합니다 (GitLab, Bitbucket, 자체 호스팅 등).",
+      "sectionDescription": "전용 섹션이 없는 Git 서버의 자격 증명을 관리합니다(Bitbucket, 자체 호스팅 등).",
       "noAccounts": "설정된 Git 서버 계정이 없습니다.",
       "addAccount": "계정 추가",
       "addTitle": "Git 계정 추가",
@@ -1642,7 +1642,7 @@
   "GeneralSettings": {
     "loading": "로딩 중...",
     "sectionTitle": "일반",
-    "sectionDescription": "기본 터미널, 렌더링 가속, 알림음, 다중 에이전트 위임 등 공용 환경설정을 한곳에서 관리합니다.",
+    "sectionDescription": "기본 터미널, 렌더링 가속, 알림과 알림음, 다중 에이전트 위임 등 공용 환경설정을 한곳에서 관리합니다.",
     "terminalTitle": "기본 터미널",
     "terminalDescription": "터미널 바나 파일 트리에서 새 터미널 탭을 열 때 사용할 셸을 선택합니다. 에이전트가 houhub에 전체 명령줄 실행을 요청할 때도 사용됩니다.",
     "defaultTerminalShell": "기본 셸",
@@ -1659,7 +1659,7 @@
     "terminalShellNotInstalled": "설치되지 않음",
     "terminalShellNotFoundWarning": "이 경로는 현재 호스트에 존재하지 않습니다.",
     "terminalCurrentShell": "현재 사용 중: {path}",
-    "renderingDescription": "앱이 검은 화면이 되거나 렌더링 문제가 발생하면(일부 AMD GPU 또는 Intel 내장 GPU에서 보고됨) 하드웨어 가속을 끄세요. Windows 데스크톱에서만 적용됩니다.",
+    "renderingDescription": "앱이 검은 화면이 되거나 렌더링 문제가 발생하면(Windows에서는 일부 AMD GPU 또는 Intel 내장 GPU, Linux에서는 NVIDIA 독점 드라이버에서 보고됨) 하드웨어 가속을 끄세요. Windows 및 Linux 데스크톱에서만 적용됩니다.",
     "disableHardwareAcceleration": "하드웨어 가속 비활성화",
     "renderingSaveFailed": "렌더링 설정 저장 실패: {message}",
     "restartRequired": "저장되었습니다. 변경 사항을 적용하려면 앱을 다시 시작하세요.",
@@ -3454,7 +3454,7 @@
         "agentSessionLoading": "하위 에이전트의 기록을 불러오는 중…",
         "agentSessionEmpty": "하위 에이전트가 아직 아무것도 기록하지 않았습니다.",
         "agentFallbackTitle": "서브 에이전트 시작 중…",
-        "agentCodexLaunchOnly": "시작되었습니다. Codex는 이 하위 에이전트의 진행 상황을 더 이상 알리지 않으며, 결과는 이 대화의 메시지로 도착합니다.",
+        "agentCodexLaunchOnly": "시작되었습니다. Codex가 이 하위 에이전트의 결과를 아직 알리지 않았습니다. 세션을 열면 작업을 확인할 수 있습니다.",
         "agentStatsBash": "명령",
         "agentStatsRead": "파일 읽기",
         "agentStatsSearch": "검색",
@@ -3776,27 +3776,6 @@
         "viewTree": "트리 보기",
         "fields": "필드 {count}개",
         "items": "항목 {count}개"
-      },
-      "houhubMcpTool": {
-        "getSessionInfo": "세션 {session} 읽는 중",
-        "getSessionInfoNoId": "세션 읽는 중",
-        "taskProgress": "진행: {message}",
-        "taskProgressNoMessage": "작업 진행 상황 보고",
-        "taskComplete": "작업 종료 · {verdict}",
-        "taskCompleteWithSummary": "작업 종료 · {verdict}: {summary}",
-        "createAutomation": "자동화 {name} 생성 중",
-        "createAutomationNoName": "자동화 생성 중",
-        "createWorkTask": "작업 항목 {title} 생성 중",
-        "createWorkTaskNoTitle": "작업 항목 생성 중",
-        "resumeDelegation": "작업 {task} 재개 중",
-        "resumeDelegationNoId": "위임 작업 재개 중",
-        "promptLabel": "프롬프트",
-        "verdict": {
-          "success": "성공",
-          "needs_review": "검토 필요",
-          "blocked": "차단됨",
-          "unknown": "알 수 없음"
-        }
       },
       "houhubMcpTool": {
         "getSessionInfo": "세션 {session} 읽는 중",
@@ -4287,8 +4266,7 @@
       "linked_to_houhub": "활성화됨",
       "linked_elsewhere": "차단됨 — 다른 링크가 존재함",
       "blocked_by_real_directory": "차단됨 — 사용자 정의 스킬이 이 이름을 점유 중",
-      "broken": "손상된 링크",
-      "linked_to_houhub": "활성화됨"
+      "broken": "손상된 링크"
     },
     "badges": {
       "userModified": "사용자가 수정함"
@@ -4325,8 +4303,7 @@
       "linked_to_houhub": "활성화됨",
       "linked_elsewhere": "차단됨 — 다른 링크가 존재함",
       "blocked_by_real_directory": "차단됨 — 사용자 정의 스킬이 이 이름을 점유 중",
-      "broken": "손상된 링크",
-      "linked_to_houhub": "활성화됨"
+      "broken": "손상된 링크"
     },
     "badges": {
       "userModified": "사용자가 수정함",
@@ -4376,8 +4353,7 @@
       "linked_to_houhub": "활성",
       "linked_elsewhere": "차단됨 — 다른 링크가 존재합니다",
       "blocked_by_real_directory": "차단됨 — 사용자 정의 스킬이 이 이름을 사용 중",
-      "broken": "링크 끊김",
-      "linked_to_houhub": "활성"
+      "broken": "링크 끊김"
     },
     "badges": {
       "notSynced": "미동기화"
@@ -5078,8 +5054,7 @@
       "linked_to_houhub": "사용 중",
       "linked_elsewhere": "다른 위치에 연결됨",
       "blocked_by_real_directory": "실제 폴더가 차지함",
-      "broken": "손상된 링크",
-      "linked_to_houhub": "사용 중"
+      "broken": "손상된 링크"
     },
     "actions": {
       "new": "새로 만들기",

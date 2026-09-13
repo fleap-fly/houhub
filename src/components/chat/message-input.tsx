@@ -131,7 +131,10 @@ import {
 import { ComposerContextUsage } from "@/components/chat/composer-context-usage"
 import { ComposerConnectionStatus } from "@/components/chat/composer-connection-status"
 import { InlineModeSelector } from "@/components/chat/mode-selector"
-import { InlineSessionConfigSelector } from "@/components/chat/session-config-selector"
+import {
+  InlineSessionConfigSelector,
+  InlineSessionConfigToggle,
+} from "@/components/chat/session-config-selector"
 import { ModelOptionPicker } from "@/components/chat/model-option-picker"
 import { SelectorTooltip } from "@/components/chat/selector-tooltip"
 import {
@@ -3101,6 +3104,21 @@ export function MessageInput({
     <>
       {hasConfigOptions &&
         availableConfigOptions.map((option) => {
+          // On/off options flip in place — a dropdown for a binary choice is a
+          // wasted interaction.
+          if (option.kind.type === "boolean") {
+            return (
+              <InlineSessionConfigToggle
+                key={option.id}
+                option={option}
+                onLabel={t("toggleOn")}
+                offLabel={t("toggleOff")}
+                onSelect={(configId, value) =>
+                  onConfigOptionChange?.(configId, value)
+                }
+              />
+            )
+          }
           // Long model lists get the searchable + virtualized popover (a Radix
           // menu of hundreds of items is the scroll jank); every other option —
           // and short model lists — keep the lightweight inline dropdown.

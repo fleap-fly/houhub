@@ -1414,7 +1414,7 @@ async fn remote_error_from_response(
 /// Resolve the download URL the remote handed back, and refuse one that leaves
 /// the connection's origin.
 ///
-/// `HouHub-server` always answers with a path (`create_download_ticket` builds
+/// `houhub-server` always answers with a path (`create_download_ticket` builds
 /// `/api/workspace_download/<ticket>`), so the absolute branch only ever fires
 /// for a remote that went off-script. It matters because this is the one
 /// request that carries the connection's custom headers with no bearer token
@@ -1781,9 +1781,7 @@ async fn run_ws_task(
         let mut socket = match connect_result {
             Ok(s) => s,
             Err(err) => {
-                tracing::error!(
-                    "[RemoteProxy] WS connect failed for connection {connection_id}: {err}"
-                );
+                tracing::error!("[RemoteProxy] WS connect failed for connection {connection_id}: {err}");
                 fail_count += 1;
                 if fail_count >= WS_RECONNECT_FAIL_THRESHOLD {
                     emit_internal(&app, &entry, &event_name, WS_UNAUTHORIZED_CHANNEL).await;
@@ -2045,18 +2043,18 @@ mod tests {
 
     #[test]
     fn ticket_url_resolves_a_path_against_the_connection() {
-        // The only shape `HouHub-server` actually returns.
+        // The only shape `houhub-server` actually returns.
         assert_eq!(
             absolute_remote_ticket_url("https://box.example", "/api/workspace_download/t1")
                 .unwrap(),
             "https://box.example/api/workspace_download/t1"
         );
         // A base with a path prefix keeps it — this is why the resolution is
-        // string concatenation and not `Url::join`, which would drop `/HouHub`.
+        // string concatenation and not `Url::join`, which would drop `/houhub`.
         assert_eq!(
-            absolute_remote_ticket_url("https://box.example/HouHub", "/api/workspace_download/t1")
+            absolute_remote_ticket_url("https://box.example/houhub", "/api/workspace_download/t1")
                 .unwrap(),
-            "https://box.example/HouHub/api/workspace_download/t1"
+            "https://box.example/houhub/api/workspace_download/t1"
         );
         assert_eq!(
             absolute_remote_ticket_url("https://box.example/", "api/workspace_download/t1")

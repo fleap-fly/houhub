@@ -46,10 +46,14 @@ export type MessageProps = HTMLAttributes<HTMLDivElement> & {
 export const Message = ({ className, from, ...props }: MessageProps) => (
   <div
     className={cn(
-      "group flex w-full flex-col gap-2",
+      "group flex flex-col gap-2",
       from === "user"
-        ? "is-user ml-auto justify-end max-w-[88%]"
-        : "is-assistant",
+        ? // Outer user capsule hugs its content (`w-fit`) instead of always
+          // reserving the full `max-w-[88%]` box — the inner bubble
+          // (`MessageContent`) is already `w-fit`, so this just drops the
+          // phantom full-width wrapper. Assistant keeps `w-full`.
+          "is-user ml-auto justify-end w-fit max-w-[88%]"
+        : "is-assistant w-full",
       className
     )}
     {...props}
@@ -483,7 +487,19 @@ function MessageResponseImpl({
   return (
     <Streamdown
       className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-3 [&_ol]:pl-3 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:not-italic",
+        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-3 [&_ol]:pl-3",
+        // Streamdown gives `blockquote` its own `border-l-4
+        // border-muted-foreground/30 … italic`, but those class names live in
+        // node_modules, which Tailwind v4 does not scan — so the two border
+        // utilities generate no CSS and a quote renders as bare indented text
+        // with no rule (the `pl-4`/`my-4`/`text-muted-foreground` on the same
+        // element only survive because they happen to be used elsewhere in src).
+        // Re-declare the rule here, where it IS scanned; the descendant selector
+        // also outranks Streamdown's plain utility class. No `pl-*` — its `pl-4`
+        // already works and a same-specificity duplicate would be a coin flip.
+        // Upright, not italic: CJK has no true italic, so a browser fakes it by
+        // skewing, which looks broken.
+        "[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:not-italic",
         className
       )}
       plugins={plugins}

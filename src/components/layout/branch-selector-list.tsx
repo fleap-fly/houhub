@@ -32,12 +32,13 @@ import { useTranslations } from "next-intl"
 import { Virtualizer, type VirtualizerHandle } from "virtua"
 import { useImeGuard } from "@/hooks/use-ime-guard"
 import { useZoomLevel } from "@/hooks/use-appearance"
+import { isImeCompositionKey } from "@/lib/ime-composition"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { branchRowPaddingLeft } from "@/components/layout/branch-tree-collapsible"
 import {
-  buildBranchRows,
   branchLeafActions,
+  buildBranchRows,
   isNavigableRow,
   type BranchLeafAction,
   type BranchOperationMeta,
@@ -146,10 +147,10 @@ const DESTRUCTIVE_ACTIONS: ReadonlySet<BranchLeafAction> = new Set([
   "deleteWorktreeAndBranch",
 ])
 
-// First action of each group in `branchLeafActions`. A rule ("insert a divider before any group
-// starter that isn't the first row") rather than fixed indices, so a group that
-// drops out entirely — a remote leaf has no "push", a tracked remote no
-// "delete" — never leaves a dangling divider behind.
+// First action of each group in `branchLeafActions`. A rule ("insert a divider
+// before any group starter that isn't the first row") rather than fixed indices,
+// so a group that drops out entirely — a remote leaf has no "push", a tracked
+// remote no "delete" — never leaves a dangling divider behind.
 const BUBBLE_GROUP_STARTS: ReadonlySet<BranchLeafAction> = new Set([
   "pull",
   "delete",
@@ -258,7 +259,7 @@ export function BranchSelectorList({
           active.isContentEditable)
       )
         return
-      if (event.isComposing || event.key === "Process") return
+      if (isImeCompositionKey(event)) return
       const isPrintable =
         event.key.length === 1 &&
         !event.metaKey &&
@@ -522,7 +523,7 @@ export function BranchSelectorList({
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     // Don't steal Enter/arrows while an IME composition is in flight (CJK).
-    if (event.nativeEvent.isComposing || event.key === "Process") return
+    if (ime.isComposing(event)) return
 
     // When the action bubble is open, arrows/Enter drive it; Escape/Left close
     // it; any other key closes it and falls through to normal list handling.

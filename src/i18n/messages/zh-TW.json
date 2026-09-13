@@ -390,7 +390,7 @@
     "loadFailed": "載入設定失敗：{message}",
     "gitAccount": {
       "sectionTitle": "Git 伺服器帳號",
-      "sectionDescription": "管理非 GitHub 的 Git 伺服器憑據（GitLab、Bitbucket、自建服務等）。",
+      "sectionDescription": "管理沒有獨立區塊的 Git 伺服器憑證（Bitbucket、自架服務等）。",
       "noAccounts": "尚未設定 Git 伺服器帳號。",
       "addAccount": "新增帳號",
       "addTitle": "新增 Git 帳號",
@@ -1642,7 +1642,7 @@
   "GeneralSettings": {
     "loading": "載入中...",
     "sectionTitle": "一般",
-    "sectionDescription": "集中管理預設終端機、渲染加速、通知提示音以及多智能體協同等通用偏好。",
+    "sectionDescription": "集中管理預設終端機、渲染加速、通知與提示音以及多智能體協同等通用偏好。",
     "terminalTitle": "預設終端",
     "terminalDescription": "選擇從終端列或檔案樹開啟新終端分頁時使用的 Shell。智慧代理請求 houhub 代為執行整條命令列時也會使用它。",
     "defaultTerminalShell": "預設 Shell",
@@ -1659,7 +1659,7 @@
     "terminalShellNotInstalled": "未安裝",
     "terminalShellNotFoundWarning": "目前主機上不存在此路徑。",
     "terminalCurrentShell": "目前使用：{path}",
-    "renderingDescription": "若應用出現黑屏或渲染異常（常見於 AMD 顯示卡或部分 Intel 內顯），可關閉硬體加速。僅 Windows 桌面端生效。",
+    "renderingDescription": "若應用出現黑屏或渲染異常（Windows 上常見於 AMD 顯示卡或部分 Intel 內顯，Linux 上常見於 NVIDIA 閉源驅動），可關閉硬體加速。僅 Windows 與 Linux 桌面端生效。",
     "disableHardwareAcceleration": "停用硬體加速",
     "renderingSaveFailed": "渲染設定儲存失敗：{message}",
     "restartRequired": "已儲存，需重新啟動應用程式才會生效。",
@@ -3454,7 +3454,7 @@
         "agentSessionLoading": "正在載入子智慧體的對話記錄…",
         "agentSessionEmpty": "子智慧體尚未寫入任何內容。",
         "agentFallbackTitle": "子智能體啟動中…",
-        "agentCodexLaunchOnly": "已啟動。Codex 不會再回報這個子智能體的進度——它的結果會以一則訊息出現在本工作階段中。",
+        "agentCodexLaunchOnly": "已啟動。Codex 尚未回報這個子智能體的結果——開啟它的工作階段即可追蹤進度。",
         "agentStatsBash": "命令",
         "agentStatsRead": "讀取檔案",
         "agentStatsSearch": "搜尋",
@@ -3776,27 +3776,6 @@
         "viewTree": "檢視樹狀檢視",
         "fields": "{count} 個欄位",
         "items": "{count} 項"
-      },
-      "houhubMcpTool": {
-        "getSessionInfo": "讀取會話 {session}",
-        "getSessionInfoNoId": "讀取會話",
-        "taskProgress": "進度：{message}",
-        "taskProgressNoMessage": "回報任務進度",
-        "taskComplete": "任務結束 · {verdict}",
-        "taskCompleteWithSummary": "任務結束 · {verdict}：{summary}",
-        "createAutomation": "建立自動化 {name}",
-        "createAutomationNoName": "建立自動化",
-        "createWorkTask": "建立待辦任務 {title}",
-        "createWorkTaskNoTitle": "建立待辦任務",
-        "resumeDelegation": "恢復任務 {task}",
-        "resumeDelegationNoId": "恢復委派任務",
-        "promptLabel": "指令",
-        "verdict": {
-          "success": "成功",
-          "needs_review": "待複核",
-          "blocked": "受阻",
-          "unknown": "未知"
-        }
       },
       "houhubMcpTool": {
         "getSessionInfo": "讀取會話 {session}",
@@ -4287,8 +4266,7 @@
       "linked_to_houhub": "已啟用",
       "linked_elsewhere": "衝突 — 已有其他連結",
       "blocked_by_real_directory": "衝突 — 已有同名的自訂 skill 佔用",
-      "broken": "連結損壞",
-      "linked_to_houhub": "已啟用"
+      "broken": "連結損壞"
     },
     "badges": {
       "userModified": "使用者修改過"
@@ -4325,8 +4303,7 @@
       "linked_to_houhub": "已啟用",
       "linked_elsewhere": "衝突 — 已有其他連結",
       "blocked_by_real_directory": "衝突 — 已有同名的自訂 skill 佔用",
-      "broken": "連結損壞",
-      "linked_to_houhub": "已啟用"
+      "broken": "連結損壞"
     },
     "badges": {
       "userModified": "使用者修改過",
@@ -4376,8 +4353,7 @@
       "linked_to_houhub": "已啟用",
       "linked_elsewhere": "已阻止——存在其他連結",
       "blocked_by_real_directory": "已阻止——自訂技能佔用此名稱",
-      "broken": "連結已損壞",
-      "linked_to_houhub": "已啟用"
+      "broken": "連結已損壞"
     },
     "badges": {
       "notSynced": "未同步"
@@ -5078,8 +5054,7 @@
       "linked_to_houhub": "已啟用",
       "linked_elsewhere": "連結到其他位置",
       "blocked_by_real_directory": "被同名實體目錄佔用",
-      "broken": "連結已失效",
-      "linked_to_houhub": "已啟用"
+      "broken": "連結已失效"
     },
     "actions": {
       "new": "新增",

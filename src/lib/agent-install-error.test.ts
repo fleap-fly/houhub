@@ -13,6 +13,8 @@ describe("getInstallErrorHintKey", () => {
   })
 
   it.each([
+    // Volta "Could not create environment ... Access is denied (os error 5)".
+    "Volta error: Could not create environment for the package at C:\\...\\packages\\foo Access is denied. (os error 5)",
     // Plain npm on Windows — EPERM/EBUSY only count with a removal syscall.
     "npm error code EPERM\nnpm error syscall rmdir\nnpm error EPERM: operation not permitted, rmdir 'C:\\...\\node_modules\\foo'",
     "npm error EPERM: operation not permitted, unlink 'C:\\...\\bin\\foo.exe'",
@@ -25,7 +27,6 @@ describe("getInstallErrorHintKey", () => {
     // A generic Volta error must NOT misfire as the file-lock hint.
     "VOLTA ERROR: something went wrong",
     "Volta error: Could not download Node version 20",
-    "Volta error: Could not create environment for the package at C:\\...\\packages\\foo Access is denied. (os error 5)",
     // EPERM/EBUSY without a removal syscall (e.g. opening a file) is unrelated.
     "npm error EPERM: operation not permitted, open 'C:\\...\\foo.json'",
     "Error: EBUSY: resource busy or locked, stat 'C:\\...\\foo'",

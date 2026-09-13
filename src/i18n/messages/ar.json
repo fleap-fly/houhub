@@ -390,7 +390,7 @@
     "loadFailed": "فشل تحميل الإعدادات: {message}",
     "gitAccount": {
       "sectionTitle": "حسابات خادم Git",
-      "sectionDescription": "إدارة بيانات الاعتماد لخوادم Git غير GitHub (GitLab، Bitbucket، الخوادم الذاتية، إلخ).",
+      "sectionDescription": "إدارة بيانات اعتماد خوادم Git التي ليس لها قسم خاص (Bitbucket، الاستضافة الذاتية، إلخ).",
       "noAccounts": "لا توجد حسابات خادم Git مكوّنة.",
       "addAccount": "إضافة حساب",
       "addTitle": "إضافة حساب Git",
@@ -1642,7 +1642,7 @@
   "GeneralSettings": {
     "loading": "جارٍ التحميل...",
     "sectionTitle": "عام",
-    "sectionDescription": "تفضيلات موحّدة للطرفية الافتراضية وتسريع العرض وأصوات الإشعارات وتفويض الوكلاء المتعدّدين.",
+    "sectionDescription": "تفضيلات موحّدة للطرفية الافتراضية وتسريع العرض والإشعارات وتفويض الوكلاء المتعدّدين.",
     "terminalTitle": "الطرفية الافتراضية",
     "terminalDescription": "اختر الصدفة المستخدمة عند فتح علامات تبويب طرفية جديدة من شريط الطرفية أو شجرة الملفات. تستخدمها الوكلاء أيضًا عندما تطلب من houhub تنفيذ سطر أوامر كامل نيابةً عنها.",
     "defaultTerminalShell": "الصدفة الافتراضية",
@@ -1659,7 +1659,7 @@
     "terminalShellNotInstalled": "غير مثبّت",
     "terminalShellNotFoundWarning": "هذا المسار غير موجود على هذا المضيف.",
     "terminalCurrentShell": "قيد الاستخدام: {path}",
-    "renderingDescription": "أوقف تشغيل تسريع الأجهزة إذا ظهرت شاشة سوداء أو أخطاء في العرض (شائع على بعض كروت AMD أو كروت Intel المدمجة). يسري على إصدار سطح المكتب لويندوز فقط.",
+    "renderingDescription": "أوقف تشغيل تسريع الأجهزة إذا ظهرت شاشة سوداء أو أخطاء في العرض (شائع على بعض كروت AMD أو كروت Intel المدمجة على ويندوز، وعلى تعريف NVIDIA المغلق على لينكس). يسري على إصدارات سطح المكتب لويندوز ولينكس فقط.",
     "disableHardwareAcceleration": "تعطيل تسريع الأجهزة",
     "renderingSaveFailed": "فشل حفظ إعدادات العرض: {message}",
     "restartRequired": "تم الحفظ. أعد تشغيل التطبيق ليصبح التغيير نافذًا.",
@@ -3454,7 +3454,7 @@
         "agentSessionLoading": "جارٍ تحميل سجل الوكيل الفرعي…",
         "agentSessionEmpty": "لم يكتب الوكيل الفرعي أي شيء بعد.",
         "agentFallbackTitle": "جارٍ تشغيل الوكيل الفرعي…",
-        "agentCodexLaunchOnly": "تم التشغيل. لا يبلّغ Codex عن أي تقدّم إضافي لهذا الوكيل الفرعي — وستصل نتيجته كرسالة في هذه المحادثة.",
+        "agentCodexLaunchOnly": "تم التشغيل. لم يبلّغ Codex بعد عن نتيجة هذا الوكيل الفرعي — افتح جلسته لمتابعة العمل.",
         "agentStatsBash": "الأوامر",
         "agentStatsRead": "الملفات المقروءة",
         "agentStatsSearch": "عمليات البحث",
@@ -3776,27 +3776,6 @@
         "viewTree": "عرض الشجرة",
         "fields": "{count, plural, zero {لا حقول} one {حقل واحد} two {حقلان} few {# حقول} many {# حقلًا} other {# حقل}}",
         "items": "{count, plural, zero {لا عناصر} one {عنصر واحد} two {عنصران} few {# عناصر} many {# عنصرًا} other {# عنصر}}"
-      },
-      "houhubMcpTool": {
-        "getSessionInfo": "قراءة المحادثة {session}",
-        "getSessionInfoNoId": "قراءة محادثة",
-        "taskProgress": "التقدم: {message}",
-        "taskProgressNoMessage": "الإبلاغ عن تقدم المهمة",
-        "taskComplete": "انتهت المهمة · {verdict}",
-        "taskCompleteWithSummary": "انتهت المهمة · {verdict}: {summary}",
-        "createAutomation": "إنشاء الأتمتة {name}",
-        "createAutomationNoName": "إنشاء أتمتة",
-        "createWorkTask": "إنشاء مهمة العمل {title}",
-        "createWorkTaskNoTitle": "إنشاء مهمة عمل",
-        "resumeDelegation": "استئناف المهمة {task}",
-        "resumeDelegationNoId": "استئناف مهمة مفوضة",
-        "promptLabel": "التعليمات",
-        "verdict": {
-          "success": "ناجحة",
-          "needs_review": "بحاجة إلى مراجعة",
-          "blocked": "متوقفة",
-          "unknown": "غير معروف"
-        }
       },
       "houhubMcpTool": {
         "getSessionInfo": "قراءة المحادثة {session}",
@@ -4287,8 +4266,7 @@
       "linked_to_houhub": "مُفعَّل",
       "linked_elsewhere": "محظور — يوجد رابط آخر",
       "blocked_by_real_directory": "محظور — مهارة مخصصة تشغل هذا الاسم",
-      "broken": "رابط معطوب",
-      "linked_to_houhub": "مُفعَّل"
+      "broken": "رابط معطوب"
     },
     "badges": {
       "userModified": "عُدِّل من قبل المستخدم"
@@ -4325,8 +4303,7 @@
       "linked_to_houhub": "مُفعَّل",
       "linked_elsewhere": "محظور — يوجد رابط آخر",
       "blocked_by_real_directory": "محظور — مهارة مخصصة تشغل هذا الاسم",
-      "broken": "رابط معطوب",
-      "linked_to_houhub": "مُفعَّل"
+      "broken": "رابط معطوب"
     },
     "badges": {
       "userModified": "عُدِّل من قبل المستخدم",
@@ -4376,8 +4353,7 @@
       "linked_to_houhub": "مفعّل",
       "linked_elsewhere": "محظور — يوجد رابط آخر",
       "blocked_by_real_directory": "محظور — مهارة مخصصة تشغل هذا الاسم",
-      "broken": "رابط معطل",
-      "linked_to_houhub": "مفعّل"
+      "broken": "رابط معطل"
     },
     "badges": {
       "notSynced": "غير متزامن"
@@ -5078,8 +5054,7 @@
       "linked_to_houhub": "مُفعّلة",
       "linked_elsewhere": "مرتبطة في مكان آخر",
       "blocked_by_real_directory": "محجوبة بمجلد فعلي",
-      "broken": "رابط معطوب",
-      "linked_to_houhub": "مُفعّلة"
+      "broken": "رابط معطوب"
     },
     "actions": {
       "new": "جديدة",

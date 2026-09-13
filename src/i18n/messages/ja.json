@@ -390,7 +390,7 @@
     "loadFailed": "設定の読み込みに失敗しました：{message}",
     "gitAccount": {
       "sectionTitle": "Git サーバーアカウント",
-      "sectionDescription": "GitHub 以外の Git サーバーの認証情報を管理します（GitLab、Bitbucket、セルフホストなど）。",
+      "sectionDescription": "専用のセクションがない Git サーバーの認証情報を管理します（Bitbucket、自己ホスト型など）。",
       "noAccounts": "Git サーバーアカウントが設定されていません。",
       "addAccount": "アカウントを追加",
       "addTitle": "Git アカウントを追加",
@@ -1642,7 +1642,7 @@
   "GeneralSettings": {
     "loading": "読み込み中...",
     "sectionTitle": "一般",
-    "sectionDescription": "デフォルトターミナル、レンダリング高速化、通知音、マルチエージェント委譲などの共通設定をここで一括管理します。",
+    "sectionDescription": "デフォルトターミナル、レンダリング高速化、通知と通知音、マルチエージェント委譲などの共通設定をここで一括管理します。",
     "terminalTitle": "デフォルトターミナル",
     "terminalDescription": "ターミナルバーやファイルツリーから新しいターミナルタブを開くときに使用するシェルを選択します。エージェントが houhub にコマンドライン全体の実行を依頼するときにも使われます。",
     "defaultTerminalShell": "デフォルトシェル",
@@ -1659,7 +1659,7 @@
     "terminalShellNotInstalled": "未インストール",
     "terminalShellNotFoundWarning": "このパスはホスト上に存在しません。",
     "terminalCurrentShell": "現在使用中: {path}",
-    "renderingDescription": "アプリで黒画面や描画不具合が発生する場合（一部の AMD GPU や Intel 内蔵 GPU で報告あり）、ハードウェアアクセラレーションを無効化してください。Windows デスクトップ版のみ有効です。",
+    "renderingDescription": "アプリで黒画面や描画不具合が発生する場合（Windows では一部の AMD GPU や Intel 内蔵 GPU、Linux では NVIDIA プロプライエタリドライバーで報告あり）、ハードウェアアクセラレーションを無効化してください。Windows と Linux のデスクトップ版のみ有効です。",
     "disableHardwareAcceleration": "ハードウェアアクセラレーションを無効化",
     "renderingSaveFailed": "レンダリング設定の保存に失敗しました: {message}",
     "restartRequired": "保存しました。再起動後に反映されます。",
@@ -3454,7 +3454,7 @@
         "agentSessionLoading": "サブエージェントの記録を読み込んでいます…",
         "agentSessionEmpty": "サブエージェントはまだ何も書き込んでいません。",
         "agentFallbackTitle": "サブエージェント起動中…",
-        "agentCodexLaunchOnly": "起動しました。Codex はこのサブエージェントの進捗をこれ以上通知しません。結果はこの会話のメッセージとして届きます。",
+        "agentCodexLaunchOnly": "起動しました。Codex はこのサブエージェントの結末をまだ報告していません。セッションを開くと作業を追えます。",
         "agentStatsBash": "コマンド",
         "agentStatsRead": "ファイル読取",
         "agentStatsSearch": "検索",
@@ -3776,27 +3776,6 @@
         "viewTree": "ツリー表示",
         "fields": "{count} 個のフィールド",
         "items": "{count} 件"
-      },
-      "houhubMcpTool": {
-        "getSessionInfo": "セッション {session} を読み取り中",
-        "getSessionInfoNoId": "セッションを読み取り中",
-        "taskProgress": "進捗: {message}",
-        "taskProgressNoMessage": "タスクの進捗を報告",
-        "taskComplete": "タスク終了 · {verdict}",
-        "taskCompleteWithSummary": "タスク終了 · {verdict}: {summary}",
-        "createAutomation": "自動化 {name} を作成中",
-        "createAutomationNoName": "自動化を作成中",
-        "createWorkTask": "作業タスク {title} を作成中",
-        "createWorkTaskNoTitle": "作業タスクを作成中",
-        "resumeDelegation": "タスク {task} を再開中",
-        "resumeDelegationNoId": "委任タスクを再開中",
-        "promptLabel": "プロンプト",
-        "verdict": {
-          "success": "成功",
-          "needs_review": "要確認",
-          "blocked": "ブロック",
-          "unknown": "不明"
-        }
       },
       "houhubMcpTool": {
         "getSessionInfo": "セッション {session} を読み取り中",
@@ -4287,8 +4266,7 @@
       "linked_to_houhub": "有効",
       "linked_elsewhere": "ブロック — 別のリンクが存在",
       "blocked_by_real_directory": "ブロック — カスタムスキルがこの名前を占有",
-      "broken": "壊れたリンク",
-      "linked_to_houhub": "有効"
+      "broken": "壊れたリンク"
     },
     "badges": {
       "userModified": "ユーザーにより変更"
@@ -4325,8 +4303,7 @@
       "linked_to_houhub": "有効",
       "linked_elsewhere": "ブロック — 別のリンクが存在",
       "blocked_by_real_directory": "ブロック — カスタムスキルがこの名前を占有",
-      "broken": "壊れたリンク",
-      "linked_to_houhub": "有効"
+      "broken": "壊れたリンク"
     },
     "badges": {
       "userModified": "ユーザーにより変更",
@@ -4376,8 +4353,7 @@
       "linked_to_houhub": "有効",
       "linked_elsewhere": "ブロック — 他のリンクが存在します",
       "blocked_by_real_directory": "ブロック — カスタムスキルがこの名前を使用しています",
-      "broken": "リンク切れ",
-      "linked_to_houhub": "有効"
+      "broken": "リンク切れ"
     },
     "badges": {
       "notSynced": "未同期"
@@ -5078,8 +5054,7 @@
       "linked_to_houhub": "有効",
       "linked_elsewhere": "別の場所にリンク",
       "blocked_by_real_directory": "実在フォルダにより占有",
-      "broken": "リンク切れ",
-      "linked_to_houhub": "有効"
+      "broken": "リンク切れ"
     },
     "actions": {
       "new": "新規",

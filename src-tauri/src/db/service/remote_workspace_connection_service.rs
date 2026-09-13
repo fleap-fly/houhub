@@ -401,6 +401,7 @@ mod tests {
         .unwrap();
         assert_eq!(updated.name, "Server A");
         assert_eq!(updated.base_url, "https://houhub.example.com");
+        assert!(updated.headers.is_empty());
 
         delete(&db.conn, created.id).await.unwrap();
         assert!(list(&db.conn).await.unwrap().is_empty());

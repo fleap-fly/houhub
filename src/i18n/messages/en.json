@@ -390,7 +390,7 @@
     "loadFailed": "Failed to load settings: {message}",
     "gitAccount": {
       "sectionTitle": "Git Accounts",
-      "sectionDescription": "Manage credentials for non-GitHub Git servers (GitLab, Bitbucket, self-hosted, etc.).",
+      "sectionDescription": "Manage credentials for Git servers with no section of their own (Bitbucket, self-hosted, etc.).",
       "noAccounts": "No Git server accounts configured.",
       "addAccount": "Add Account",
       "addTitle": "Add Git Account",
@@ -1642,7 +1642,7 @@
   "GeneralSettings": {
     "loading": "Loading...",
     "sectionTitle": "General",
-    "sectionDescription": "Centralized preferences for the default terminal, rendering acceleration, notification sounds, and multi-agent delegation.",
+    "sectionDescription": "Centralized preferences for the default terminal, rendering acceleration, notifications, and multi-agent delegation.",
     "terminalTitle": "Default Terminal",
     "terminalDescription": "Choose the shell used when opening new terminal tabs from the terminal bar or file tree. Agents also use it when they ask houhub to run a whole command line for them.",
     "defaultTerminalShell": "Default shell",
@@ -1659,7 +1659,7 @@
     "terminalShellNotInstalled": "not installed",
     "terminalShellNotFoundWarning": "This path doesn't exist on this host.",
     "terminalCurrentShell": "Currently using: {path}",
-    "renderingDescription": "Disable hardware acceleration if the app shows a black screen or rendering glitches (common on certain AMD GPUs or Intel integrated GPUs). Only takes effect on the Windows desktop build.",
+    "renderingDescription": "Disable hardware acceleration if the app shows a black screen or rendering glitches (common on certain AMD GPUs or Intel integrated GPUs on Windows, and with the proprietary NVIDIA driver on Linux). Only takes effect on the Windows and Linux desktop builds.",
     "disableHardwareAcceleration": "Disable hardware acceleration",
     "renderingSaveFailed": "Failed to save rendering settings: {message}",
     "restartRequired": "Saved. Restart the app for the change to take effect.",
@@ -3467,7 +3467,7 @@
         "agentSessionLoading": "Loading the sub-agent's transcript…",
         "agentSessionEmpty": "The sub-agent hasn't written anything yet.",
         "agentFallbackTitle": "Sub-agent starting…",
-        "agentCodexLaunchOnly": "Launched. Codex reports no further progress for this sub-agent — its result arrives as a message in this conversation.",
+        "agentCodexLaunchOnly": "Launched. Codex hasn't reported how this sub-agent ended — open its session to follow the work.",
         "agentStatsBash": "Commands",
         "agentStatsRead": "Files read",
         "agentStatsSearch": "Searches",
@@ -3776,27 +3776,6 @@
         "viewTree": "Show tree",
         "fields": "{count, plural, one {# field} other {# fields}}",
         "items": "{count, plural, one {# item} other {# items}}"
-      },
-      "houhubMcpTool": {
-        "getSessionInfo": "Reading session {session}",
-        "getSessionInfoNoId": "Reading a session",
-        "taskProgress": "Progress: {message}",
-        "taskProgressNoMessage": "Reporting task progress",
-        "taskComplete": "Task finished · {verdict}",
-        "taskCompleteWithSummary": "Task finished · {verdict}: {summary}",
-        "createAutomation": "Creating automation {name}",
-        "createAutomationNoName": "Creating an automation",
-        "createWorkTask": "Creating work task {title}",
-        "createWorkTaskNoTitle": "Creating a work task",
-        "resumeDelegation": "Resuming task {task}",
-        "resumeDelegationNoId": "Resuming a delegated task",
-        "promptLabel": "Prompt",
-        "verdict": {
-          "success": "success",
-          "needs_review": "needs review",
-          "blocked": "blocked",
-          "unknown": "unknown"
-        }
       },
       "houhubMcpTool": {
         "getSessionInfo": "Reading session {session}",
@@ -4299,8 +4278,7 @@
       "linked_to_houhub": "Enabled",
       "linked_elsewhere": "Blocked — another link exists",
       "blocked_by_real_directory": "Blocked — a custom skill occupies this name",
-      "broken": "Broken link",
-      "linked_to_houhub": "Enabled"
+      "broken": "Broken link"
     },
     "badges": {
       "userModified": "User modified"
@@ -4337,8 +4315,7 @@
       "linked_to_houhub": "Enabled",
       "linked_elsewhere": "Blocked — another link exists",
       "blocked_by_real_directory": "Blocked — a custom skill occupies this name",
-      "broken": "Broken link",
-      "linked_to_houhub": "Enabled"
+      "broken": "Broken link"
     },
     "badges": {
       "userModified": "User modified",
@@ -4388,8 +4365,7 @@
       "linked_to_houhub": "Enabled",
       "linked_elsewhere": "Blocked — another link exists",
       "blocked_by_real_directory": "Blocked — a custom skill occupies this name",
-      "broken": "Broken link",
-      "linked_to_houhub": "Enabled"
+      "broken": "Broken link"
     },
     "badges": {
       "notSynced": "Not synced"
@@ -5078,8 +5054,7 @@
       "linked_to_houhub": "Enabled",
       "linked_elsewhere": "Linked elsewhere",
       "blocked_by_real_directory": "Blocked by a real folder",
-      "broken": "Broken link",
-      "linked_to_houhub": "Enabled"
+      "broken": "Broken link"
     },
     "actions": {
       "new": "New",

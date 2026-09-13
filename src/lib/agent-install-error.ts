@@ -3,12 +3,13 @@
  * UI can show a clear, localized hint the user can act on, instead of the raw
  * CLI error text.
  *
- * Primary case (Windows): a running agent process can hold file locks on its
- * own files inside the npm / Volta global package directory, so a reinstall
- * cannot remove the old package dir to upgrade or uninstall. npm/Volta surface
- * this as "Could not remove directory" / EPERM / EBUSY (and it fails even as
- * admin, because it is a sharing violation, not a permissions problem). The
- * fix the user needs is to close the running sessions and retry.
+ * Primary case (Windows): houhub keeps an agent's process alive for session
+ * reuse. On Windows the running process holds file locks on its own files
+ * inside the npm / Volta global package directory, so a reinstall can't remove
+ * the old package dir to upgrade or uninstall — npm/Volta surface this as
+ * "Could not remove directory" / EPERM / EBUSY (and it fails even as admin,
+ * because it's a sharing violation, not a permissions problem). The fix the
+ * user needs is simply to close the running sessions and retry.
  *
  * This module only classifies the error and returns a translation key; the
  * caller renders it via its own `useTranslations("AcpAgentSettings")` so the
@@ -30,7 +31,8 @@ const INSTALL_ERROR_RULES: InstallErrorRule[] = [
   {
     // Windows file lock held by a running agent process, surfacing only while
     // removing/replacing the old install. Two real shapes:
-    //   • Volta wraps it as "Could not remove directory".
+    //   • Volta wraps it as "Could not remove directory" / "Could not create
+    //     environment" (package-image ops on its global packages dir).
     //   • Plain npm prints "EPERM/EBUSY: operation not permitted, rmdir|unlink".
     // The phrases/codes are emitted in English regardless of OS locale. We
     // require an explicit removal context (rmdir/unlink) for the EPERM/EBUSY
@@ -39,6 +41,7 @@ const INSTALL_ERROR_RULES: InstallErrorRule[] = [
     // to the raw message rather than misfiring this hint.
     match: (m) =>
       m.includes("could not remove directory") ||
+      m.includes("could not create environment") ||
       ((m.includes("eperm") || m.includes("ebusy")) &&
         (m.includes("rmdir") || m.includes("unlink"))),
     key: "errors.windowsFileLocked",

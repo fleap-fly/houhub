@@ -142,6 +142,11 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             include_top: Some(&["sessions", "session_index.jsonl"]),
         },
         ExternalSource {
+            // Grok keeps a directory-per-session transcript store under
+            // `~/.grok/sessions/<encoded-cwd>/<uuid>/` (relocatable via
+            // `GROK_HOME`). `resolve_grok_home_dir()` points at `~/.grok`, so
+            // scope the archive to the `sessions/` subtree — never the sibling
+            // `auth.json` / `config.toml` / `bin/` under the same home.
             agent: "grok",
             root: grok::resolve_grok_home_dir().join("sessions"),
             is_file: false,
@@ -430,7 +435,7 @@ fn sanitize_text(text: &mut String) -> bool {
 /// on `GEMINI_HOME` (`acp_server/paths.py`) and DeepSeek expands `DSH_HOME`
 /// (`dsh-home-paths`' `expandHomePath`), but Hermes's `get_hermes_home` is a
 /// bare `Path(val.strip())` and Codex, Claude and the rest are likewise
-/// verbatim. Expanding for one of those would point HouHub at `$HOME/...` while
+/// verbatim. Expanding for one of those would point houhub at `$HOME/...` while
 /// the agent used a literal `~` directory — and, in the fs sandbox, would hand
 /// out `$HOME` as a writable root the user never selected.
 ///
@@ -538,10 +543,7 @@ fn is_markdown_whitespace(c: char) -> bool {
 /// lets a backslash escape whitespace, so `\` + whitespace ENDS (not extends) a
 /// label/destination scan — only `\` + a non-whitespace char is a real escape.
 fn reference_escapes_next(chars: &[char], k: usize) -> bool {
-    chars.get(k) == Some(&'\\')
-        && chars
-            .get(k + 1)
-            .is_some_and(|c| !is_markdown_whitespace(*c))
+    chars.get(k) == Some(&'\\') && chars.get(k + 1).is_some_and(|c| !is_markdown_whitespace(*c))
 }
 
 /// If a well-formed `(destination)` begins at `start`, return the index just
@@ -783,6 +785,23 @@ fn model_capacity_suffix_regex() -> &'static Regex {
     })
 }
 
+/// Matches the SDK's *id* spelling of Anthropic's 1M-context lane, where `1m`
+/// is its own delimited token (`claude-opus-4-6-1m`). `\b1m\b` is the same
+/// test claude-agent-acp's `inferContextWindowFromModel` applies, and it
+/// deliberately does not match embedded runs like `10m`.
+fn claude_one_million_id_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)\b1m\b").expect("valid claude 1m id regex"))
+}
+
+/// Whether `model` names Anthropic's 1M-context lane through the SDK's id
+/// spelling (`claude-opus-4-6-1m`). The CLI's *display* spelling
+/// (`claude-sonnet-5[1m]`) carries the same meaning but is handled by
+/// [`parse_model_capacity_suffix`], which reads the bracketed number directly.
+fn is_claude_one_million_context_id(model: &str) -> bool {
+    claude_one_million_id_regex().is_match(model)
+}
+
 fn parse_model_capacity_suffix(model: &str) -> Option<u64> {
     let captures = model_capacity_suffix_regex().captures(model.trim())?;
     let value = captures.get(1)?.as_str().parse::<f64>().ok()?;
@@ -823,7 +842,15 @@ pub fn infer_context_window_max_tokens(model: Option<&str>) -> Option<u64> {
         .trim()
         .to_ascii_lowercase();
 
+    // Anthropic's default lane is 200K; the 1M lane is opt-in and shows up in
+    // the model id itself. Agents other than Claude Code record the id the way
+    // their backend named it, so the marker survives here — unlike Claude
+    // Code's own transcripts, where it is stripped (see
+    // `claude::claude_context_window_max_tokens_for_model`).
     if normalized.starts_with("claude") {
+        if is_claude_one_million_context_id(&normalized) {
+            return Some(1_000_000);
+        }
         return Some(200_000);
     }
     if normalized.starts_with("gemini") {
@@ -843,6 +870,12 @@ pub fn infer_context_window_max_tokens(model: Option<&str>) -> Option<u64> {
         //   general -fast (grok-4-fast) → 2M
         // Default any unknown grok model to the conservative 256K rather than
         // guessing high.
+        //
+        // This is the LAST resort. Grok publishes every model's real window —
+        // `availableModels[]._meta.totalContextTokens` on the wire, and
+        // `models_cache.json` / a BYO `[model.<id>].context_window` on disk — so
+        // both the live path and `grok::build_detail` consult those first and
+        // only land here for a model nothing on this machine names.
         if normalized.contains("4.5") {
             return Some(500_000);
         }
@@ -852,7 +885,10 @@ pub fn infer_context_window_max_tokens(model: Option<&str>) -> Option<u64> {
         if normalized.contains("code") || normalized.contains("build") {
             return Some(256_000);
         }
-        if normalized.contains("fast") {
+        // The 2M lane is grok's OWN `-fast` line. `grok-composer-2.5-fast` is
+        // Cursor's Composer, merely offered in grok's model list, and shares
+        // none of that capacity — it takes the conservative default below.
+        if normalized.contains("fast") && !normalized.contains("composer") {
             return Some(2_000_000);
         }
         return Some(256_000);
@@ -2040,6 +2076,21 @@ mod tests {
             infer_context_window_max_tokens(Some("claude-sonnet-4-6 [1.5M]")),
             Some(1_500_000)
         );
+        // The 1M lane also travels as a bare id token (`-1m`), which is how the
+        // SDK — and therefore every agent that records the resolved id — spells
+        // it. `\b1m\b` must not fire on an embedded run like `10m`.
+        assert_eq!(
+            infer_context_window_max_tokens(Some("claude-opus-4-6-1m")),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("my-gateway/claude-opus-4-6-1m")),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("claude-opus-4-6-10m-preview")),
+            Some(200_000)
+        );
         // Grok context windows per x.ai docs: grok-4.5 = 500K, grok-4.3 /
         // grok-4.20 = 1M, the coding/build models = 256K (grok-code-fast-1
         // despite "fast"), the general -fast variants = 2M, and any unknown
@@ -2067,6 +2118,12 @@ mod tests {
         assert_eq!(
             infer_context_window_max_tokens(Some("grok-4-fast")),
             Some(2_000_000)
+        );
+        // Cursor's Composer rides in grok's model list; the "fast" in its name
+        // must NOT put it on grok's own 2M lane.
+        assert_eq!(
+            infer_context_window_max_tokens(Some("grok-composer-2.5-fast")),
+            Some(256_000)
         );
         assert_eq!(
             infer_context_window_max_tokens(Some("grok-7-experimental")),

@@ -682,6 +682,26 @@ async fn npm_list_version(
     normalize_version_candidate(version)
 }
 
+/// The version to display for a `Uvx` agent, shared by `detect_local_version`
+/// and the status/list paths so they can't disagree: houhub's prepared marker
+/// first, then the package's console script on PATH, then the system-fallback
+/// command a launch would actually use (a pipx / `uv tool install` CLI).
+async fn uvx_displayed_version(
+    agent_type: AgentType,
+    cmd: &str,
+    system_cmd: Option<(&'static str, &'static [&'static str])>,
+) -> Option<String> {
+    let mut version = binary_cache::uvx_prepared_version(agent_type);
+    if version.is_none() {
+        let bin = resolve_command_on_path(cmd)
+            .or_else(|| system_cmd.and_then(|(c, _)| resolve_command_on_path(c)));
+        if let Some(bin) = bin {
+            version = system_probed_version(agent_type, &bin, None).await;
+        }
+    }
+    version
+}
+
 async fn detect_local_version(agent_type: AgentType) -> Option<String> {
     let meta = registry::get_agent_meta(agent_type);
     match meta.distribution {
@@ -715,21 +735,7 @@ async fn detect_local_version(agent_type: AgentType) -> Option<String> {
         }
         registry::AgentDistribution::Uvx {
             cmd, system_cmd, ..
-        } => {
-            let mut version = binary_cache::uvx_prepared_version(agent_type);
-            // A user-installed package CLI is a real install even without a
-            // HouHub prewarm marker. Prefer its console script, then the
-            // launch fallback (Hermes: `hermes-acp` then `hermes`).
-            if version.is_none() {
-                let bin = resolve_command_on_path(cmd).or_else(|| {
-                    system_cmd.and_then(|(command, _)| resolve_command_on_path(command))
-                });
-                if let Some(bin) = bin {
-                    version = system_probed_version(agent_type, &bin, None).await;
-                }
-            }
-            version
-        }
+        } => uvx_displayed_version(agent_type, cmd, system_cmd).await,
     }
 }
 
@@ -10498,18 +10504,10 @@ pub(crate) async fn acp_get_agent_status_core(
         }
         registry::AgentDistribution::Uvx {
             cmd, system_cmd, ..
-        } => {
-            let mut version = binary_cache::uvx_prepared_version(agent_type);
-            if version.is_none() {
-                let bin = resolve_command_on_path(cmd).or_else(|| {
-                    (*system_cmd).and_then(|(command, _)| resolve_command_on_path(command))
-                });
-                if let Some(bin) = bin {
-                    version = system_probed_version(agent_type, &bin, None).await;
-                }
-            }
-            (uvx_agent_launchable(*system_cmd), version)
-        }
+        } => (
+            uvx_agent_launchable(*system_cmd),
+            uvx_displayed_version(agent_type, cmd, *system_cmd).await,
+        ),
     };
 
     Ok(crate::acp::types::AcpAgentStatus {
@@ -10602,18 +10600,11 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
             }
             registry::AgentDistribution::Uvx {
                 cmd, system_cmd, ..
-            } => {
-                let mut version = binary_cache::uvx_prepared_version(agent_type);
-                if version.is_none() {
-                    let bin = resolve_command_on_path(cmd).or_else(|| {
-                        (*system_cmd).and_then(|(command, _)| resolve_command_on_path(command))
-                    });
-                    if let Some(bin) = bin {
-                        version = system_probed_version(agent_type, &bin, None).await;
-                    }
-                }
-                (uvx_agent_launchable(*system_cmd), "uvx", version)
-            }
+            } => (
+                uvx_agent_launchable(*system_cmd),
+                "uvx",
+                uvx_displayed_version(agent_type, cmd, *system_cmd).await,
+            ),
         };
 
         let mut env = setting

@@ -40,7 +40,7 @@ import {
   SettingCard,
   SettingNote,
   SettingRow,
-} from "@/components/tasks/setting-card"
+} from "@/components/shared/setting-card"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -633,6 +633,9 @@ function TaskSettingsBody({
                     })}
                   </div>
                 </SettingRow>
+                {/* Unattended landing: same dispatch as the merge button, so
+                    it sits between "how commits land" and "what happens to the
+                    worktree" — the two knobs it inherits. */}
                 <SettingRow
                   icon={Merge}
                   title={t("settingsAutoMerge")}

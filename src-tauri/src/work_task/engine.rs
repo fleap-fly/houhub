@@ -53,7 +53,8 @@ use crate::forge::{ForgeItemKind, ForgeSourceMeta, SOURCE_KIND_ISSUE, SOURCE_KIN
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
 use crate::models::{
     AgentType, FollowUpIntent, WorkTaskConfig, WorkTaskFolderSettings, WorkTaskMergeOp,
-    WorkTaskMergeState, WorkTaskPreflight, WorkTaskQueuedMerge, STAGE_PROMPT_ALL,
+    WorkTaskMergeState, WorkTaskPreflight, WorkTaskQueuedMerge, DELIVERABLE_REPORT,
+    STAGE_PROMPT_ALL,
 };
 use crate::web::event_bridge::{
     emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT,
@@ -710,6 +711,7 @@ impl TaskEngine {
         task_id: i32,
         note: Option<String>,
         attachments: Vec<serde_json::Value>,
+        allow_duplicate_source: bool,
     ) -> Result<(), String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
@@ -729,6 +731,7 @@ impl TaskEngine {
             WorkTaskStatus::Failed,
             "user",
             action,
+            allow_duplicate_source,
         )
         .await
         .map_err(|e| e.to_string())?
@@ -770,6 +773,7 @@ impl TaskEngine {
                 "feedback": feedback,
                 "blocks": attachments,
             })),
+            false,
         )
         .await
         .map_err(|e| e.to_string())?
@@ -6119,8 +6123,20 @@ async fn compose_prompt(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("bad prompt blocks: {e}"))?;
 
+    // Whether this launch is (re)doing the task's ORIGINAL work order, as
+    // opposed to follow-up work the user asked for later. The worktree guard
+    // below keys its licence on this: a report-deliverable task forbids code
+    // changes on its original order, but a returned "now apply the fix" turn
+    // is precisely a change order and must get the normal write licence.
+    let mut original_work_order = false;
+    // A retry standing in for an unanswered question: its replay already says
+    // "do not change any files for it", so the guard must not hand back the
+    // commit grant three blocks later.
+    let mut retried_question = false;
+
     match mode {
         LaunchMode::Fresh => {
+            original_work_order = true;
             if original.is_empty() {
                 return Err("prompt is empty".to_string());
             }
@@ -6155,7 +6171,16 @@ async fn compose_prompt(
             // Replay whatever instruction the interrupted generation still
             // owed the user, framed the way they meant it — an unanswered
             // question must not come back as a work order.
-            if let Some(outstanding) = outstanding_instruction(conn, task.id).await {
+            let scan = instruction_scan(conn, task.id).await;
+            // A retry stands in for whichever turn was interrupted, and the
+            // licence follows THAT turn — `interrupted`, not the newest note:
+            // a retry/requeue note refines the turn it interrupts (a hint, a
+            // screenshot), it does not change what kind of turn it was. With
+            // no unsettled follow-up underneath, this is the original order
+            // again.
+            original_work_order = scan.interrupted.is_none();
+            retried_question = matches!(scan.interrupted, Some(FollowUpIntent::Question));
+            if let Some(outstanding) = scan.outstanding {
                 blocks.push(match outstanding.kind {
                     OutstandingKind::Restart => restart_note_block(&outstanding.text),
                     OutstandingKind::Review(FollowUpIntent::Question) => PromptInputBlock::Text {
@@ -6263,9 +6288,10 @@ async fn compose_prompt(
     // own instructions (it exists to forbid exactly what a merge must do).
     //
     // It is the LAST built-in block, so its licence clause is the last thing
-    // the agent reads: a read-only turn has to swap that clause out, or "commit
-    // to the current branch as you like" would quietly undo the intent's own
-    // "don't touch any file" instruction several blocks earlier.
+    // the agent reads: a read-only turn — and a report-deliverable original
+    // order — has to swap that clause out, or "commit to the current branch as
+    // you like" would quietly undo the intent's own "don't touch any file"
+    // instruction several blocks earlier.
     if !matches!(mode, LaunchMode::Merge { .. }) {
         let branch = task
             .work_branch
@@ -6277,12 +6303,24 @@ async fn compose_prompt(
             .as_deref()
             .map(|b| format!(" (`{b}`)"))
             .unwrap_or_default();
-        let licence = if mode.is_read_only() {
+        let licence = if mode.is_read_only() || retried_question {
             format!(
                 "This turn is a question, not a work order: answer it in your reply and do NOT \
                  create, edit, delete or commit any file, and do not merge into, rebase onto, or \
                  push the base branch{base}. If answering would require a change, describe the \
                  change instead of making it."
+            )
+        } else if original_work_order && cfg.deliverable.as_deref() == Some(DELIVERABLE_REPORT) {
+            // Report-deliverable order (forge plan-first / review-only):
+            // the generic "commit as you like" grant would quietly undo the
+            // task's own "analysis only" instruction several blocks earlier —
+            // the licence must defer to the task text, not overrule it.
+            format!(
+                "This turn delivers a report, not code changes: put the full findings in your \
+                 final reply — the user reads them from there, and may return this task for \
+                 follow-up work afterwards. Commit only what the task's instructions \
+                 explicitly allow (often nothing), and do NOT merge into, rebase onto, or \
+                 push the base branch{base}."
             )
         } else {
             format!(
@@ -6498,28 +6536,24 @@ struct Outstanding {
     attachments: Vec<serde_json::Value>,
 }
 
-/// The user instruction the agent still owes a turn to, if any.
-///
-/// Scans the task's events newest-first and stops at whichever comes first:
-/// - a follow-up `user_action` (return / retry / requeue) → that one is
-///   outstanding;
-/// - a settle into `review` → a generation ran to completion after anything
-///   earlier, so nothing is owed.
-///
-/// It is a barrier, not a filter. Filtering (e.g. "skip questions") would walk
-/// *past* the newest instruction and resurrect an older one the agent already
-/// carried out — replaying "add the tests" long after they were added. And the
-/// review barrier is what stops a note from being re-injected into every
-/// subsequent generation for the rest of the task's life.
-async fn outstanding_instruction(
+/// What a retry launch learns from the event log: the newest instruction the
+/// interrupted generation still owes the user (`outstanding`, replayed into
+/// the prompt), and the kind of turn that generation was actually running
+/// (`interrupted`, which picks the guard's licence). They differ exactly when
+/// a retry/requeue note sits on top of a failed follow-up: the note is the
+/// newer INSTRUCTION, but the turn underneath is still that follow-up — a
+/// note refines the turn it interrupts, it does not change its kind.
+struct InstructionScan {
+    outstanding: Option<Outstanding>,
+    /// The unsettled `return` intent beneath any retry/requeue notes; `None`
+    /// when the generation was (re)doing the task's original order.
+    interrupted: Option<FollowUpIntent>,
+}
+
+async fn instruction_scan(
     conn: &sea_orm::DatabaseConnection,
     task_id: i32,
-) -> Option<Outstanding> {
-    // Newest-first, and narrowed IN THE QUERY to the two kinds that can settle
-    // the question. Scanning raw events would let a chatty run bury the answer:
-    // `agent_progress` volume is up to the agent, so a few hundred milestones
-    // would push the instruction past any limit. Filtered this way the limit
-    // bounds a log of decisions, which is small.
+) -> InstructionScan {
     let events = work_task_service::recent_events_of_kinds(
         conn,
         task_id,
@@ -6527,7 +6561,11 @@ async fn outstanding_instruction(
         200,
     )
     .await
-    .ok()?;
+    .unwrap_or_default();
+    let mut scan = InstructionScan {
+        outstanding: None,
+        interrupted: None,
+    };
     for event in events {
         match event.kind.as_str() {
             "status_changed" => {
@@ -6537,8 +6575,10 @@ async fn outstanding_instruction(
                     .and_then(|p| p.get("to"))
                     .and_then(|v| v.as_str())
                     == Some("review");
+                // Reaching review consumed every older instruction: whatever
+                // lies beyond was delivered and decided on.
                 if settled {
-                    return None;
+                    break;
                 }
             }
             "user_action" => {
@@ -6546,27 +6586,45 @@ async fn outstanding_instruction(
                     Some(p) => p,
                     None => continue,
                 };
-                let action = payload.get("action").and_then(|v| v.as_str())?;
+                let Some(action) = payload.get("action").and_then(|v| v.as_str()) else {
+                    break;
+                };
                 match action {
                     "return" => {
                         let intent = FollowUpIntent::from_wire(
                             payload.get("intent").and_then(|v| v.as_str()),
                         )
                         .unwrap_or_default();
-                        let text = payload.get("feedback").and_then(|v| v.as_str())?;
-                        return Some(Outstanding {
-                            kind: OutstandingKind::Review(intent),
-                            text: text.to_string(),
-                            attachments: payload_blocks(&payload),
-                        });
+                        if scan.outstanding.is_none() {
+                            let Some(text) = payload.get("feedback").and_then(|v| v.as_str())
+                            else {
+                                break;
+                            };
+                            scan.outstanding = Some(Outstanding {
+                                kind: OutstandingKind::Review(intent),
+                                text: text.to_string(),
+                                attachments: payload_blocks(&payload),
+                            });
+                        }
+                        // The newest unsettled return IS the interrupted turn
+                        // (a second return needs another review in between,
+                        // which would have settled this scan already).
+                        scan.interrupted = Some(intent);
+                        break;
                     }
                     "retry" | "requeue" => {
-                        let text = payload.get("note").and_then(|v| v.as_str())?;
-                        return Some(Outstanding {
-                            kind: OutstandingKind::Restart,
-                            text: text.to_string(),
-                            attachments: payload_blocks(&payload),
-                        });
+                        if scan.outstanding.is_none() {
+                            let Some(text) = payload.get("note").and_then(|v| v.as_str()) else {
+                                break;
+                            };
+                            scan.outstanding = Some(Outstanding {
+                                kind: OutstandingKind::Restart,
+                                text: text.to_string(),
+                                attachments: payload_blocks(&payload),
+                            });
+                        }
+                        // Keep looking: the turn this note interrupted lies
+                        // deeper in the log.
                     }
                     // Other user actions (delete, …) neither carry nor consume
                     // an instruction.
@@ -6576,7 +6634,17 @@ async fn outstanding_instruction(
             _ => continue,
         }
     }
-    None
+    scan
+}
+
+/// The newest instruction a launch still owes the user — the replay half of
+/// [`instruction_scan`], for callers that do not pick a licence (Fresh only
+/// ever replays restart notes).
+async fn outstanding_instruction(
+    conn: &sea_orm::DatabaseConnection,
+    task_id: i32,
+) -> Option<Outstanding> {
+    instruction_scan(conn, task_id).await.outstanding
 }
 
 /// One-shot sink for the generation a launch actually operated on. The launch
@@ -7737,6 +7805,7 @@ mod tests {
             WorkTaskStatus::Failed,
             "user",
             Some(serde_json::json!({ "action": "retry", "note": "install deps first" })),
+            false,
         )
         .await
         .expect("claim")
@@ -7756,6 +7825,7 @@ mod tests {
             WorkTaskStatus::Failed,
             "user",
             Some(serde_json::json!({ "action": "retry", "note": "orphan" })),
+            false,
         )
         .await
         .expect("claim");

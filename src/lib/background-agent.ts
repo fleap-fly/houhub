@@ -1,28 +1,36 @@
 /**
  * Background-task lifecycle for the Agent tool card.
  *
- * The Claude parser rewrites an async sub-agent launch ack's output into a
- * structured marker payload (`BACKGROUND_TASK_MARKER` + one-line JSON), joined
- * with the latest matching `<task-notification>` from the same transcript.
- * This module is the frontend side of that contract.
+ * The Claude parser rewrites an async sub-agent launch ack's output — internal
+ * metadata text never meant for users — into a structured marker payload
+ * (`BACKGROUND_TASK_MARKER` + one-line JSON), joined with the latest matching
+ * `<task-notification>` from the same transcript (see
+ * `ClaudeRecordAccumulator::finalize_background_lifecycle` in
+ * `src-tauri/src/parsers/claude.rs`). This module is the frontend side of that
+ * contract.
  *
- * A `null` status means no notification has been observed in the transcript.
- * Historical transcript data cannot prove the task is still alive, so this is
- * rendered as "launched, result pending" rather than "running".
+ * A `null` status means no notification has been observed in the transcript —
+ * deliberately rendered as "launched · result pending", NEVER as "running":
+ * the transcript alone cannot distinguish a still-running task from one whose
+ * CLI died (the zombie-"running" trap). Live "running" presentation is only
+ * derived from the in-flight wire ack text (`isAsyncLaunchAckText`), which by
+ * construction only exists inside a live session.
  */
 
 export const BACKGROUND_TASK_MARKER = "[[houhub-background-task]]"
 
 export interface BackgroundTaskLifecycle {
   taskId: string
-  /** `<status>` of the latest task-notification; `null` before notification. */
+  /** `<status>` of the latest task-notification ("completed" on success);
+   *  `null` while no notification has been observed. */
   status: string | null
   summary: string | null
-  /** The notification's `<result>` markdown. */
+  /** The notification's `<result>` markdown (parser-capped). */
   result: string | null
 }
 
-/** Parse a parser-rewritten lifecycle marker out of a tool output preview. */
+/** Parse a parser-rewritten lifecycle marker out of a tool output preview.
+ *  Returns `null` for anything that isn't a well-formed marker. */
 export function parseBackgroundTaskMarker(
   output: string | null | undefined
 ): BackgroundTaskLifecycle | null {
@@ -47,12 +55,21 @@ export function parseBackgroundTaskMarker(
 }
 
 /**
- * Whether a live wire tool output is the async sub-agent launch ack.
- * Presentation-only: used while the live turn still carries raw wire data.
+ * Whether a LIVE wire tool output is an async sub-agent launch ack —
+ * Claude Code's ("Async agent launched successfully. … You will be
+ * notified…") or Grok's `spawn_subagent(background: true)` ack ("Subagent
+ * started in background.\nsubagent_id: …\nUse get_command_or_subagent_output
+ * …"). Presentation-only: used to show a "running in background" state
+ * instead of dumping the internal ack text while the turn's wire data is
+ * still what the card renders (the parser marker — or, for Grok, the live
+ * `subagent_finished` settle — replaces it).
  */
 export function isAsyncLaunchAckText(
   output: string | null | undefined
 ): boolean {
   if (!output) return false
-  return output.includes("Async agent launched successfully")
+  return (
+    output.includes("Async agent launched successfully") ||
+    output.trimStart().startsWith("Subagent started in background")
+  )
 }

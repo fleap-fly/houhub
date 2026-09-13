@@ -25,6 +25,7 @@ import {
 import type { ReferenceAttrs } from "@/components/chat/composer/types"
 import { useAgentSkills } from "@/hooks/use-agent-skills"
 import { rankByTextMatch } from "@/lib/fuzzy-text-match"
+import { isImeCompositionKey } from "@/lib/ime-composition"
 import { cn } from "@/lib/utils"
 import type {
   AgentSkillItem,
@@ -187,7 +188,7 @@ export function useComposerInvocations({
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent): boolean => {
-      if (event.isComposing) return false
+      if (isImeCompositionKey(event)) return false
       if (!open || count === 0) return false
       if (event.key === "ArrowDown") {
         setRawActiveIndex((i) => (i < count - 1 ? i + 1 : 0))

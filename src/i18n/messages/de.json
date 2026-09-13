@@ -390,7 +390,7 @@
     "loadFailed": "Einstellungen konnten nicht geladen werden: {message}",
     "gitAccount": {
       "sectionTitle": "Git-Server-Konten",
-      "sectionDescription": "Verwalten Sie Anmeldedaten für Nicht-GitHub-Git-Server (GitLab, Bitbucket, selbst gehostet usw.).",
+      "sectionDescription": "Zugangsdaten für Git-Server ohne eigenen Abschnitt verwalten (Bitbucket, selbst gehostet usw.).",
       "noAccounts": "Keine Git-Server-Konten konfiguriert.",
       "addAccount": "Konto hinzufügen",
       "addTitle": "Git-Konto hinzufügen",
@@ -1642,7 +1642,7 @@
   "GeneralSettings": {
     "loading": "Wird geladen...",
     "sectionTitle": "Allgemein",
-    "sectionDescription": "Zentrale Einstellungen für das Standardterminal, die Rendering-Beschleunigung, Benachrichtigungstöne und die Multi-Agent-Delegation.",
+    "sectionDescription": "Zentrale Einstellungen für das Standardterminal, die Rendering-Beschleunigung, Benachrichtigungen und die Multi-Agent-Delegation.",
     "terminalTitle": "Standardterminal",
     "terminalDescription": "Wählen Sie die Shell, die beim Öffnen neuer Terminal-Tabs über die Terminalleiste oder den Dateibaum verwendet wird. Agenten nutzen sie ebenfalls, wenn sie houhub um die Ausführung einer vollständigen Befehlszeile bitten.",
     "defaultTerminalShell": "Standard-Shell",
@@ -1659,7 +1659,7 @@
     "terminalShellNotInstalled": "nicht installiert",
     "terminalShellNotFoundWarning": "Dieser Pfad existiert auf diesem Host nicht.",
     "terminalCurrentShell": "Aktuell verwendet: {path}",
-    "renderingDescription": "Deaktivieren Sie die Hardwarebeschleunigung, wenn die App einen schwarzen Bildschirm oder Render-Fehler zeigt (häufig bei bestimmten AMD-GPUs oder integrierten Intel-GPUs). Wirkt sich nur auf die Windows-Desktop-Version aus.",
+    "renderingDescription": "Deaktivieren Sie die Hardwarebeschleunigung, wenn die App einen schwarzen Bildschirm oder Render-Fehler zeigt (häufig bei bestimmten AMD-GPUs oder integrierten Intel-GPUs unter Windows sowie beim proprietären NVIDIA-Treiber unter Linux). Wirkt sich nur auf die Windows- und Linux-Desktop-Versionen aus.",
     "disableHardwareAcceleration": "Hardwarebeschleunigung deaktivieren",
     "renderingSaveFailed": "Render-Einstellungen konnten nicht gespeichert werden: {message}",
     "restartRequired": "Gespeichert. Starten Sie die App neu, damit die Änderung wirksam wird.",
@@ -3454,7 +3454,7 @@
         "agentSessionLoading": "Protokoll des Subagenten wird geladen…",
         "agentSessionEmpty": "Der Subagent hat noch nichts geschrieben.",
         "agentFallbackTitle": "Sub-Agent wird gestartet…",
-        "agentCodexLaunchOnly": "Gestartet. Codex meldet keinen weiteren Fortschritt dieses Sub-Agenten – sein Ergebnis trifft als Nachricht in dieser Unterhaltung ein.",
+        "agentCodexLaunchOnly": "Gestartet. Codex hat noch nicht gemeldet, wie dieser Sub-Agent geendet ist – öffne seine Sitzung, um die Arbeit zu verfolgen.",
         "agentStatsBash": "Befehle",
         "agentStatsRead": "Dateien gelesen",
         "agentStatsSearch": "Suchen",
@@ -3776,27 +3776,6 @@
         "viewTree": "Baum anzeigen",
         "fields": "{count, plural, one {# Feld} other {# Felder}}",
         "items": "{count, plural, one {# Eintrag} other {# Einträge}}"
-      },
-      "houhubMcpTool": {
-        "getSessionInfo": "Sitzung {session} wird gelesen",
-        "getSessionInfoNoId": "Sitzung wird gelesen",
-        "taskProgress": "Fortschritt: {message}",
-        "taskProgressNoMessage": "Aufgabenfortschritt wird gemeldet",
-        "taskComplete": "Aufgabe beendet · {verdict}",
-        "taskCompleteWithSummary": "Aufgabe beendet · {verdict}: {summary}",
-        "createAutomation": "Automatisierung {name} wird erstellt",
-        "createAutomationNoName": "Automatisierung wird erstellt",
-        "createWorkTask": "Arbeitsaufgabe {title} wird erstellt",
-        "createWorkTaskNoTitle": "Arbeitsaufgabe wird erstellt",
-        "resumeDelegation": "Aufgabe {task} wird fortgesetzt",
-        "resumeDelegationNoId": "Delegierte Aufgabe wird fortgesetzt",
-        "promptLabel": "Anweisung",
-        "verdict": {
-          "success": "erfolgreich",
-          "needs_review": "Prüfung nötig",
-          "blocked": "blockiert",
-          "unknown": "unbekannt"
-        }
       },
       "houhubMcpTool": {
         "getSessionInfo": "Sitzung {session} wird gelesen",
@@ -4287,8 +4266,7 @@
       "linked_to_houhub": "Aktiviert",
       "linked_elsewhere": "Blockiert — ein anderer Link existiert",
       "blocked_by_real_directory": "Blockiert — ein benutzerdefinierter Skill belegt diesen Namen",
-      "broken": "Defekter Link",
-      "linked_to_houhub": "Aktiviert"
+      "broken": "Defekter Link"
     },
     "badges": {
       "userModified": "Vom Benutzer geändert"
@@ -4325,8 +4303,7 @@
       "linked_to_houhub": "Aktiviert",
       "linked_elsewhere": "Blockiert — ein anderer Link existiert",
       "blocked_by_real_directory": "Blockiert — ein benutzerdefinierter Skill belegt diesen Namen",
-      "broken": "Defekter Link",
-      "linked_to_houhub": "Aktiviert"
+      "broken": "Defekter Link"
     },
     "badges": {
       "userModified": "Vom Benutzer geändert",
@@ -4376,8 +4353,7 @@
       "linked_to_houhub": "Aktiviert",
       "linked_elsewhere": "Blockiert — ein anderer Link existiert",
       "blocked_by_real_directory": "Blockiert — ein benutzerdefinierter Skill belegt diesen Namen",
-      "broken": "Defekter Link",
-      "linked_to_houhub": "Aktiviert"
+      "broken": "Defekter Link"
     },
     "badges": {
       "notSynced": "Nicht synchronisiert"
@@ -5078,8 +5054,7 @@
       "linked_to_houhub": "Aktiviert",
       "linked_elsewhere": "Anderweitig verknüpft",
       "blocked_by_real_directory": "Durch echten Ordner blockiert",
-      "broken": "Defekter Link",
-      "linked_to_houhub": "Aktiviert"
+      "broken": "Defekter Link"
     },
     "actions": {
       "new": "Neu",

@@ -104,12 +104,13 @@ export function TaskTranscriptDialog({
 }
 
 /**
- * Resolve the session's agent BEFORE the viewer mounts. The live-event parser
- * is fixed by the attach latch below and never re-attached (a late change
- * would drop buffered events), so guessing here would render live chunks with
- * the wrong renderer. A per-task override is definitive and instant;
- * otherwise one conversation read returns the agent recorded at dispatch,
- * with the folder's default agent covering a failed read.
+ * Resolve the session's agent BEFORE the viewer mounts. It selects the parser
+ * every live chunk is rendered with, and it is a per-task setting (stable
+ * across the task's generations), so resolving it once up front — rather than
+ * guessing and refining later — is what keeps chunks off the wrong renderer.
+ * A per-task override is definitive and instant; otherwise one conversation
+ * read returns the agent recorded at dispatch, with the folder's default agent
+ * covering a failed read.
  */
 function TaskAgentResolver({ task }: { task: WorkTask }) {
   const folders = useAppWorkspaceStore((s) => s.folders)
@@ -251,12 +252,13 @@ function TaskTranscriptBody({
   }
   const taskId = task.id
   useEffect(() => {
-    const id = attachId
-    if (id == null) return
+    if (attachId == null) return
     attachDelegationChild({
-      connectionId: id,
-      parentConnectionId: id,
+      connectionId: attachId,
+      parentConnectionId: attachId,
       parentToolUseId: `work-task-${taskId}`,
+      // Agent as resolved before this body mounted. It is a per-task setting,
+      // stable across generations, so re-attaching never needs a fresh read.
       agentType,
       // Unlike a real delegation child (attached the moment it spawns), this
       // viewer opens onto a turn already in progress — hydrate its state
@@ -266,7 +268,7 @@ function TaskTranscriptBody({
     })
     // Detaches the PREVIOUS connection when the id moves to a new generation,
     // and the current one when the viewer closes.
-    return () => detachDelegationChild(id)
+    return () => detachDelegationChild(attachId)
   }, [
     attachId,
     taskId,

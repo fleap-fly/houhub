@@ -119,7 +119,7 @@ export function ModelOptionList({
     (event: React.KeyboardEvent<HTMLInputElement>) => {
       // Don't steal Enter/arrows while an IME composition is in flight (CJK
       // input): Enter there confirms the candidate, it must not pick a model.
-      if (event.nativeEvent.isComposing || event.key === "Process") return
+      if (ime.isComposing(event)) return
       switch (event.key) {
         case "ArrowDown":
           event.preventDefault()
@@ -152,6 +152,7 @@ export function ModelOptionList({
     },
     [
       activeIndexClamped,
+      ime,
       moveActiveTo,
       onSelect,
       optionCount,

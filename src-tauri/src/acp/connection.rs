@@ -13086,12 +13086,18 @@ async fn emit_conversation_update(
             let meta = tcu.meta.clone().map(serde_json::Value::Object);
             let status = tcu.fields.status.map(|s| format!("{:?}", s).to_lowercase());
             raw_output_cache.remove_if_final(&tool_call_id, status.as_deref());
+            // Same lifetime as the output cache — and deliberately NOT mirrored in
+            // the ToolCall arm: pi's `session/load` replay opens the call ALREADY
+            // `completed` and delivers the output on the update that follows, so
+            // dropping the entry on the opening frame's status would lose it.
             if matches!(
                 status.as_deref(),
                 Some("completed" | "failed" | "cancelled" | "error")
             ) {
                 cb_state.pi_terminal_calls.remove(&tool_call_id);
             }
+            // Symmetric with the ToolCall arm: an update may carry the terminal
+            // status (and, on grok, usually re-carries the `x.ai/tool` meta).
             track_grok_spawn_call(
                 cb_state,
                 grok_spawn,
@@ -13099,6 +13105,40 @@ async fn emit_conversation_update(
                 &tool_call_id,
                 &raw_input,
             );
+            // Ordering variant: `subagent_spawned` can pair BEFORE the launch
+            // call's terminal frame arrives. The pairing site skipped its
+            // outstanding emission then (call not yet settled), so surface the
+            // count here — a completed launch with a paired, still-running
+            // child is a background subagent HouHub must not idle-sweep. The
+            // common ordering (completed first) emits from the pairing site,
+            // and `subagent_finished` always re-emits the corrected count.
+            if status.as_deref() == Some("completed")
+                && cb_state
+                    .grok_subagent_to_call
+                    .values()
+                    .any(|call| call == &tool_call_id)
+            {
+                let session_id = state.read().await.external_id.clone();
+                if let Some(session_id) = session_id {
+                    let outstanding = cb_state
+                        .grok_subagent_to_call
+                        .values()
+                        .filter(|call| cb_state.grok_settled_spawn_ids.contains(*call))
+                        .count() as u32;
+                    emit_with_state(
+                        state,
+                        emitter,
+                        AcpEvent::BackgroundActivity {
+                            session_id,
+                            turns: Vec::new(),
+                            outstanding,
+                            settled: Vec::new(),
+                            watermark: 0,
+                        },
+                    )
+                    .await;
+                }
+            }
             // Re-assert any authoritative title rewrite (see fn doc): an update
             // that carries the subagent/deferred marker classifies (and records)
             // the card, and — the key fix — a later status-only update that LOST
@@ -14586,6 +14626,7 @@ mod tests {
             skills_dir: None,
             source: Default::default(),
             version_probe: None,
+            supports_mcp: true,
         };
         assert!(
             hydrate(&[def]).is_empty(),
@@ -14636,6 +14677,7 @@ mod tests {
             skills_dir: None,
             source: Default::default(),
             version_probe: None,
+            supports_mcp: true,
         };
         // Same reason as the cursor case: an unregistered id would satisfy the
         // negative assertion for the wrong reason.
@@ -20517,6 +20559,7 @@ mod tests {
             skills_dir: None,
             source: Default::default(),
             version_probe: None,
+            supports_mcp: true,
         };
         assert!(hydrate(&[def("delegate-on"), def("delegate-off")]).is_empty());
 

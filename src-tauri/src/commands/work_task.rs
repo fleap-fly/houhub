@@ -446,14 +446,16 @@ pub async fn work_task_start_all_core(folder_id: Option<i32>) -> Result<u32, DbE
 }
 
 /// failed → queued, optionally with a note explaining what to do differently.
+/// `blocks` carries whatever the note box attached out of band (images, pasted
+/// bytes) as raw prompt blocks.
 pub async fn work_task_retry_core(
     id: i32,
     note: Option<String>,
     blocks: Vec<serde_json::Value>,
-    _allow_duplicate_source: bool,
+    allow_duplicate_source: bool,
 ) -> Result<(), DbError> {
     engine()?
-        .retry(id, note, blocks)
+        .retry(id, note, blocks, allow_duplicate_source)
         .await
         .map_err(DbError::Validation)
 }
@@ -467,13 +469,14 @@ pub async fn work_task_requeue_core(
     id: i32,
     note: Option<String>,
     blocks: Vec<serde_json::Value>,
-    _allow_duplicate_source: bool,
+    allow_duplicate_source: bool,
 ) -> Result<(), DbError> {
     if !work_task_service::requeue_canceled(
         &db.conn,
         id,
         note.as_deref(),
         &blocks,
+        allow_duplicate_source,
     )
     .await?
     {
@@ -534,8 +537,8 @@ pub async fn work_task_return_core(
 ) -> Result<(), DbError> {
     let intent = FollowUpIntent::from_wire(intent.as_deref()).map_err(DbError::Validation)?;
     let feedback = feedback.trim().to_string();
-    // A self-check is a complete instruction on its own; everything else is
-    // only as good as what the user typed.
+    // A self-check is a complete instruction on its own, and so is an attached
+    // screenshot; everything else is only as good as what the user typed.
     if feedback.is_empty() && blocks.is_empty() && !intent.allows_empty() {
         return Err(DbError::Validation("feedback is required".to_string()));
     }

@@ -390,7 +390,7 @@
     "loadFailed": "Falha ao carregar configurações: {message}",
     "gitAccount": {
       "sectionTitle": "Contas de servidor Git",
-      "sectionDescription": "Gerencie credenciais para servidores Git que não são GitHub (GitLab, Bitbucket, auto-hospedados, etc.).",
+      "sectionDescription": "Gerencie credenciais de servidores Git sem uma seção própria (Bitbucket, auto-hospedados, etc.).",
       "noAccounts": "Nenhuma conta de servidor Git configurada.",
       "addAccount": "Adicionar conta",
       "addTitle": "Adicionar conta Git",
@@ -1642,7 +1642,7 @@
   "GeneralSettings": {
     "loading": "Carregando...",
     "sectionTitle": "Geral",
-    "sectionDescription": "Preferências centralizadas para o terminal padrão, aceleração de renderização, sons de notificação e delegação multi-agente.",
+    "sectionDescription": "Preferências centralizadas para o terminal padrão, aceleração de renderização, notificações e delegação multi-agente.",
     "terminalTitle": "Terminal padrão",
     "terminalDescription": "Escolha o shell usado ao abrir novas abas de terminal pela barra de terminal ou pela árvore de arquivos. Os agentes também o usam quando pedem ao houhub para executar uma linha de comando inteira.",
     "defaultTerminalShell": "Shell padrão",
@@ -1659,7 +1659,7 @@
     "terminalShellNotInstalled": "não instalado",
     "terminalShellNotFoundWarning": "Este caminho não existe neste host.",
     "terminalCurrentShell": "Em uso: {path}",
-    "renderingDescription": "Desative a aceleração de hardware se o aplicativo apresentar tela preta ou falhas de renderização (comum em certas GPUs AMD ou GPUs Intel integradas). Aplica-se apenas à versão desktop do Windows.",
+    "renderingDescription": "Desative a aceleração de hardware se o aplicativo apresentar tela preta ou falhas de renderização (comum em certas GPUs AMD ou GPUs Intel integradas no Windows e com o driver proprietário da NVIDIA no Linux). Aplica-se apenas às versões desktop do Windows e do Linux.",
     "disableHardwareAcceleration": "Desativar aceleração de hardware",
     "renderingSaveFailed": "Falha ao salvar as configurações de renderização: {message}",
     "restartRequired": "Salvo. Reinicie o aplicativo para aplicar a alteração.",
@@ -3454,7 +3454,7 @@
         "agentSessionLoading": "Carregando a transcrição do subagente…",
         "agentSessionEmpty": "O subagente ainda não escreveu nada.",
         "agentFallbackTitle": "Iniciando subagente…",
-        "agentCodexLaunchOnly": "Iniciado. O Codex não informa mais o progresso deste subagente — o resultado chega como uma mensagem nesta conversa.",
+        "agentCodexLaunchOnly": "Iniciado. O Codex ainda não informou o desfecho deste subagente — abra a sessão dele para acompanhar o trabalho.",
         "agentStatsBash": "Comandos",
         "agentStatsRead": "Arquivos lidos",
         "agentStatsSearch": "Pesquisas",
@@ -3776,27 +3776,6 @@
         "viewTree": "Ver árvore",
         "fields": "{count, plural, one {# campo} other {# campos}}",
         "items": "{count, plural, one {# item} other {# itens}}"
-      },
-      "houhubMcpTool": {
-        "getSessionInfo": "Lendo a sessão {session}",
-        "getSessionInfoNoId": "Lendo uma sessão",
-        "taskProgress": "Progresso: {message}",
-        "taskProgressNoMessage": "Relatando o progresso da tarefa",
-        "taskComplete": "Tarefa concluída · {verdict}",
-        "taskCompleteWithSummary": "Tarefa concluída · {verdict}: {summary}",
-        "createAutomation": "Criando a automação {name}",
-        "createAutomationNoName": "Criando uma automação",
-        "createWorkTask": "Criando a tarefa de trabalho {title}",
-        "createWorkTaskNoTitle": "Criando uma tarefa de trabalho",
-        "resumeDelegation": "Retomando a tarefa {task}",
-        "resumeDelegationNoId": "Retomando uma tarefa delegada",
-        "promptLabel": "Instrução",
-        "verdict": {
-          "success": "sucesso",
-          "needs_review": "requer revisão",
-          "blocked": "bloqueada",
-          "unknown": "desconhecido"
-        }
       },
       "houhubMcpTool": {
         "getSessionInfo": "Lendo a sessão {session}",
@@ -4287,8 +4266,7 @@
       "linked_to_houhub": "Ativado",
       "linked_elsewhere": "Bloqueado — outro vínculo existe",
       "blocked_by_real_directory": "Bloqueado — uma habilidade personalizada ocupa este nome",
-      "broken": "Vínculo quebrado",
-      "linked_to_houhub": "Ativado"
+      "broken": "Vínculo quebrado"
     },
     "badges": {
       "userModified": "Modificado pelo usuário"
@@ -4325,8 +4303,7 @@
       "linked_to_houhub": "Ativado",
       "linked_elsewhere": "Bloqueado — outro vínculo existe",
       "blocked_by_real_directory": "Bloqueado — uma habilidade personalizada ocupa este nome",
-      "broken": "Vínculo quebrado",
-      "linked_to_houhub": "Ativado"
+      "broken": "Vínculo quebrado"
     },
     "badges": {
       "userModified": "Modificado pelo usuário",
@@ -4376,8 +4353,7 @@
       "linked_to_houhub": "Ativado",
       "linked_elsewhere": "Bloqueado — existe outro link",
       "blocked_by_real_directory": "Bloqueado — uma habilidade personalizada ocupa este nome",
-      "broken": "Link quebrado",
-      "linked_to_houhub": "Ativado"
+      "broken": "Link quebrado"
     },
     "badges": {
       "notSynced": "Não sincronizado"
@@ -5078,8 +5054,7 @@
       "linked_to_houhub": "Ativada",
       "linked_elsewhere": "Vinculada em outro lugar",
       "blocked_by_real_directory": "Bloqueada por uma pasta real",
-      "broken": "Link quebrado",
-      "linked_to_houhub": "Ativada"
+      "broken": "Link quebrado"
     },
     "actions": {
       "new": "Nova",

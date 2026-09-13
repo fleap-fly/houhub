@@ -3149,9 +3149,16 @@ impl ConnectionManager {
                     SteerOutcome::PromptRequired => return Err(AcpError::NoActiveTurn),
                     SteerOutcome::Injected => {}
                     SteerOutcome::StartedNewTurn => {
+                        // The adapter ignored the opt-in and detached a turn
+                        // (stale binary lying about its version?). The content
+                        // IS consumed — record it delivered, NEVER resend —
+                        // but this adapter can't be trusted with the idle race
+                        // again: downgrade to the MCP pull channel for the
+                        // rest of the session.
                         tracing::warn!(
                             "[ACP][feedback] _session/steering returned startedNewTurn \
-                             (conn={conn_id_for_task}); downgrading native steering"
+                             (conn={conn_id_for_task}); downgrading native steering for \
+                             this session"
                         );
                         state.write().await.native_steering_available = false;
                     }

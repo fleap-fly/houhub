@@ -1167,6 +1167,52 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
+    /// Regression for the select race in `connect_to`: the protocol side may
+    /// finish before the child-monitor future receives its first poll. The
+    /// monitor must already own a `ChildGuard`, otherwise dropping that
+    /// unpolled future bypasses kill/reap and never fires `on_exit`.
+    #[cfg(unix)]
+    #[test]
+    fn dropping_an_unpolled_child_monitor_still_reaps_and_reports_exit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        rt.block_on(async {
+            let mut command = tokio::process::Command::new("/bin/sh");
+            command.args(["-c", "sleep 30"]);
+            command.stderr(std::process::Stdio::piped());
+            let mut child = command.spawn().expect("spawn sh");
+            let stderr = child.stderr.take().expect("stderr");
+            let (stderr_tx, stderr_rx) = tokio::sync::oneshot::channel();
+            tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                let mut stderr = stderr;
+                let mut bytes = Vec::new();
+                let _ = stderr.read_to_end(&mut bytes).await;
+                let _ = stderr_tx.send(String::from_utf8_lossy(&bytes).into_owned());
+            });
+
+            let monitor = monitor_child(child, stderr_rx, Some(counting_callback(&calls)));
+            // Deliberately never poll it.
+            drop(monitor);
+
+            let mut reported = false;
+            for _ in 0..200 {
+                if calls.load(Ordering::SeqCst) == 1 {
+                    reported = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            assert!(reported, "unpolled monitor bypassed the reap callback");
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
     /// Dropping the guard kills the tree but does not wait, so the exit is not
     /// observed yet — and must not be reported yet. It has to be reported once
     /// the child actually dies, which only works because `drop` keeps owning the

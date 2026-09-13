@@ -40,7 +40,20 @@ pub(crate) async fn list_all_conversations_core(
     chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
     options: ListAllConversationsOptions,
 ) -> Result<Vec<DbConversationSummary>, AppCommandError> {
-    let codex_titles = CodexParser::new().load_thread_name_index();
+    let codex_titles = match tokio::task::spawn_blocking(|| {
+        CodexParser::new().load_thread_name_index()
+    })
+    .await
+    {
+        Ok(titles) => titles,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "conversation list: failed to load Codex session titles; continuing without refresh"
+            );
+            HashMap::new()
+        }
+    };
     list_all_conversations_core_with_codex_titles(
         conn,
         emitter,
