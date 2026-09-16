@@ -463,7 +463,7 @@
       },
       "open_folder": {
         "title": "Ouvrir un dossier",
-        "description": "Ouvrir le sélecteur de dossier et ouvrir dans une nouvelle fenêtre"
+        "description": "Ouvrir le sélecteur de dossier et ouvrir le dossier dans l'espace de travail"
       },
       "open_settings": {
         "title": "Ouvrir les paramètres",
@@ -1417,7 +1417,8 @@
       "noPlugins": "Aucun plugin déclaré dans opencode.json",
       "status": {
         "installed": "Installé",
-        "missing": "Non installé"
+        "missing": "Non installé",
+        "needs_migration": "Migration requise"
       },
       "installAll": "Installer tous les manquants",
       "pinVersions": "Fixer les versions @latest",
@@ -1623,7 +1624,21 @@
         "action": "Se déconnecter",
         "done": "Déconnecté. Reconnectez-vous pour choisir un autre compte.",
         "failed": "Impossible de se déconnecter"
-      }
+      },
+      "tempReclaimTitle": "Espace temporaire résiduel",
+      "tempReclaimHint": "Les anciennes versions de houhub ne pouvaient pas nettoyer le répertoire temporaire que cet agent décompresse à chaque lancement. Ceci analyse le dossier temporaire du système à la recherche de ces résidus. Ce dossier est partagé avec d'autres applications : rien n'est supprimé avant votre confirmation, et tout élément encore utilisé est ignoré.",
+      "tempReclaimScan": "Analyser",
+      "tempReclaimDelete": "Supprimer les résidus",
+      "tempReclaimNone": "Rien à récupérer.",
+      "tempReclaimFound": "{count} élément(s) résiduel(s), {size} récupérable(s).",
+      "tempReclaimSkipped": "{count} ignoré(s) (encore utilisé(s) ou trop récent(s)).",
+      "tempReclaimed": "{size} récupéré(s) sur {count} élément(s).",
+      "tempReclaimSelectAll": "Tout sélectionner",
+      "tempReclaimAgeHours": "{hours} h",
+      "tempReclaimConfirmTitle": "Supprimer {count} élément(s) ?",
+      "tempReclaimConfirmBody": "Cette action supprime définitivement {size}. Le dossier temporaire du système est partagé avec d'autres applications : vérifiez chaque chemin avant de confirmer. Les éléments encore utilisés sont ignorés.",
+      "tempReclaimConfirmAction": "Supprimer",
+      "tempReclaimCancel": "Annuler"
     },
     "customAgentMcpLabel": "Prise en charge de MCP",
     "customAgentMcpHint": "Transmet le compagnon MCP intégré de houhub à cet agent au démarrage de la session — le canal derrière la délégation, le retour en direct et les outils de tâches. Désactivez-le pour un agent qui refuse les serveurs MCP et ne parvient pas à se connecter ; le changement s'applique à la prochaine connexion.",
@@ -3072,7 +3087,8 @@
         "steerNoteFailed": "Impossible d'envoyer votre note",
         "openLink": "Ouvrir le lien",
         "openFile": "Ouvrir le fichier",
-        "sendEmail": "Envoyer un e-mail"
+        "sendEmail": "Envoyer un e-mail",
+        "recommendedBadge": "Recommandé"
       },
       "messageQueue": {
         "addToQueue": "Mettre en file",
@@ -3343,7 +3359,8 @@
         "copyImageFailed": "Échec de la copie de l'image : {message}",
         "copyImageUnsupported": "La copie de cette image n'est pas prise en charge ici",
         "selectionSaveAsNote": "Note",
-        "forkNotReady": "Impossible de bifurquer depuis cette réponse pour le moment, réessayez dans un instant"
+        "forkNotReady": "Impossible de bifurquer depuis cette réponse pour le moment, réessayez dans un instant",
+        "loadBackgroundActivity": "Charger l'activité en arrière-plan"
       },
       "liveTurnStats": {
         "thinking": "Réflexion...",
@@ -6054,5 +6071,53 @@
     "toastSaved": "Liste de modèles enregistrée",
     "toastRestored": "Utilisation de la liste de modèles intégrée de l'agent",
     "toastSaveFailed": "Impossible d'enregistrer la liste de modèles"
+  },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "Normal",
+    "deepseekModeDefaultDescription": "Lit et modifie les fichiers et exécute des commandes directement pour accomplir la tâche",
+    "deepseekModePlan": "Plan",
+    "deepseekModePlanDescription": "Enquête d'abord et propose un plan complet que vous validez avant toute action. Cela oriente le modèle ; la limite réelle reste celle de l'accès aux fichiers.",
+    "deepseekOptionModel": "Modèle",
+    "deepseekOptionReasoning": "Effort de raisonnement",
+    "deepseekOptionReasoningDescription": "Plus c'est élevé, plus c'est lent et coûteux en jetons, mais plus c'est fiable sur les problèmes difficiles",
+    "deepseekOptionSandbox": "Accès aux fichiers",
+    "deepseekOptionSandboxDescription": "Les commandes et les outils de fichiers partagent cette unique limite",
+    "deepseekReasoningOff": "Désactivé",
+    "deepseekReasoningOffDescription": "Répond directement sans raisonner ; le plus rapide",
+    "deepseekReasoningLow": "Faible",
+    "deepseekReasoningLowDescription": "Raisonne brièvement ; plus fiable que désactivé, plus rapide qu'élevé",
+    "deepseekReasoningHigh": "Élevé",
+    "deepseekReasoningHighDescription": "Raisonne avant de répondre ; la valeur par défaut au quotidien",
+    "deepseekReasoningMax": "Maximum",
+    "deepseekReasoningMaxDescription": "Raisonne plus longtemps ; plus fiable sur les problèmes difficiles, mais plus lent et plus coûteux",
+    "deepseekSandboxReadOnly": "Lecture seule",
+    "deepseekSandboxReadOnlyDescription": "S'exécute selon une politique de lecture seule ; changez d'accès quand une écriture est nécessaire. Sur certaines plateformes, l'application n'est que partielle.",
+    "deepseekSandboxWorkspaceWrite": "Écriture dans l'espace de travail",
+    "deepseekSandboxWorkspaceWriteDescription": "Les écritures sont censées rester dans l'espace de travail de la session et les répertoires temporaires du système ; un appel en dehors demande une autorisation ponctuelle. Sur certaines plateformes, l'application n'est que partielle.",
+    "deepseekSandboxFullAccess": "Accès complet (sans bac à sable)",
+    "deepseekSandboxFullAccessDescription": "N'applique aucune restriction de fichiers. Ne le choisissez que si vous en comprenez les conséquences.",
+    "deepseekPermissionAllowOnce": "Autoriser une fois",
+    "deepseekPermissionRejectOnce": "Refuser"
+  },
+  "CloseBehaviorSettings": {
+    "title": "Comportement du bouton Fermer",
+    "description": "Choisissez ce que fait le bouton Fermer de la fenêtre principale.",
+    "trayUnavailable": "Ce système ne dispose pas de zone de notification utilisable : le bouton Fermer quitte toujours houhub.",
+    "behaviorAsk": "Demander à chaque fois",
+    "behaviorMinimize": "Réduire dans la zone de notification",
+    "behaviorExit": "Quitter houhub",
+    "saveFailed": "Échec de l'enregistrement du comportement de fermeture : {message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "Fermer houhub ?",
+    "askDescription": "houhub peut continuer à s'exécuter dans la zone de notification pour garder les agents et les terminaux actifs, ou quitter complètement.",
+    "confirmExitTitle": "Quitter houhub ?",
+    "confirmExitDescription": "La fermeture de la fenêtre est configurée pour quitter houhub.",
+    "runningTerminals": "{count, plural, one {# terminal est encore actif et sera fermé en quittant.} other {# terminaux sont encore actifs et seront fermés en quittant.}}",
+    "remember": "Mémoriser mon choix",
+    "cancel": "Annuler",
+    "minimize": "Réduire dans la zone de notification",
+    "exit": "Quitter houhub",
+    "actionFailed": "Échec de l'action : {message}"
   }
 }

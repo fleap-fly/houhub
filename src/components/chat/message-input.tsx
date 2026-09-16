@@ -158,6 +158,7 @@ import { useScrollbarSafeDismiss } from "@/hooks/use-scrollbar-safe-dismiss"
 import { getExpertIcon, pickLocalized } from "@/lib/expert-presentation"
 import { getScienceIcon } from "@/lib/science-presentation"
 import { OFFICE_ACTIONS, type OfficeAction } from "@/lib/office-actions"
+import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 import {
   clearMessageInputDraftV2,
   loadMessageInputDraftV2,
@@ -185,10 +186,12 @@ import {
   restoreBlocksIntoEditor,
 } from "@/components/chat/composer/composer-commands"
 import {
+  buildKnownInvocations,
   commandInvocationToken,
   commandToReference,
   skillToReference,
 } from "@/components/chat/composer/invocation-reference"
+import type { KnownInvocations } from "@/lib/invocation-token"
 import { cutSelectionToClipboard } from "@/components/chat/composer/clipboard-actions"
 import {
   ComposerTokenAction,
@@ -610,6 +613,27 @@ export function MessageInput({
   // only ever saw global skills in the `$` autocomplete.
   const availableSkills = useAgentSkills(skillAgentType, defaultPath ?? null)
   const skillPrefix = agentType === "codex" ? "$" : "/"
+  // Exactly what the `/`·`$` menu below can offer. Seeding or pasting text turns
+  // a bare `/cmd`·`$skill` token into a badge only when it is on this list, so
+  // prose the agent has no command for stays prose.
+  const knownInvocations = useMemo(
+    () =>
+      buildKnownInvocations(availableCommands, availableSkills, skillPrefix),
+    [availableCommands, availableSkills, skillPrefix]
+  )
+  // The hydration effects below read the list through this ref inside their
+  // deferred frame, never from their dependency array. `buildKnownInvocations`
+  // mints a fresh Set whenever the agent re-advertises (and on every render for
+  // a host that passes `availableCommands={conn.availableCommands ?? []}`), and
+  // those effects claim a one-shot guard synchronously but do the restore in a
+  // rAF whose cleanup cancels it: a new identity landing in that gap would
+  // cancel the frame and then bail on the already-claimed guard, dropping the
+  // draft entirely. Reading it late is also the more accurate answer — it is
+  // whatever the agent advertises at the moment the content is actually seeded.
+  const knownInvocationsRef = useRef(knownInvocations)
+  useEffect(() => {
+    knownInvocationsRef.current = knownInvocations
+  }, [knownInvocations])
   const { shortcuts } = useShortcutSettings()
   const effectiveDraftStorageKey = draftStorageKey ?? null
   const resolvedPlaceholder = placeholder ?? t("askAnything")
@@ -789,9 +813,9 @@ export function MessageInput({
   // embedded/data-uri resources re-inlined as sentinel badges with their
   // bytes-bearing blocks re-registered in the payload map.
   const hydrateFromBlocks = useCallback(
-    (editor: Editor, blocks: PromptInputBlock[]) => {
+    (editor: Editor, blocks: PromptInputBlock[], known?: KnownInvocations) => {
       embeddedPayloadsRef.current.clear()
-      const restored = restoreBlocksIntoEditor(editor, blocks)
+      const restored = restoreBlocksIntoEditor(editor, blocks, known)
       setAttachments(
         restored.filter((a): a is ImageInputAttachment => a.type === "image")
       )
@@ -863,7 +887,11 @@ export function MessageInput({
         const editor = ed.getEditor()
         if (editingDraftBlocks && editingDraftBlocks.length > 0 && editor) {
           // Full fidelity: restore inline badges + images from the blocks.
-          hydrateFromBlocks(editor, editingDraftBlocks)
+          hydrateFromBlocks(
+            editor,
+            editingDraftBlocks,
+            knownInvocationsRef.current
+          )
         } else if (editingDraftText != null) {
           ed.setText(editingDraftText)
         }
@@ -924,7 +952,11 @@ export function MessageInput({
       const raf = requestAnimationFrame(() => {
         const editor = editorRef.current?.getEditor()
         if (editingDraftBlocks && editingDraftBlocks.length > 0 && editor) {
-          hydrateFromBlocks(editor, editingDraftBlocks)
+          hydrateFromBlocks(
+            editor,
+            editingDraftBlocks,
+            knownInvocationsRef.current
+          )
         } else if (editingDraftText != null) {
           editorRef.current?.setText(editingDraftText)
         }
@@ -1042,10 +1074,20 @@ export function MessageInput({
     setComposerReady(true)
   }, [])
 
-  const availableModes = useMemo(() => modes ?? [], [modes])
+  // Localised HERE, once, rather than at each selector: the composer renders
+  // this data through three independent paths (the searchable model picker,
+  // the inline dropdowns, and the collapsed panel's own projection), and a
+  // per-selector fix leaves whichever one the reader is not looking at in the
+  // agent's own language. Non-DeepSeek agents get their arrays back unchanged,
+  // identity included, so the memos below do not churn.
+  const vocabulary = useAgentVocabulary(agentType)
+  const availableModes = useMemo(
+    () => vocabulary.modes(modes ?? []),
+    [modes, vocabulary]
+  )
   const availableConfigOptions = useMemo(
-    () => configOptions ?? [],
-    [configOptions]
+    () => vocabulary.configOptions(configOptions ?? []),
+    [configOptions, vocabulary]
   )
   const hasConfigOptions = availableConfigOptions.length > 0
   const hasModes = availableModes.length > 0
@@ -3140,6 +3182,7 @@ export function MessageInput({
               key={option.id}
               option={option}
               derivedGroups={deriveModelGroups(option)}
+              recommendedLabel={t("recommendedBadge")}
               onSelect={(configId, valueId) =>
                 onConfigOptionChange?.(configId, valueId)
               }
@@ -3217,6 +3260,7 @@ export function MessageInput({
           currentValue: kind.current_value,
           currentLabel: current?.name ?? kind.current_value,
           groups,
+          recommendedValue: option.recommended_value,
           onSelect: (value) => onConfigOptionChange?.(option.id, value),
           ...(searchable && {
             search: {
@@ -3567,6 +3611,11 @@ export function MessageInput({
                 referenceSearch={composerReferenceSearch}
                 mentionUiLabels={mentionUiLabels}
                 tabLabels={referenceGroupLabels}
+                // The `@` panel spans the whole composer and opens above it —
+                // the same box the `/` menu hangs off (this container), so the
+                // two read as one affordance.
+                mentionAnchorRef={containerRef}
+                knownInvocations={knownInvocations}
                 onChange={handleComposerChange}
                 onReady={handleComposerReady}
                 onSubmit={handleSend}
@@ -3976,6 +4025,7 @@ export function MessageInput({
                             <SessionSelectorsPanel
                               settings={collapsedSettings}
                               settingsLabel={t("agentSettings")}
+                              recommendedLabel={t("recommendedBadge")}
                               onAfterSelect={() =>
                                 setCollapsedSelectorsOpen(false)
                               }

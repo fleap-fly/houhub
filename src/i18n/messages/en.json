@@ -463,7 +463,7 @@
       },
       "open_folder": {
         "title": "Open Folder",
-        "description": "Open folder picker and open in a new window"
+        "description": "Open folder picker and open the folder in the workspace"
       },
       "open_settings": {
         "title": "Open Settings",
@@ -1417,7 +1417,8 @@
       "noPlugins": "No plugins declared.",
       "status": {
         "installed": "Installed",
-        "missing": "Missing"
+        "missing": "Missing",
+        "needs_migration": "Needs migration"
       },
       "installAll": "Install All Missing",
       "pinVersions": "Pin @latest Versions",
@@ -1623,7 +1624,21 @@
         "action": "Sign out",
         "done": "Signed out. Sign in again to pick a different account.",
         "failed": "Could not sign out"
-      }
+      },
+      "tempReclaimTitle": "Leftover temp space",
+      "tempReclaimHint": "Older versions of houhub could not clean up the temporary directory this agent unpacks on every launch. This scans the system temp folder for those leftovers. That folder is shared with other applications, so nothing is deleted until you confirm, and anything still in use is skipped.",
+      "tempReclaimScan": "Scan",
+      "tempReclaimDelete": "Delete leftovers",
+      "tempReclaimNone": "Nothing to reclaim.",
+      "tempReclaimFound": "{count} leftover item(s), {size} reclaimable.",
+      "tempReclaimSkipped": "{count} skipped (still in use or too recent).",
+      "tempReclaimed": "Reclaimed {size} from {count} item(s).",
+      "tempReclaimSelectAll": "Select all",
+      "tempReclaimAgeHours": "{hours}h",
+      "tempReclaimConfirmTitle": "Delete {count} item(s)?",
+      "tempReclaimConfirmBody": "This permanently deletes {size}. The system temp folder is shared with other applications, so check each path before confirming — anything still in use is skipped.",
+      "tempReclaimConfirmAction": "Delete",
+      "tempReclaimCancel": "Cancel"
     },
     "customAgentMcpLabel": "MCP support",
     "customAgentMcpHint": "Sends houhub's built-in MCP companion to this agent when a session starts — the channel behind delegation, live feedback and task tools. Turn it off for an agent that rejects MCP servers and fails to connect; the change applies to the next connection.",
@@ -3072,7 +3087,8 @@
         "steerNoteFailed": "Couldn't send your note",
         "openLink": "Open link",
         "openFile": "Open file",
-        "sendEmail": "Send email"
+        "sendEmail": "Send email",
+        "recommendedBadge": "Recommended"
       },
       "messageQueue": {
         "addToQueue": "Queue message",
@@ -3356,7 +3372,8 @@
         "copyImageFailed": "Could not copy image: {message}",
         "copyImageUnsupported": "Copying this image is not supported here",
         "selectionSaveAsNote": "Note",
-        "forkNotReady": "Can't fork from this reply just yet — try again in a moment"
+        "forkNotReady": "Can't fork from this reply just yet — try again in a moment",
+        "loadBackgroundActivity": "Load background activity"
       },
       "liveTurnStats": {
         "thinking": "Thinking...",
@@ -6054,5 +6071,53 @@
     "toastSaved": "Model list saved",
     "toastRestored": "Using the agent's built-in model list",
     "toastSaveFailed": "Could not save the model list"
+  },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "Normal",
+    "deepseekModeDefaultDescription": "Reads and edits files and runs commands directly to get the job done",
+    "deepseekModePlan": "Plan",
+    "deepseekModePlanDescription": "Investigates first and proposes a full plan for you to confirm before touching anything. This steers the model — the real boundary is still whatever File access allows.",
+    "deepseekOptionModel": "Model",
+    "deepseekOptionReasoning": "Reasoning effort",
+    "deepseekOptionReasoningDescription": "Higher is slower and costs more tokens, but steadier on hard problems",
+    "deepseekOptionSandbox": "File access",
+    "deepseekOptionSandboxDescription": "Commands and file tools share this one boundary",
+    "deepseekReasoningOff": "Off",
+    "deepseekReasoningOffDescription": "Answers directly with no reasoning; fastest",
+    "deepseekReasoningLow": "Low",
+    "deepseekReasoningLowDescription": "Reasons briefly; steadier than off, faster than high",
+    "deepseekReasoningHigh": "High",
+    "deepseekReasoningHighDescription": "Reasons before answering; the everyday coding default",
+    "deepseekReasoningMax": "Max",
+    "deepseekReasoningMaxDescription": "Reasons longer; steadier on hard problems, but slower and costs more tokens",
+    "deepseekSandboxReadOnly": "Read-only",
+    "deepseekSandboxReadOnlyDescription": "Runs under a read-only policy; switch access when a write is needed. Enforcement can be partial on some platforms.",
+    "deepseekSandboxWorkspaceWrite": "Workspace write",
+    "deepseekSandboxWorkspaceWriteDescription": "Writes are meant to stay inside the session workspace and the system temp directories; a call outside them asks for one-time approval. Enforcement can be partial on some platforms.",
+    "deepseekSandboxFullAccess": "Full access (no sandbox)",
+    "deepseekSandboxFullAccessDescription": "Applies no file restrictions at all. Choose it only when you understand the consequences.",
+    "deepseekPermissionAllowOnce": "Allow once",
+    "deepseekPermissionRejectOnce": "Reject"
+  },
+  "CloseBehaviorSettings": {
+    "title": "Close Button Behavior",
+    "description": "Choose what the main window's close button does.",
+    "trayUnavailable": "This system has no usable tray, so the close button always exits houhub.",
+    "behaviorAsk": "Ask every time",
+    "behaviorMinimize": "Minimize to tray",
+    "behaviorExit": "Exit houhub",
+    "saveFailed": "Failed to save close behavior: {message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "Close houhub?",
+    "askDescription": "houhub can keep running in the tray so agents and terminals stay alive, or exit completely.",
+    "confirmExitTitle": "Exit houhub?",
+    "confirmExitDescription": "Closing the window is set to exit houhub.",
+    "runningTerminals": "{count, plural, one {# terminal is still running and will be terminated on exit.} other {# terminals are still running and will be terminated on exit.}}",
+    "remember": "Remember my choice",
+    "cancel": "Cancel",
+    "minimize": "Minimize to tray",
+    "exit": "Exit houhub",
+    "actionFailed": "Action failed: {message}"
   }
 }

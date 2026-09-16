@@ -463,7 +463,7 @@
       },
       "open_folder": {
         "title": "打開資料夾",
-        "description": "打開資料夾選擇器並在新視窗中開啟"
+        "description": "打開資料夾選擇器並在工作區中開啟該資料夾"
       },
       "open_settings": {
         "title": "打開設定",
@@ -1417,7 +1417,8 @@
       "noPlugins": "opencode.json 中未宣告任何外掛",
       "status": {
         "installed": "已安裝",
-        "missing": "未安裝"
+        "missing": "未安裝",
+        "needs_migration": "需要遷移"
       },
       "installAll": "安裝全部缺失外掛",
       "pinVersions": "固定 @latest 版本",
@@ -1623,7 +1624,21 @@
         "action": "登出",
         "done": "已登出。重新登入即可選擇其他帳號。",
         "failed": "登出失敗"
-      }
+      },
+      "tempReclaimTitle": "殘留暫存空間",
+      "tempReclaimHint": "舊版本 houhub 無法清理此代理每次啟動時解壓的暫存目錄。此操作會掃描系統暫存資料夾中的這些殘留。該資料夾與其他應用程式共用，因此在你確認之前不會刪除任何內容，仍在使用中的項目也會被跳過。",
+      "tempReclaimScan": "掃描",
+      "tempReclaimDelete": "刪除殘留",
+      "tempReclaimNone": "沒有可回收的內容。",
+      "tempReclaimFound": "發現 {count} 項殘留，可回收 {size}。",
+      "tempReclaimSkipped": "已跳過 {count} 項（仍在使用或過新）。",
+      "tempReclaimed": "已從 {count} 項中回收 {size}。",
+      "tempReclaimSelectAll": "全選",
+      "tempReclaimAgeHours": "{hours} 小時",
+      "tempReclaimConfirmTitle": "刪除選取的 {count} 項？",
+      "tempReclaimConfirmBody": "將永久刪除 {size}。系統暫存目錄與其他應用共用，確認前請先核對每條路徑；仍在使用中的項目會被略過。",
+      "tempReclaimConfirmAction": "刪除",
+      "tempReclaimCancel": "取消"
     },
     "customAgentMcpLabel": "MCP 支援",
     "customAgentMcpHint": "工作階段建立時向該智慧體注入 houhub 內建的 houhub-mcp 伴生行程 —— 委派、即時回饋與任務工具都依賴它。若該智慧體不支援 MCP、連線時報錯，請關閉此項；設定會在下次連線時生效。",
@@ -3072,7 +3087,8 @@
         "steerNoteFailed": "留言送出失敗",
         "openLink": "開啟連結",
         "openFile": "開啟檔案",
-        "sendEmail": "傳送郵件"
+        "sendEmail": "傳送郵件",
+        "recommendedBadge": "推薦"
       },
       "messageQueue": {
         "addToQueue": "加入佇列",
@@ -3343,7 +3359,8 @@
         "copyImageFailed": "複製圖片失敗：{message}",
         "copyImageUnsupported": "目前環境不支援複製該圖片",
         "selectionSaveAsNote": "存為便利貼",
-        "forkNotReady": "這則回覆暫時還不能作為分叉點，請稍後再試"
+        "forkNotReady": "這則回覆暫時還不能作為分叉點，請稍後再試",
+        "loadBackgroundActivity": "載入背景活動"
       },
       "liveTurnStats": {
         "thinking": "思考中...",
@@ -6054,5 +6071,53 @@
     "toastSaved": "模型清單已儲存",
     "toastRestored": "已改用代理內建模型清單",
     "toastSaveFailed": "儲存模型清單失敗"
+  },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "常規",
+    "deepseekModeDefaultDescription": "直接讀寫檔案、執行命令完成任務",
+    "deepseekModePlan": "計畫",
+    "deepseekModePlanDescription": "先調查再提出完整方案，經你確認後才動手；這只是對模型的引導，實際邊界仍由「檔案權限」決定。",
+    "deepseekOptionModel": "模型",
+    "deepseekOptionReasoning": "推理檔位",
+    "deepseekOptionReasoningDescription": "越高越慢越耗 token，難題更穩",
+    "deepseekOptionSandbox": "檔案權限",
+    "deepseekOptionSandboxDescription": "命令與檔案工具共用這一條邊界",
+    "deepseekReasoningOff": "關閉",
+    "deepseekReasoningOffDescription": "不做推理，直接作答；最快",
+    "deepseekReasoningLow": "低",
+    "deepseekReasoningLowDescription": "略作推理；比關閉穩，比高檔快",
+    "deepseekReasoningHigh": "高",
+    "deepseekReasoningHighDescription": "推理後作答；日常編碼的預設檔",
+    "deepseekReasoningMax": "最高",
+    "deepseekReasoningMaxDescription": "推理更久；難題更穩，但較慢且更耗 token",
+    "deepseekSandboxReadOnly": "唯讀",
+    "deepseekSandboxReadOnlyDescription": "依唯讀策略執行；需要寫入時切換權限。部分平台上只是部分強制。",
+    "deepseekSandboxWorkspaceWrite": "可寫工作區",
+    "deepseekSandboxWorkspaceWriteDescription": "寫入意在限制於工作階段工作區與系統暫存目錄；越界的呼叫會請求單次授權。部分平台上只是部分強制。",
+    "deepseekSandboxFullAccess": "完全開放（無沙箱）",
+    "deepseekSandboxFullAccessDescription": "不施加任何檔案限制。僅在你清楚後果時選擇。",
+    "deepseekPermissionAllowOnce": "允許本次",
+    "deepseekPermissionRejectOnce": "拒絕"
+  },
+  "CloseBehaviorSettings": {
+    "title": "關閉按鈕行為",
+    "description": "選擇點擊主視窗關閉按鈕時的行為。",
+    "trayUnavailable": "目前系統沒有可用的系統匣，關閉按鈕將一律結束 houhub。",
+    "behaviorAsk": "每次詢問",
+    "behaviorMinimize": "最小化到系統匣",
+    "behaviorExit": "結束 houhub",
+    "saveFailed": "儲存關閉行為失敗：{message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "要關閉 houhub 嗎？",
+    "askDescription": "houhub 可以最小化到系統匣繼續執行，讓智能體與終端機保持運作；也可以完全結束。",
+    "confirmExitTitle": "要結束 houhub 嗎？",
+    "confirmExitDescription": "目前設定為：關閉視窗即結束 houhub。",
+    "runningTerminals": "還有 {count} 個終端機正在執行，結束後會全部中止。",
+    "remember": "記住我的選擇",
+    "cancel": "取消",
+    "minimize": "最小化到系統匣",
+    "exit": "結束 houhub",
+    "actionFailed": "操作失敗：{message}"
   }
 }

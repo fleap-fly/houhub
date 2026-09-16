@@ -7,20 +7,35 @@ import {
   Copy,
   Eye,
   EyeOff,
+  HardDrive,
   Loader2,
   Save,
   ExternalLink,
 } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { BrowserLink } from "@/components/ui/browser-link"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import {
   acpAntigravityLoginCancel,
   acpAntigravityLoginFinish,
   acpAntigravityLoginStart,
   acpAntigravitySignOut,
+  acpReclaimLeakedTemp,
+  acpScanLeakedTemp,
   acpSyncAntigravitySettings,
   type AntigravityLoginOutcome,
   type AntigravityLoginStart,
@@ -35,7 +50,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { AcpAgentInfo } from "@/lib/types"
+import type { AcpAgentInfo, LeakedTempScan } from "@/lib/types"
 
 /** houhub-side knob recording the chosen auth method. The agent reads NOTHING
  * from it — its auth intent comes from `auth.type` in
@@ -219,8 +234,8 @@ type PendingLogin = Extract<AntigravityLoginStart, { alreadySignedIn: false }>
  * false without raising — so the first session simply hangs and then fails,
  * with no link anywhere the user could open themselves.
  *
- * This runs that same flow out of band and splits it in two: HouHub shows the
- * link, the user consents in whatever browser they do have, and HouHub — which
+ * This runs that same flow out of band and splits it in two: houhub shows the
+ * link, the user consents in whatever browser they do have, and houhub — which
  * IS on the machine where that port is listening — performs the redirect their
  * browser could not. See `src-tauri/src/acp/antigravity_login.rs`.
  */
@@ -366,7 +381,7 @@ function HeadlessSignIn({
         // request — so the link on screen is spent whether or not the sign-in
         // worked. Leaving the paste box would invite a second attempt that
         // could only fail. `retryable` marks the one case where it is still
-        // live: HouHub rejected the paste before sending anything.
+        // live: houhub rejected the paste before sending anything.
         pendingRef.current = null
         setPending(null)
         setRedirect("")
@@ -445,7 +460,7 @@ function HeadlessSignIn({
                   <Copy className="size-3.5" />
                 )}
               </Button>
-              {/* The one case where opening it here is useful: a DESKTOP HouHub
+              {/* The one case where opening it here is useful: a DESKTOP houhub
                   driving a remote agent, or a user browsing the server's panel
                   from their laptop. On the headless host itself it is inert,
                   which is what the copy button beside it is for. */}
@@ -664,6 +679,251 @@ function SignOut({
  * session. A second copy here would only create two places to disagree about
  * what a session runs on.
  */
+/** Human-readable byte count. Binary units — these are disk sizes. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ["KB", "MB", "GB", "TB"]
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`
+}
+
+/**
+ * One-time reclamation of temp directories leaked by launches from BEFORE
+ * per-launch isolation shipped.
+ *
+ * Scan-then-confirm rather than a silent sweep, and the copy says why: the
+ * directories live in the system temp dir, which every PyInstaller application
+ * shares. houhub cannot tell its own leftovers from another app's, so deleting
+ * them is the user's call, not houhub's.
+ */
+function LeakedTempSection() {
+  const t = useTranslations("AcpAgentSettings")
+  const [scan, setScan] = useState<LeakedTempScan | null>(null)
+  /** Paths the user has explicitly opted in. Starts empty — see the render. */
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [failed, setFailed] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+
+  const runScan = useCallback(async () => {
+    setBusy(true)
+    try {
+      setScan(await acpScanLeakedTemp())
+      // A new scan is a new set of paths; carrying ticks across would let a
+      // path the user never looked at arrive pre-approved.
+      setSelected(new Set())
+      setFailed([])
+    } catch (err) {
+      toast.error(toErrorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
+  const chosen = useMemo(
+    () => scan?.entries.filter((entry) => selected.has(entry.path)) ?? [],
+    [scan, selected]
+  )
+  const chosenBytes = chosen.reduce((total, entry) => total + entry.bytes, 0)
+
+  const runReclaim = useCallback(async () => {
+    setConfirming(false)
+    if (chosen.length === 0) return
+    setBusy(true)
+    try {
+      const result = await acpReclaimLeakedTemp(chosen.map((e) => e.path))
+      toast.success(
+        t("antigravity.tempReclaimed", {
+          count: result.removed,
+          size: formatBytes(result.freed_bytes),
+        })
+      )
+      // Every failure, not just the first: "removed 3 of 5" with three
+      // unexplained survivors is the report that wastes the next hour.
+      setFailed(result.failed)
+      setScan(await acpScanLeakedTemp())
+      setSelected(new Set())
+    } catch (err) {
+      toast.error(toErrorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }, [chosen, t])
+
+  const toggle = useCallback((path: string, on: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(path)
+      else next.delete(path)
+      return next
+    })
+  }, [])
+
+  const allChecked: boolean | "indeterminate" =
+    scan && scan.entries.length > 0 && selected.size === scan.entries.length
+      ? true
+      : selected.size > 0
+        ? "indeterminate"
+        : false
+
+  return (
+    <div className="space-y-1.5 rounded-md border bg-background/60 p-2.5">
+      <div className="flex items-center gap-1.5">
+        <HardDrive className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-xs font-medium">
+          {t("antigravity.tempReclaimTitle")}
+        </span>
+      </div>
+      <p className="text-3xs text-muted-foreground">
+        {t("antigravity.tempReclaimHint")}
+      </p>
+
+      {scan ? (
+        <div className="space-y-1">
+          <p className="text-2xs">
+            {scan.entries.length === 0
+              ? t("antigravity.tempReclaimNone")
+              : t("antigravity.tempReclaimFound", {
+                  count: scan.entries.length,
+                  size: formatBytes(scan.total_bytes),
+                })}
+          </p>
+          {scan.skipped > 0 ? (
+            <p className="text-3xs text-muted-foreground">
+              {t("antigravity.tempReclaimSkipped", { count: scan.skipped })}
+            </p>
+          ) : null}
+          <code className="block overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-3xs whitespace-nowrap text-muted-foreground">
+            {scan.root}
+          </code>
+
+          {/* Nothing is pre-ticked, and every path is shown. The hint above
+              says houhub cannot tell its own leftovers from another
+              application's; a single button that deleted all of them would be
+              asking the user to take responsibility for a list they were never
+              shown. */}
+          {scan.entries.length > 0 ? (
+            <div className="rounded border">
+              <label className="flex items-center gap-2 border-b px-2 py-1">
+                <Checkbox
+                  checked={allChecked}
+                  disabled={busy}
+                  onCheckedChange={(value) =>
+                    setSelected(
+                      value === true
+                        ? new Set(scan.entries.map((e) => e.path))
+                        : new Set()
+                    )
+                  }
+                />
+                <span className="text-3xs text-muted-foreground">
+                  {t("antigravity.tempReclaimSelectAll")}
+                </span>
+              </label>
+              <div className="max-h-40 overflow-y-auto">
+                {scan.entries.map((entry) => (
+                  <label
+                    className="flex items-center gap-2 px-2 py-1 hover:bg-muted/50"
+                    key={entry.path}
+                  >
+                    <Checkbox
+                      checked={selected.has(entry.path)}
+                      disabled={busy}
+                      onCheckedChange={(value) =>
+                        toggle(entry.path, value === true)
+                      }
+                    />
+                    <span className="min-w-0 flex-1 truncate font-mono text-3xs">
+                      {entry.path}
+                    </span>
+                    <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">
+                      {formatBytes(entry.bytes)}
+                    </span>
+                    <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">
+                      {t("antigravity.tempReclaimAgeHours", {
+                        hours: entry.age_hours,
+                      })}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {failed.length > 0 ? (
+            <ul className="space-y-0.5">
+              {failed.map((message) => (
+                <li className="text-3xs text-destructive" key={message}>
+                  {message}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="flex justify-end gap-1.5">
+        <Button
+          className="h-7 gap-1.5 px-2.5 text-xs"
+          disabled={busy}
+          onClick={() => void runScan()}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          {busy && !scan ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : null}
+          {t("antigravity.tempReclaimScan")}
+        </Button>
+        {scan && scan.entries.length > 0 ? (
+          <AlertDialog onOpenChange={setConfirming} open={confirming}>
+            <AlertDialogTrigger asChild>
+              <Button
+                className="h-7 gap-1.5 px-2.5 text-xs"
+                disabled={busy || chosen.length === 0}
+                size="sm"
+                type="button"
+                variant="destructive"
+              >
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                {t("antigravity.tempReclaimDelete")}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {t("antigravity.tempReclaimConfirmTitle", {
+                    count: chosen.length,
+                  })}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t("antigravity.tempReclaimConfirmBody", {
+                    size: formatBytes(chosenBytes),
+                  })}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>
+                  {t("antigravity.tempReclaimCancel")}
+                </AlertDialogCancel>
+                <AlertDialogAction onClick={() => void runReclaim()}>
+                  {t("antigravity.tempReclaimConfirmAction")}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export function AntigravityConfigPanel({
   agent,
   saving,
@@ -790,7 +1050,7 @@ export function AntigravityConfigPanel({
       // Storing the row is only half of a save. What actually authenticates
       // Antigravity is `auth.type` in the server's settings.json, and that file
       // is the user's — it can legitimately be Hjson with comments, or hold an
-      // `auth` key of a shape HouHub refuses to overwrite — in which case the
+      // `auth` key of a shape houhub refuses to overwrite — in which case the
       // launch leaves it alone and only writes a log line. Saying "saved"
       // regardless was claiming something that had not happened, and the
       // consequence lands later and elsewhere: switching methods scrubs the
@@ -1032,7 +1292,7 @@ export function AntigravityConfigPanel({
         {/* The save landed in the database but not in the file the server
             reads, so the choice above is NOT what the next session will
             authenticate with. Names the file and the reason, because the fix
-            is to edit that file by hand — HouHub will not touch it again. */}
+            is to edit that file by hand — houhub will not touch it again. */}
         {syncSkip ? (
           <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-2">
             <p className="text-2xs text-amber-600 dark:text-amber-400">
@@ -1059,6 +1319,8 @@ export function AntigravityConfigPanel({
             </code>
           </div>
         ) : null}
+
+        <LeakedTempSection />
 
         <div className="flex justify-end">
           <Button

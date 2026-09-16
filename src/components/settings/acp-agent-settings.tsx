@@ -46,6 +46,8 @@ import {
 } from "@/lib/custom-agents"
 import { AgentIcon } from "@/components/agent-icon"
 import { AddCustomAgentDialog } from "@/components/settings/add-custom-agent-dialog"
+import { SettingCard, SettingRow } from "@/components/shared/setting-card"
+import { CustomAgentMcpToggle } from "@/components/settings/custom-agent-mcp-toggle"
 import { CustomAgentSkillsToggle } from "@/components/settings/custom-agent-skills-toggle"
 import {
   AlertDialog,
@@ -676,16 +678,31 @@ const OPENCLAW_ENV_KEYS = {
   sessionKey: "OPENCLAW_SESSION_KEY",
 } as const
 
+/** Cline provider ids, as the CLI's own registry keys them (`cline auth -p`).
+ *
+ * `openai-compatible` is NOT interchangeable with `openai`: the `auth`
+ * subcommand aliases the latter, but the ACP path does not, so an `openai`
+ * selection reaches `session/new` as an unknown provider with an empty model
+ * list. The backend's `normalize_cline_provider_id` maps the legacy value on
+ * read so an existing config still lands on the right row here. */
 const CLINE_PROVIDERS = [
   { value: "anthropic", label: "Anthropic" },
   { value: "openai-native", label: "OpenAI" },
-  { value: "openai", label: "OpenAI Compatible" },
+  { value: "openai-compatible", label: "OpenAI Compatible" },
   { value: "openrouter", label: "OpenRouter" },
   { value: "gemini", label: "Gemini" },
   { value: "deepseek", label: "DeepSeek" },
   { value: "bedrock", label: "AWS Bedrock" },
   { value: "vertex", label: "GCP Vertex" },
   { value: "ollama", label: "Ollama" },
+  // Cline's own sign-in providers, labelled as the CLI labels them. They are
+  // listed so a `cline auth` login reads back as itself instead of leaving the
+  // dropdown blank — their credential is an OAuth token the agent restores by
+  // itself, which houhub preserves rather than manages, so the API key field
+  // stays empty for them.
+  { value: "cline", label: "Cline Usage-Billing (sign-in)" },
+  { value: "cline-pass", label: "ClinePass (sign-in)" },
+  { value: "openai-codex", label: "OpenAI ChatGPT Subscription (sign-in)" },
 ] as const
 
 type ClineProvider = (typeof CLINE_PROVIDERS)[number]["value"]
@@ -1175,13 +1192,24 @@ interface ClineImportantValues {
   baseUrl: string
 }
 
+/** Mirrors the backend `normalize_cline_provider_id`, so a legacy `"openai"`
+ * typed into the advanced JSON editor still selects a row instead of leaving the
+ * provider dropdown blank. */
+function normalizeClineProvider(provider: string): ClineProvider {
+  return (
+    provider === "openai" ? "openai-compatible" : provider
+  ) as ClineProvider
+}
+
 function extractClineImportantValues(configText: string): ClineImportantValues {
   const parseResult = parseConfigJsonText(configText)
   const config = parseResult.config
   return {
-    provider: (typeof config.apiProvider === "string" && config.apiProvider
-      ? config.apiProvider
-      : "anthropic") as ClineProvider,
+    provider: normalizeClineProvider(
+      typeof config.apiProvider === "string" && config.apiProvider
+        ? config.apiProvider
+        : "anthropic"
+    ),
     apiKey: typeof config.apiKey === "string" ? config.apiKey : "",
     model: typeof config.model === "string" ? config.model : "",
     baseUrl: typeof config.apiBaseUrl === "string" ? config.apiBaseUrl : "",
@@ -10074,6 +10102,10 @@ supports_websockets = true`}
                       <label className="text-2xs text-muted-foreground">
                         API URL
                       </label>
+                      {/* Cline stores this as `settings.baseUrl`, which its
+                          own schema validates as a full URL — and an
+                          OpenAI-compatible endpoint wants the version suffix,
+                          so the placeholder shows the whole shape. */}
                       <Input
                         value={selectedDraft.clineBaseUrl}
                         onChange={(event) => {
@@ -10082,7 +10114,7 @@ supports_websockets = true`}
                             event.target.value
                           )
                         }}
-                        placeholder="https://api.openai.com"
+                        placeholder="https://api.openai.com/v1"
                       />
                     </div>
 
@@ -11313,55 +11345,62 @@ supports_websockets = true`}
                   // dialog) so the panel reads as one stack of settings rather
                   // than four differently-shaped boxes.
                   <>
-                    <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-                      <div>
-                        <label className="text-xs font-medium">
-                          {t("customAgentEdit")}
-                        </label>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          {t("customAgentEditHint")}
-                        </p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() =>
-                          setEditCustomAgentId(
-                            customAgentId(selectedAgent.agent_type)
-                          )
+                    <SettingCard>
+                      <SettingRow
+                        icon={Pencil}
+                        title={t("customAgentEdit")}
+                        description={t("customAgentEditHint")}
+                        control={
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setEditCustomAgentId(
+                                customAgentId(selectedAgent.agent_type)
+                              )
+                            }
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                            {t("customAgentEdit")}
+                          </Button>
                         }
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                        {t("customAgentEdit")}
-                      </Button>
-                    </div>
+                      />
+                    </SettingCard>
                     <CustomAgentSkillsToggle
                       registryId={customAgentId(selectedAgent.agent_type) ?? ""}
                     />
-                    <div className="space-y-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
-                      <div>
-                        <label className="text-xs font-medium text-destructive">
-                          {t("customAgentRemove")}
-                        </label>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          {t("customAgentRemoveHint")}
-                        </p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-destructive hover:text-destructive"
-                        disabled={removingCustomAgent}
-                        onClick={() => setRemoveConfirmAgent(selectedAgent)}
-                      >
-                        {removingCustomAgent ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-3.5 w-3.5" />
-                        )}
-                        {t("customAgentRemove")}
-                      </Button>
-                    </div>
+                    <CustomAgentMcpToggle
+                      registryId={customAgentId(selectedAgent.agent_type) ?? ""}
+                    />
+                    {/* The one destructive action keeps its own tinting — the
+                        card shape is shared, the color is the warning. */}
+                    <SettingCard className="border-destructive/30 bg-destructive/5">
+                      <SettingRow
+                        icon={Trash2}
+                        title={
+                          <span className="text-destructive">
+                            {t("customAgentRemove")}
+                          </span>
+                        }
+                        description={t("customAgentRemoveHint")}
+                        control={
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-destructive hover:text-destructive"
+                            disabled={removingCustomAgent}
+                            onClick={() => setRemoveConfirmAgent(selectedAgent)}
+                          >
+                            {removingCustomAgent ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                            {t("customAgentRemove")}
+                          </Button>
+                        }
+                      />
+                    </SettingCard>
                   </>
                 ) : (
                   <div className="space-y-3 rounded-md border bg-muted/10 p-3">

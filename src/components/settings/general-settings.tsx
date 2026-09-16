@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react"
 import {
+  Cpu,
+  FolderCog,
   Loader2,
-  MonitorCog,
   Palette,
   RefreshCw,
   SquareTerminal,
@@ -11,11 +12,14 @@ import {
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
+import { SettingCard, SettingRow } from "@/components/shared/setting-card"
+import {
+  SettingsError,
+  SettingsSection,
+} from "@/components/shared/settings-section"
 import { Button } from "@/components/ui/button"
-import { SettingsSection } from "@/components/shared/settings-section"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Switch } from "@/components/ui/switch"
 import {
   Select,
   SelectContent,
@@ -23,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import {
   getAvailableTerminalShells,
   getSystemRenderingSettings,
@@ -37,6 +42,7 @@ import type { AvailableTerminalShells, TerminalShellOption } from "@/lib/types"
 import { usePlatform } from "@/hooks/use-platform"
 import { relaunchApp } from "@/lib/updater"
 import { toErrorMessage } from "@/lib/app-error"
+import { CloseBehaviorSettingsSection } from "@/components/settings/close-behavior-settings"
 import { DesktopNotificationSettingsSection } from "@/components/settings/desktop-notification-settings"
 import { NotificationSoundSettingsSection } from "@/components/settings/notification-sound-settings"
 import { DelegationSettingsSection } from "@/components/settings/delegation-settings"
@@ -323,9 +329,9 @@ export function GeneralSettings() {
         </section>
 
         {loadError && (
-          <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+          <SettingsError>
             {t("loadFailed", { message: loadError })}
-          </div>
+          </SettingsError>
         )}
 
         {/* The section is the picker: heading, purpose and control on one line,
@@ -348,70 +354,76 @@ export function GeneralSettings() {
           }
           htmlFor="terminal-default-shell"
           control={
-            <>
-              <Select
-                value={selectedShellId}
-                onValueChange={onShellSelectChange}
-                disabled={savingTerminal || !availableShells}
+            <Select
+              value={selectedShellId}
+              onValueChange={onShellSelectChange}
+              disabled={savingTerminal || !availableShells}
+            >
+              {/* `size` rather than a bare `h-8`: the trigger's height is
+                  gated on `data-size`, which outranks an ungated utility
+                  in the class list. */}
+              <SelectTrigger
+                id="terminal-default-shell"
+                size="sm"
+                className="w-52 bg-background text-xs"
               >
-                <SelectTrigger
-                  id="terminal-default-shell"
-                  className="w-full sm:w-64"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent align="start">
-                  {availableShells?.options.map((opt) => (
-                    <SelectItem key={opt.id} value={opt.id}>
-                      <span className="flex items-center gap-2">
-                        <span>{tDynamic(opt.label_key)}</span>
-                        {!opt.exists && !opt.accepts_custom_path && (
-                          <span className="text-[10px] text-muted-foreground">
-                            ({t("terminalShellNotInstalled")})
-                          </span>
-                        )}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {selectedShellId === TERMINAL_SHELL_OPTION_CUSTOM && (
-                <div className="space-y-2 pt-2">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {t("terminalShellCustomPath")}
-                  </label>
-                  <div className="flex gap-2">
-                    <Input
-                      value={customShellPath}
-                      onChange={(event) => {
-                        setCustomShellPath(event.target.value)
-                        setCustomPathExists(null)
-                      }}
-                      placeholder={t("terminalShellCustomPlaceholder")}
-                      disabled={savingTerminal}
-                      className="flex-1"
-                    />
-                    <Button
-                      size="sm"
-                      onClick={onCustomPathSave}
-                      disabled={savingTerminal || !customShellPath.trim()}
-                    >
-                      {t("terminalShellCustomSave")}
-                    </Button>
-                  </div>
-                  {customPathExists === false && customShellPath.trim() && (
-                    <p className="text-[11px] text-amber-500">
-                      {t("terminalShellNotFoundWarning")}
-                    </p>
-                  )}
-                  <p className="text-[11px] text-muted-foreground">
-                    {t("terminalShellCustomHint")}
-                  </p>
-                </div>
-              )}
-            </>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                {availableShells?.options.map((opt) => (
+                  <SelectItem key={opt.id} value={opt.id}>
+                    <span className="flex items-center gap-2">
+                      <span>{tDynamic(opt.label_key)}</span>
+                      {!opt.exists && !opt.accepts_custom_path && (
+                        <span className="text-3xs text-muted-foreground">
+                          ({t("terminalShellNotInstalled")})
+                        </span>
+                      )}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           }
-        />
+        >
+          {selectedShellId === TERMINAL_SHELL_OPTION_CUSTOM && (
+            <SettingCard>
+              <SettingRow
+                icon={FolderCog}
+                title={t("terminalShellCustomPath")}
+                description={t("terminalShellCustomHint")}
+                htmlFor="terminal-custom-shell"
+              >
+                <div className="flex gap-2">
+                  <Input
+                    id="terminal-custom-shell"
+                    value={customShellPath}
+                    onChange={(event) => {
+                      setCustomShellPath(event.target.value)
+                      setCustomPathExists(null)
+                    }}
+                    placeholder={t("terminalShellCustomPlaceholder")}
+                    disabled={savingTerminal}
+                    className="h-8 flex-1 bg-background font-mono text-xs"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={onCustomPathSave}
+                    disabled={savingTerminal || !customShellPath.trim()}
+                  >
+                    {t("terminalShellCustomSave")}
+                  </Button>
+                </div>
+                {customPathExists === false && customShellPath.trim() && (
+                  <p className="text-2xs text-amber-500">
+                    {t("terminalShellNotFoundWarning")}
+                  </p>
+                )}
+              </SettingRow>
+            </SettingCard>
+          )}
+        </SettingsSection>
 
         {/* Titled by the option rather than by "Color": the switch forces color
             ON for every command an agent runs, so the heading has to say what
@@ -440,8 +452,11 @@ export function GeneralSettings() {
         />
 
         {renderingSectionVisible && (
+          // Titled by the option, not by the category it belongs to: the switch
+          // turns acceleration *off*, so labelling it "Rendering" would read as
+          // the opposite of what it does.
           <SettingsSection
-            icon={MonitorCog}
+            icon={Cpu}
             title={t("disableHardwareAcceleration")}
             description={t("renderingDescription")}
             htmlFor="disable-hardware-acceleration"
@@ -459,13 +474,14 @@ export function GeneralSettings() {
             }
           >
             {renderingDirty && (
-              <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2 text-xs">
-                <span className="text-muted-foreground">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/40 px-3 py-2 text-xs">
+                <span className="min-w-0 text-muted-foreground">
                   {t("restartRequired")}
                 </span>
                 <Button
                   type="button"
                   size="sm"
+                  className="shrink-0"
                   onClick={() => void restartNow()}
                   disabled={savingRendering}
                 >
@@ -476,6 +492,8 @@ export function GeneralSettings() {
             )}
           </SettingsSection>
         )}
+
+        <CloseBehaviorSettingsSection />
 
         {/* The two halves of "how HouHub gets my attention", adjacent on
             purpose: one leaves the window, one does not. */}

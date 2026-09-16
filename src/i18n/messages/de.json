@@ -463,7 +463,7 @@
       },
       "open_folder": {
         "title": "Ordner öffnen",
-        "description": "Öffnet die Ordnerauswahl und den Ordner in einem neuen Fenster"
+        "description": "Öffnet die Ordnerauswahl und den Ordner im Arbeitsbereich"
       },
       "open_settings": {
         "title": "Einstellungen öffnen",
@@ -1417,7 +1417,8 @@
       "noPlugins": "Keine Plugins in opencode.json deklariert",
       "status": {
         "installed": "Installiert",
-        "missing": "Nicht installiert"
+        "missing": "Nicht installiert",
+        "needs_migration": "Migration erforderlich"
       },
       "installAll": "Alle fehlenden installieren",
       "pinVersions": "@latest-Versionen fixieren",
@@ -1623,7 +1624,21 @@
         "action": "Abmelden",
         "done": "Abgemeldet. Melde dich erneut an, um ein anderes Konto zu wählen.",
         "failed": "Abmelden fehlgeschlagen"
-      }
+      },
+      "tempReclaimTitle": "Übrig gebliebener temporärer Speicher",
+      "tempReclaimHint": "Ältere houhub-Versionen konnten das temporäre Verzeichnis nicht aufräumen, das dieser Agent bei jedem Start entpackt. Hiermit wird der temporäre Systemordner nach diesen Überresten durchsucht. Dieser Ordner wird mit anderen Anwendungen geteilt, daher wird nichts gelöscht, bevor du bestätigst, und alles noch Verwendete wird übersprungen.",
+      "tempReclaimScan": "Suchen",
+      "tempReclaimDelete": "Überreste löschen",
+      "tempReclaimNone": "Nichts zurückzugewinnen.",
+      "tempReclaimFound": "{count} Überrest(e), {size} freigebbar.",
+      "tempReclaimSkipped": "{count} übersprungen (noch in Verwendung oder zu neu).",
+      "tempReclaimed": "{size} aus {count} Element(en) zurückgewonnen.",
+      "tempReclaimSelectAll": "Alle auswählen",
+      "tempReclaimAgeHours": "{hours} Std.",
+      "tempReclaimConfirmTitle": "{count} Element(e) löschen?",
+      "tempReclaimConfirmBody": "Damit werden {size} dauerhaft gelöscht. Der temporäre Systemordner wird von anderen Anwendungen mitbenutzt – prüfe daher jeden Pfad vor dem Bestätigen. Noch verwendete Einträge werden übersprungen.",
+      "tempReclaimConfirmAction": "Löschen",
+      "tempReclaimCancel": "Abbrechen"
     },
     "customAgentMcpLabel": "MCP-Unterstützung",
     "customAgentMcpHint": "Übergibt den in houhub integrierten MCP-Begleitprozess beim Sitzungsstart an diesen Agenten — der Kanal hinter Delegation, Live-Feedback und Aufgaben-Tools. Für einen Agenten, der MCP-Server ablehnt und deshalb keine Verbindung aufbaut, ausschalten; die Änderung gilt ab der nächsten Verbindung.",
@@ -3072,7 +3087,8 @@
         "steerNoteFailed": "Deine Notiz konnte nicht gesendet werden",
         "openLink": "Link öffnen",
         "openFile": "Datei öffnen",
-        "sendEmail": "E-Mail senden"
+        "sendEmail": "E-Mail senden",
+        "recommendedBadge": "Empfohlen"
       },
       "messageQueue": {
         "addToQueue": "Zur Warteschlange",
@@ -3343,7 +3359,8 @@
         "copyImageFailed": "Bild konnte nicht kopiert werden: {message}",
         "copyImageUnsupported": "Das Kopieren dieses Bildes wird hier nicht unterstützt",
         "selectionSaveAsNote": "Notiz",
-        "forkNotReady": "Von dieser Antwort kann noch nicht verzweigt werden – bitte gleich erneut versuchen"
+        "forkNotReady": "Von dieser Antwort kann noch nicht verzweigt werden – bitte gleich erneut versuchen",
+        "loadBackgroundActivity": "Hintergrundaktivität laden"
       },
       "liveTurnStats": {
         "thinking": "Denkt nach...",
@@ -6054,5 +6071,53 @@
     "toastSaved": "Modellliste gespeichert",
     "toastRestored": "Es wird die eingebaute Modellliste des Agenten verwendet",
     "toastSaveFailed": "Die Modellliste konnte nicht gespeichert werden"
+  },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "Normal",
+    "deepseekModeDefaultDescription": "Liest und bearbeitet Dateien und führt Befehle direkt aus, um die Aufgabe zu erledigen",
+    "deepseekModePlan": "Plan",
+    "deepseekModePlanDescription": "Untersucht zuerst und legt einen vollständigen Plan zur Bestätigung vor, bevor etwas geändert wird. Das lenkt nur das Modell — die tatsächliche Grenze bestimmt weiterhin der Dateizugriff.",
+    "deepseekOptionModel": "Modell",
+    "deepseekOptionReasoning": "Denkaufwand",
+    "deepseekOptionReasoningDescription": "Höher ist langsamer und kostet mehr Tokens, ist bei schweren Problemen aber stabiler",
+    "deepseekOptionSandbox": "Dateizugriff",
+    "deepseekOptionSandboxDescription": "Befehle und Dateiwerkzeuge teilen sich diese eine Grenze",
+    "deepseekReasoningOff": "Aus",
+    "deepseekReasoningOffDescription": "Antwortet direkt ohne Nachdenken; am schnellsten",
+    "deepseekReasoningLow": "Niedrig",
+    "deepseekReasoningLowDescription": "Denkt kurz nach; stabiler als aus, schneller als hoch",
+    "deepseekReasoningHigh": "Hoch",
+    "deepseekReasoningHighDescription": "Denkt vor der Antwort nach; die Voreinstellung für den Alltag",
+    "deepseekReasoningMax": "Maximal",
+    "deepseekReasoningMaxDescription": "Denkt länger nach; stabiler bei schweren Problemen, aber langsamer und teurer",
+    "deepseekSandboxReadOnly": "Nur lesen",
+    "deepseekSandboxReadOnlyDescription": "Läuft mit einer Nur-Lese-Richtlinie; wechsle den Zugriff, wenn geschrieben werden muss. Auf manchen Plattformen wird das nur teilweise durchgesetzt.",
+    "deepseekSandboxWorkspaceWrite": "Workspace-Schreibzugriff",
+    "deepseekSandboxWorkspaceWriteDescription": "Schreibvorgänge sollen im Workspace der Sitzung und in den temporären Systemverzeichnissen bleiben; ein Aufruf außerhalb davon fragt einmalig nach. Auf manchen Plattformen wird das nur teilweise durchgesetzt.",
+    "deepseekSandboxFullAccess": "Vollzugriff (keine Sandbox)",
+    "deepseekSandboxFullAccessDescription": "Wendet überhaupt keine Dateibeschränkungen an. Wähle das nur, wenn du die Folgen kennst.",
+    "deepseekPermissionAllowOnce": "Einmal erlauben",
+    "deepseekPermissionRejectOnce": "Ablehnen"
+  },
+  "CloseBehaviorSettings": {
+    "title": "Verhalten der Schließen-Schaltfläche",
+    "description": "Lege fest, was die Schließen-Schaltfläche des Hauptfensters bewirkt.",
+    "trayUnavailable": "Dieses System bietet keinen nutzbaren Infobereich, daher beendet die Schließen-Schaltfläche houhub immer.",
+    "behaviorAsk": "Jedes Mal fragen",
+    "behaviorMinimize": "In den Infobereich minimieren",
+    "behaviorExit": "houhub beenden",
+    "saveFailed": "Schließverhalten konnte nicht gespeichert werden: {message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "houhub schließen?",
+    "askDescription": "houhub kann im Infobereich weiterlaufen, damit Agenten und Terminals aktiv bleiben – oder vollständig beendet werden.",
+    "confirmExitTitle": "houhub beenden?",
+    "confirmExitDescription": "Das Schließen des Fensters ist so eingestellt, dass houhub beendet wird.",
+    "runningTerminals": "{count, plural, one {# Terminal läuft noch und wird beim Beenden geschlossen.} other {# Terminals laufen noch und werden beim Beenden geschlossen.}}",
+    "remember": "Meine Auswahl merken",
+    "cancel": "Abbrechen",
+    "minimize": "In den Infobereich minimieren",
+    "exit": "houhub beenden",
+    "actionFailed": "Aktion fehlgeschlagen: {message}"
   }
 }

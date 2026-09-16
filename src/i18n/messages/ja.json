@@ -463,7 +463,7 @@
       },
       "open_folder": {
         "title": "フォルダを開く",
-        "description": "フォルダ選択を開き、新しいウィンドウで開きます"
+        "description": "フォルダ選択を開き、そのフォルダをワークスペースで開きます"
       },
       "open_settings": {
         "title": "設定を開く",
@@ -1417,7 +1417,8 @@
       "noPlugins": "opencode.json にプラグインが宣言されていません",
       "status": {
         "installed": "インストール済み",
-        "missing": "未インストール"
+        "missing": "未インストール",
+        "needs_migration": "移行が必要"
       },
       "installAll": "不足プラグインをすべてインストール",
       "pinVersions": "@latest バージョンを固定",
@@ -1623,7 +1624,21 @@
         "action": "サインアウト",
         "done": "サインアウトしました。サインインし直すと別のアカウントを選べます。",
         "failed": "サインアウトできませんでした"
-      }
+      },
+      "tempReclaimTitle": "残存した一時領域",
+      "tempReclaimHint": "以前のバージョンの houhub は、このエージェントが起動のたびに展開する一時ディレクトリを削除できませんでした。システムの一時フォルダーからその残存物を検索します。このフォルダーは他のアプリケーションと共有されているため、確認するまで何も削除されず、使用中の項目はスキップされます。",
+      "tempReclaimScan": "スキャン",
+      "tempReclaimDelete": "残存物を削除",
+      "tempReclaimNone": "回収できるものはありません。",
+      "tempReclaimFound": "残存物 {count} 件、{size} を回収できます。",
+      "tempReclaimSkipped": "{count} 件をスキップしました（使用中または新しすぎます）。",
+      "tempReclaimed": "{count} 件から {size} を回収しました。",
+      "tempReclaimSelectAll": "すべて選択",
+      "tempReclaimAgeHours": "{hours} 時間",
+      "tempReclaimConfirmTitle": "選択した {count} 件を削除しますか？",
+      "tempReclaimConfirmBody": "{size} を完全に削除します。システムの一時フォルダーは他のアプリと共有されるため、確認する前に各パスをご確認ください。使用中のものはスキップされます。",
+      "tempReclaimConfirmAction": "削除",
+      "tempReclaimCancel": "キャンセル"
     },
     "customAgentMcpLabel": "MCP サポート",
     "customAgentMcpHint": "セッション開始時に houhub 内蔵の houhub-mcp コンパニオンをこのエージェントへ渡します。委任・リアルタイムフィードバック・タスクツールはこの経路を使います。MCP サーバーを受け付けず接続に失敗するエージェントではオフにしてください。設定は次回の接続から有効になります。",
@@ -3072,7 +3087,8 @@
         "steerNoteFailed": "メモを送信できませんでした",
         "openLink": "リンクを開く",
         "openFile": "ファイルを開く",
-        "sendEmail": "メールを送信"
+        "sendEmail": "メールを送信",
+        "recommendedBadge": "推奨"
       },
       "messageQueue": {
         "addToQueue": "キューに追加",
@@ -3343,7 +3359,8 @@
         "copyImageFailed": "画像のコピーに失敗しました: {message}",
         "copyImageUnsupported": "この環境では画像をコピーできません",
         "selectionSaveAsNote": "メモに保存",
-        "forkNotReady": "この返信からはまだ分岐できません。少し待ってからお試しください"
+        "forkNotReady": "この返信からはまだ分岐できません。少し待ってからお試しください",
+        "loadBackgroundActivity": "バックグラウンドの動作を読み込む"
       },
       "liveTurnStats": {
         "thinking": "考え中...",
@@ -6054,5 +6071,53 @@
     "toastSaved": "モデル一覧を保存しました",
     "toastRestored": "エージェント内蔵のモデル一覧を使用します",
     "toastSaveFailed": "モデル一覧を保存できませんでした"
+  },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "通常",
+    "deepseekModeDefaultDescription": "ファイルの読み書きとコマンド実行を直接おこなってタスクを完了します",
+    "deepseekModePlan": "プラン",
+    "deepseekModePlanDescription": "まず調査し、完全な計画を提示して確認を得てから着手します。これはモデルへの誘導であり、実際の境界は「ファイルアクセス」で決まります。",
+    "deepseekOptionModel": "モデル",
+    "deepseekOptionReasoning": "推論の強度",
+    "deepseekOptionReasoningDescription": "高いほど遅くトークンを消費しますが、難しい問題では安定します",
+    "deepseekOptionSandbox": "ファイルアクセス",
+    "deepseekOptionSandboxDescription": "コマンドとファイルツールはこの境界を共有します",
+    "deepseekReasoningOff": "オフ",
+    "deepseekReasoningOffDescription": "推論せずに直接回答します。最速です",
+    "deepseekReasoningLow": "低",
+    "deepseekReasoningLowDescription": "少しだけ推論します。オフより安定し、高より高速です",
+    "deepseekReasoningHigh": "高",
+    "deepseekReasoningHighDescription": "推論してから回答します。日常のコーディング向けの既定値です",
+    "deepseekReasoningMax": "最高",
+    "deepseekReasoningMaxDescription": "より長く推論します。難問には強いものの、遅くトークンも多く消費します",
+    "deepseekSandboxReadOnly": "読み取り専用",
+    "deepseekSandboxReadOnlyDescription": "読み取り専用ポリシーで実行します。書き込みが必要なときは権限を切り替えてください。プラットフォームによっては部分的な強制にとどまります。",
+    "deepseekSandboxWorkspaceWrite": "ワークスペース書き込み",
+    "deepseekSandboxWorkspaceWriteDescription": "書き込みはセッションのワークスペースとシステムの一時ディレクトリ内に収める想定です。範囲外の呼び出しは都度の承認を求めます。プラットフォームによっては部分的な強制にとどまります。",
+    "deepseekSandboxFullAccess": "フルアクセス（サンドボックスなし）",
+    "deepseekSandboxFullAccessDescription": "ファイルの制限を一切適用しません。結果を理解している場合にのみ選んでください。",
+    "deepseekPermissionAllowOnce": "今回のみ許可",
+    "deepseekPermissionRejectOnce": "拒否"
+  },
+  "CloseBehaviorSettings": {
+    "title": "閉じるボタンの動作",
+    "description": "メインウィンドウの閉じるボタンを押したときの動作を選択します。",
+    "trayUnavailable": "このシステムでは通知領域を利用できないため、閉じるボタンは常に houhub を終了します。",
+    "behaviorAsk": "毎回確認する",
+    "behaviorMinimize": "通知領域に最小化",
+    "behaviorExit": "houhub を終了",
+    "saveFailed": "閉じる動作の保存に失敗しました: {message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "houhub を閉じますか？",
+    "askDescription": "通知領域に常駐してエージェントとターミナルを動かし続けることも、完全に終了することもできます。",
+    "confirmExitTitle": "houhub を終了しますか？",
+    "confirmExitDescription": "現在の設定では、ウィンドウを閉じると houhub が終了します。",
+    "runningTerminals": "{count} 個のターミナルが実行中です。終了するとすべて停止します。",
+    "remember": "この選択を記憶する",
+    "cancel": "キャンセル",
+    "minimize": "通知領域に最小化",
+    "exit": "houhub を終了",
+    "actionFailed": "操作に失敗しました: {message}"
   }
 }

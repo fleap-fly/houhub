@@ -362,7 +362,7 @@ mod tests {
             Arc::new(MockSpawner::new()) as Arc<dyn ConnectionSpawner>,
             Arc::new(Stub) as Arc<dyn ConversationDepthLookup>,
         ));
-        let listener = DelegationListener::new_with_tasks(
+        let listener = DelegationListener::new(
             broker,
             Arc::new(TokenRegistry::default()),
             Arc::new(Stub),

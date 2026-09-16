@@ -463,7 +463,7 @@
       },
       "open_folder": {
         "title": "فتح مجلد",
-        "description": "فتح منتقي المجلدات وفتح المجلد في نافذة جديدة"
+        "description": "فتح منتقي المجلدات وفتح المجلد في مساحة العمل"
       },
       "open_settings": {
         "title": "فتح الإعدادات",
@@ -1417,7 +1417,8 @@
       "noPlugins": "لا توجد إضافات معلنة في opencode.json",
       "status": {
         "installed": "مثبّت",
-        "missing": "غير مثبّت"
+        "missing": "غير مثبّت",
+        "needs_migration": "يتطلب الترحيل"
       },
       "installAll": "تثبيت جميع الإضافات المفقودة",
       "pinVersions": "تثبيت إصدارات @latest",
@@ -1623,7 +1624,21 @@
         "action": "تسجيل الخروج",
         "done": "تم تسجيل الخروج. سجّل الدخول مرة أخرى لاختيار حساب آخر.",
         "failed": "تعذّر تسجيل الخروج"
-      }
+      },
+      "tempReclaimTitle": "مساحة مؤقتة متبقية",
+      "tempReclaimHint": "لم تكن الإصدارات القديمة من houhub قادرة على تنظيف الدليل المؤقت الذي يفكه هذا الوكيل عند كل تشغيل. يفحص هذا الإجراء مجلد النظام المؤقت بحثًا عن تلك البقايا. هذا المجلد مشترك مع تطبيقات أخرى، لذا لا يُحذف أي شيء قبل تأكيدك، ويتم تخطي أي عنصر لا يزال قيد الاستخدام.",
+      "tempReclaimScan": "فحص",
+      "tempReclaimDelete": "حذف البقايا",
+      "tempReclaimNone": "لا يوجد ما يمكن استرجاعه.",
+      "tempReclaimFound": "{count} عنصرًا متبقيًا، يمكن استرجاع {size}.",
+      "tempReclaimSkipped": "تم تخطي {count} (لا يزال قيد الاستخدام أو حديث جدًا).",
+      "tempReclaimed": "تم استرجاع {size} من {count} عنصرًا.",
+      "tempReclaimSelectAll": "تحديد الكل",
+      "tempReclaimAgeHours": "{hours} ساعة",
+      "tempReclaimConfirmTitle": "حذف {count} عنصر؟",
+      "tempReclaimConfirmBody": "سيؤدي هذا إلى حذف {size} نهائيًا. مجلد النظام المؤقت مشترك مع تطبيقات أخرى، لذا تحقّق من كل مسار قبل التأكيد؛ وسيتم تخطّي أي عنصر قيد الاستخدام.",
+      "tempReclaimConfirmAction": "حذف",
+      "tempReclaimCancel": "إلغاء"
     },
     "customAgentMcpLabel": "دعم MCP",
     "customAgentMcpHint": "يرسل رفيق MCP المدمج في houhub إلى هذا الوكيل عند بدء الجلسة — وهو القناة التي تعتمد عليها الإحالة والتغذية الراجعة الحية وأدوات المهام. أوقفه مع الوكلاء الذين يرفضون خوادم MCP ويفشلون في الاتصال؛ ويسري التغيير من الاتصال التالي.",
@@ -3072,7 +3087,8 @@
         "steerNoteFailed": "تعذّر إرسال ملاحظتك",
         "openLink": "فتح الرابط",
         "openFile": "فتح الملف",
-        "sendEmail": "إرسال بريد"
+        "sendEmail": "إرسال بريد",
+        "recommendedBadge": "موصى به"
       },
       "messageQueue": {
         "addToQueue": "إضافة للقائمة",
@@ -3343,7 +3359,8 @@
         "copyImageFailed": "تعذّر نسخ الصورة: {message}",
         "copyImageUnsupported": "نسخ هذه الصورة غير مدعوم هنا",
         "selectionSaveAsNote": "ملاحظة",
-        "forkNotReady": "لا يمكن التفريع من هذا الرد بعد، أعد المحاولة بعد قليل"
+        "forkNotReady": "لا يمكن التفريع من هذا الرد بعد، أعد المحاولة بعد قليل",
+        "loadBackgroundActivity": "تحميل نشاط الخلفية"
       },
       "liveTurnStats": {
         "thinking": "جارٍ التفكير...",
@@ -6054,5 +6071,53 @@
     "toastSaved": "تم حفظ قائمة النماذج",
     "toastRestored": "يجري استخدام قائمة نماذج الوكيل المدمجة",
     "toastSaveFailed": "تعذّر حفظ قائمة النماذج"
+  },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "عادي",
+    "deepseekModeDefaultDescription": "يقرأ الملفات ويعدّلها وينفّذ الأوامر مباشرة لإنجاز المهمة",
+    "deepseekModePlan": "خطة",
+    "deepseekModePlanDescription": "يبحث أولاً ثم يقدّم خطة كاملة لتؤكّدها قبل أي تعديل. هذا توجيه للنموذج فقط؛ الحدّ الفعلي يبقى وفق الوصول إلى الملفات.",
+    "deepseekOptionModel": "النموذج",
+    "deepseekOptionReasoning": "مستوى الاستدلال",
+    "deepseekOptionReasoningDescription": "كلما ارتفع كان أبطأ وأكثر استهلاكاً للرموز، لكنه أثبت في المسائل الصعبة",
+    "deepseekOptionSandbox": "الوصول إلى الملفات",
+    "deepseekOptionSandboxDescription": "تتشارك الأوامر وأدوات الملفات هذا الحدّ نفسه",
+    "deepseekReasoningOff": "إيقاف",
+    "deepseekReasoningOffDescription": "يجيب مباشرة دون استدلال؛ الأسرع",
+    "deepseekReasoningLow": "منخفض",
+    "deepseekReasoningLowDescription": "يستدل قليلاً؛ أثبت من الإيقاف وأسرع من المرتفع",
+    "deepseekReasoningHigh": "مرتفع",
+    "deepseekReasoningHighDescription": "يستدل ثم يجيب؛ الخيار الافتراضي للبرمجة اليومية",
+    "deepseekReasoningMax": "الأقصى",
+    "deepseekReasoningMaxDescription": "يستدل لفترة أطول؛ أثبت في المسائل الصعبة لكنه أبطأ وأكثر استهلاكاً للرموز",
+    "deepseekSandboxReadOnly": "قراءة فقط",
+    "deepseekSandboxReadOnlyDescription": "ينفّذ وفق سياسة القراءة فقط؛ بدّل الصلاحية عند الحاجة إلى الكتابة. التطبيق جزئي على بعض المنصات.",
+    "deepseekSandboxWorkspaceWrite": "الكتابة في مساحة العمل",
+    "deepseekSandboxWorkspaceWriteDescription": "يُفترض أن تبقى عمليات الكتابة داخل مساحة عمل الجلسة والمجلدات المؤقتة للنظام؛ وأي استدعاء خارجها يطلب إذناً لمرة واحدة. التطبيق جزئي على بعض المنصات.",
+    "deepseekSandboxFullAccess": "وصول كامل (بدون عزل)",
+    "deepseekSandboxFullAccessDescription": "لا يطبّق أي قيود على الملفات. اخترْه فقط إذا كنت تدرك العواقب.",
+    "deepseekPermissionAllowOnce": "السماح مرة واحدة",
+    "deepseekPermissionRejectOnce": "رفض"
+  },
+  "CloseBehaviorSettings": {
+    "title": "سلوك زر الإغلاق",
+    "description": "اختر ما يفعله زر إغلاق النافذة الرئيسية.",
+    "trayUnavailable": "لا تتوفر منطقة إشعارات في هذا النظام، لذا يؤدي زر الإغلاق دائمًا إلى إنهاء houhub.",
+    "behaviorAsk": "السؤال في كل مرة",
+    "behaviorMinimize": "التصغير إلى منطقة الإشعارات",
+    "behaviorExit": "إنهاء houhub",
+    "saveFailed": "تعذر حفظ سلوك الإغلاق: {message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "إغلاق houhub؟",
+    "askDescription": "يمكن أن يستمر houhub في العمل ضمن منطقة الإشعارات لإبقاء الوكلاء والطرفيات نشطة، أو أن يُنهى تمامًا.",
+    "confirmExitTitle": "إنهاء houhub؟",
+    "confirmExitDescription": "الإعداد الحالي يجعل إغلاق النافذة ينهي houhub.",
+    "runningTerminals": "لا تزال {count} من الطرفيات قيد التشغيل وسيتم إنهاؤها عند الخروج.",
+    "remember": "تذكّر اختياري",
+    "cancel": "إلغاء",
+    "minimize": "التصغير إلى منطقة الإشعارات",
+    "exit": "إنهاء houhub",
+    "actionFailed": "فشل تنفيذ الإجراء: {message}"
   }
 }

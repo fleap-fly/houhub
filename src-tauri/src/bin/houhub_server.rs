@@ -137,7 +137,9 @@ async fn async_main() -> ExitCode {
     // errors are silenced, no subprocesses spawned.
     std::thread::spawn(|| {
         let _ = std::panic::catch_unwind(|| {
+            houhub_lib::acp::binary_cache::migrate_legacy_root();
             houhub_lib::sweep_acp_binary_trash();
+            houhub_lib::sweep_acp_scratch_dirs();
         });
     });
 
@@ -340,7 +342,7 @@ async fn async_main() -> ExitCode {
     // through the broker. Path is PID-scoped, so the listener owns it for
     // the lifetime of the process.
     {
-        let listener = houhub_lib::acp::delegation::listener::DelegationListener::new_with_tasks(
+        let listener = houhub_lib::acp::delegation::listener::DelegationListener::new(
             delegation_broker,
             delegation_tokens,
             Arc::new(houhub_lib::acp::manager::ConnectionManagerParentLookup {
@@ -470,6 +472,12 @@ async fn async_main() -> ExitCode {
             std::time::Duration::from_secs(houhub_lib::SWEEP_INTERVAL_SECS),
         ));
     }
+
+    // Reclaim scratch directories lost track of mid-session. Deliberately NOT
+    // gated on `idle_timeout_from_env` like the sweep above: setting
+    // `HOUHUB_ACP_IDLE_TIMEOUT_SECS=0` disables idle disconnects, not disk
+    // reclamation.
+    tokio::spawn(houhub_lib::scratch_sweep_task());
 
     // Office watch preview servers: reap dead children + ref0 stragglers.
     if let Some(idle_timeout) = houhub_lib::office_watch::idle_timeout_from_env() {

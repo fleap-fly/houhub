@@ -463,7 +463,7 @@
       },
       "open_folder": {
         "title": "打开文件夹",
-        "description": "打开文件夹选择器并在新窗口中打开"
+        "description": "打开文件夹选择器并在工作区中打开该文件夹"
       },
       "open_settings": {
         "title": "打开设置",
@@ -1417,7 +1417,8 @@
       "noPlugins": "opencode.json 中未声明任何插件",
       "status": {
         "installed": "已安装",
-        "missing": "未安装"
+        "missing": "未安装",
+        "needs_migration": "需要迁移"
       },
       "installAll": "安装全部缺失插件",
       "pinVersions": "固定 @latest 版本",
@@ -1623,7 +1624,21 @@
         "action": "退出登录",
         "done": "已退出登录。重新登录即可选择其他账号。",
         "failed": "退出登录失败"
-      }
+      },
+      "tempReclaimTitle": "残留临时空间",
+      "tempReclaimHint": "旧版本 houhub 无法清理该代理每次启动时解压的临时目录。此操作会扫描系统临时文件夹中的这些残留。该文件夹与其他应用共用，因此在你确认之前不会删除任何内容，仍在使用中的项目也会被跳过。",
+      "tempReclaimScan": "扫描",
+      "tempReclaimDelete": "删除残留",
+      "tempReclaimNone": "没有可回收的内容。",
+      "tempReclaimFound": "发现 {count} 项残留，可回收 {size}。",
+      "tempReclaimSkipped": "已跳过 {count} 项（仍在使用或过新）。",
+      "tempReclaimed": "已从 {count} 项中回收 {size}。",
+      "tempReclaimSelectAll": "全选",
+      "tempReclaimAgeHours": "{hours} 小时",
+      "tempReclaimConfirmTitle": "删除选中的 {count} 项？",
+      "tempReclaimConfirmBody": "将永久删除 {size}。系统临时目录与其他应用共用，确认前请先核对每条路径；仍在使用中的项会被跳过。",
+      "tempReclaimConfirmAction": "删除",
+      "tempReclaimCancel": "取消"
     },
     "customAgentMcpLabel": "MCP 支持",
     "customAgentMcpHint": "会话建立时向该智能体注入 houhub 内置的 houhub-mcp 伴生进程 —— 委托、实时反馈与任务工具都依赖它。若该智能体不支持 MCP、连接时报错，请关闭此项；设置在下次连接时生效。",
@@ -3072,7 +3087,8 @@
         "steerNoteFailed": "留言发送失败",
         "openLink": "打开链接",
         "openFile": "打开文件",
-        "sendEmail": "发送邮件"
+        "sendEmail": "发送邮件",
+        "recommendedBadge": "推荐"
       },
       "messageQueue": {
         "addToQueue": "加入队列",
@@ -3356,7 +3372,8 @@
         "copyImageFailed": "复制图片失败：{message}",
         "copyImageUnsupported": "当前环境不支持复制该图片",
         "selectionSaveAsNote": "存为便签",
-        "forkNotReady": "这条回复暂时还不能作为分叉点，请稍后再试"
+        "forkNotReady": "这条回复暂时还不能作为分叉点，请稍后再试",
+        "loadBackgroundActivity": "加载后台活动"
       },
       "liveTurnStats": {
         "thinking": "思考中...",
@@ -6054,5 +6071,53 @@
     "toastSaved": "模型列表已保存",
     "toastRestored": "已改用代理内置模型列表",
     "toastSaveFailed": "保存模型列表失败"
+  },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "常规",
+    "deepseekModeDefaultDescription": "直接读写文件、执行命令完成任务",
+    "deepseekModePlan": "计划",
+    "deepseekModePlanDescription": "先调研再给出完整方案，经你确认后才动手；这只是对模型的引导，实际边界仍由「文件权限」决定。",
+    "deepseekOptionModel": "模型",
+    "deepseekOptionReasoning": "推理档位",
+    "deepseekOptionReasoningDescription": "越高越慢越费 token，难题更稳",
+    "deepseekOptionSandbox": "文件权限",
+    "deepseekOptionSandboxDescription": "命令与文件工具共用这一条边界",
+    "deepseekReasoningOff": "关闭",
+    "deepseekReasoningOffDescription": "不做推理，直接作答；最快",
+    "deepseekReasoningLow": "低",
+    "deepseekReasoningLowDescription": "略作推理；比关闭稳，比高档快",
+    "deepseekReasoningHigh": "高",
+    "deepseekReasoningHighDescription": "推理后作答；日常编码的默认档",
+    "deepseekReasoningMax": "最高",
+    "deepseekReasoningMaxDescription": "推理更久；难题更稳，但慢且更费 token",
+    "deepseekSandboxReadOnly": "只读",
+    "deepseekSandboxReadOnlyDescription": "按只读策略执行；需要写入时切换权限。部分平台上只是部分强制。",
+    "deepseekSandboxWorkspaceWrite": "可写工作区",
+    "deepseekSandboxWorkspaceWriteDescription": "写入意在限制于会话工作区与系统临时目录；越界的调用会请求单次授权。部分平台上只是部分强制。",
+    "deepseekSandboxFullAccess": "完全放开（无沙箱）",
+    "deepseekSandboxFullAccessDescription": "不施加任何文件限制。仅在你清楚后果时选择。",
+    "deepseekPermissionAllowOnce": "允许本次",
+    "deepseekPermissionRejectOnce": "拒绝"
+  },
+  "CloseBehaviorSettings": {
+    "title": "关闭按钮行为",
+    "description": "选择点击主窗口关闭按钮时的行为。",
+    "trayUnavailable": "当前系统没有可用的托盘，关闭按钮将始终退出 houhub。",
+    "behaviorAsk": "每次询问",
+    "behaviorMinimize": "最小化到托盘",
+    "behaviorExit": "退出 houhub",
+    "saveFailed": "保存关闭行为失败：{message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "要关闭 houhub 吗？",
+    "askDescription": "houhub 可以最小化到托盘继续运行，智能体和终端保持活动；也可以完全退出。",
+    "confirmExitTitle": "要退出 houhub 吗？",
+    "confirmExitDescription": "当前设置为：关闭窗口即退出 houhub。",
+    "runningTerminals": "还有 {count} 个终端正在运行，退出后会被全部结束。",
+    "remember": "记住我的选择",
+    "cancel": "取消",
+    "minimize": "最小化到托盘",
+    "exit": "退出 houhub",
+    "actionFailed": "操作失败：{message}"
   }
 }

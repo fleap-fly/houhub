@@ -8,6 +8,7 @@ import type {
   UnsubscribeFn,
 } from "./types"
 import { buildHouhubWebSocketProtocols } from "./ws-auth"
+import { parseJsonOrThrow } from "../json-parse-error"
 import { getWebAuthToken } from "./web-auth"
 import { browserFetch } from "@/lib/browser-fetch"
 
@@ -189,7 +190,14 @@ export class WebTransport implements Transport {
       }))
       throw error
     }
-    return res.json()
+    // Read the body as text and parse it here rather than calling
+    // `res.json()`. Identical on the happy path, but a truncated or malformed
+    // body otherwise throws a bare engine message — `Unterminated string in
+    // JSON at position 80865` — that names neither the endpoint nor anything
+    // else a user could report. Exactly that error was reported against the
+    // Agents settings page (#736) and could not be traced to a source.
+    const body = await res.text()
+    return parseJsonOrThrow<T>(body, `API ${command}`)
   }
 
   async subscribe<T>(

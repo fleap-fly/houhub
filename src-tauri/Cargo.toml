@@ -1,6 +1,6 @@
 [package]
 name = "houhub"
-version = "0.31.3"
+version = "0.31.4"
 description = "Agent Code Generation App"
 authors = ["fleap.fly"]
 edition = "2021"
@@ -28,6 +28,7 @@ tauri-runtime = [
     "dep:tauri-plugin-process",
     "dep:tauri-plugin-notification",
     "dep:tauri-plugin-single-instance",
+    "dep:tauri-plugin-deep-link",
     "dep:tauri-plugin-autostart",
     "dep:keyring",
 ]
@@ -143,7 +144,9 @@ tauri-plugin-updater = { version = "2", optional = true }
 tauri-plugin-process = { version = "2", optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
-# Desktop launch-at-login support (Run key, LaunchAgent, or XDG autostart).
+tauri-plugin-deep-link = { version = "2", optional = true }
+# "Launch at login" toggle. Desktop-only: registry Run key on Windows, a
+# LaunchAgent plist on macOS, an XDG autostart .desktop entry on Linux.
 tauri-plugin-autostart = { version = "2", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

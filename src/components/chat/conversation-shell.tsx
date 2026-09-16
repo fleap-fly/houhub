@@ -297,6 +297,7 @@ export function ConversationShell({
       <PermissionDialog
         permission={pendingPermission}
         onRespond={onRespondPermission}
+        agentType={agentType}
       />
 
       <QuestionDialog question={pendingQuestion} onAnswer={onAnswerQuestion} />

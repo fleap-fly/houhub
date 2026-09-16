@@ -463,7 +463,7 @@
       },
       "open_folder": {
         "title": "Abrir pasta",
-        "description": "Abre o seletor de pastas e abre em uma nova janela"
+        "description": "Abre o seletor de pastas e abre a pasta no espaço de trabalho"
       },
       "open_settings": {
         "title": "Abrir configurações",
@@ -1417,7 +1417,8 @@
       "noPlugins": "Nenhum plugin declarado em opencode.json",
       "status": {
         "installed": "Instalado",
-        "missing": "Não instalado"
+        "missing": "Não instalado",
+        "needs_migration": "Requer migração"
       },
       "installAll": "Instalar todos os ausentes",
       "pinVersions": "Fixar versões @latest",
@@ -1623,7 +1624,21 @@
         "action": "Sair",
         "done": "Sessão encerrada. Entre novamente para escolher outra conta.",
         "failed": "Não foi possível sair"
-      }
+      },
+      "tempReclaimTitle": "Espaço temporário remanescente",
+      "tempReclaimHint": "Versões anteriores do houhub não conseguiam limpar o diretório temporário que este agente descompacta a cada inicialização. Isto verifica a pasta temporária do sistema em busca desses resíduos. Essa pasta é compartilhada com outros aplicativos, portanto nada é excluído até você confirmar, e tudo o que ainda estiver em uso é ignorado.",
+      "tempReclaimScan": "Verificar",
+      "tempReclaimDelete": "Excluir resíduos",
+      "tempReclaimNone": "Nada a recuperar.",
+      "tempReclaimFound": "{count} item(ns) remanescente(s), {size} recuperável(is).",
+      "tempReclaimSkipped": "{count} ignorado(s) (ainda em uso ou muito recente).",
+      "tempReclaimed": "Recuperado(s) {size} de {count} item(ns).",
+      "tempReclaimSelectAll": "Selecionar tudo",
+      "tempReclaimAgeHours": "{hours} h",
+      "tempReclaimConfirmTitle": "Excluir {count} item(ns)?",
+      "tempReclaimConfirmBody": "Isto exclui permanentemente {size}. A pasta temporária do sistema é compartilhada com outros aplicativos, então confira cada caminho antes de confirmar; o que ainda estiver em uso é ignorado.",
+      "tempReclaimConfirmAction": "Excluir",
+      "tempReclaimCancel": "Cancelar"
     },
     "customAgentMcpLabel": "Suporte a MCP",
     "customAgentMcpHint": "Envia o companheiro MCP integrado do houhub para este agente ao iniciar a sessão — o canal por trás da delegação, do feedback ao vivo e das ferramentas de tarefas. Desative para um agente que rejeita servidores MCP e não consegue conectar; a mudança vale a partir da próxima conexão.",
@@ -3072,7 +3087,8 @@
         "steerNoteFailed": "Não foi possível enviar a sua nota",
         "openLink": "Abrir link",
         "openFile": "Abrir arquivo",
-        "sendEmail": "Enviar e-mail"
+        "sendEmail": "Enviar e-mail",
+        "recommendedBadge": "Recomendado"
       },
       "messageQueue": {
         "addToQueue": "Adicionar à fila",
@@ -3343,7 +3359,8 @@
         "copyImageFailed": "Não foi possível copiar a imagem: {message}",
         "copyImageUnsupported": "Não é possível copiar esta imagem aqui",
         "selectionSaveAsNote": "Nota",
-        "forkNotReady": "Ainda não é possível bifurcar a partir desta resposta; tente novamente em instantes"
+        "forkNotReady": "Ainda não é possível bifurcar a partir desta resposta; tente novamente em instantes",
+        "loadBackgroundActivity": "Carregar atividade em segundo plano"
       },
       "liveTurnStats": {
         "thinking": "Pensando...",
@@ -6054,5 +6071,53 @@
     "toastSaved": "Lista de modelos guardada",
     "toastRestored": "A usar a lista de modelos integrada do agente",
     "toastSaveFailed": "Não foi possível guardar a lista de modelos"
+  },
+  "AgentVocabulary": {
+    "deepseekModeDefault": "Normal",
+    "deepseekModeDefaultDescription": "Lê e edita arquivos e executa comandos diretamente para concluir a tarefa",
+    "deepseekModePlan": "Plano",
+    "deepseekModePlanDescription": "Investiga primeiro e apresenta um plano completo para você confirmar antes de agir. Isso orienta o modelo; o limite real continua sendo o do acesso a arquivos.",
+    "deepseekOptionModel": "Modelo",
+    "deepseekOptionReasoning": "Esforço de raciocínio",
+    "deepseekOptionReasoningDescription": "Quanto maior, mais lento e mais tokens consome, mas é mais estável em problemas difíceis",
+    "deepseekOptionSandbox": "Acesso a arquivos",
+    "deepseekOptionSandboxDescription": "Comandos e ferramentas de arquivo compartilham este único limite",
+    "deepseekReasoningOff": "Desligado",
+    "deepseekReasoningOffDescription": "Responde direto, sem raciocinar; o mais rápido",
+    "deepseekReasoningLow": "Baixo",
+    "deepseekReasoningLowDescription": "Raciocina brevemente; mais estável que desligado, mais rápido que alto",
+    "deepseekReasoningHigh": "Alto",
+    "deepseekReasoningHighDescription": "Raciocina antes de responder; o padrão para o dia a dia",
+    "deepseekReasoningMax": "Máximo",
+    "deepseekReasoningMaxDescription": "Raciocina por mais tempo; mais estável em problemas difíceis, porém mais lento e mais caro",
+    "deepseekSandboxReadOnly": "Somente leitura",
+    "deepseekSandboxReadOnlyDescription": "Executa com uma política somente de leitura; troque o acesso quando precisar gravar. Em algumas plataformas a aplicação é apenas parcial.",
+    "deepseekSandboxWorkspaceWrite": "Escrita no espaço de trabalho",
+    "deepseekSandboxWorkspaceWriteDescription": "As gravações devem ficar dentro do espaço de trabalho da sessão e dos diretórios temporários do sistema; uma chamada fora deles pede autorização pontual. Em algumas plataformas a aplicação é apenas parcial.",
+    "deepseekSandboxFullAccess": "Acesso total (sem sandbox)",
+    "deepseekSandboxFullAccessDescription": "Não aplica nenhuma restrição de arquivos. Escolha apenas se entender as consequências.",
+    "deepseekPermissionAllowOnce": "Permitir uma vez",
+    "deepseekPermissionRejectOnce": "Recusar"
+  },
+  "CloseBehaviorSettings": {
+    "title": "Comportamento do botão Fechar",
+    "description": "Escolha o que o botão Fechar da janela principal faz.",
+    "trayUnavailable": "Este sistema não tem uma bandeja utilizável, portanto o botão Fechar sempre encerra o houhub.",
+    "behaviorAsk": "Perguntar sempre",
+    "behaviorMinimize": "Minimizar para a bandeja",
+    "behaviorExit": "Sair do houhub",
+    "saveFailed": "Falha ao salvar o comportamento de fechamento: {message}"
+  },
+  "CloseRequestDialog": {
+    "askTitle": "Fechar o houhub?",
+    "askDescription": "O houhub pode continuar em execução na bandeja para manter agentes e terminais ativos, ou encerrar por completo.",
+    "confirmExitTitle": "Sair do houhub?",
+    "confirmExitDescription": "Fechar a janela está configurado para encerrar o houhub.",
+    "runningTerminals": "{count, plural, one {# terminal ainda está em execução e será encerrado ao sair.} other {# terminais ainda estão em execução e serão encerrados ao sair.}}",
+    "remember": "Lembrar minha escolha",
+    "cancel": "Cancelar",
+    "minimize": "Minimizar para a bandeja",
+    "exit": "Sair do houhub",
+    "actionFailed": "Falha na ação: {message}"
   }
 }
