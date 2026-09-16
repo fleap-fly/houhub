@@ -6,12 +6,15 @@ apps and every well-behaved third-party app measure exactly that ratio, so an
 icon drawn edge-to-edge renders about 1.24x wider than its Dock neighbours
 (issue #610).
 
-`icon.svg` is deliberately full-bleed — that is the right shape for the web
-favicon, the Windows .ico and the Linux PNGs, which all want to fill their
-canvas — so the inset is applied here, for macOS only. Re-run after editing
-icon.svg:
-
-    python3 src-tauri/icons/macos-icon.gen.py
+The source is the HouHub brand master, `icons/ios/AppIcon-512@2x.png`: a
+1024x1024 true-resolution render of the HouHub mark. It is deliberately NOT
+`icon.svg` — that file carried upstream's logo, and building the Dock tile from
+it put upstream's mark in HouHub's app icon. The brand master draws its
+squircle inset `SOURCE_INSET` into the canvas, so this script re-insets that
+body onto Apple's grid for macOS only. Every other platform keeps its
+full-bleed art: the web favicon, the Windows .ico and the Linux PNGs all want
+the canvas filled, and those PNGs are what `default_window_icon()` hands the
+Windows and Linux tray.
 
 Requires only the project's Tauri CLI (`pnpm tauri`); no Python packages and no
 macOS-only tooling, so this runs anywhere.
@@ -27,10 +30,10 @@ encoders finish, so re-running always produces a different byte order — and so
 a non-empty `git diff` — even when every pixel is identical. To tell whether
 anything actually changed, compare the payload of each chunk rather than the
 whole file. `cargo test --features test-utils macos_icon_geometry` asserts the
-properties that actually matter.
+properties that actually matter, so run it after regenerating.
 """
 
-import re
+import base64
 import shutil
 import subprocess
 import sys
@@ -43,68 +46,47 @@ CANVAS = 1024
 BODY = 824
 INSET = (CANVAS - BODY) // 2
 
+# The brand master's own squircle, measured from its alpha channel. The artwork
+# is transparent outside this box, so these two numbers are what place the mark
+# on Apple's grid. Re-measure them if the master is ever redrawn;
+# `macos_icon_geometry.rs` fails if the result drifts off the grid.
+SOURCE_INSET = 84
+SOURCE_BODY = CANVAS - 2 * SOURCE_INSET
+
 ICONS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = ICONS_DIR.parents[1]
-SOURCE_SVG = ICONS_DIR / "icon.svg"
+SOURCE_PNG = ICONS_DIR / "ios" / "AppIcon-512@2x.png"
 OUTPUT_ICNS = ICONS_DIR / "icon.icns"
-
-_SVG_OPEN = re.compile(r"<svg\b[^>]*>", re.IGNORECASE)
-_VIEW_BOX = re.compile(r'viewBox\s*=\s*"([^"]+)"', re.IGNORECASE)
 
 
 def _fail(message):
     raise SystemExit(f"macos-icon.gen.py: {message}")
 
 
-def _split_source(svg_text):
-    """Return (inner_markup, source_side) for a square, origin-anchored SVG.
+def build_padded_svg(source_png):
+    """Wrap the brand master in a 1024 canvas with the macOS safe-area inset.
 
-    The whole document is re-wrapped rather than edited in place, so the
-    artwork travels verbatim and only the enclosing transform is ours.
+    The master travels verbatim as a data URI — the whole document is built
+    around it rather than edited — so only the enclosing transform is ours.
     """
-    open_tag = _SVG_OPEN.search(svg_text)
-    if open_tag is None:
-        _fail(f"{SOURCE_SVG.name} has no <svg> element")
-
-    view_box = _VIEW_BOX.search(open_tag.group(0))
-    if view_box is None:
-        _fail(f"{SOURCE_SVG.name} has no viewBox; cannot place the 824/1024 inset")
-
-    bounds = view_box.group(1).replace(",", " ").split()
-    if len(bounds) != 4:
-        _fail(f"unexpected viewBox {view_box.group(1)!r}")
-    min_x, min_y, width, height = (float(value) for value in bounds)
-    if (min_x, min_y) != (0.0, 0.0) or width != height or width <= 0:
-        # A non-square or offset viewBox would silently skew the artwork.
-        _fail(
-            f"viewBox must be square and anchored at 0 0, got {view_box.group(1)!r}"
-        )
-
-    close = svg_text.rfind("</svg>")
-    if close == -1:
-        _fail(f"{SOURCE_SVG.name} has no closing </svg>")
-
-    return svg_text[open_tag.end() : close], width
-
-
-def build_padded_svg(svg_text):
-    """Wrap the source artwork in a 1024 canvas with the macOS safe-area inset."""
-    inner, source_side = _split_source(svg_text)
-    scale = BODY / source_side
+    scale = BODY / SOURCE_BODY
+    offset = INSET - SOURCE_INSET * scale
+    encoded = base64.b64encode(source_png).decode("ascii")
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" '
         f'width="{CANVAS}" height="{CANVAS}" viewBox="0 0 {CANVAS} {CANVAS}">\n'
-        f'  <g transform="translate({INSET},{INSET}) scale({scale:.10g})">'
-        f"{inner}</g>\n"
+        f'  <g transform="translate({offset:.5f},{offset:.5f}) scale({scale:.8f})">'
+        f'<image href="data:image/png;base64,{encoded}" '
+        f'width="{CANVAS}" height="{CANVAS}"/></g>\n'
         f"</svg>\n"
     )
 
 
 def main():
-    if not SOURCE_SVG.is_file():
-        _fail(f"missing {SOURCE_SVG}")
+    if not SOURCE_PNG.is_file():
+        _fail(f"missing {SOURCE_PNG}")
 
-    padded = build_padded_svg(SOURCE_SVG.read_text(encoding="utf-8"))
+    padded = build_padded_svg(SOURCE_PNG.read_bytes())
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)

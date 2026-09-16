@@ -7,20 +7,26 @@
 //! shipped a full-bleed squircle through 0.29.0, which rendered ~1.24x wider
 //! than its neighbours — visibly "a size bigger" (issue #610).
 //!
-//! The inset lives only in the `.icns`. `icon.svg`, the Windows `.ico` and the
-//! Linux PNGs stay full-bleed on purpose: those platforms want the canvas
-//! filled, and the PNGs are what `default_window_icon()` hands the Windows and
-//! Linux tray (`commands/windows.rs`). So this test deliberately checks one
-//! file and not the rest.
+//! The inset lives only in the `.icns`. The brand master, the Windows `.ico`
+//! and the Linux PNGs stay full-bleed on purpose: those platforms want the
+//! canvas filled, and the PNGs are what `default_window_icon()` hands the
+//! Windows and Linux tray (`commands/windows.rs`). So this test deliberately
+//! checks one file and not the rest.
 //!
 //! Why a test and not a comment: `pnpm tauri icon` regenerates the `.icns`
 //! full-bleed, and it gets run for unrelated reasons — `1d3dd0dc` rewrote all 17
 //! icon assets while fixing the *Windows* ICO. A note in the file would not have
 //! stopped that; a red CI cell does.
 //!
-//! Regenerate after editing `icon.svg`:
+//! Regenerate after the brand master changes:
 //!
 //!     python3 src-tauri/icons/macos-icon.gen.py
+//!
+//! The artwork itself is pinned too. The `.icns` is built from the HouHub brand
+//! master, and an earlier sync rebuilt it from upstream's `icon.svg` instead —
+//! geometry perfect, logo wrong. `icns_carries_the_houhub_brand_artwork` compares
+//! the Dock tile against the master's own colour signature so that swap fails
+//! loudly rather than shipping upstream's mark inside HouHub.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -234,5 +240,94 @@ fn icns_keeps_the_legacy_masks_the_declared_macos_floor_needs() {
              raw ARGB while dropping the legacy masks that macOS 10.13 needs. \
              Rebuild with src-tauri/icons/macos-icon.gen.py."
         );
+    }
+}
+
+/// The Dock tile must draw the HouHub mark, not upstream's.
+///
+/// Geometry alone cannot tell them apart: a rebuild from upstream's `icon.svg`
+/// lands on the exact same 824/1024 grid with the exact same chunk set, so
+/// `every_png_slot_keeps_the_macos_safe_area_inset` stays green while the app
+/// icon becomes a different product's logo. That happened once during a sync.
+///
+/// The check is the artwork's colour signature. The brand master is a deep
+/// desaturated teal with a warm gold ring, while upstream's mark is a navy
+/// canvas carrying saturated yellow-and-cyan dots. Measured over the opaque
+/// body of the 1024 tile:
+///
+///     warm (gold ring)      brand 0.144   upstream 0.014
+///     cyan (saturated dot)  brand 0.000   upstream 0.011
+///
+/// A ten-fold gap on `warm` is the load-bearing assertion; `cyan` is the same
+/// signature read the other way. Both thresholds sit an order of magnitude away
+/// from the values they must accept, so re-rendering cannot trip them.
+#[test]
+fn icns_carries_the_houhub_brand_artwork() {
+    let data = std::fs::read(icns_path()).expect("read icons/icon.icns");
+    let chunks = parse_chunks(&data);
+    let payload = chunks
+        .iter()
+        .find(|(name, _)| name == "ic10")
+        .map(|(_, payload)| *payload)
+        .expect("icon.icns is missing the 1024px ic10 slot");
+
+    let tile = decode("ic10", payload);
+    let signature = colour_signature(&tile);
+
+    assert!(
+        signature.warm > 0.05,
+        "the Dock tile is missing the brand's warm gold ring (warm = {:.4}). \
+         It was probably rebuilt from upstream's icon.svg — regenerate with \
+         src-tauri/icons/macos-icon.gen.py, which reads the HouHub master.",
+        signature.warm
+    );
+    assert!(
+        signature.cyan < 0.005,
+        "the Dock tile carries upstream's saturated cyan dot (cyan = {:.4}) \
+         instead of the HouHub mark. Regenerate with \
+         src-tauri/icons/macos-icon.gen.py.",
+        signature.cyan
+    );
+}
+
+/// Fractions of the opaque body that read as warm gold and as saturated cyan.
+struct ColourSignature {
+    warm: f64,
+    cyan: f64,
+}
+
+/// Sample the opaque body of a 1024 tile and bucket its pixels by hue.
+///
+/// Only the body counts — the transparent safe area would otherwise dilute
+/// both fractions by the same 0.805 factor and blur the margin between the two
+/// artworks.
+fn colour_signature(image: &image::RgbaImage) -> ColourSignature {
+    let mut opaque = 0u32;
+    let mut warm = 0u32;
+    let mut cyan = 0u32;
+
+    for pixel in image.pixels() {
+        let [r, g, b, a] = pixel.0;
+        if a < 200 {
+            continue;
+        }
+        opaque += 1;
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        // Warm gold: the ring. Red leads, and blue stays well below it.
+        if r > 140 && g > 110 && r.saturating_sub(b) > 50 {
+            warm += 1;
+        }
+        // Upstream's mark: a saturated cyan dot, blue-and-green over red.
+        else if max.saturating_sub(min) > 70 && b > 170 && g > 130 && r < 120 {
+            cyan += 1;
+        }
+    }
+
+    assert!(opaque > 0, "the 1024 tile has no opaque pixels");
+    let total = f64::from(opaque);
+    ColourSignature {
+        warm: f64::from(warm) / total,
+        cyan: f64::from(cyan) / total,
     }
 }
