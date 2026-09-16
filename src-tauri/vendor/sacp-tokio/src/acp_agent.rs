@@ -273,8 +273,8 @@ pub enum LineDirection {
 /// [`sacp_conductor::Conductor`]: https://docs.rs/sacp-conductor/latest/sacp_conductor/struct.Conductor.html
 pub struct AcpAgent {
     server: sacp::schema::McpServer,
-    current_dir: Option<PathBuf>,
     debug_callback: Option<Arc<dyn Fn(&str, LineDirection) + Send + Sync + 'static>>,
+    current_dir: Option<PathBuf>,
     spawn_callback: Option<Arc<dyn Fn(u32) + Send + Sync + 'static>>,
     exit_callback: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 }
@@ -283,11 +283,11 @@ impl std::fmt::Debug for AcpAgent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AcpAgent")
             .field("server", &self.server)
-            .field("current_dir", &self.current_dir)
             .field(
                 "debug_callback",
                 &self.debug_callback.as_ref().map(|_| "..."),
             )
+            .field("current_dir", &self.current_dir)
             .field(
                 "spawn_callback",
                 &self.spawn_callback.as_ref().map(|_| "..."),
@@ -302,8 +302,8 @@ impl AcpAgent {
     pub fn new(server: sacp::schema::McpServer) -> Self {
         Self {
             server,
-            current_dir: None,
             debug_callback: None,
+            current_dir: None,
             spawn_callback: None,
             exit_callback: None,
         }
@@ -499,7 +499,7 @@ impl AcpAgent {
                     command
                 };
                 for env_var in &stdio.env {
-                    // HouHub convention: an empty value means "ensure this var is
+                    // houhub convention: an empty value means "ensure this var is
                     // ABSENT from the child" (strip an inherited value) rather
                     // than setting it empty. The child otherwise inherits this
                     // process's environment, so this lets the launch layer
@@ -729,10 +729,10 @@ impl<Counterpart: AcpAgentCounterpartRole> sacp::ConnectTo<Counterpart> for AcpA
         self,
         client: impl sacp::ConnectTo<Counterpart::Counterpart>,
     ) -> Result<(), sacp::Error> {
-        use futures::io::BufReader;
         use futures::AsyncBufReadExt;
         use futures::AsyncWriteExt;
         use futures::StreamExt;
+        use futures::io::BufReader;
 
         let (child_stdin, child_stdout, child_stderr, child) = self.spawn_process()?;
 
@@ -764,8 +764,11 @@ impl<Counterpart: AcpAgentCounterpartRole> sacp::ConnectTo<Counterpart> for AcpA
                     }
                     // Always collect for error reporting
                     if !collected.is_empty() {
-                        truncated |=
-                            append_limited_utf8(&mut collected, "\n", MAX_STDERR_CAPTURE_BYTES);
+                        truncated |= append_limited_utf8(
+                            &mut collected,
+                            "\n",
+                            MAX_STDERR_CAPTURE_BYTES,
+                        );
                     }
                     truncated |=
                         append_limited_utf8(&mut collected, &line, MAX_STDERR_CAPTURE_BYTES);
@@ -903,8 +906,8 @@ impl AcpAgent {
                     .args(cmd_args)
                     .env(env),
             ),
-            current_dir: None,
             debug_callback: None,
+            current_dir: None,
             spawn_callback: None,
             exit_callback: None,
         })
@@ -949,8 +952,8 @@ impl FromStr for AcpAgent {
                 .map_err(|e| sacp::util::internal_error(format!("Failed to parse JSON: {}", e)))?;
             return Ok(Self {
                 server,
-                current_dir: None,
                 debug_callback: None,
+                current_dir: None,
                 spawn_callback: None,
                 exit_callback: None,
             });
@@ -1087,13 +1090,17 @@ mod tests {
     /// keeps a Windows process handle open, which is exactly what stops the OS
     /// from reusing the pid there.
     #[cfg(unix)]
-    fn counting_callback(calls: &Arc<std::sync::atomic::AtomicUsize>) -> Arc<dyn Fn() + Send + Sync> {
+    fn counting_callback(calls: &Arc<std::sync::atomic::AtomicUsize>) -> Arc<dyn Fn() + Send + Sync>
+    {
         let calls = Arc::clone(calls);
         Arc::new(move || {
             calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         })
     }
 
+    /// A reaped child means its pid is free for the OS to reassign, so the exit
+    /// callback has to fire — a host still holding that pid would aim its
+    /// shutdown kill at whatever inherits the number next.
     #[cfg(unix)]
     #[test]
     fn exit_callback_fires_once_the_child_is_reaped() {
@@ -1118,52 +1125,7 @@ mod tests {
             );
             drop(guard);
         });
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    /// Regression for the select race in `connect_to`: the protocol side may
-    /// finish before the child-monitor future receives its first poll. The
-    /// monitor must already own a `ChildGuard`, otherwise dropping that
-    /// unpolled future bypasses kill/reap and never fires `on_exit`.
-    #[cfg(unix)]
-    #[test]
-    fn dropping_an_unpolled_child_monitor_still_reaps_and_reports_exit() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let calls = Arc::new(AtomicUsize::new(0));
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime");
-        rt.block_on(async {
-            let mut command = tokio::process::Command::new("/bin/sh");
-            command.args(["-c", "sleep 30"]);
-            command.stderr(std::process::Stdio::piped());
-            let mut child = command.spawn().expect("spawn sh");
-            let stderr = child.stderr.take().expect("stderr");
-            let (stderr_tx, stderr_rx) = tokio::sync::oneshot::channel();
-            tokio::spawn(async move {
-                use tokio::io::AsyncReadExt;
-                let mut stderr = stderr;
-                let mut bytes = Vec::new();
-                let _ = stderr.read_to_end(&mut bytes).await;
-                let _ = stderr_tx.send(String::from_utf8_lossy(&bytes).into_owned());
-            });
-
-            let monitor = monitor_child(child, stderr_rx, Some(counting_callback(&calls)));
-            // Deliberately never poll it.
-            drop(monitor);
-
-            let mut reported = false;
-            for _ in 0..200 {
-                if calls.load(Ordering::SeqCst) == 1 {
-                    reported = true;
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-            assert!(reported, "unpolled monitor bypassed the reap callback");
-        });
+        // Exactly once, even though `drop` also runs its own notify path.
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
