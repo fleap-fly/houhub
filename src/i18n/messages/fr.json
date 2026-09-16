@@ -4772,28 +4772,6 @@
     "dialogDescriptionInstant": "Envoyez une note à l'agent pendant qu'il travaille. Elle est insérée immédiatement dans le tour en cours — l'agent la voit aussitôt.",
     "channelDowngraded": "L'insertion instantanée n'est pas disponible dans cette session — votre note a été enregistrée et sera récupérée au prochain contrôle de l'agent."
   },
-  "SessionInfoSettings": {
-    "title": "Obtenir les infos de session",
-    "description": "Permet aux agents de consulter une session que vous mentionnez dans votre message (un badge de session) pour lire son titre, son agent, son statut, son espace de travail, sa consommation de jetons et ses messages récents.",
-    "enable": "Activer l'obtention des infos de session",
-    "enableHint": "Ajoute l'outil get_session_info aux agents démarrés après l'activation.",
-    "save": "Enregistrer",
-    "saving": "Enregistrement…",
-    "saved": "Paramètres d'infos de session enregistrés",
-    "saveFailed": "Échec de l'enregistrement des paramètres d'infos de session",
-    "loadFailed": "Échec du chargement : {detail}"
-  },
-  "AskQuestionSettings": {
-    "title": "Poser une question à l'utilisateur",
-    "description": "Permet aux agents de s'interrompre et de vous poser une question à choix multiples affichée au-dessus de la zone de saisie de la conversation. L'agent attend votre réponse (ou que vous ignoriez).",
-    "enable": "Activer les questions à l'utilisateur",
-    "enableHint": "Ajoute l'outil ask_user_question aux agents démarrés après l'activation.",
-    "save": "Enregistrer",
-    "saving": "Enregistrement…",
-    "saved": "Paramètres de question enregistrés",
-    "saveFailed": "Échec de l'enregistrement des paramètres de question",
-    "loadFailed": "Échec du chargement : {detail}"
-  },
   "LogsSettings": {
     "loading": "Chargement…",
     "sectionTitle": "Journaux d'exécution",
@@ -5650,19 +5628,6 @@
     "loadFailed": "Impossible de charger la consommation",
     "truncatedNotice": "Cette période est très large — les chiffres ne couvrent que sa portion la plus récente.",
     "customRangePick": "Choisir une période"
-  },
-  "ChatAuthoringSettings": {
-    "title": "Créer depuis le chat",
-    "description": "Permet aux agents de transformer une conversation en travail planifié ou mis en file : enregistrer une automatisation qui s'exécute selon un cron, ou déposer une carte dans les tâches à faire. Les deux sont désactivés par défaut car ces outils écrivent l'état de l'application et une automatisation planifiée finit par lancer des agents d'elle-même.",
-    "enableAutomations": "Créer des automatisations",
-    "enableAutomationsHint": "Ajoute l'outil create_automation aux agents démarrés après activation.",
-    "enableWorkTasks": "Créer des tâches à faire",
-    "enableWorkTasksHint": "Ajoute l'outil create_work_task aux agents démarrés après activation.",
-    "save": "Enregistrer",
-    "saving": "Enregistrement…",
-    "saved": "Paramètres de création depuis le chat enregistrés",
-    "saveFailed": "Échec de l'enregistrement des paramètres de création depuis le chat",
-    "loadFailed": "Échec du chargement : {detail}"
   },
   "AgentToolsSettings": {
     "title": "Outils dans la conversation",

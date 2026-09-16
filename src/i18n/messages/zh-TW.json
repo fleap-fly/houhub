@@ -4772,28 +4772,6 @@
     "dialogDescriptionInstant": "在智慧代理工作時傳送備註。備註會立即插入目前回合——代理馬上就能看到。",
     "channelDowngraded": "本工作階段無法即時插入——備註已儲存，待代理下次檢查時讀取。"
   },
-  "SessionInfoSettings": {
-    "title": "取得工作階段資訊",
-    "description": "允許智慧代理查詢你在訊息中提及的工作階段（工作階段徽章），讀取其標題、代理、狀態、工作區、Token 用量與最近訊息。",
-    "enable": "啟用取得工作階段資訊",
-    "enableHint": "在開啟後啟動的代理將取得 get_session_info 工具。",
-    "save": "儲存",
-    "saving": "儲存中…",
-    "saved": "工作階段資訊設定已儲存",
-    "saveFailed": "儲存工作階段資訊設定失敗",
-    "loadFailed": "載入失敗：{detail}"
-  },
-  "AskQuestionSettings": {
-    "title": "向使用者提問",
-    "description": "允許智能體暫停並向你提出多選問題，問題會顯示在對話輸入框上方。智能體會一直等待，直到你作答（或略過）。",
-    "enable": "啟用向使用者提問",
-    "enableHint": "為開啟後啟動的智能體加入 ask_user_question 工具。",
-    "save": "儲存",
-    "saving": "儲存中…",
-    "saved": "提問設定已儲存",
-    "saveFailed": "儲存提問設定失敗",
-    "loadFailed": "載入失敗：{detail}"
-  },
   "LogsSettings": {
     "loading": "載入中…",
     "sectionTitle": "執行日誌",
@@ -5650,19 +5628,6 @@
     "loadFailed": "用量載入失敗",
     "truncatedNotice": "此範圍過大 —— 下面的數字只涵蓋其中最近的一段。",
     "customRangePick": "選擇日期範圍"
-  },
-  "ChatAuthoringSettings": {
-    "title": "從聊天中建立",
-    "description": "允許智能體把對話變成定時或排隊的工作：儲存一條按 cron 執行的自動化，或在待辦任務裡排一張卡片。兩者預設關閉，因為這些工具會寫入應用程式狀態，而定時自動化還會自行啟動智能體。",
-    "enableAutomations": "建立自動化",
-    "enableAutomationsHint": "在開啟後啟動的智能體將獲得 create_automation 工具。",
-    "enableWorkTasks": "建立待辦任務",
-    "enableWorkTasksHint": "在開啟後啟動的智能體將獲得 create_work_task 工具。",
-    "save": "儲存",
-    "saving": "儲存中…",
-    "saved": "從聊天中建立的設定已儲存",
-    "saveFailed": "儲存從聊天中建立的設定失敗",
-    "loadFailed": "載入失敗：{detail}"
   },
   "AgentToolsSettings": {
     "title": "對話內工具",

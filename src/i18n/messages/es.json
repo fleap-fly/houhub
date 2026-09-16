@@ -4772,28 +4772,6 @@
     "dialogDescriptionInstant": "Envía una nota al agente mientras trabaja. Se inserta de inmediato en el turno actual: el agente la ve al instante.",
     "channelDowngraded": "La inserción instantánea no está disponible en esta sesión: tu nota quedó guardada para que el agente la recoja en su próxima consulta."
   },
-  "SessionInfoSettings": {
-    "title": "Obtener información de sesión",
-    "description": "Permite que los agentes consulten una sesión que mencionas en tu mensaje (una insignia de sesión) para leer su título, agente, estado, espacio de trabajo, uso de tokens y mensajes recientes.",
-    "enable": "Activar obtener información de sesión",
-    "enableHint": "Añade la herramienta get_session_info a los agentes iniciados después de activarla.",
-    "save": "Guardar",
-    "saving": "Guardando…",
-    "saved": "Ajustes de información de sesión guardados",
-    "saveFailed": "No se pudieron guardar los ajustes de información de sesión",
-    "loadFailed": "Error al cargar: {detail}"
-  },
-  "AskQuestionSettings": {
-    "title": "Preguntar al usuario",
-    "description": "Permite que los agentes se detengan y te hagan una pregunta de opción múltiple que aparece encima del cuadro de entrada de la conversación. El agente espera hasta que respondas (u omitas).",
-    "enable": "Activar preguntas al usuario",
-    "enableHint": "Añade la herramienta ask_user_question a los agentes iniciados después de activarlo.",
-    "save": "Guardar",
-    "saving": "Guardando…",
-    "saved": "Ajustes de preguntas guardados",
-    "saveFailed": "No se pudieron guardar los ajustes de preguntas",
-    "loadFailed": "Error al cargar: {detail}"
-  },
   "LogsSettings": {
     "loading": "Cargando…",
     "sectionTitle": "Registros de ejecución",
@@ -5650,19 +5628,6 @@
     "loadFailed": "No se pudo cargar el uso",
     "truncatedNotice": "Este periodo es muy amplio: las cifras cubren solo su tramo más reciente.",
     "customRangePick": "Elegir un intervalo"
-  },
-  "ChatAuthoringSettings": {
-    "title": "Crear desde el chat",
-    "description": "Permite que los agentes conviertan una conversación en trabajo programado o en cola: guardar una automatización que se ejecuta con cron, o añadir una tarjeta a las tareas pendientes. Ambas opciones están desactivadas por defecto porque estas herramientas escriben en el estado de la aplicación y una automatización programada llega a iniciar agentes por su cuenta.",
-    "enableAutomations": "Crear automatizaciones",
-    "enableAutomationsHint": "Añade la herramienta create_automation a los agentes iniciados después de activarlo.",
-    "enableWorkTasks": "Crear tareas pendientes",
-    "enableWorkTasksHint": "Añade la herramienta create_work_task a los agentes iniciados después de activarlo.",
-    "save": "Guardar",
-    "saving": "Guardando…",
-    "saved": "Ajustes de crear desde el chat guardados",
-    "saveFailed": "No se pudieron guardar los ajustes de crear desde el chat",
-    "loadFailed": "Error al cargar: {detail}"
   },
   "AgentToolsSettings": {
     "title": "Herramientas en la conversación",
