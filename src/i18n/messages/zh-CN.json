@@ -4213,6 +4213,7 @@
     "testModelCustomPlaceholder": "自定义模型 ID（可选）",
     "testModelHint": "选择列表中的模型，或手动输入一个模型。",
     "testSuccess": "连接测试通过。",
+    "testFailed": "连接测试失败。",
     "close": "关闭",
     "runTest": "运行测试",
     "affectedRunningSessions": "{count} 个进行中的会话需重连以应用更改"

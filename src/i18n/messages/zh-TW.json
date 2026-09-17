@@ -4201,6 +4201,7 @@
     "testModelCustomPlaceholder": "自訂模型 ID（可選）",
     "testModelHint": "選擇清單中的模型，或手動輸入一個模型。",
     "testSuccess": "連線測試通過。",
+    "testFailed": "連線測試失敗。",
     "close": "關閉",
     "runTest": "執行測試",
     "affectedRunningSessions": "{count} 個進行中的工作階段需重新連線以套用變更"

@@ -1645,6 +1645,7 @@ mod tauri_app {
                 acp_commands::acp_update_hermes_config,
                 acp_commands::acp_update_kimi_code_config,
                 acp_commands::acp_fetch_kimi_models,
+                acp_commands::acp_test_model_provider,
                 deepseek_settings_commands::acp_load_deepseek_model_catalog,
                 deepseek_settings_commands::acp_update_deepseek_model_catalog,
                 acp_commands::acp_update_pi_config,

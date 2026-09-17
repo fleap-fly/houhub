@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { parseClaudeProviderModel, type ModelProviderInfo } from "@/lib/types"
+import { testModelProvider } from "@/lib/api"
 
 interface TestResult {
   success: boolean
@@ -67,64 +68,33 @@ export function TestModelProviderDialog({
     setTesting(true)
     setResult(null)
 
-    const startTime = performance.now()
     try {
-      const baseUrl = provider.api_url.replace(/\/+$/, "")
-      const url = baseUrl.endsWith("/chat/completions")
-        ? baseUrl
-        : `${baseUrl}/chat/completions`
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${provider.api_key}`,
-        },
-        body: JSON.stringify({
-          model: effectiveModel,
-          messages: [
-            { role: "user", content: "Hi, say hello in one sentence." },
-          ],
-          max_tokens: 64,
-          stream: false,
-        }),
+      // The backend owns the request: the desktop webview cannot POST to a
+      // third-party endpoint cross-origin, and in server mode the key must not
+      // be sent from the page. Same route the "fetch models" button uses.
+      const outcome = await testModelProvider({
+        baseUrl: provider.api_url,
+        apiKey: provider.api_key,
+        model: effectiveModel,
       })
-
-      const latencyMs = Math.round(performance.now() - startTime)
-
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => "")
-        let errorMsg = `HTTP ${response.status}`
-        try {
-          const parsed = JSON.parse(errorBody)
-          errorMsg = parsed?.error?.message || parsed?.message || errorMsg
-        } catch {
-          if (errorBody.length > 0 && errorBody.length < 200) {
-            errorMsg = errorBody
-          }
-        }
-        setResult({
-          success: false,
-          latencyMs,
-          message: errorMsg,
-        })
-        return
-      }
-
-      const data = await response.json()
-      const content =
-        data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? ""
-      setResult({
-        success: true,
-        latencyMs,
-        message: t("testSuccess"),
-        preview: typeof content === "string" ? content.slice(0, 200) : "",
-      })
+      setResult(
+        outcome.success
+          ? {
+              success: true,
+              latencyMs: outcome.latencyMs,
+              message: t("testSuccess"),
+              preview: outcome.preview ?? "",
+            }
+          : {
+              success: false,
+              latencyMs: outcome.latencyMs,
+              message: outcome.error ?? t("testFailed"),
+            }
+      )
     } catch (err) {
-      const latencyMs = Math.round(performance.now() - startTime)
       setResult({
         success: false,
-        latencyMs,
+        latencyMs: 0,
         message: err instanceof Error ? err.message : String(err),
       })
     } finally {

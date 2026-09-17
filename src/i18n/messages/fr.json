@@ -4201,6 +4201,7 @@
     "testModelCustomPlaceholder": "ID de modèle personnalisé (facultatif)",
     "testModelHint": "Choisissez un modèle de la liste ou saisissez-en un manuellement.",
     "testSuccess": "Test de connexion réussi.",
+    "testFailed": "Test de connexion échoué.",
     "close": "Fermer",
     "runTest": "Lancer le test",
     "affectedRunningSessions": "{count, plural, one {# session active doit se reconnecter pour appliquer la modification} other {# sessions actives doivent se reconnecter pour appliquer la modification}}"

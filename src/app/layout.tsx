@@ -87,15 +87,6 @@ export default async function RootLayout({
                     {children}
                   </WorkbenchProvider>
                 </HouflowDesktopProvider>
-                <OverlayScrollbarsInit />
-                <ClipboardFallbackInit />
-                <WebConnectionGuard />
-                <WindowResizeGrips />
-                {/* Self-gated to the main window: every route it can show
-                    (/workspace, /login, the redirecting /) must be able to
-                    answer a close press. */}
-                <CloseRequestDialog />
-                {children}
               </AppearanceProvider>
             </ThemeProvider>
           </AppI18nProvider>

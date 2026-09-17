@@ -4213,6 +4213,7 @@
     "testModelCustomPlaceholder": "Custom model ID (optional)",
     "testModelHint": "Choose a listed model or enter one manually.",
     "testSuccess": "Connection test passed.",
+    "testFailed": "Connection test failed.",
     "close": "Close",
     "runTest": "Run Test",
     "affectedRunningSessions": "{count, plural, one {# running session needs to reconnect to apply the change} other {# running sessions need to reconnect to apply the change}}"

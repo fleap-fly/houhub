@@ -783,6 +783,33 @@ export async function fetchOpenAiCompatibleModels(params: {
   })
 }
 
+/** Outcome of testing a model provider with a real chat completion. */
+export interface ModelProviderTestOutcome {
+  success: boolean
+  latencyMs: number
+  error: string | null
+  preview: string | null
+}
+
+/**
+ * Probe a provider with a one-shot chat completion.
+ *
+ * Routed through the backend rather than the renderer: the desktop webview runs
+ * on `tauri://localhost`, so a direct cross-origin POST to a provider endpoint
+ * is blocked by CORS, and in server mode the key would have to live in the page.
+ */
+export async function testModelProvider(params: {
+  baseUrl: string
+  apiKey: string
+  model: string
+}): Promise<ModelProviderTestOutcome> {
+  return getTransport().call("acp_test_model_provider", {
+    baseUrl: params.baseUrl,
+    apiKey: params.apiKey,
+    model: params.model,
+  })
+}
+
 /**
  * Apply a structured Pi config update. Merge-writes pi's native
  * `~/.pi/agent/settings.json` (`defaultProvider` / `defaultModel` /

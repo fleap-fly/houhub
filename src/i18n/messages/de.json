@@ -4201,6 +4201,7 @@
     "testModelCustomPlaceholder": "Benutzerdefinierte Modell-ID (optional)",
     "testModelHint": "Wähle ein Modell aus der Liste oder gib eines manuell ein.",
     "testSuccess": "Verbindungstest bestanden.",
+    "testFailed": "Verbindungstest fehlgeschlagen.",
     "close": "Schließen",
     "runTest": "Test ausführen",
     "affectedRunningSessions": "{count, plural, one {# laufende Sitzung muss zum Anwenden neu verbunden werden} other {# laufende Sitzungen müssen zum Anwenden neu verbunden werden}}"

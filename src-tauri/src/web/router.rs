@@ -850,6 +850,10 @@ pub fn build_router(
             post(handlers::acp::acp_fetch_kimi_models),
         )
         .route(
+            "/acp_test_model_provider",
+            post(handlers::acp::acp_test_model_provider),
+        )
+        .route(
             "/acp_update_pi_config",
             post(handlers::acp::acp_update_pi_config),
         )

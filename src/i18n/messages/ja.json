@@ -4201,6 +4201,7 @@
     "testModelCustomPlaceholder": "カスタムモデル ID（任意）",
     "testModelHint": "リストのモデルを選ぶか、手動で入力します。",
     "testSuccess": "接続テストに合格しました。",
+    "testFailed": "接続テストに失敗しました。",
     "close": "閉じる",
     "runTest": "テストを実行",
     "affectedRunningSessions": "{count} 件の実行中セッションは再接続すると変更が適用されます"

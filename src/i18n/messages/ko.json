@@ -4201,6 +4201,7 @@
     "testModelCustomPlaceholder": "사용자 지정 모델 ID(선택 사항)",
     "testModelHint": "목록의 모델을 선택하거나 직접 입력하세요.",
     "testSuccess": "연결 테스트를 통과했습니다.",
+    "testFailed": "연결 테스트에 실패했습니다.",
     "close": "닫기",
     "runTest": "테스트 실행",
     "affectedRunningSessions": "{count}개의 실행 중인 세션은 다시 연결하면 변경 사항이 적용됩니다"

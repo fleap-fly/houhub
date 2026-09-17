@@ -4201,6 +4201,7 @@
     "testModelCustomPlaceholder": "معرّف نموذج مخصص (اختياري)",
     "testModelHint": "اختر نموذجًا من القائمة أو أدخله يدويًا.",
     "testSuccess": "نجح اختبار الاتصال.",
+    "testFailed": "فشل اختبار الاتصال.",
     "close": "إغلاق",
     "runTest": "تشغيل الاختبار",
     "affectedRunningSessions": "{count} جلسة نشطة تحتاج إلى إعادة الاتصال لتطبيق التغيير"

@@ -5516,6 +5516,123 @@ pub(crate) async fn acp_fetch_kimi_models_core(
     Ok(ids)
 }
 
+/// Outcome of a model-provider connection test: a one-shot chat completion
+/// against the provider's endpoint with the configured key and model.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelProviderTestOutcome {
+    pub success: bool,
+    pub latency_ms: u64,
+    /// Provider-reported or transport error when `success` is false.
+    pub error: Option<String>,
+    /// First `PREVIEW_CHARS` of the assistant reply when `success` is true.
+    pub preview: Option<String>,
+}
+
+/// Characters of the reply echoed back to the settings dialog. Enough to tell a
+/// real completion from a truncated or garbled one, short enough that a verbose
+/// model cannot balloon the IPC frame.
+const MODEL_PROVIDER_TEST_PREVIEW_CHARS: usize = 200;
+
+/// Probe a model provider's endpoint with a real chat completion.
+///
+/// The renderer cannot do this itself: the desktop webview loads from
+/// `tauri://localhost`, so a cross-origin POST to a provider API is both
+/// blocked by CORS (no provider sends `Access-Control-Allow-Origin` for that
+/// origin) and, in server mode, would expose the user's key to the page. Every
+/// other outbound call in the app therefore goes through Rust — the settings
+/// panel's own "fetch models" button does too. This mirrors
+/// `acp_fetch_kimi_models_core`: same 20s ceiling, same Bearer auth.
+///
+/// `/chat/completions` is appended unless the URL already names it, so both a
+/// bare `https://host/v1` base and a pasted full endpoint work.
+pub(crate) async fn acp_test_model_provider_core(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+) -> Result<ModelProviderTestOutcome, AcpError> {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err(AcpError::protocol("base URL is required to test a provider"));
+    }
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err(AcpError::protocol("API key is required to test a provider"));
+    }
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(AcpError::protocol("a model is required to test a provider"));
+    }
+    let url = if base.ends_with("/chat/completions") {
+        base.to_string()
+    } else {
+        format!("{base}/chat/completions")
+    };
+
+    let started = std::time::Instant::now();
+    let response = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(key)
+        .json(&serde_json::json!({
+            "model": model,
+            "messages": [{ "role": "user", "content": "Hi, say hello in one sentence." }],
+            "max_tokens": 64,
+            "stream": false,
+        }))
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|e| AcpError::protocol(format!("provider test request failed: {e}")))?;
+
+    let latency_ms = started.elapsed().as_millis() as u64;
+    let status = response.status();
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| AcpError::protocol(format!("provider test returned invalid JSON: {e}")))?;
+
+    if !status.is_success() {
+        // Providers disagree on where the message lives; take the first one
+        // that reads as text rather than guessing at one shape.
+        let message = body
+            .get("error")
+            .and_then(|error| {
+                error
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| error.as_str())
+            })
+            .or_else(|| body.get("message").and_then(serde_json::Value::as_str))
+            .unwrap_or("request rejected");
+        return Ok(ModelProviderTestOutcome {
+            success: false,
+            latency_ms,
+            error: Some(format!("{status}: {message}")),
+            preview: None,
+        });
+    }
+
+    let content = body
+        .get("choices")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| {
+            choice
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| choice.get("text").and_then(serde_json::Value::as_str))
+        })
+        .unwrap_or_default();
+
+    Ok(ModelProviderTestOutcome {
+        success: true,
+        latency_ms,
+        error: None,
+        preview: Some(content.chars().take(MODEL_PROVIDER_TEST_PREVIEW_CHARS).collect()),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Pi config helpers
 //
@@ -12089,6 +12206,18 @@ pub async fn acp_fetch_kimi_models(
     acp_fetch_kimi_models_core(&base_url, &api_key).await
 }
 
+/// Probe a model provider endpoint with a real chat completion. Desktop
+/// command; the web handler calls `acp_test_model_provider_core` directly.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_test_model_provider(
+    base_url: String,
+    api_key: String,
+    model: String,
+) -> Result<ModelProviderTestOutcome, AcpError> {
+    acp_test_model_provider_core(&base_url, &api_key, &model).await
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 #[allow(clippy::too_many_arguments)]
@@ -13577,6 +13706,117 @@ pub(crate) async fn codex_poll_device_code_core(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    /// A fake OpenAI-compatible provider: `/chat/completions` answers with
+    /// `status` and `body`. Returns the bound port.
+    async fn spawn_fake_provider(
+        status: u16,
+        body: serde_json::Value,
+    ) -> (u16, Arc<std::sync::Mutex<Option<serde_json::Value>>>) {
+        let seen: Arc<std::sync::Mutex<Option<serde_json::Value>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let seen_for_route = Arc::clone(&seen);
+        let app = axum::Router::new().route(
+            "/v1/chat/completions",
+            axum::routing::post(move |axum::Json(payload): axum::Json<serde_json::Value>| {
+                let seen = Arc::clone(&seen_for_route);
+                async move {
+                    *seen.lock().unwrap() = Some(payload);
+                    (
+                        axum::http::StatusCode::from_u16(status).unwrap(),
+                        axum::Json(body),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (port, seen)
+    }
+
+    #[tokio::test]
+    async fn provider_test_reports_the_assistant_reply() {
+        let (port, seen) = spawn_fake_provider(
+            200,
+            serde_json::json!({
+                "choices": [{ "message": { "role": "assistant", "content": "Hello there!" } }]
+            }),
+        )
+        .await;
+
+        let outcome = acp_test_model_provider_core(
+            &format!("http://127.0.0.1:{port}/v1"),
+            "sk-test",
+            "deepseek-chat",
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.success);
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.preview.as_deref(), Some("Hello there!"));
+        // The probe has to be a real completion request, not a `/models` call:
+        // only the former proves the endpoint accepts this model.
+        let payload = seen.lock().unwrap().clone().unwrap();
+        assert_eq!(payload["model"], "deepseek-chat");
+        assert_eq!(payload["stream"], false);
+    }
+
+    #[tokio::test]
+    async fn provider_test_surfaces_the_provider_error_message() {
+        let (port, _seen) = spawn_fake_provider(
+            401,
+            serde_json::json!({ "error": { "message": "invalid api key" } }),
+        )
+        .await;
+
+        let outcome = acp_test_model_provider_core(
+            &format!("http://127.0.0.1:{port}/v1"),
+            "sk-bad",
+            "deepseek-chat",
+        )
+        .await
+        .unwrap();
+
+        assert!(!outcome.success);
+        assert_eq!(outcome.error.as_deref(), Some("401 Unauthorized: invalid api key"));
+        assert!(outcome.preview.is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_test_accepts_a_full_chat_completions_url() {
+        let (port, _seen) = spawn_fake_provider(
+            200,
+            serde_json::json!({ "choices": [{ "message": { "content": "hi" } }] }),
+        )
+        .await;
+
+        // A pasted full endpoint must not end up as `/chat/completions/chat/completions`.
+        let outcome = acp_test_model_provider_core(
+            &format!("http://127.0.0.1:{port}/v1/chat/completions"),
+            "sk-test",
+            "deepseek-chat",
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.success);
+    }
+
+    #[tokio::test]
+    async fn provider_test_requires_a_key_and_a_model() {
+        assert!(acp_test_model_provider_core("https://example.com/v1", "", "m")
+            .await
+            .is_err());
+        assert!(acp_test_model_provider_core("https://example.com/v1", "k", "  ")
+            .await
+            .is_err());
+        assert!(acp_test_model_provider_core("   ", "k", "m").await.is_err());
+    }
 
     #[test]
     fn extract_version_token_finds_common_cli_banners() {

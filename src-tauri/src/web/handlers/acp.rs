@@ -898,6 +898,24 @@ pub async fn acp_fetch_kimi_models(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpTestModelProviderParams {
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+}
+
+pub async fn acp_test_model_provider(
+    Json(params): Json<AcpTestModelProviderParams>,
+) -> Result<Json<acp_commands::ModelProviderTestOutcome>, AppCommandError> {
+    let outcome =
+        acp_commands::acp_test_model_provider_core(&params.base_url, &params.api_key, &params.model)
+            .await
+            .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(outcome))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpUpdatePiConfigParams {
     pub provider: String,
     pub model: String,
