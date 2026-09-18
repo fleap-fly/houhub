@@ -6,6 +6,7 @@ import { isDesktop } from "@/lib/platform"
 import Image from "next/image"
 import { useLocale, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   BookOpenText,
   Check,
@@ -98,6 +99,11 @@ import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
 import { isNoActiveTurnRejection } from "@/lib/turn-busy"
 import { openFileDialog } from "@/lib/platform"
 import { getActiveRemoteConnectionId } from "@/lib/transport"
+import { buildSteerPayload } from "@/lib/prompt-draft"
+import {
+  stepComposerHistory,
+  type HistoryDirection,
+} from "@/lib/composer-history"
 import { ServerFileBrowserDialog } from "@/components/shared/server-file-browser-dialog"
 import { toast } from "sonner"
 import { disposeTauriListener } from "@/lib/tauri-listener"
@@ -305,6 +311,15 @@ interface MessageInputProps {
   /** Grey out the live-feedback "+" entry when a note can't be sent right now
    *  (no active turn / agent lacks the tool). */
   feedbackAddDisabled?: boolean
+  /**
+   * The current session's user prompts, oldest first — the ArrowUp/ArrowDown
+   * recall history. A GETTER rather than an array on purpose: prompts are
+   * append-only and the runtime store updates on every streaming token, so a
+   * reactive prop would recompute (and re-render the composer) per token for a
+   * list that is only read when the user presses Up/Down. Absent for a surface
+   * with no session, or a brand-new one — which then simply has no history.
+   */
+  getSentHistory?: () => string[]
   injectContent?: ComposerInjectContent | null
   onInjectConsumed?: () => void
 }
@@ -525,6 +540,30 @@ function SelectorLoadingChip({ label }: { label: string }) {
   )
 }
 
+/**
+ * Stand-in for the model / mode / config chips while the session is still being
+ * established. It holds the row open at the real chips' height (`h-6`, matching
+ * `Button size="xs"`) so nothing jumps when they arrive, and — unlike the
+ * loading row inside the collapsed cog popover, which only a user who opens the
+ * popover ever sees — it is visible where the chips themselves will be. Opening
+ * a historical conversation spends seconds in exactly this state, and showing
+ * nothing there made a live, still-connecting composer look like a dead one.
+ */
+function SelectorLoadingPlaceholder({ label }: { label: string }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label={label}
+      title={label}
+      className="flex h-6 shrink-0 items-center gap-1.5 px-1"
+    >
+      <Skeleton className="h-3 w-16 rounded-sm" />
+      <Skeleton className="h-3 w-10 rounded-sm" />
+    </div>
+  )
+}
+
 // Groups for the searchable + virtualized model picker, or `null` when the
 // option should keep the lightweight selectors. Only the MODEL option, and only
 // when its list is long enough to jank, qualifies. Falls back to a single
@@ -581,6 +620,7 @@ export function MessageInput({
   feedbackAddDisabled,
   injectContent,
   onInjectConsumed,
+  getSentHistory,
 }: MessageInputProps) {
   const t = useTranslations("Folder.chat.messageInput")
   const tQueue = useTranslations("Folder.chat.messageQueue")
@@ -652,6 +692,26 @@ export function MessageInput({
     supported: skillManagementSupported,
   } = useEnabledSkillIds(agentType ?? null)
   const editorRef = useRef<RichComposerHandle>(null)
+  // Prompt-history navigation. `historyRef` is seeded from `getSentHistory`
+  // lazily, the first time the user steps into history, so a session that never
+  // uses it pays nothing.
+  const historyRef = useRef<string[]>([])
+  const historyIndexRef = useRef<number | null>(null)
+  const historyDraftRef = useRef<{
+    json: JSONContent | null
+    text: string
+  } | null>(null)
+  // True while the history itself writes the document, so the resulting
+  // onChange is not mistaken for a user edit that ends navigation.
+  const applyingHistoryRef = useRef(false)
+  // A conversation switch ends navigation: the recalled entries and the stashed
+  // draft belong to the session that was on screen. The next Up re-seeds from
+  // the new session's own prompts.
+  useEffect(() => {
+    historyIndexRef.current = null
+    historyDraftRef.current = null
+    historyRef.current = []
+  }, [effectiveDraftStorageKey])
   const containerRef = useRef<HTMLDivElement>(null)
   const lastDomDropAtRef = useRef(0)
   const disabledRef = useRef(disabled)
@@ -779,6 +839,19 @@ export function MessageInput({
   // Markdown) ~300ms after the last change so inline reference badges survive a
   // reload — a Markdown round-trip would downgrade them to plain links.
   const draftSaveTimerRef = useRef<number | null>(null)
+  /** Persist (or clear) the draft from the document as it stands right now. */
+  const writeDraftNow = useCallback(() => {
+    const ed = editorRef.current
+    if (!ed || !effectiveDraftStorageKey) return
+    if (ed.isEmpty()) {
+      clearMessageInputDraftV2(effectiveDraftStorageKey)
+    } else {
+      saveMessageInputDraftV2(
+        effectiveDraftStorageKey,
+        stripEmbeddedReferences(ed.getJSON())
+      )
+    }
+  }, [effectiveDraftStorageKey])
   const scheduleDraftSave = useCallback(() => {
     if (typeof window === "undefined") return
     if (!effectiveDraftStorageKey || isEditingQueueItem) return
@@ -787,18 +860,22 @@ export function MessageInput({
     }
     draftSaveTimerRef.current = window.setTimeout(() => {
       draftSaveTimerRef.current = null
-      const ed = editorRef.current
-      if (!ed || !effectiveDraftStorageKey) return
-      if (ed.isEmpty()) {
-        clearMessageInputDraftV2(effectiveDraftStorageKey)
-      } else {
-        saveMessageInputDraftV2(
-          effectiveDraftStorageKey,
-          stripEmbeddedReferences(ed.getJSON())
-        )
-      }
+      writeDraftNow()
     }, 300)
-  }, [effectiveDraftStorageKey, isEditingQueueItem])
+  }, [effectiveDraftStorageKey, isEditingQueueItem, writeDraftNow])
+  /**
+   * Land a *pending* debounced save immediately, before something other than
+   * the user replaces the document. A save scheduled by the keystrokes that
+   * preceded a prompt recall would otherwise fire ~300ms later — after the
+   * recall — and store the recalled prompt in place of the draft it replaced.
+   */
+  const flushDraftSave = useCallback(() => {
+    if (typeof window === "undefined") return
+    if (draftSaveTimerRef.current == null) return
+    window.clearTimeout(draftSaveTimerRef.current)
+    draftSaveTimerRef.current = null
+    writeDraftNow()
+  }, [writeDraftNow])
 
   useEffect(() => {
     return () => {
@@ -1065,10 +1142,79 @@ export function MessageInput({
   }, [])
 
   const handleComposerChange = useCallback(() => {
+    // The history's own writes are not edits. They must not end navigation, and
+    // they must not be saved as the draft: overwriting the stored draft with a
+    // recalled prompt would lose what the user had typed if they closed the tab
+    // without stepping back down. An actual edit falls into the branch below
+    // and saves normally.
+    if (!applyingHistoryRef.current) {
+      if (historyIndexRef.current !== null) {
+        historyIndexRef.current = null
+        historyDraftRef.current = null
+      }
+      scheduleDraftSave()
+    }
     syncComposerEmpty()
-    scheduleDraftSave()
     detectSlashTriggerRef.current?.()
   }, [syncComposerEmpty, scheduleDraftSave])
+
+  // Arrow-key prompt history. RichComposer only calls this from the document
+  // edge, so the caret keeps moving line by line inside a multi-line entry. A
+  // step lands on the edge it travelled FROM — the top for older, the bottom
+  // for newer — so pressing the same key again keeps going. Editing ends the
+  // navigation (see `handleComposerChange`); re-entry always starts at the
+  // newest prompt. Returns true to consume the key.
+  const handleHistoryKeyDown = useCallback(
+    (direction: HistoryDirection): boolean => {
+      // Queue-edit mode owns the composer's content: recalling a chat prompt
+      // would replace the queued message being edited.
+      if (isEditingQueueItem) return false
+      if (direction === "older" && historyIndexRef.current === null) {
+        // Fresh navigation: seed here so a prompt sent since the last one is
+        // included, then stash the box before the first recall replaces it.
+        historyRef.current = getSentHistory?.() ?? []
+      }
+      const step = stepComposerHistory(
+        historyRef.current,
+        historyIndexRef.current,
+        direction
+      )
+      if (step.action === "none") {
+        // Keep the key while a navigation is open; with nothing to recall, let
+        // it fall through to the editor's caret movement.
+        return historyIndexRef.current !== null
+      }
+      if (step.enters) {
+        historyDraftRef.current = {
+          json: editorRef.current?.getJSON() ?? null,
+          text: editorRef.current?.getText() ?? "",
+        }
+        // A save the typing just before this keypress scheduled would fire
+        // ~300ms from now, AFTER the recall, and persist the recalled prompt
+        // as the draft. Land it on the document it was scheduled for instead —
+        // the stash above only lives in memory, so storage is what survives a
+        // tab switch made while a recalled prompt is on screen.
+        flushDraftSave()
+      }
+      applyingHistoryRef.current = true
+      if (step.action === "show") {
+        editorRef.current?.setText(step.text ?? "")
+      } else {
+        const draft = historyDraftRef.current
+        if (draft?.json) editorRef.current?.setDoc(draft.json)
+        else editorRef.current?.setText(draft?.text ?? "")
+        historyDraftRef.current = null
+      }
+      // Land on the edge we travelled from, so the SAME key keeps stepping.
+      editorRef.current
+        ?.getEditor()
+        ?.commands.focus(direction === "older" ? "start" : "end")
+      applyingHistoryRef.current = false
+      historyIndexRef.current = step.index
+      return true
+    },
+    [flushDraftSave, getSentHistory, isEditingQueueItem]
+  )
 
   const handleComposerReady = useCallback(() => {
     setComposerReady(true)
@@ -1106,9 +1252,14 @@ export function MessageInput({
     hasModes && Boolean(effectiveModeId) && !hasConfigOptions
   const showModeLoading = modeLoading && !hasConfigOptions && !showModeSelector
   const showConfigLoading = configOptionsLoading && !hasConfigOptions
+  const showSelectorsLoading = showConfigLoading || showModeLoading
   const hasAnySelector =
-    showConfigLoading || hasConfigOptions || showModeLoading || showModeSelector
-  const hasInlineSelectors = hasConfigOptions || showModeSelector
+    hasConfigOptions || showModeSelector || showSelectorsLoading
+  // The loading placeholder takes the inline slot too, not just the collapsed
+  // popover's row: at composer widths the chips would occupy, "still loading"
+  // has to be visible without opening anything.
+  const hasInlineSelectors =
+    hasConfigOptions || showModeSelector || showSelectorsLoading
   const hasFolderBranchPicker = useConversationFolderBranchPickerVisible(
     attachmentTabId,
     folderPickerOverride
@@ -2843,6 +2994,8 @@ export function MessageInput({
     attachmentEngine.clearAttachments()
     embeddedPayloadsRef.current.clear()
     closeSlashMenu()
+    historyIndexRef.current = null
+    historyDraftRef.current = null
   }, [closeSlashMenu])
 
   const handleSend = useCallback(() => {
@@ -2927,19 +3080,11 @@ export function MessageInput({
       resetComposer()
       toast.info(t("steerQueuedInstead"))
     }
-    const blocks = draft.blocks.some((b) => b.type !== "text")
-      ? draft.blocks
-      : undefined
-    const text = blocks
-      ? draft.displayText
-      : draft.blocks
-          .map((b) => (b.type === "text" ? b.text : ""))
-          .join("\n")
-          .trim()
-    if (!text) return
+    const payload = buildSteerPayload(draft)
+    if (!payload) return
     setSteering(true)
     try {
-      await onSteer(text, blocks)
+      await onSteer(payload.text, payload.blocks)
       resetComposer()
     } catch (err) {
       if (isNoActiveTurnRejection(err)) {
@@ -3144,6 +3289,11 @@ export function MessageInput({
 
   const inlineSelectorItems = (
     <>
+      {showSelectorsLoading && (
+        <SelectorLoadingPlaceholder
+          label={showConfigLoading ? t("loadingSettings") : t("loadingMode")}
+        />
+      )}
       {hasConfigOptions &&
         availableConfigOptions.map((option) => {
           // On/off options flip in place — a dropdown for a binary choice is a
@@ -3207,6 +3357,30 @@ export function MessageInput({
     const result: SessionSelectorSetting[] = []
     if (hasConfigOptions) {
       for (const option of availableConfigOptions) {
+        // An on/off option becomes a two-item headerless group — the same shape
+        // the mode picker below uses — so the panel needs no toggle affordance
+        // of its own.
+        if (option.kind.type === "boolean") {
+          const checked = option.kind.current_value
+          result.push({
+            key: `config:${option.id}`,
+            title: option.name,
+            currentValue: checked ? "true" : "false",
+            currentLabel: checked ? t("toggleOn") : t("toggleOff"),
+            groups: [
+              {
+                key: "__boolean__",
+                name: null,
+                options: [
+                  { value: "true", name: t("toggleOn"), description: null },
+                  { value: "false", name: t("toggleOff"), description: null },
+                ],
+              },
+            ],
+            onSelect: (value) => onConfigOptionChange?.(option.id, value),
+          })
+          continue
+        }
         if (option.kind.type !== "select") continue
         const kind = option.kind
         // Model values that carry a `provider/` prefix group by provider; every
@@ -3627,6 +3801,7 @@ export function MessageInput({
                 newlineShortcut={shortcuts.newline_in_message}
                 isExternalMenuOpen={slashMenuVisible}
                 onExternalMenuKeyDown={handleExternalMenuKeyDown}
+                onHistoryKeyDown={handleHistoryKeyDown}
                 className="min-h-0 flex-1"
               />
               <div className="flex shrink-0 items-end justify-between gap-1 px-2 pb-2">

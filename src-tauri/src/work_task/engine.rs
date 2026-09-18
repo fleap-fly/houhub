@@ -1544,20 +1544,46 @@ impl TaskEngine {
         }
 
         // Where the task's branch starts, and what its diff is measured
-        // against. A task triggered from a pull request starts at that
-        // request's pinned head and measures from its merge base.
+        // against. Normally both are the project folder's current HEAD; a task
+        // created FOR a particular branch starts at that branch's tip instead,
+        // and a task that IS a pull request starts at that pull request's head
+        // and measures against the merge base (see `pr_checkout_point`).
         let (base_branch, base_sha, start_at) = match self.pr_checkout_point(task, root).await? {
             Some(point) => point,
-            None => {
-                let head = resolve_git_head(&root.path).await.map_err(|e| e.to_string())?;
-                let base_branch = head.branch.ok_or_else(|| {
-                    "project folder is not on a branch (detached HEAD?)".to_string()
-                })?;
-                let base_sha = task_git::rev_parse(&root.path, "HEAD")
-                    .await
-                    .map_err(|e| e.to_string())?;
-                (base_branch, base_sha.clone(), base_sha)
-            }
+            None => match chosen_base_branch(task) {
+                Some(branch) => {
+                    // A branch that is gone by the time the task is claimed
+                    // FAILS the setup: the choice exists so the work lands
+                    // somewhere specific, and quietly branching from the
+                    // checkout instead would be the wrong answer delivered
+                    // without a word. The LOCAL branch specifically — the
+                    // merge lands into the project checkout, which can only be
+                    // on a local branch — and looking it up this way is also
+                    // what keeps an arbitrary string out of the git commands
+                    // (and out of the merge prompt) downstream: only a name
+                    // git itself resolved under `refs/heads/` gets through.
+                    let tip = task_git::local_branch_tip(&root.path, &branch)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| {
+                            format!(
+                                "the task's base branch '{branch}' does not exist in the \
+                                 project folder"
+                            )
+                        })?;
+                    (branch, tip.clone(), tip)
+                }
+                None => {
+                    let head = resolve_git_head(&root.path).await.map_err(|e| e.to_string())?;
+                    let base_branch = head.branch.ok_or_else(|| {
+                        "project folder is not on a branch (detached HEAD?)".to_string()
+                    })?;
+                    let base_sha = task_git::rev_parse(&root.path, "HEAD")
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    (base_branch, base_sha.clone(), base_sha)
+                }
+            },
         };
 
         let branch = format!("task/{}", task.id);
@@ -3518,8 +3544,12 @@ impl TaskEngine {
         }
         let head = resolve_git_head(&root.path).await.map_err(|e| e.to_string())?;
         if head.branch.as_deref() != Some(base_branch.as_str()) {
+            // Not necessarily a branch the user wandered off: a task created
+            // FOR another branch has a base the project folder may never have
+            // been on. So the ask is "put it there", not "put it back".
             return Err(format!(
-                "project folder is on '{}', expected '{base_branch}' — switch back to merge",
+                "project folder is on '{}', expected '{base_branch}' — switch it to \
+                 '{base_branch}' to merge",
                 head.branch.as_deref().unwrap_or("detached HEAD")
             ));
         }
@@ -5533,7 +5563,7 @@ impl TaskEngine {
             let changed = match conv_status {
                 Some(ConversationStatus::PendingReview) | Some(ConversationStatus::Completed) => {
                     let stats = self.snapshot_diff_stats(task.id).await;
-                    work_task_service::settle_review(
+                    let settled = work_task_service::settle_review(
                         &self.db.conn,
                         task.id,
                         task.run_seq,
@@ -5541,7 +5571,14 @@ impl TaskEngine {
                         stats,
                     )
                     .await
-                    .unwrap_or(false)
+                    .unwrap_or(false);
+                    if settled {
+                        // The dropped TurnComplete owed review its preflight
+                        // and its auto-merge chance — same hook as the live
+                        // settle path.
+                        self.spawn_preflight(task.id, task.run_seq);
+                    }
+                    settled
                 }
                 Some(ConversationStatus::Cancelled) => {
                     work_task_service::cancel_running_generation(
@@ -6067,6 +6104,18 @@ fn launch_mode_for(task: &crate::db::entities::work_task::Model) -> LaunchMode {
     } else {
         LaunchMode::Fresh
     }
+}
+
+/// The branch the task was created FOR, if its config names one. A blank
+/// choice is no choice: the editor writes the empty string for "the project
+/// folder's current branch", which is also what every task predating the
+/// field carries.
+fn chosen_base_branch(task: &crate::db::entities::work_task::Model) -> Option<String> {
+    serde_json::from_str::<WorkTaskConfig>(&task.config)
+        .ok()?
+        .base_branch
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty())
 }
 
 /// Layered agent config: task override wins wholesale; else the folder's task
@@ -7377,7 +7426,7 @@ mod tests {
             "another task of this project is already merging — wait for it"
         ));
         assert!(!is_benign_merge_race(
-            "project folder is on 'feature', expected 'main' — switch back to merge"
+            "project folder is on 'feature', expected 'main' — switch it to 'main' to merge"
         ));
         assert!(!is_benign_merge_race(
             "the task worktree no longer exists on disk"
@@ -7624,6 +7673,230 @@ mod tests {
             .iter()
             .any(|t| t.contains("Commit to the current branch as you like")));
     }
+    /// A report-deliverable task (forge plan-first / review-only)
+    /// swaps the commit licence on its ORIGINAL order — otherwise the guard's
+    /// "commit as you like", being the last block read, would quietly undo the
+    /// task's own "analysis only" instruction.
+    #[tokio::test]
+    async fn a_report_deliverable_order_swaps_the_commit_licence() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let report_cfg = WorkTaskConfig {
+            deliverable: Some(DELIVERABLE_REPORT.to_string()),
+            ..task_config()
+        };
+        let guard_of = |blocks: &[PromptInputBlock]| {
+            texts(blocks)
+                .into_iter()
+                .find(|t| t.starts_with("—— Work task context ——"))
+                .expect("guard block")
+        };
+
+        let fresh = compose_prompt(
+            &report_cfg,
+            &task_row(),
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let guard = guard_of(&fresh);
+        assert!(!guard.contains("Commit to the current branch as you like"));
+        assert!(guard.contains("This turn delivers a report"));
+        // The base-branch rules survive the swap.
+        assert!(guard.contains("push the base branch"));
+
+        // A retry with nothing outstanding re-runs that same order.
+        let retry = compose_prompt(
+            &report_cfg,
+            &task_row(),
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        assert!(guard_of(&retry).contains("This turn delivers a report"));
+
+        // Returned for changes, the write licence comes BACK: "now apply the
+        // fix" is precisely a change order, and it is how a report task's
+        // loop is meant to close.
+        let returned = compose_prompt(
+            &report_cfg,
+            &task_row(),
+            &return_mode(FollowUpIntent::Revise),
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        assert!(guard_of(&returned).contains("Commit to the current branch as you like"));
+
+        // Same for a retry that stands in for an interrupted review follow-up:
+        // the outstanding feedback, not the original order, is the work.
+        let id = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({
+                "action": "return",
+                "intent": "revise",
+                "feedback": "apply the fix you recommended",
+            }),
+        )
+        .await;
+        let mut row = task_row();
+        row.id = id;
+        let retry_review = compose_prompt(
+            &report_cfg,
+            &row,
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        assert!(guard_of(&retry_review).contains("Commit to the current branch as you like"));
+
+        // An unrecognized deliverable value reads as a normal task: a config
+        // written by a newer build must still launch, not change meaning.
+        let odd_cfg = WorkTaskConfig {
+            deliverable: Some("something-newer".to_string()),
+            ..task_config()
+        };
+        let odd = compose_prompt(
+            &odd_cfg,
+            &task_row(),
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        assert!(guard_of(&odd).contains("Commit to the current branch as you like"));
+    }
+    /// A retry stands in for the turn it interrupted, and a retry/requeue note
+    /// refines that turn without changing its KIND — so the guard's licence
+    /// follows the unsettled follow-up underneath the note, not the note.
+    #[tokio::test]
+    async fn a_retry_licence_follows_the_interrupted_turn_not_the_note() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let report_cfg = WorkTaskConfig {
+            deliverable: Some(DELIVERABLE_REPORT.to_string()),
+            ..task_config()
+        };
+        let guard_of = |blocks: &[PromptInputBlock]| {
+            texts(blocks)
+                .into_iter()
+                .find(|t| t.starts_with("—— Work task context ——"))
+                .expect("guard block")
+        };
+
+        // An unanswered question retried: the replay already says "do not
+        // change any files for it", so the guard must withdraw the commit
+        // grant as well — for every task, not only report ones.
+        let questioned = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            questioned,
+            serde_json::json!({
+                "action": "return",
+                "intent": "question",
+                "feedback": "why is the cap 200?",
+            }),
+        )
+        .await;
+        let mut row = task_row();
+        row.id = questioned;
+        let blocks = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let guard = guard_of(&blocks);
+        assert!(guard.contains("do NOT create, edit, delete or commit any file"));
+        assert!(!guard.contains("Commit to the current branch as you like"));
+
+        // A note layered over a failed "apply the fix" return on a report
+        // task: the turn underneath is a change order, so the write licence
+        // survives — while the note is still the replayed instruction.
+        let returned = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            returned,
+            serde_json::json!({
+                "action": "return",
+                "intent": "revise",
+                "feedback": "apply the fix you recommended",
+            }),
+        )
+        .await;
+        user_action(
+            &db.conn,
+            returned,
+            serde_json::json!({
+                "action": "retry",
+                "note": "it failed on CI, go again",
+                "blocks": [],
+            }),
+        )
+        .await;
+        row.id = returned;
+        let blocks = compose_prompt(
+            &report_cfg,
+            &row,
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        assert!(guard_of(&blocks).contains("Commit to the current branch as you like"));
+        assert!(texts(&blocks).join("\n").contains("it failed on CI, go again"));
+
+        // The same note on a run that never reached review: still the
+        // original report order.
+        let fresh_note = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            fresh_note,
+            serde_json::json!({
+                "action": "retry",
+                "note": "network glitch, go again",
+                "blocks": [],
+            }),
+        )
+        .await;
+        row.id = fresh_note;
+        for (label, mode) in [("fresh", LaunchMode::Fresh), ("retry", LaunchMode::Retry)] {
+            let blocks = compose_prompt(
+                &report_cfg,
+                &row,
+                &mode,
+                &WorkTaskFolderSettings::default(),
+                true,
+                &db.conn,
+            )
+            .await
+            .expect("compose");
+            assert!(
+                guard_of(&blocks).contains("This turn delivers a report"),
+                "restart note on the original order keeps the report licence ({label})"
+            );
+        }
+    }
+
 
     /// The one scenario that stands alone without user text.
     #[tokio::test]
@@ -7765,6 +8038,196 @@ mod tests {
         // phase divider keeps matching on it.
         assert_eq!(prompt_head(&blocks), "Fix the login flow and add tests.");
     }
+    /// A screenshot pasted into the follow-up box has to reach the agent as an
+    /// image block, right behind the sentence that framed it — dropping it
+    /// would leave the framing pointing at nothing.
+    #[tokio::test]
+    async fn a_follow_up_carries_its_attachments_after_the_framing() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let blocks = compose_prompt(
+            &task_config(),
+            &task_row(),
+            &LaunchMode::Return {
+                intent: FollowUpIntent::Revise,
+                feedback: "the header is wrong, see this".to_string(),
+                attachments: vec![
+                    serde_json::json!({
+                        "type": "image", "data": "aGk=", "mime_type": "image/png", "uri": null,
+                    }),
+                    // A block that no longer deserializes is dropped, not fatal:
+                    // one bad attachment must not stop the run carrying the rest.
+                    serde_json::json!({ "type": "not_a_block" }),
+                ],
+            },
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        // The framing sentence, then the image it refers to, then the worktree
+        // guard every prompt ends with.
+        let framing = blocks
+            .iter()
+            .position(
+                |b| matches!(b, PromptInputBlock::Text { text } if text.contains("the header is wrong, see this")),
+            )
+            .expect("the feedback is in there");
+        assert!(
+            matches!(
+                blocks.get(framing + 1),
+                Some(PromptInputBlock::Image { data, .. }) if data == "aGk="
+            ),
+            "the image follows the framing text, unparseable blocks aside: {blocks:?}"
+        );
+        assert_eq!(
+            blocks
+                .iter()
+                .filter(|b| matches!(b, PromptInputBlock::Image { .. }))
+                .count(),
+            1
+        );
+    }
+    /// The same attachments have to survive the replay path: a run interrupted
+    /// before it answered owes the user the screenshot as well as the sentence.
+    #[tokio::test]
+    async fn an_outstanding_instruction_replays_its_attachments() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let id = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({
+                "action": "retry",
+                "note": "it looked like this",
+                "blocks": [
+                    { "type": "image", "data": "aGk=", "mime_type": "image/png", "uri": null },
+                ],
+            }),
+        )
+        .await;
+
+        let outstanding = outstanding_instruction(&db.conn, id)
+            .await
+            .expect("an outstanding instruction");
+        assert_eq!(outstanding.attachments.len(), 1);
+
+        let mut row = task_row();
+        row.id = id;
+        let blocks = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        assert!(
+            blocks
+                .iter()
+                .any(|b| matches!(b, PromptInputBlock::Image { data, .. } if data == "aGk=")),
+            "the replayed instruction keeps its image: {blocks:?}"
+        );
+    }
+    /// A task's image blocks are stored, so the encoding the composer chose can
+    /// be stale by the time the run happens (a slow probe then, a different
+    /// agent now). Dispatch re-encodes for whoever actually answered.
+    #[test]
+    fn images_are_reencoded_for_the_agent_that_answered() {
+        let caps = |image, embedded_context| PromptCapabilitiesInfo {
+            image,
+            audio: false,
+            embedded_context,
+        };
+        let image = || PromptInputBlock::Image {
+            data: "aGk=".to_string(),
+            mime_type: "image/png".to_string(),
+            uri: None,
+        };
+        let embedded = || PromptInputBlock::Resource {
+            uri: "file:///shot.png".to_string(),
+            mime_type: Some("image/png".to_string()),
+            text: None,
+            blob: Some("aGk=".to_string()),
+        };
+
+        // Native image → embedded blob for an agent that takes only the latter,
+        // with a stable synthetic uri for a path-less screenshot.
+        let mut blocks = vec![PromptInputBlock::Text { text: "see".into() }, image()];
+        reencode_images(&mut blocks, &caps(false, true));
+        assert!(
+            matches!(
+                &blocks[1],
+                PromptInputBlock::Resource { uri, mime_type, text: None, blob: Some(b) }
+                    if uri == "clipboard://work-task-image-1"
+                        && mime_type.as_deref() == Some("image/png")
+                        && b == "aGk="
+            ),
+            "{:?}",
+            blocks[1]
+        );
+        // The prose beside it is untouched.
+        assert!(matches!(&blocks[0], PromptInputBlock::Text { text } if text == "see"));
+
+        // …and back, for an agent that takes images but not embedded context.
+        let mut blocks = vec![embedded()];
+        reencode_images(&mut blocks, &caps(true, false));
+        assert!(
+            matches!(
+                &blocks[0],
+                PromptInputBlock::Image { data, mime_type, uri: Some(u) }
+                    if data == "aGk=" && mime_type == "image/png" && u == "file:///shot.png"
+            ),
+            "{:?}",
+            blocks[0]
+        );
+
+        // An agent that takes both, or neither, gets exactly what was stored:
+        // there is no better shape to reach for in either case.
+        for c in [caps(true, true), caps(false, false)] {
+            let mut blocks = vec![image(), embedded()];
+            reencode_images(&mut blocks, &c);
+            assert!(matches!(&blocks[0], PromptInputBlock::Image { uri: None, .. }));
+            assert!(matches!(&blocks[1], PromptInputBlock::Resource { blob: Some(_), .. }));
+        }
+
+        // A non-image embedded resource (a pasted text file) is never turned
+        // into an image, whatever the agent accepts.
+        let mut blocks = vec![PromptInputBlock::Resource {
+            uri: "clipboard://notes".to_string(),
+            mime_type: Some("text/markdown".to_string()),
+            text: None,
+            blob: Some("aGk=".to_string()),
+        }];
+        reencode_images(&mut blocks, &caps(true, false));
+        assert!(matches!(
+            &blocks[0],
+            PromptInputBlock::Resource { mime_type, .. }
+                if mime_type.as_deref() == Some("text/markdown")
+        ));
+    }
+    /// An event written before follow-ups could carry attachments has no
+    /// `blocks` field at all — that has to read as "nothing was attached".
+    #[tokio::test]
+    async fn a_legacy_instruction_without_blocks_still_replays() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let id = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({ "action": "return", "intent": "revise", "feedback": "redo it" }),
+        )
+        .await;
+
+        let outstanding = outstanding_instruction(&db.conn, id)
+            .await
+            .expect("an outstanding instruction");
+        assert_eq!(outstanding.text, "redo it");
+        assert!(outstanding.attachments.is_empty());
+    }
+
 
     /// Two ways a busy task could hide its own instruction: `list_events`
     /// returns the OLDEST rows within its limit, and an agent's progress
@@ -10574,6 +11037,131 @@ mod tests {
             head_repo: head_repo.into(),
             base_ref: "main".into(),
         }
+    }
+
+    /// A repository on `main` that also carries a `feature` branch the project
+    /// checkout is NOT on. Returns `(engine, task id, home, feature tip, main
+    /// tip)`; the task's config is whatever the caller passes.
+    async fn branch_choice_fixture(
+        config: serde_json::Value,
+    ) -> (Arc<TaskEngine>, i32, tempfile::TempDir, String, String) {
+        use sea_orm::{ActiveModelTrait, Set};
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let root = home.path().join("repo");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        git_run(&root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("a.txt"), "one\n").expect("write");
+        git_run(&root, &["add", "-A"]);
+        git_run(&root, &["commit", "-q", "-m", "base"]);
+        // The branch the user wants this task to work on…
+        git_run(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("feature.txt"), "the feature\n").expect("write");
+        git_run(&root, &["add", "-A"]);
+        git_run(&root, &["commit", "-q", "-m", "the feature so far"]);
+        let feature_tip = task_git::rev_parse(root.to_str().unwrap(), "HEAD")
+            .await
+            .expect("feature tip");
+        // …and the branch the project folder happens to be sitting on.
+        git_run(&root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("b.txt"), "meanwhile\n").expect("write");
+        git_run(&root, &["add", "-A"]);
+        git_run(&root, &["commit", "-q", "-m", "main moves on"]);
+        let main_tip = task_git::rev_parse(root.to_str().unwrap(), "HEAD")
+            .await
+            .expect("main tip");
+
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder_id = crate::db::test_helpers::seed_folder(&db, root.to_str().unwrap()).await;
+        let now = chrono::Utc::now();
+        let task = crate::db::entities::work_task::ActiveModel {
+            folder_id: Set(folder_id),
+            title: Set("Polish the feature".to_string()),
+            config: Set(config.to_string()),
+            status: Set(WorkTaskStatus::Todo),
+            run_seq: Set(1),
+            sort_order: Set(0),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&db.conn)
+        .await
+        .expect("insert task");
+
+        (test_engine(db), task.id, home, feature_tip, main_tip)
+    }
+
+    /// The task says which branch it is for, and that is where it starts and
+    /// what it lands back onto — whatever the project folder happens to be
+    /// checked out on when the task is claimed.
+    #[tokio::test]
+    async fn a_task_starts_on_the_base_branch_it_was_created_for() {
+        let (engine, task_id, home, feature_tip, _main_tip) =
+            branch_choice_fixture(serde_json::json!({ "base_branch": "feature" })).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+
+        assert_eq!(
+            task_git::rev_parse(&wt.path, "HEAD").await.expect("head"),
+            feature_tip,
+            "the worktree starts at the chosen branch's tip"
+        );
+        let after = row(&engine, task_id).await;
+        assert_eq!(
+            after.base_branch.as_deref(),
+            Some("feature"),
+            "the merge lands back onto the branch the task was created for"
+        );
+        assert_eq!(after.base_sha.as_deref(), Some(feature_tip.as_str()));
+        drop(home);
+    }
+
+    /// No choice recorded — every task created before this existed, and every
+    /// task of a user who does not care — keeps branching from the project
+    /// folder's current checkout.
+    #[tokio::test]
+    async fn a_task_without_a_chosen_branch_still_follows_the_checkout() {
+        let (engine, task_id, home, _feature_tip, main_tip) =
+            branch_choice_fixture(serde_json::json!({})).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+
+        engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+
+        let after = row(&engine, task_id).await;
+        assert_eq!(after.base_branch.as_deref(), Some("main"));
+        assert_eq!(after.base_sha.as_deref(), Some(main_tip.as_str()));
+        drop(home);
+    }
+
+    /// A branch that is gone by the time the task is claimed must not quietly
+    /// fall back to the checkout: the whole point of the choice is that the
+    /// work lands somewhere specific, and starting from `main` instead would
+    /// be a wrong answer delivered silently.
+    #[tokio::test]
+    async fn a_chosen_branch_that_disappeared_refuses_instead_of_falling_back() {
+        let (engine, task_id, home, _feature_tip, _main_tip) =
+            branch_choice_fixture(serde_json::json!({ "base_branch": "gone" })).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+
+        let err = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .err()
+            .expect("must refuse");
+        assert!(err.contains("gone"), "{err}");
+        assert!(row(&engine, task_id).await.worktree_folder_id.is_none());
+        drop(home);
     }
 
     /// A repository that HAS a proposed change: `origin` carries `main` (moved

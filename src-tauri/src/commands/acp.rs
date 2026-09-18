@@ -2835,6 +2835,22 @@ fn cline_provider_is_keyless(provider: &str) -> bool {
     matches!(provider, "ollama" | "lmstudio")
 }
 
+/// Cline's own sign-in providers — the three `authMethods` its ACP `initialize`
+/// advertises, and the only three its auth gate inspects.
+///
+/// Their credential is an OAuth token cline obtains through a device-code flow
+/// (`cline auth <id>`, or the ACP `authenticate` request, which prints a code
+/// and a `authkit.cline.bot/device` URL and blocks until the browser half
+/// finishes) and stores itself. houhub neither holds nor refreshes it, which has
+/// two consequences it must respect: never write over these entries' secrets,
+/// and never export `CLINE_PROVIDER`/`CLINE_API_KEY` for them — the env would
+/// shadow the very credential `tryRestoreAuth` is meant to find, and would
+/// additionally freeze the provider selector (see
+/// `env_pinned_config_option_ids`).
+fn cline_provider_is_agent_managed(provider: &str) -> bool {
+    matches!(provider, "cline" | "cline-pass" | "openai-codex")
+}
+
 /// `providers.json` rejects a `settings.baseUrl` that is not a `z.string().url()`,
 /// and a rejected file reads back EMPTY — so a typo in this field would silently
 /// cost the user every provider they had configured. Fail the save instead.
@@ -3131,16 +3147,30 @@ fn persist_cline_provider_settings_at(
         "provider".to_string(),
         serde_json::Value::String(provider.to_string()),
     );
+    // Credentials for a sign-in provider belong to `cline auth`, not to houhub:
+    // the panel offers no key or endpoint field for them, so there is no user
+    // intent to write — and clearing what is not shown would log the user out.
+    // `tokenSource: "oauth"` is the same statement made by an entry houhub does
+    // not otherwise recognize, and is honoured for the same reason.
+    let agent_managed_credential =
+        cline_provider_is_agent_managed(provider) || token_source == "oauth";
     for (key, value) in [
         ("apiKey", api_key),
         ("model", model),
         ("baseUrl", base_url),
     ] {
+        let credential = key != "model";
         match value {
             Some(value) => {
+                if credential && agent_managed_credential {
+                    continue;
+                }
                 settings.insert(key.to_string(), serde_json::Value::String(value.to_string()));
             }
             None => {
+                if credential && agent_managed_credential {
+                    continue;
+                }
                 settings.remove(key);
             }
         }
@@ -4645,6 +4675,16 @@ const KIMI_SYNTHETIC_TOKEN_ACCESS: &str = "houhub-local-gate";
 /// kimi discard the whole model block ("Ignored invalid config … models.houhub-managed"),
 /// which leaves `default_model` dangling and every prompt ends with no reply. So we
 /// always write one, defaulting to the kimi-k2 256K window when the user leaves it blank.
+///
+/// This deliberately does NOT track `parsers::infer_context_window_max_tokens`, which
+/// puts `kimi-k3` on a 1M lane. The two answer different questions: that one reads a
+/// past session's model id to draw a gauge, while this one is the budget houhub DECLARES
+/// for a bring-your-own provider whose model is unknown — the managed block routes to
+/// any of the six interface types, so the model behind it may be GPT or Claude, not a
+/// Kimi model at all. Kimi spends the declared number rather than checking it (a live
+/// run with this default emits `llm.request.maxTokens = 262144` and
+/// `usage_update {size: 262144}`), so it is the compaction budget, not a fact about the
+/// model. Users on a bigger window raise it in the config panel.
 const KIMI_DEFAULT_MAX_CONTEXT_SIZE: i64 = 262_144;
 /// The six native provider `type` values Kimi accepts in `[providers.<name>]`.
 const KIMI_INTERFACE_TYPES: &[&str] = &[
@@ -8398,14 +8438,28 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
             global_dirs: vec![home_dir_or_default().join(".codebuddy").join("skills")],
             project_rel_dirs: vec![".codebuddy/skills"],
         }),
-        // Kimi Code reads skills from `<KIMI_CODE_HOME>/skills/` (default
-        // `~/.kimi-code/skills/`) and project-local `<root>/.kimi-code/skills/`.
+        // Kimi Code scans four roots, not two (`features/skill/catalog/
+        // skillRoots.ts`): a user pair of `<KIMI_CODE_HOME>/skills` +
+        // `<osHome>/.agents/skills`, and a project pair of `.kimi-code/skills`
+        // + `.agents/skills`. Note the two bases differ — the brand dir hangs
+        // off the DATA home (so `KIMI_CODE_HOME` moves it) while the shared
+        // store hangs off the OS home (so it does not), which is why only the
+        // first goes through `resolve_kimi_code_home_dir`. The kimi-native dir
+        // stays first so houhub links into Kimi's own store by default and
+        // toggling Kimi does not move a skill out from under pi/cline/codex,
+        // which share `~/.agents/skills` too.
+        //
+        // Verified live rather than read off the source: with `KIMI_CODE_HOME`
+        // pointed at an empty temp dir, `kimi acp` still advertised this
+        // machine's `~/.agents/skills` entries as `skill:<name>` in
+        // `available_commands_update`.
         AgentType::KimiCode => Some(SkillStorageSpec {
             kind: SkillStorageKind::SkillDirectoryOnly,
             global_dirs: vec![
-                crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("skills")
+                crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("skills"),
+                home_dir_or_default().join(".agents").join("skills"),
             ],
-            project_rel_dirs: vec![".kimi-code/skills"],
+            project_rel_dirs: vec![".kimi-code/skills", ".agents/skills"],
         }),
         AgentType::Pi => Some(SkillStorageSpec {
             kind: SkillStorageKind::SkillDirectoryOrMarkdownFile,
@@ -8568,21 +8622,27 @@ pub(crate) fn scoped_skill_dirs(
 
 /// The directory an agent's PROJECT-relative skill dirs hang off.
 ///
-/// Normally the workspace itself. DeepSeek is the exception: its provider
-/// (`dsh-skill-filesystem`'s `findProjectRoot`) walks up from the session cwd
-/// to the nearest ancestor containing `.git` before joining `.dsh/skills` /
-/// `.agents/skills`, falling back to the cwd when it reaches the filesystem
-/// root. Opening a subdirectory of a repo as the workspace would otherwise
-/// make houhub create and list `<subdir>/.dsh/skills` — a directory the agent
-/// never scans, so the skill would simply never load, with nothing on screen
-/// saying so.
+/// Normally the workspace itself. DeepSeek and Kimi Code are the exceptions:
+/// both walk up from the session cwd to the nearest ancestor containing `.git`
+/// before joining their project-relative skill dirs, falling back to the cwd
+/// when they reach the filesystem root — DeepSeek in `dsh-skill-filesystem`'s
+/// `findProjectRoot`, Kimi in `features/skill/catalog/skillRoots.ts`'s
+/// `projectRoots` → `findUpwardRoot(workDir, ".git", exists)`. Opening a
+/// subdirectory of a repo as the workspace would otherwise make houhub create
+/// and list `<subdir>/.dsh/skills` / `<subdir>/.kimi-code/skills` — a directory
+/// the agent never scans, so the skill would simply never load, with nothing on
+/// screen saying so.
+///
+/// Kimi's half was confirmed live: `kimi acp` launched with `cwd` at
+/// `<repo>/sub` advertised the skills under `<repo>/.kimi-code/skills` and
+/// `<repo>/.agents/skills` and ignored the ones under `<repo>/sub/...`.
 ///
 /// `.git` is matched as a plain path, file or directory: in a linked worktree
-/// (which houhub creates routinely) it is a FILE, and upstream's `pathExists`
-/// accepts that too.
+/// (which houhub creates routinely) it is a FILE, and both upstreams' existence
+/// probes (`pathExists` / `stat`) accept that too.
 fn project_skill_base(agent_type: AgentType, workspace: &str) -> PathBuf {
     let workspace = PathBuf::from(workspace);
-    if agent_type != AgentType::DeepSeek {
+    if !matches!(agent_type, AgentType::DeepSeek | AgentType::KimiCode) {
         return workspace;
     }
     let mut current = workspace.as_path();
@@ -9653,6 +9713,32 @@ fn apply_cline_launch_env(config_json: Option<&str>, merged: &mut BTreeMap<Strin
             .unwrap_or_default(),
     );
 
+    // A sign-in provider must be left to `tryRestoreAuth`, and either half of
+    // the pair in the way breaks it:
+    //
+    //   * a non-empty `CLINE_API_KEY` SHORT-CIRCUITS the gate without
+    //     populating `authResult`, so `newSession` resolves
+    //     `CLINE_PROVIDER ?? authResult?.providerId ?? "cline"` and a ClinePass
+    //     or ChatGPT account silently runs as plain Cline billing;
+    //   * a stale `CLINE_PROVIDER` — an `env_json` row, or one exported in the
+    //     shell houhub was launched from — overrides the account entirely and
+    //     freezes a selector these three are entitled to use.
+    //
+    // Both are cleared by writing an EMPTY value, which the spawn layer turns
+    // into `env_remove` (see the houhub convention in vendor/sacp-tokio) — so
+    // this strips an inherited value rather than merely declining to add one.
+    // Removal, not `""`, is what the agent needs: `??` does not fall through on
+    // an empty string, so an actually-empty `CLINE_PROVIDER` would become the
+    // provider id. Mirrors Cursor/Grok subscription mode.
+    //
+    // Re-applied after every later env overlay (see `build_session_runtime_env`),
+    // because a model-provider binding writes the same two keys.
+    if cline_provider_is_agent_managed(&provider) {
+        merged.insert("CLINE_API_KEY".to_string(), String::new());
+        merged.insert("CLINE_PROVIDER".to_string(), String::new());
+        return;
+    }
+
     if !merged.contains_key("CLINE_API_KEY") {
         // Local providers authenticate with no key at all, but the gate only
         // tests `CLINE_API_KEY` for emptiness — it never validates it, and
@@ -10402,6 +10488,15 @@ pub(crate) async fn build_session_runtime_env(
         sync_pi_model_provider_config(setting.as_ref(), &mut runtime_env, &db.conn).await?;
     }
     ensure_codex_home_env(agent_type, &mut runtime_env);
+    // `apply_model_provider_env` writes this agent's generic credential trio —
+    // for cline that is `CLINE_BASE_URL`/`CLINE_API_KEY`/`CLINE_MODEL` — so a
+    // model-provider binding left over from a BYO setup would put a key back
+    // after the sign-in scrub already cleared it, silently rerouting a ClinePass
+    // or ChatGPT session onto Cline's own billing. Run cline's policy last; it
+    // is idempotent, so the BYO path is unchanged.
+    if agent_type == AgentType::Cline {
+        apply_cline_launch_env(local_config_json.as_deref(), &mut runtime_env);
+    }
 
     // codex resume no longer needs a `MODEL_PROVIDER` pin: codex-acp 1.0.1
     // resolves the resumed provider from `~/.codex/config.toml`, matching new
@@ -13246,9 +13341,10 @@ pub async fn acp_list_agent_skills(
     if let Some(workspace) = workspace_path.as_deref().map(str::trim) {
         if !workspace.is_empty() {
             // Same base the WRITE path resolves through `scoped_skill_dirs` —
-            // for DeepSeek that is the repo root, not the workspace. Joining
-            // onto the workspace here instead would make a skill saved from a
-            // nested workspace vanish from the list that is meant to show it.
+            // for DeepSeek and Kimi Code that is the repo root, not the
+            // workspace. Joining onto the workspace here instead would make a
+            // skill saved from a nested workspace vanish from the list that is
+            // meant to show it.
             let base = project_skill_base(agent_type, workspace);
             for relative in &spec.project_rel_dirs {
                 let project_dir = base.join(relative);
@@ -13819,33 +13915,72 @@ mod tests {
     }
 
     #[test]
-    fn extract_version_token_finds_common_cli_banners() {
+    fn extract_version_token_finds_the_version_in_common_banners() {
         assert_eq!(extract_version_token("0.21.0").as_deref(), Some("0.21.0"));
         assert_eq!(
-            extract_version_token("hermes version 0.21.0\n").as_deref(),
+            extract_version_token("qwen version 0.21.0\n").as_deref(),
             Some("0.21.0")
         );
         assert_eq!(
-            extract_version_token("hermes-acp/1.44.0").as_deref(),
+            extract_version_token("goose v1.44.0 (release)").as_deref(),
             Some("1.44.0")
         );
         assert_eq!(
-            extract_version_token("@scope/agent@v2.3.4-beta.1").as_deref(),
+            extract_version_token("Foo CLI\nversion: 2.3.4-beta.1").as_deref(),
             Some("2.3.4-beta.1")
         );
+        // A leading `v` is stripped; the word "version" is not mistaken for one.
+        assert_eq!(
+            extract_version_token("version v10.2.30").as_deref(),
+            Some("10.2.30")
+        );
+        // curl-style `name/version` banners (omp prints exactly this).
+        assert_eq!(
+            extract_version_token("omp/17.1.7").as_deref(),
+            Some("17.1.7")
+        );
+        // npm-style `package@version`, scoped packages included.
+        assert_eq!(
+            extract_version_token("@oh-my-pi/pi-coding-agent@17.1.7").as_deref(),
+            Some("17.1.7")
+        );
+    }
+    #[test]
+    fn extract_version_token_rejects_non_versions() {
+        assert!(extract_version_token("").is_none());
+        assert!(extract_version_token("usage: foo [args]").is_none());
+        // Dotted but not digit-led, and digit-led but not dotted.
+        assert!(extract_version_token("node.js required").is_none());
+        assert!(extract_version_token("exit 1").is_none());
+        // A URL's path segment must not read as a version, and slash-split
+        // pieces without a dot don't qualify either.
         assert!(extract_version_token("docs: https://example.com/2.0/setup").is_none());
+        assert!(extract_version_token("built 2026/07").is_none());
     }
 
     #[test]
-    fn probe_cache_key_changes_with_effective_probe_input() {
+    fn probe_cache_key_misses_when_the_declared_probe_or_package_changes() {
         let bin = std::path::Path::new("/usr/local/bin/agent");
+        // Editing the declared probe MUST be a cache miss — this was the bug:
+        // a path+mtime key kept serving the old probe's result.
+        let auto = probe_cache_key(bin, None, None);
+        let probe_a = probe_cache_key(bin, Some("agent --version"), None);
+        let probe_b = probe_cache_key(bin, Some("agent -V"), None);
+        assert_ne!(auto, probe_a);
+        assert_ne!(probe_a, probe_b);
+        // Removing the probe again returns to the auto key.
+        assert_eq!(probe_cache_key(bin, None, None), auto);
+        // Two agents sharing a launcher but naming different npm packages must
+        // not read each other's auto-path result…
+        let pkg_a = probe_cache_key(bin, None, Some("@scope/a"));
+        let pkg_b = probe_cache_key(bin, None, Some("@scope/b"));
+        assert_ne!(pkg_a, pkg_b);
+        // …and the package stays in the key even with a declared probe: a
+        // failing probe falls back to the package conventions, so the package
+        // still shapes the cached result.
         assert_ne!(
-            probe_cache_key(bin, None, None),
-            probe_cache_key(bin, Some("agent --version"), None)
-        );
-        assert_ne!(
-            probe_cache_key(bin, None, Some("@scope/a")),
-            probe_cache_key(bin, None, Some("@scope/b"))
+            probe_cache_key(bin, Some("agent --version"), Some("@scope/a")),
+            probe_cache_key(bin, Some("agent --version"), Some("@scope/b")),
         );
     }
 
@@ -13861,6 +13996,37 @@ mod tests {
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         bin
     }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn system_probed_version_reads_a_system_cli_via_the_version_convention() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = fake_version_script(dir.path(), "fake-agent", "fake-agent version 1.2.3");
+
+        // Unregistered custom id → no declared probe → the auto `--version`
+        // path, exactly what a hand-added agent without a probe gets. The
+        // same path serves built-ins, which can never declare a probe.
+        let version =
+            system_probed_version(AgentType::Custom("probe-e2e-test"), &bin, None).await;
+        assert_eq!(version.as_deref(), Some("1.2.3"));
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failing_declared_probe_falls_back_to_the_version_convention() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // `name/version` banner — the shape that motivated the token split.
+        let bin = fake_version_script(dir.path(), "fallback-agent", "fallback-agent/3.2.1");
+
+        // The declared probe's program doesn't exist, so the probe yields
+        // nothing; the convention path must still read the real install.
+        let version = system_probed_version_with(
+            Some("houhub-missing-probe-cmd-e2e --version"),
+            &bin,
+            None,
+        )
+        .await;
+        assert_eq!(version.as_deref(), Some("3.2.1"));
+    }
+
 
     #[cfg(unix)]
     #[tokio::test]
@@ -14646,6 +14812,16 @@ base_url = \"https://example.test/v1\"
         assert_eq!(settings.custom_context_window, Some(262144));
         assert_eq!(settings.auto_compact_threshold_percent, Some(90));
     }
+    #[test]
+    fn parse_grok_settings_untracks_default_without_model_block() {
+        // `[models].default` naming a stock model (no `[model.*]` block) is not a
+        // houhub-managed custom model — the panel must show the custom fields empty.
+        let toml = "[model.foo]\nbase_url = \"x\"\n\n[models]\ndefault = \"grok-4.5\"\n";
+        let s = parse_grok_settings(toml);
+        assert!(s.custom_model_id.is_none());
+        assert!(s.custom_base_url.is_none());
+    }
+
 
     #[test]
     fn parse_grok_settings_uses_native_permission_modes_and_migrates_legacy_values() {
@@ -14696,6 +14872,93 @@ base_url = \"https://example.test/v1\"
         assert_eq!(settings.custom_context_window, Some(131072));
         assert_eq!(settings.auto_compact_threshold_percent, Some(80));
     }
+    #[test]
+    fn apply_grok_custom_model_empty_base_url_omits_key() {
+        // "Leave empty ⇒ official endpoint": no `base_url` key is written.
+        let merged = apply_grok_structured_config(
+            "",
+            &GrokStructuredConfig {
+                custom_model_id: Some("foo".into()),
+                custom_base_url: Some("   ".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!merged.contains("base_url"), "empty base_url must omit the key");
+        let back = parse_grok_settings(&merged);
+        assert_eq!(back.custom_model_id.as_deref(), Some("foo"));
+        assert!(back.custom_base_url.is_none());
+    }
+    #[test]
+    fn apply_grok_custom_model_non_positive_context_window_omitted() {
+        let merged = apply_grok_structured_config(
+            "",
+            &GrokStructuredConfig {
+                custom_model_id: Some("foo".into()),
+                custom_context_window: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!merged.contains("context_window"));
+        assert!(parse_grok_settings(&merged).custom_context_window.is_none());
+    }
+    #[test]
+    fn apply_grok_custom_model_rename_moves_block() {
+        let base = "[model.old]\nmodel = \"old\"\nbase_url = \"https://old/v1\"\n\n\
+                    [models]\ndefault = \"old\"\n";
+        let merged = apply_grok_structured_config(
+            base,
+            &GrokStructuredConfig {
+                custom_model_id: Some("new".into()),
+                custom_base_url: Some("https://new/v1".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!merged.contains("old"), "the stale block + default must be gone");
+        let back = parse_grok_settings(&merged);
+        assert_eq!(back.custom_model_id.as_deref(), Some("new"));
+        assert_eq!(back.custom_base_url.as_deref(), Some("https://new/v1"));
+    }
+    #[test]
+    fn apply_grok_custom_model_update_preserves_unmanaged_block_keys() {
+        // Editing a managed block keeps keys houhub doesn't own (e.g. temperature).
+        let base = "[model.foo]\nmodel = \"foo\"\ntemperature = 0.7\nbase_url = \"https://old/v1\"\n\n\
+                    [models]\ndefault = \"foo\"\n";
+        let merged = apply_grok_structured_config(
+            base,
+            &GrokStructuredConfig {
+                custom_model_id: Some("foo".into()),
+                custom_base_url: Some("https://new/v1".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(merged.contains("temperature"), "unmanaged key preserved");
+        let back = parse_grok_settings(&merged);
+        assert_eq!(back.custom_base_url.as_deref(), Some("https://new/v1"));
+    }
+    #[test]
+    fn apply_grok_custom_model_clear_removes_managed_block_and_default() {
+        let base = "[model.foo]\nmodel = \"foo\"\nbase_url = \"https://x/v1\"\n\n\
+                    [models]\ndefault = \"foo\"\n";
+        let merged =
+            apply_grok_structured_config(base, &GrokStructuredConfig::default()).unwrap();
+        assert!(!merged.contains("[model."), "managed block removed");
+        let back = parse_grok_settings(&merged);
+        assert!(back.custom_model_id.is_none());
+    }
+    #[test]
+    fn apply_grok_custom_model_clear_leaves_handset_stock_default() {
+        // Clearing the (empty) custom form must NOT delete a hand-set stock
+        // `[models].default` that was never houhub-managed.
+        let base = "[models]\ndefault = \"grok-4.5\"\n";
+        let merged =
+            apply_grok_structured_config(base, &GrokStructuredConfig::default()).unwrap();
+        assert!(merged.contains("default = \"grok-4.5\""));
+    }
+
 
     #[test]
     fn apply_grok_custom_model_omits_empty_or_non_positive_values() {
@@ -14788,6 +15051,28 @@ base_url = \"https://example.test/v1\"
             .auto_compact_threshold_percent
             .is_none());
     }
+    #[test]
+    fn grok_config_permission_mode_maps_to_launch_flag() {
+        // Legacy always-approve → real bypassPermissions, passed as the flag.
+        assert_eq!(
+            grok_config_permission_mode("[ui]\npermission_mode = \"always-approve\"\n").as_deref(),
+            Some("bypassPermissions")
+        );
+        // A real granular mode passes through.
+        assert_eq!(
+            grok_config_permission_mode("[ui]\npermission_mode = \"acceptEdits\"\n").as_deref(),
+            Some("acceptEdits")
+        );
+        // `default` (grok's own default) and legacy `ask` keep the flag off so
+        // ACP permission requests reach houhub's UI.
+        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"default\"\n").is_none());
+        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"ask\"\n").is_none());
+        // Unset / malformed / unknown ⇒ no flag (preserve the ability to prompt).
+        assert!(grok_config_permission_mode("").is_none());
+        assert!(grok_config_permission_mode("== not toml ==").is_none());
+        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"bogus\"\n").is_none());
+    }
+
 
     #[test]
     fn grok_permission_mode_maps_to_launch_flag() {
@@ -15699,6 +15984,30 @@ base_url = \"https://example.test/v1\"
             );
         });
     }
+    #[test]
+    fn opencode_paths_follow_xdg_when_set() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cfg = tmp.path().join("xdg-config");
+        let data = tmp.path().join("xdg-data");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(tmp.path())),
+                ("XDG_CONFIG_HOME", Some(cfg.as_path())),
+                ("XDG_DATA_HOME", Some(data.as_path())),
+            ],
+            || {
+                assert_eq!(
+                    opencode_primary_config_path(),
+                    cfg.join("opencode").join("opencode.json")
+                );
+                assert_eq!(
+                    opencode_auth_json_path(),
+                    data.join("opencode").join("auth.json")
+                );
+            },
+        );
+    }
+
 
     #[test]
     fn pi_config_update_uses_explicit_runtime_agent_dir() {
@@ -15923,10 +16232,50 @@ wire_api = "chat"
                 let spec =
                     skill_storage_spec(AgentType::KimiCode).expect("Kimi Code supports skills");
                 assert_eq!(spec.kind, SkillStorageKind::SkillDirectoryOnly);
-                assert_eq!(spec.project_rel_dirs, vec![".kimi-code/skills"]);
-                let expected =
-                    crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("skills");
-                assert_eq!(spec.global_dirs, vec![expected]);
+                assert_eq!(
+                    spec.project_rel_dirs,
+                    vec![".kimi-code/skills", ".agents/skills"]
+                );
+                // Kimi-native dir first (preferred link target), shared
+                // cross-agent store second. The two hang off DIFFERENT bases:
+                // the brand dir off the data home `KIMI_CODE_HOME` moves, the
+                // shared store off the OS home it does not.
+                let expected = vec![
+                    crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("skills"),
+                    home_dir_or_default().join(".agents").join("skills"),
+                ];
+                assert_eq!(spec.global_dirs, expected);
+            },
+        );
+    }
+
+    #[test]
+    fn kimi_code_skill_storage_spec_shared_store_ignores_kimi_code_home() {
+        // `KIMI_CODE_HOME` relocates Kimi's own `skills/` dir but NOT the
+        // shared `~/.agents/skills` store: upstream's `userRoots(homeDir,
+        // osHomeDir)` joins the brand dirs onto the data home and the generic
+        // dirs onto the OS home. Getting this backwards would silently point
+        // the shared column at a directory nothing reads.
+        let home = tempfile::tempdir().expect("tempdir");
+        let kimi_home = tempfile::tempdir().expect("tempdir");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.path())),
+                ("KIMI_CODE_HOME", Some(kimi_home.path())),
+            ],
+            || {
+                let spec =
+                    skill_storage_spec(AgentType::KimiCode).expect("Kimi Code supports skills");
+                assert_eq!(
+                    spec.global_dirs[0],
+                    kimi_home.path().join("skills"),
+                    "the brand dir follows KIMI_CODE_HOME"
+                );
+                assert_eq!(
+                    spec.global_dirs[1],
+                    home_dir_or_default().join(".agents").join("skills"),
+                    "the shared store follows the OS home, not KIMI_CODE_HOME"
+                );
             },
         );
     }
@@ -16072,6 +16421,72 @@ wire_api = "chat"
                 .locations
                 .iter()
                 .any(|l| l.path == repo.join(".dsh/skills").to_string_lossy()),
+            "the listed project location must be the git root: {:?}",
+            listed.locations
+        );
+    }
+
+    #[test]
+    fn kimi_code_project_skills_hang_off_the_git_root() {
+        // Kimi's `skillRoots.projectRoots` walks up to the nearest `.git`
+        // exactly like DeepSeek's, so opening a package subdirectory must still
+        // target the repo root. Confirmed live: `kimi acp` with `cwd` at
+        // `<repo>/sub` advertised `<repo>/.kimi-code/skills` and
+        // `<repo>/.agents/skills` and ignored both `<repo>/sub` copies.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        let nested = repo.join("packages").join("app");
+        std::fs::create_dir_all(&nested).expect("create nested");
+        // A linked worktree records `.git` as a FILE, and upstream probes it
+        // with a bare `stat`, which accepts that — so must this.
+        std::fs::write(repo.join(".git"), "gitdir: /elsewhere\n").expect("write .git file");
+
+        let dirs = scoped_skill_dirs(
+            AgentType::KimiCode,
+            AgentSkillScope::Project,
+            Some(nested.to_str().expect("utf-8 path")),
+        )
+        .expect("project dirs");
+        assert_eq!(
+            dirs,
+            vec![repo.join(".kimi-code/skills"), repo.join(".agents/skills")]
+        );
+
+        // No `.git` anywhere above ⇒ fall back to the workspace itself, which
+        // is also what `findUpwardRoot` does when it reaches the filesystem
+        // root.
+        let bare = tmp.path().join("bare");
+        std::fs::create_dir_all(&bare).expect("create bare");
+        let fallback = scoped_skill_dirs(
+            AgentType::KimiCode,
+            AgentSkillScope::Project,
+            Some(bare.to_str().expect("utf-8 path")),
+        )
+        .expect("fallback dirs");
+        assert_eq!(fallback[0], bare.join(".kimi-code/skills"));
+
+        // The LIST path must resolve the same base as the WRITE path.
+        let saved = repo.join(".kimi-code/skills").join("demo");
+        std::fs::create_dir_all(&saved).expect("create skill dir");
+        std::fs::write(saved.join("SKILL.md"), "---\nname: demo\n---\nbody\n")
+            .expect("write SKILL.md");
+        let listed = tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(acp_list_agent_skills(
+                AgentType::KimiCode,
+                Some(nested.to_string_lossy().to_string()),
+            ))
+            .expect("list skills");
+        assert!(
+            listed.skills.iter().any(|s| s.id == "demo"),
+            "skill saved at the git root must be listed from a nested workspace: {:?}",
+            listed.skills
+        );
+        assert!(
+            listed
+                .locations
+                .iter()
+                .any(|l| l.path == repo.join(".kimi-code/skills").to_string_lossy()),
             "the listed project location must be the git root: {:?}",
             listed.locations
         );
@@ -16618,6 +17033,31 @@ wire_api = "chat"
         );
         assert_eq!(v.pointer("/permissions/deny"), Some(&serde_json::json!([])));
     }
+    #[tokio::test]
+    async fn qoder_probe_env_materializes_the_token() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+
+        // The form value wins over saved env and is trimmed.
+        let env = qoder_probe_env(&db, Some("  pat-123  ")).await;
+        assert_eq!(
+            env.get("QODER_PERSONAL_ACCESS_TOKEN").map(String::as_str),
+            Some("pat-123")
+        );
+
+        // No token on screen → present but empty, so `run_qoder_probe` strips
+        // any inherited one instead of probing a credential a launch wouldn't use.
+        let cleared = qoder_probe_env(&db, Some("")).await;
+        assert_eq!(
+            cleared.get("QODER_PERSONAL_ACCESS_TOKEN").map(String::as_str),
+            Some("")
+        );
+        let unset = qoder_probe_env(&db, None).await;
+        assert_eq!(
+            unset.get("QODER_PERSONAL_ACCESS_TOKEN").map(String::as_str),
+            Some("")
+        );
+    }
+
 
     #[tokio::test]
     async fn cursor_probe_env_materializes_key_and_scrubs_base_url() {
@@ -18587,6 +19027,16 @@ wire_api = "chat"
             }
         }
     }
+    #[test]
+    fn kimi_parse_provider_model_uses_kimi_model_name() {
+        let out = parse_provider_model(AgentType::KimiCode, Some("kimi-for-coding"));
+        assert_eq!(
+            out.get("KIMI_MODEL_NAME"),
+            Some(&Some("kimi-for-coding".to_string()))
+        );
+        assert!(!out.contains_key("OPENAI_MODEL"));
+    }
+
 
     #[test]
     fn non_codex_provider_model_does_not_override_agent_model() {
@@ -18854,6 +19304,215 @@ model = "kimi-for-coding"
         };
         assert!(build_kimi_managed_spec(&no_model).is_err());
     }
+    /// A minimal valid api-key update; reasoning fields are filled per test.
+    fn kimi_reasoning_update(
+        reasoning_enabled: Option<bool>,
+        always_thinking: Option<bool>,
+        support_efforts: Option<Vec<String>>,
+        default_effort: Option<&str>,
+    ) -> KimiCodeConfigUpdate {
+        KimiCodeConfigUpdate {
+            mode: "apikey".to_string(),
+            interface_type: Some("kimi".to_string()),
+            auth_type: None,
+            base_url: None,
+            api_key: Some("sk-x".to_string()),
+            model: Some("kimi-k2".to_string()),
+            max_context_size: None,
+            vertex_project: None,
+            vertex_location: None,
+            raw_config_toml: None,
+            reasoning_enabled,
+            always_thinking,
+            support_efforts,
+            default_effort: default_effort.map(str::to_string),
+        }
+    }
+    #[test]
+    fn kimi_reasoning_off_writes_no_capability_keys() {
+        // With reasoning off the model block must stay byte-identical to the
+        // pre-feature shape: an ABSENT `capabilities` is what keeps kimi's
+        // permissive "allow every modality" default in force.
+        let spec = build_kimi_managed_spec(&kimi_reasoning_update(None, None, None, None))
+            .expect("valid spec");
+        assert!(spec.capabilities.is_empty());
+        assert!(spec.support_efforts.is_empty());
+        assert!(spec.default_effort.is_none());
+
+        let mut doc = toml::Value::Table(toml::map::Map::new());
+        apply_kimi_managed_block(&mut doc, Some(&spec)).expect("applied");
+        let model = doc
+            .get("models")
+            .and_then(|m| m.get(KIMI_MANAGED_MODEL_ALIAS))
+            .and_then(toml::Value::as_table)
+            .expect("model block");
+        assert!(model.get("capabilities").is_none());
+        assert!(model.get("support_efforts").is_none());
+        assert!(model.get("default_effort").is_none());
+    }
+    #[test]
+    fn kimi_reasoning_on_declares_thinking_plus_the_permissive_modalities() {
+        // `thinking` alone would REVOKE image/video input, because kimi only
+        // treats an absent capabilities array as "allow all".
+        let spec = build_kimi_managed_spec(&kimi_reasoning_update(
+            Some(true),
+            None,
+            Some(vec!["low".into(), "high".into()]),
+            Some("high"),
+        ))
+        .expect("valid spec");
+        assert_eq!(
+            spec.capabilities,
+            vec!["thinking", "image_in", "video_in", "tool_use"]
+        );
+        assert_eq!(spec.support_efforts, vec!["low", "high"]);
+        assert_eq!(spec.default_effort.as_deref(), Some("high"));
+
+        let mut doc = toml::Value::Table(toml::map::Map::new());
+        apply_kimi_managed_block(&mut doc, Some(&spec)).expect("applied");
+        let model = doc
+            .get("models")
+            .and_then(|m| m.get(KIMI_MANAGED_MODEL_ALIAS))
+            .and_then(toml::Value::as_table)
+            .expect("model block");
+        let caps: Vec<&str> = model["capabilities"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect();
+        assert!(caps.contains(&"thinking") && caps.contains(&"image_in"));
+        assert_eq!(
+            model["default_effort"].as_str(),
+            Some("high"),
+            "default_effort must reach config.toml"
+        );
+    }
+    #[test]
+    fn kimi_reasoning_off_clears_keys_a_previous_save_wrote() {
+        // Turning reasoning back off must REMOVE the keys, not just stop
+        // refreshing them: a lingering `capabilities` array would keep kimi in
+        // whitelist mode (and keep advertising a Thinking picker) forever.
+        let mut doc = toml::Value::Table(toml::map::Map::new());
+        let on = build_kimi_managed_spec(&kimi_reasoning_update(
+            Some(true),
+            Some(true),
+            Some(vec!["low".into(), "high".into()]),
+            Some("high"),
+        ))
+        .expect("valid spec");
+        apply_kimi_managed_block(&mut doc, Some(&on)).expect("write reasoning on");
+        assert!(doc["models"][KIMI_MANAGED_MODEL_ALIAS]
+            .get("capabilities")
+            .is_some());
+
+        let off = build_kimi_managed_spec(&kimi_reasoning_update(Some(false), None, None, None))
+            .expect("valid spec");
+        apply_kimi_managed_block(&mut doc, Some(&off)).expect("write reasoning off");
+        let model = doc["models"][KIMI_MANAGED_MODEL_ALIAS]
+            .as_table()
+            .expect("model block");
+        assert!(model.get("capabilities").is_none(), "capabilities must go");
+        assert!(model.get("support_efforts").is_none());
+        assert!(model.get("default_effort").is_none());
+        // The keys that are NOT part of reasoning must survive the rewrite.
+        assert_eq!(model["model"].as_str(), Some("kimi-k2"));
+        assert!(model.get("max_context_size").is_some());
+    }
+    #[test]
+    fn kimi_reasoning_always_thinking_swaps_the_capability() {
+        let spec = build_kimi_managed_spec(&kimi_reasoning_update(
+            Some(true),
+            Some(true),
+            Some(vec!["high".into()]),
+            None,
+        ))
+        .expect("valid spec");
+        assert!(spec.capabilities.contains(&"always_thinking".to_string()));
+        assert!(!spec.capabilities.contains(&"thinking".to_string()));
+    }
+    #[test]
+    fn kimi_reasoning_normalizes_efforts_and_drops_an_unlisted_default() {
+        let spec = build_kimi_managed_spec(&kimi_reasoning_update(
+            Some(true),
+            None,
+            Some(vec![
+                "  low  ".into(),
+                "".into(),
+                "low".into(),
+                "high".into(),
+            ]),
+            // kimi clamps an unlisted default to the middle entry anyway, so
+            // writing it would only misreport what the composer will show.
+            Some("max"),
+        ))
+        .expect("valid spec");
+        assert_eq!(spec.support_efforts, vec!["low", "high"]);
+        assert!(spec.default_effort.is_none());
+    }
+    #[test]
+    fn kimi_reasoning_rejects_a_newline_in_an_effort() {
+        let err = build_kimi_managed_spec(&kimi_reasoning_update(
+            Some(true),
+            None,
+            Some(vec!["hi\ngh".into()]),
+            None,
+        ));
+        assert!(err.is_err());
+    }
+    #[test]
+    fn kimi_project_managed_config_round_trips_reasoning_metadata() {
+        let value: toml::Value = r#"
+default_model = "houhub-managed"
+[providers.houhub]
+type = "openai_responses"
+[models.houhub-managed]
+provider = "houhub"
+model = "gpt-5.6-sol"
+max_context_size = 1000000
+capabilities = ["thinking", "image_in", "video_in", "tool_use"]
+support_efforts = ["low", "medium", "high"]
+default_effort = "high"
+"#
+        .parse()
+        .expect("valid toml");
+        let proj = project_kimi_managed_config(&value);
+        let caps: Vec<&str> = proj["capabilities"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(caps.contains(&"thinking"));
+        let efforts: Vec<&str> = proj["supportEfforts"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(efforts, vec!["low", "medium", "high"]);
+        assert_eq!(proj.get("defaultEffort").and_then(|v| v.as_str()), Some("high"));
+    }
+    #[test]
+    fn kimi_project_managed_config_omits_reasoning_keys_when_absent() {
+        // The shape the panel wrote before this feature — the projection must
+        // not invent empty arrays, or the panel would read reasoning as "on".
+        let value: toml::Value = r#"
+[providers.houhub]
+type = "kimi"
+[models.houhub-managed]
+provider = "houhub"
+model = "kimi-k2"
+max_context_size = 262144
+"#
+        .parse()
+        .expect("valid toml");
+        let proj = project_kimi_managed_config(&value);
+        assert!(proj.get("capabilities").is_none());
+        assert!(proj.get("supportEfforts").is_none());
+        assert!(proj.get("defaultEffort").is_none());
+    }
+
 
     #[test]
     fn kimi_project_managed_config_uses_non_colliding_keys() {
@@ -19466,11 +20125,134 @@ model = "gpt"
         assert_eq!(loaded["apiProvider"], "cline");
         assert!(loaded.get("apiKey").is_none());
 
-        // …and the launch env stays empty, so `tryRestoreAuth` finds the login
-        // instead of houhub forcing a half-filled BYO provider over it.
+        // …and the launch carries no credential of its own, so `tryRestoreAuth`
+        // finds the login instead of houhub forcing a half-filled BYO provider
+        // over it. Both keys are blanked rather than merely omitted: the spawn
+        // layer reads an empty value as `env_remove`, which is the only way to
+        // strip one the child would otherwise inherit.
         let env = cline_launch_env(serde_json::Value::Object(loaded));
-        assert!(!env.contains_key("CLINE_API_KEY"));
-        assert!(!env.contains_key("CLINE_PROVIDER"));
+        assert_eq!(env.get("CLINE_API_KEY").map(String::as_str), Some(""));
+        assert_eq!(env.get("CLINE_PROVIDER").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn the_sign_in_scrub_survives_a_leftover_model_provider_binding() {
+        // `apply_model_provider_env` writes the agent's generic credential trio
+        // for ANY agent with a `model_provider_id`, so a binding left from a BYO
+        // setup used to put `CLINE_API_KEY` back after the scrub — short-circuiting
+        // the gate and billing a ClinePass account as plain Cline. Running cline's
+        // policy last has to win, and has to stay idempotent for BYO.
+        let signed_in = serde_json::json!({ "apiProvider": "cline-pass" }).to_string();
+        let mut env: BTreeMap<String, String> = BTreeMap::new();
+        apply_cline_launch_env(Some(&signed_in), &mut env);
+        // The binding lands after the first pass…
+        env.insert("CLINE_API_KEY".to_string(), "sk-from-provider".to_string());
+        env.insert(
+            "CLINE_BASE_URL".to_string(),
+            "https://proxy.example/v1".to_string(),
+        );
+        // …and the re-application scrubs it again.
+        apply_cline_launch_env(Some(&signed_in), &mut env);
+        assert_eq!(env.get("CLINE_API_KEY").map(String::as_str), Some(""));
+        assert_eq!(env.get("CLINE_PROVIDER").map(String::as_str), Some(""));
+
+        // Idempotent for BYO: running it twice changes nothing.
+        let byo = serde_json::json!({
+            "apiProvider": "openai-compatible",
+            "apiKey": "sk-byo",
+        })
+        .to_string();
+        let mut byo_env: BTreeMap<String, String> = BTreeMap::new();
+        apply_cline_launch_env(Some(&byo), &mut byo_env);
+        let once = byo_env.clone();
+        apply_cline_launch_env(Some(&byo), &mut byo_env);
+        assert_eq!(byo_env, once);
+    }
+
+    #[test]
+    fn a_stray_key_cannot_hijack_a_cline_sign_in() {
+        // The failure this prevents is silent and expensive: a non-empty
+        // `CLINE_API_KEY` opens the gate WITHOUT setting `authResult`, so
+        // `newSession` falls back to `"cline"` and a ClinePass or ChatGPT
+        // subscription quietly bills as plain Cline.
+        for provider in ["cline", "cline-pass", "openai-codex"] {
+            let env = cline_launch_env(serde_json::json!({
+                "apiProvider": provider,
+                // Left over from a BYO provider the user configured earlier.
+                "apiKey": "sk-stale",
+                "model": "claude-sonnet-5",
+            }));
+            assert_eq!(
+                env.get("CLINE_API_KEY").map(String::as_str),
+                Some(""),
+                "{provider}: a stale key must not short-circuit the gate"
+            );
+            assert_eq!(
+                env.get("CLINE_PROVIDER").map(String::as_str),
+                Some(""),
+                "{provider}: an empty value is the spawn layer's `env_remove`, which is what \
+                 strips a stale row or one exported in the launching shell"
+            );
+            // The model still travels — `newSession` reads CLINE_MODEL for
+            // every provider, sign-in included.
+            assert_eq!(
+                env.get("CLINE_MODEL").map(String::as_str),
+                Some("claude-sonnet-5")
+            );
+        }
+    }
+
+    #[test]
+    fn saving_a_sign_in_provider_leaves_its_credential_alone() {
+        // The panel shows no key or endpoint field for these, so an empty draft
+        // is the absence of an opinion — not an instruction to log the user out.
+        let store = ClineStore::new();
+        std::fs::create_dir_all(store.providers.parent().expect("parent")).expect("mkdir");
+        std::fs::write(
+            &store.providers,
+            serde_json::json!({
+                "version": 1,
+                "lastUsedProvider": "openai-compatible",
+                "modes": {},
+                "providers": {
+                    "cline": {
+                        "settings": {
+                            "provider": "cline",
+                            "apiKey": "account-key",
+                            "auth": { "accessToken": "oauth-token" },
+                        },
+                        "updatedAt": "2026-01-01T00:00:00.000Z",
+                        "tokenSource": "oauth",
+                    },
+                },
+            })
+            .to_string(),
+        )
+        .expect("seed");
+
+        persist_cline_provider_settings_at(
+            &store.providers,
+            &store.models,
+            "cline",
+            None,
+            Some("claude-sonnet-5"),
+            None,
+        )
+        .expect("save");
+
+        let root = read_json_object(&store.providers).expect("read back");
+        assert_valid_cline_provider_store(&root);
+        let entry = &root["providers"]["cline"];
+        assert_eq!(entry["tokenSource"], "oauth");
+        assert_eq!(
+            entry["settings"]["apiKey"], "account-key",
+            "clearing a field the panel never showed would end the session"
+        );
+        assert_eq!(entry["settings"]["auth"]["accessToken"], "oauth-token");
+        // The model IS the panel's to set, and switching providers is the point
+        // of the save.
+        assert_eq!(entry["settings"]["model"], "claude-sonnet-5");
+        assert_eq!(root["lastUsedProvider"], "cline");
     }
 
     #[test]

@@ -17,6 +17,10 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { RichComposerHandle } from "./composer/rich-composer"
 import { serializeDocToText } from "./composer/to-prompt-blocks"
 import {
+  clearMessageInputDraftV2,
+  loadMessageInputDraftV2,
+} from "@/lib/message-input-draft"
+import {
   emitAttachFileToSession,
   emitAttachSessionToSession,
 } from "@/lib/session-attachment-events"
@@ -686,6 +690,127 @@ const MODEL_OPTION: SessionConfigOptionInfo = {
     groups: [],
   },
 }
+
+const MSGS = enMessages.Folder.chat.messageInput
+
+// Cline 3.0.50's `auto_approve` — the first boolean config option any pinned
+// agent ships. Both the wide inline row and the collapsed popover are always in
+// the DOM (a container query, which jsdom does not evaluate, picks one), so a
+// single render exercises both surfaces.
+const AUTO_APPROVE_OPTION: SessionConfigOptionInfo = {
+  id: "auto_approve",
+  name: "Auto-approve tools",
+  description: "Automatically approve all tool calls without asking",
+  category: null,
+  kind: { type: "boolean", current_value: false },
+}
+
+describe("MessageInput boolean config options", () => {
+  afterEach(() => cleanup())
+
+  it("renders the inline chip as a toggle and flips it on click", async () => {
+    const user = userEvent.setup()
+    const onConfigOptionChange = vi.fn()
+    const { container } = renderInput({
+      configOptions: [AUTO_APPROVE_OPTION],
+      onConfigOptionChange,
+    })
+    await waitFor(() =>
+      expect(container.querySelector('[role="textbox"]')).not.toBeNull()
+    )
+
+    const toggle = screen.getByRole("button", {
+      name: `Auto-approve tools: ${MSGS.toggleOff}`,
+    })
+    expect(toggle).toHaveAttribute("aria-pressed", "false")
+
+    await user.click(toggle)
+    expect(onConfigOptionChange).toHaveBeenCalledWith("auto_approve", "true")
+  })
+
+  it("offers On/Off rows in the collapsed cog popover", async () => {
+    const user = userEvent.setup()
+    const onConfigOptionChange = vi.fn()
+    const { container } = renderInput({
+      configOptions: [AUTO_APPROVE_OPTION],
+      onConfigOptionChange,
+    })
+    await waitFor(() =>
+      expect(container.querySelector('[role="textbox"]')).not.toBeNull()
+    )
+
+    const settingsLabel = MSGS.agentSettings
+    await user.click(screen.getByRole("button", { name: settingsLabel }))
+    const popover = await screen.findByRole("dialog", { name: settingsLabel })
+
+    // The left rail summarizes the current state…
+    expect(
+      within(popover).getByRole("button", { name: /Auto-approve tools/ })
+    ).toBeInTheDocument()
+    // …and the detail pane is a plain two-item choice.
+    await user.click(
+      within(popover).getByRole("button", { name: MSGS.toggleOn })
+    )
+    expect(onConfigOptionChange).toHaveBeenCalledWith("auto_approve", "true")
+  })
+})
+
+describe("MessageInput selector loading placeholder", () => {
+  afterEach(() => cleanup())
+
+  it("shows a visible placeholder in the selector row while the session comes up", async () => {
+    // Opening a historical conversation spends seconds with no selectors known.
+    // The cue has to be in the row itself — the cog popover's loading text is
+    // only reachable by a user who already suspects something is loading.
+    const { container } = renderInput({
+      configOptionsLoading: true,
+      configOptions: [],
+    })
+    await waitFor(() =>
+      expect(container.querySelector('[role="textbox"]')).not.toBeNull()
+    )
+    expect(
+      screen.getByRole("status", { name: MSGS.loadingSettings })
+    ).toBeInTheDocument()
+  })
+
+  it("drops the placeholder as soon as the real options arrive", async () => {
+    const view = renderInput({
+      configOptionsLoading: true,
+      configOptions: [],
+    })
+    await waitFor(() =>
+      expect(view.container.querySelector('[role="textbox"]')).not.toBeNull()
+    )
+    expect(screen.queryByRole("status")).not.toBeNull()
+
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <MessageInput
+          onSend={vi.fn()}
+          promptCapabilities={CAPS}
+          configOptionsLoading={false}
+          configOptions={[MODEL_OPTION]}
+        />
+      </NextIntlClientProvider>
+    )
+    expect(screen.queryByRole("status")).toBeNull()
+    expect(screen.getByRole("button", { name: /Model/ })).toBeInTheDocument()
+  })
+
+  it("renders no selector affordance at all when nothing is loading or known", async () => {
+    // The pre-fix steady state: an agent with neither modes nor config options
+    // must not grow a placeholder that never resolves.
+    const { container } = renderInput({ configOptions: [], modes: [] })
+    await waitFor(() =>
+      expect(container.querySelector('[role="textbox"]')).not.toBeNull()
+    )
+    expect(screen.queryByRole("status")).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: MSGS.agentSettings })
+    ).toBeNull()
+  })
+})
 
 describe("MessageInput collapsed selectors popover", () => {
   afterEach(() => cleanup())
@@ -1726,5 +1851,175 @@ describe("MessageInput right-click token selection", () => {
     // appear — but it now opens over a selected address instead of a caret.
     expect(screen.queryByRole("menuitem", { name: "Copy" })).toBeNull()
     expect(selectedText(editor)).toBe("adam@example.com")
+  })
+})
+
+describe("MessageInput prompt history", () => {
+  async function mountWithHistory(
+    history: string[],
+    props: Partial<React.ComponentProps<typeof MessageInput>> = {}
+  ) {
+    renderInput({ getSentHistory: () => history, ...props })
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    const handle = composerHandle.current
+    const editor = handle?.getEditor()
+    if (!handle || !editor) throw new Error("composer editor not mounted")
+    return { handle, editor }
+  }
+
+  function press(editor: Editor, key: string) {
+    act(() => {
+      ;(editor.view.dom as HTMLElement).dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })
+      )
+    })
+  }
+
+  it("recalls sent prompts on Up and restores the draft on Down", async () => {
+    const { handle, editor } = await mountWithHistory(["first", "latest"])
+
+    act(() => handle.setText("my draft"))
+    act(() => editor.commands.focus("start"))
+    press(editor, "ArrowUp")
+    expect(handle.getText()).toBe("latest")
+
+    act(() => editor.commands.focus("start"))
+    press(editor, "ArrowUp")
+    expect(handle.getText()).toBe("first")
+
+    act(() => editor.commands.focus("end"))
+    press(editor, "ArrowDown")
+    expect(handle.getText()).toBe("latest")
+
+    // Past the newest entry the original draft comes back.
+    act(() => editor.commands.focus("end"))
+    press(editor, "ArrowDown")
+    expect(handle.getText()).toBe("my draft")
+  })
+
+  it("recalls into an empty composer, where the caret is at both edges", async () => {
+    const { handle, editor } = await mountWithHistory(["first", "latest"])
+
+    // The common case: nothing typed yet. Down must still fall through (there
+    // is nothing recalled to move forward from), Up must recall.
+    press(editor, "ArrowDown")
+    expect(handle.getText()).toBe("")
+    press(editor, "ArrowUp")
+    expect(handle.getText()).toBe("latest")
+  })
+
+  it("persists the draft the first recall replaces", async () => {
+    // The stash that ArrowDown restores lives only in memory, and the draft
+    // save is debounced: a recall that lands inside that window must flush the
+    // typed draft rather than let the timer write the RECALLED prompt over it
+    // (a tab switch from there would lose what the user typed).
+    const draftKey = "test:history-recall-draft"
+    clearMessageInputDraftV2(draftKey)
+    const { handle, editor } = await mountWithHistory(["first", "latest"], {
+      draftStorageKey: draftKey,
+    })
+
+    act(() => editor.commands.insertContent("my draft"))
+    act(() => editor.commands.focus("start"))
+    press(editor, "ArrowUp")
+    expect(handle.getText()).toBe("latest")
+
+    // Past the debounce: whatever was going to be written has been written.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350))
+    })
+    const stored = loadMessageInputDraftV2(draftKey)
+    expect(JSON.stringify(stored)).toContain("my draft")
+    expect(JSON.stringify(stored)).not.toContain("latest")
+    clearMessageInputDraftV2(draftKey)
+  })
+
+  it("editing a recalled prompt leaves history mode", async () => {
+    const { handle, editor } = await mountWithHistory(["first", "latest"])
+
+    act(() => editor.commands.focus("start"))
+    press(editor, "ArrowUp")
+    expect(handle.getText()).toBe("latest")
+
+    // Type into the recalled entry, then Down must NOT be treated as "newer"
+    // past the newest — history mode ended with the edit.
+    act(() => editor.commands.focus("end"))
+    act(() => editor.commands.insertContent(" edited"))
+    expect(handle.getText()).toBe("latest edited")
+    act(() => editor.commands.focus("end"))
+    press(editor, "ArrowDown")
+    expect(handle.getText()).toBe("latest edited")
+  })
+
+  it("does nothing on Up when the session has no history", async () => {
+    const { handle, editor } = await mountWithHistory([])
+
+    act(() => handle.setText("my draft"))
+    act(() => editor.commands.focus("start"))
+    press(editor, "ArrowUp")
+    expect(handle.getText()).toBe("my draft")
+  })
+
+  it("steps on the edge and lands on the edge it travelled from", async () => {
+    const { handle, editor } = await mountWithHistory([
+      "first",
+      "older\nmulti\nline",
+      "newest\nmulti\nline",
+    ])
+
+    act(() => handle.setText("DRAFT"))
+    act(() => editor.commands.focus("start"))
+    press(editor, "ArrowUp")
+    expect(handle.getText()).toBe("newest\nmulti\nline")
+
+    // Recalling lands at the TOP, so the same key keeps going older without the
+    // caret having to be walked anywhere.
+    press(editor, "ArrowUp")
+    expect(handle.getText()).toBe("older\nmulti\nline")
+    press(editor, "ArrowUp")
+    expect(handle.getText()).toBe("first")
+
+    // Turning around means walking to the bottom edge first — until it gets
+    // there the caret is the editor's, not the history's. (jsdom has no native
+    // caret movement, so that walk is simulated with focus("end").)
+    act(() => editor.commands.focus("end"))
+    press(editor, "ArrowDown")
+    expect(handle.getText()).toBe("older\nmulti\nline")
+    press(editor, "ArrowDown")
+    expect(handle.getText()).toBe("newest\nmulti\nline")
+    press(editor, "ArrowDown")
+    expect(handle.getText()).toBe("DRAFT")
+  })
+
+  it("does not switch prompts while the caret is inside a multi-line entry", async () => {
+    const { handle, editor } = await mountWithHistory([
+      "older",
+      "newest\nmulti\nline",
+    ])
+
+    act(() => editor.commands.focus("start"))
+    press(editor, "ArrowUp")
+    expect(handle.getText()).toBe("newest\nmulti\nline")
+
+    // The caret is at the TOP, so Down belongs to the caret, not the history
+    // (jsdom has no native caret movement, so the observable is "no recall").
+    press(editor, "ArrowDown")
+    expect(handle.getText()).toBe("newest\nmulti\nline")
+  })
+
+  it("leaves the arrows to the caret while editing a queued message", async () => {
+    const { handle, editor } = await mountWithHistory(["older", "newest"], {
+      isEditingQueueItem: true,
+    })
+
+    act(() => handle.setText("queued edit"))
+    act(() => editor.commands.focus("start"))
+    press(editor, "ArrowUp")
+
+    // A recall here would replace the queued message being edited.
+    expect(handle.getText()).toBe("queued edit")
   })
 })
