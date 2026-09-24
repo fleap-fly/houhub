@@ -57,6 +57,10 @@ ENV HOUHUB_RUNTIME=docker
 ENV HOUHUB_RESTART_DELAY_MS=2000
 
 EXPOSE 3080
+# Port bridge for dev servers (HOUHUB_BRIDGE_PORTS; default HOUHUB_PORT+1..+10).
+# Not needed when HOUHUB_BRIDGE_HOST_PATTERN names the dev servers by hostname
+# instead: those answer on 3080, and no range has to be guessed in advance.
+EXPOSE 3081-3090
 VOLUME /data
 
 # Run under the built-in supervisor (PID 1) so an in-place upgrade can swap

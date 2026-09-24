@@ -52,8 +52,13 @@ export function WorkspaceChromeController() {
   // owns them too (see the keydown handler below).
   const { mode, activePane, filesMaximized } = useWorkspaceView()
   const { activeFileTabId, fileTabs } = useWorkspaceFileTabs()
-  const { closeFileTab, closeAllFileTabs, switchFileTab, openFilePreview } =
-    useWorkspaceActions()
+  const {
+    closeFileTab,
+    closeAllFileTabs,
+    switchFileTab,
+    openFilePreview,
+    openBrowserTab,
+  } = useWorkspaceActions()
   const { openConversations } = useWorkbenchRoute()
   const { shortcuts } = useShortcutSettings()
   // Search open-state is shared (see search-dialog-context): the trigger lives
@@ -216,6 +221,16 @@ export function WorkspaceChromeController() {
             })
             return
           }
+          if (closed.kind === "browser") {
+            // Back at the page it was showing; a tab already on that page is
+            // activated instead (the usual one-tab-per-URL rule).
+            openBrowserTab(closed.url, {
+              folderId: closed.folderId ?? undefined,
+              index: closed.index,
+              profile: closed.profile,
+            })
+            return
+          }
           if (closed.conversationId != null) {
             // A deletion seen at any point wins. `applyConversationRemove`
             // purges what is on the stack when it runs, but a tab that was
@@ -256,6 +271,7 @@ export function WorkspaceChromeController() {
     openNewConversationTab,
     openTab,
     openFilePreview,
+    openBrowserTab,
     setSearchOpen,
     shortcuts,
     toggle,

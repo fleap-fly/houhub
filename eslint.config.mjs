@@ -42,6 +42,17 @@ const eslintConfig = defineConfig([
     "public/vs/**",
     // External upstream source snapshots are review inputs, not product code.
     ".upstream/**",
+    // Gitignored scratch space for planning/review docs and one-off probe
+    // scripts. Prettier already skips it — its `--ignore-path` defaults to
+    // `.gitignore` — but flat config has no such default, so without this
+    // `pnpm eslint .` fails the repo on files that are not in the repo.
+    ".docs/**",
+    // Playwright's aria tree, vendored byte-for-byte so that updating it is a
+    // copy rather than a merge (browser-agent/vendor/playwright/VENDOR.md).
+    // It is written against Playwright's lint and compiler settings, not ours.
+    "browser-agent/vendor/**",
+    // esbuild's output, committed so a cargo build needs no node.
+    "src-tauri/src/browser/js/**",
   ]),
   eslintConfigPrettier,
   eslintPluginPrettierRecommended,

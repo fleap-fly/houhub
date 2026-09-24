@@ -442,7 +442,7 @@ export function EditModelProviderDialog({
                       reasoning: e.target.value,
                     }))
                   }
-                  placeholder="claude-opus-4-8"
+                  placeholder="claude-opus-5-5"
                 />
               </div>
               <div className="space-y-1.5">
@@ -487,7 +487,7 @@ export function EditModelProviderDialog({
                       opus: e.target.value,
                     }))
                   }
-                  placeholder="claude-opus-4-8"
+                  placeholder="claude-opus-5-5"
                 />
               </div>
               <div className="space-y-1.5 md:col-span-2">
@@ -502,7 +502,7 @@ export function EditModelProviderDialog({
                       customOption: e.target.value,
                     }))
                   }
-                  placeholder="my-gateway/claude-opus-4-8"
+                  placeholder="my-gateway/claude-opus-5-5"
                 />
               </div>
               <div className="space-y-1.5">

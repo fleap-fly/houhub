@@ -267,6 +267,7 @@ async fn async_main() -> ExitCode {
         question_config,
         session_info_config,
         chat_authoring_config,
+        browser_tools_config,
     ) = houhub_lib::app_state::build_delegation_stack(
         &connection_manager,
         db.conn.clone(),
@@ -293,6 +294,7 @@ async fn async_main() -> ExitCode {
         question_config: question_config.clone(),
         session_info_config: session_info_config.clone(),
         chat_authoring_config: chat_authoring_config.clone(),
+        browser_tools_config: browser_tools_config.clone(),
         system_op_lock: houhub_lib::app_state::default_system_op_lock(),
         update_state: houhub_lib::app_state::default_update_state(),
     });
@@ -332,9 +334,28 @@ async fn async_main() -> ExitCode {
         &session_info_config,
     )
     .await;
+    // Same for the chat-authoring flags, so the first companion launch knows
+    // whether to advertise `create_automation` / `create_work_task`.
     houhub_lib::commands::chat_authoring::apply_persisted_chat_authoring_config(
         &state.db.conn,
         &chat_authoring_config,
+    )
+    .await;
+    // And the browser-tools switch, so the popover reports it truthfully.
+    // Server mode never advertises the group (there are no native tabs here),
+    // but the flag is one setting shared by both runtimes.
+    houhub_lib::commands::browser_tools::apply_persisted_browser_tools_config(
+        &state.db.conn,
+        &state.browser_tools_config,
+    )
+    .await;
+    // Before accepting connections: keep ACP model terminal fallbacks aligned
+    // with the same default-shell preference the built-in terminal uses, and
+    // seed the command-color opt-in that every launch env is built from.
+    let terminal_shell_config = state.connection_manager.terminal_shell_config();
+    houhub_lib::commands::system_settings::apply_persisted_terminal_settings(
+        &state.db.conn,
+        &terminal_shell_config,
     )
     .await;
 
@@ -367,6 +388,10 @@ async fn async_main() -> ExitCode {
                 state.emitter.clone(),
                 chat_authoring_config.clone(),
             )),
+            // No native webviews in this process: what a web user sees in a
+            // "browser tab" is an iframe their own browser renders, which
+            // nothing here can reach.
+            Arc::new(houhub_lib::acp::browser_tools::NoBrowserTabs),
         );
         // Bind through the service handle rather than a bare `listener.run`
         // spawn: it keeps the bind error and the accept-loop handle around, so
@@ -501,8 +526,8 @@ async fn async_main() -> ExitCode {
         tokio::spawn(houhub_lib::automation::run_automation_engine(engine));
     }
 
-    // Work-task engine (mirrors desktop setup): one elected task driver per
-    // data directory, with progress reported through the same MCP listener.
+    // Work-task engine (mirrors lib.rs setup): manual pipeline, event-bus
+    // settlement, merging git-truth recovery. One per process.
     if let Some(engine) = houhub_lib::work_task::build_task_engine(
         houhub_lib::db::AppDatabase {
             conn: state.db.conn.clone(),
@@ -598,6 +623,24 @@ async fn async_main() -> ExitCode {
     // Token on stderr ONLY (bearer credential — keep it out of the log files
     // and the in-app viewer); the bind addresses are safe to log normally.
     eprintln!("[SERVER] Token: {}", token);
+    // Port bridge for dev servers on this host (web-mode built-in browser):
+    // bound where our own socket is, on the ports after ours unless
+    // HOUHUB_BRIDGE_PORTS says otherwise — or nothing of its own at all when
+    // HOUHUB_BRIDGE_HOST_PATTERN names the targets by hostname on this port.
+    let bridge =
+        houhub_lib::web::browser_bridge::BridgeConfig::from_env(&advertised_host, actual_port);
+    match &bridge {
+        Some(config) => tracing::info!(
+            "[SERVER] Port bridge for dev servers: {}",
+            houhub_lib::web::describe_bridge(config)
+        ),
+        None => tracing::info!(
+            "[SERVER] Port bridge for dev servers: {}",
+            houhub_lib::web::BRIDGE_OFF
+        ),
+    }
+    houhub_lib::web::browser_bridge::configure(bridge);
+
     tracing::info!("[SERVER] Listening on:");
     for addr in &addresses {
         tracing::info!("  {}", addr);

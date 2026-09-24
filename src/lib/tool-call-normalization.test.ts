@@ -619,6 +619,159 @@ describe("normalizeToolName Grok terminal tool", () => {
   })
 })
 
+describe("normalizeToolName Windows shell tool", () => {
+  it("aliases PowerShell to bash in every spelling the parsers store", () => {
+    // Claude Code's CLI runs commands through a `PowerShell` tool when Windows
+    // has no Git Bash (claude-agent-acp ≥0.79.0 gives it Bash's `kind:
+    // "execute"` + command title); pi uses the lower-case name for the same
+    // thing. Both history parsers keep the raw name, so without the alias the
+    // reload path rendered a terminal icon over a raw-JSON dump — the card body
+    // dispatches on the normalized name.
+    expect(normalizeToolName("PowerShell")).toBe("bash")
+    expect(normalizeToolName("powershell")).toBe("bash")
+  })
+
+  it("does not sweep in unrelated names that merely contain 'shell'", () => {
+    expect(normalizeToolName("powershell_profile_lint")).toBe(
+      "powershell_profile_lint"
+    )
+  })
+
+  it("agrees with the live path, which classifies on the input shape", () => {
+    // claude-agent-acp ≥0.79.0 streams `rawInput` for PowerShell exactly as it
+    // does for Bash, so the live and reload paths must land on the same name.
+    expect(
+      inferLiveToolName({
+        title: "Get-ChildItem -Recurse",
+        kind: "execute",
+        rawInput: JSON.stringify({
+          command: "Get-ChildItem -Recurse",
+          description: "List files",
+        }),
+        meta: { claudeCode: { toolName: "PowerShell", title: "List files" } },
+      })
+    ).toBe("bash")
+    // …including before `rawInput` streams, when the meta name is all there is.
+    expect(
+      normalizeToolName(
+        inferLiveToolName({
+          title: "PowerShell",
+          kind: "execute",
+          rawInput: null,
+          meta: { claudeCode: { toolName: "PowerShell" } },
+        })
+      )
+    ).toBe("bash")
+  })
+})
+
+describe("Antigravity terminal tool", () => {
+  it("aliases the history parser's run_command to bash", () => {
+    // `parsers/antigravity.rs` stores the trajectory's own tool name.
+    expect(normalizeToolName("run_command")).toBe("bash")
+  })
+
+  it("classifies the live exec call by its input shape, not its title", () => {
+    // The live title IS the command — `tools.py::extract_tool_display_title`
+    // returns the CommandLine for exec tools "so IDEs render the command
+    // inside the terminal box". `byTitle` therefore resolves before `byKind`
+    // and named the tool "pnpm build", stranding it on the generic tool shell
+    // with the `{combinedOutput, exitCode, formatted_output, …}` rawOutput
+    // dumped as a JSON tree. Only the input shape identifies it.
+    expect(
+      inferLiveToolName({
+        title: "pnpm build",
+        kind: "execute",
+        rawInput: JSON.stringify({
+          command_line: "pnpm build",
+          working_dir: "/Users/x/work/my-app",
+        }),
+      })
+    ).toBe("bash")
+  })
+
+  it("classifies the PascalCase envelope a permission frame carries", () => {
+    // `_request_permission` forwards the MODEL's own argument envelope
+    // verbatim, which spells the same two arguments `CommandLine` / `Cwd`.
+    // That is also what the trajectory stores, so the historical card resolves
+    // through this branch too when the tool name is missing.
+    expect(
+      inferLiveToolName({
+        title: "pnpm build",
+        kind: "execute",
+        rawInput: JSON.stringify({
+          CommandLine: "pnpm build",
+          Cwd: "/Users/x/work/my-app",
+          WaitMsBeforeAsync: 10000,
+          toolAction: "Running pnpm build",
+        }),
+      })
+    ).toBe("bash")
+  })
+})
+
+describe("Antigravity MCP dispatch naming", () => {
+  it("collapses the <server>_<tool> name both paths now emit", () => {
+    // Antigravity routes EVERY MCP call through the `call_mcp_tool` sentinel
+    // and re-presents it as `<server>_<tool>`
+    // (`tools.py::unwrap_mcp_tool_call`); `parsers/antigravity.rs` performs the
+    // same rewrite so history and live resolve identically. Pinned here
+    // because that naming is now load-bearing for the delegation cards.
+    expect(normalizeToolName("houhub-mcp_delegate_to_agent")).toBe(
+      "delegate_to_agent"
+    )
+    expect(normalizeToolName("houhub-mcp_get_delegation_status")).toBe(
+      "get_delegation_status"
+    )
+    expect(normalizeToolName("houhub-mcp_ask_user_question")).toBe("question")
+    expect(normalizeToolName("houhub-mcp_task_progress")).toBe("task_progress")
+  })
+})
+
+describe("Grok spawn_subagent routes to the Agent card", () => {
+  it("aliases the raw spawn_subagent name to agent", () => {
+    // The freeform `\bagent\b` matcher can NOT catch it — "subagent" has no
+    // word boundary before "agent" — so without the exact alias any path
+    // where only the raw name survives renders a generic card.
+    expect(normalizeToolName("spawn_subagent")).toBe("agent")
+  })
+
+  it("classifies the live frame-1 tool_call by its input shape", () => {
+    // The exact first frame captured from a real grok session (019f9432):
+    // rawInput carries the standard `{description, prompt, subagent_type}`.
+    expect(
+      inferLiveToolName({
+        title: "spawn_subagent",
+        kind: "other",
+        rawInput: JSON.stringify({
+          description: "Explore test pages patterns",
+          prompt: "Explore this Next.js app codebase…",
+          subagent_type: "explore",
+          capability_mode: "read-only",
+        }),
+        meta: {
+          "x.ai/tool": {
+            name: "spawn_subagent",
+            kind: "task",
+            label: "Subagent",
+          },
+        },
+      })
+    ).toBe("agent")
+  })
+
+  it("still resolves via x.ai/tool.name when rawInput is absent", () => {
+    expect(
+      inferLiveToolName({
+        title: "Explore test pages patterns",
+        kind: "other",
+        rawInput: null,
+        meta: { "x.ai/tool": { name: "spawn_subagent", kind: "task" } },
+      })
+    ).toBe("agent")
+  })
+})
+
 describe("inferLiveToolName cursor task and MCP shapes", () => {
   it("routes cursor's task tool to the Agent card from the bare _toolName snapshot", () => {
     // Cursor announces the tool_call before its args stream in, so the live

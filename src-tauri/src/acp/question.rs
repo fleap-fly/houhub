@@ -1,3 +1,4 @@
+
 //! Interactive multiple-choice question ("ask the user") domain types.
 //!
 //! Mid-turn an agent can ask the user one or more multiple-choice questions and
@@ -27,13 +28,13 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use sacp::schema::{
+use agent_client_protocol::schema::v1::{
     CreateElicitationRequest, CreateElicitationResponse, ElicitationAcceptAction,
     ElicitationAction, ElicitationContentValue, ElicitationMode, ElicitationPropertySchema,
     ElicitationScope, MultiSelectItems, StringPropertySchema,
 };
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -449,7 +450,7 @@ pub fn build_outcome(questions: &[QuestionSpec], answer: &QuestionAnswer) -> Que
 /// question text. Synthesize one from the leading characters, bounded to
 /// [`MAX_HEADER_CHARS`]. Always returns a non-empty, in-bounds string so
 /// [`validate_specs`] accepts it.
-fn synthesize_header(question: &str) -> String {
+pub(crate) fn synthesize_header(question: &str) -> String {
     let header: String = question.trim().chars().take(MAX_HEADER_CHARS).collect();
     let header = header.trim();
     if header.is_empty() {
@@ -681,6 +682,31 @@ pub fn pi_select_option_id(outcome: &QuestionOutcome, ask: &PiSelectAsk) -> Opti
         .map(|(_, option_id)| option_id.clone())
 }
 
+/// True when a host's name for a tool is houhub's OWN `ask_user_question`
+/// companion tool, in whatever spelling the host composed it
+/// (`mcp__houhub-mcp__ask_user_question` from claude-agent-acp,
+/// `houhub-mcp/ask_user_question`, `houhub-mcp: ask_user_question`, …). Separators
+/// are folded and case is ignored, so only the two identifying words matter.
+///
+/// BOTH halves have to be present — the server name houhub itself injects
+/// (`houhub-mcp`, see `acp::connection::inject_houhub_mcp`) AND the tool name.
+/// The frontend can afford a bare `*ask_user_question` suffix rule because a
+/// wrong match there only picks a nicer card; this one unlocks an AUTO-APPROVAL
+/// of a blocked `session/request_permission`, and a third-party MCP server's
+/// similarly named tool is the user's to approve, not houhub's.
+///
+/// Auto-approving houhub's own ask tool is not a permission being skipped: the
+/// tool's entire effect is to put the interactive question card on screen and
+/// block until the user answers it. The consent IS the next dialog, so gating it
+/// behind a generic "run this tool?" card asks the user to approve being asked.
+pub fn is_houhub_ask_tool_name(name: &str) -> bool {
+    let normalized = name
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' ', '.', '/', ':'], "_");
+    normalized.ends_with("ask_user_question") && normalized.contains("houhub_mcp")
+}
+
 /// Serialize a resolved [`QuestionOutcome`] into grok's `AskUserQuestionExtResponse`
 /// — the reply to a `_x.ai/ask_user_question` ext request. Verified against grok
 /// 0.2.101 on a real run: the response is internally tagged by `outcome`; the
@@ -775,7 +801,7 @@ fn multi_select_choices(items: &MultiSelectItems) -> Vec<ElicitationChoice> {
                 value: o.value.clone(),
             })
             .collect(),
-        MultiSelectItems::Untitled(u) => u
+        MultiSelectItems::String(u) => u
             .values
             .iter()
             .map(|v| ElicitationChoice {
@@ -988,7 +1014,8 @@ impl ElicitationPeer {
 /// stamps it on every `request_user_input` field (question properties carry
 /// `isOther`/`isSecret`, companions carry `questionId` plus the role marker),
 /// and on nothing else — a generic MCP server's form has no `codex` namespace.
-/// The typed sacp property structs drop `_meta`, so this reads the raw JSON.
+/// The typed schema property structs carry no `_meta`, so this reads the raw
+/// JSON.
 fn codex_property_meta<'a>(raw: &'a Value, id: &str) -> Option<&'a Value> {
     raw.get("requestedSchema")?
         .get("properties")?
@@ -1033,10 +1060,7 @@ fn codex_form_shape(raw: &Value, peer: ElicitationPeer) -> Option<CodexUserInput
     let ElicitationPeer::Codex(running) = peer else {
         return None;
     };
-    let properties = raw
-        .get("requestedSchema")?
-        .get("properties")?
-        .as_object()?;
+    let properties = raw.get("requestedSchema")?.get("properties")?.as_object()?;
     let mut is_codex_form = false;
     let mut companion_shape = None;
     for id in properties.keys() {
@@ -1044,8 +1068,8 @@ fn codex_form_shape(raw: &Value, peer: ElicitationPeer) -> Option<CodexUserInput
             companion_shape = Some(shape);
             continue;
         }
-        is_codex_form |= codex_property_meta(raw, id)
-            .is_some_and(|codex| codex.get("isOther").is_some());
+        is_codex_form |=
+            codex_property_meta(raw, id).is_some_and(|codex| codex.get("isOther").is_some());
     }
     if !is_codex_form && companion_shape.is_none() {
         return None;
@@ -1143,8 +1167,8 @@ fn is_codex_synthetic_other_choice(raw: &Value, id: &str, label: &str, value: &s
 /// marker means houhub keeps collapsing the companion into the card's built-in
 /// "Other" input no matter which adapter produced the form.
 ///
-/// Like [`is_secret_property`], this reads the raw JSON: the typed sacp
-/// property structs drop `_meta`.
+/// Like [`is_secret_property`], this reads the raw JSON: the typed schema
+/// property structs carry no `_meta`.
 fn is_custom_answer_property(raw: &Value, id: &str) -> bool {
     raw.get("requestedSchema")
         .and_then(|s| s.get("properties"))
@@ -1210,10 +1234,7 @@ pub fn elicitation_auto_resolution_ms(raw: &Value) -> Option<u64> {
 /// [`crate::acp::manager::ConnectionManager::register_question`] re-runs
 /// [`validate_specs`]. Errors only on non-form / undeserializable requests,
 /// which the connection handler turns into a graceful decline.
-pub fn classify_elicitation(
-    raw: &Value,
-    peer: ElicitationPeer,
-) -> Result<ElicitationPlan, String> {
+pub fn classify_elicitation(raw: &Value, peer: ElicitationPeer) -> Result<ElicitationPlan, String> {
     let req: CreateElicitationRequest = serde_json::from_value(raw.clone())
         .map_err(|e| format!("unparseable elicitation request: {e}"))?;
     let ElicitationMode::Form(form) = &req.mode else {
@@ -1279,7 +1300,7 @@ fn decline_approval_option() -> ElicitationApprovalOption {
 /// Allow/Decline. Mirrors codex-acp's own `request_permission` fallback
 /// (`buildToolApprovalOptions`) so approvals look identical either way.
 fn approval_from_form(
-    form: &sacp::schema::ElicitationFormMode,
+    form: &agent_client_protocol::schema::v1::ElicitationFormMode,
     message: String,
     tool_call_id: Option<String>,
 ) -> ElicitationApproval {
@@ -1343,8 +1364,8 @@ fn approval_from_form(
 }
 
 /// True when the raw schema property carries codex's secret marker
-/// (`_meta.codex.isSecret`). The typed sacp property structs drop `_meta`, so
-/// this reads the raw JSON alongside them.
+/// (`_meta.codex.isSecret`). The typed schema property structs carry no
+/// `_meta`, so this reads the raw JSON alongside them.
 fn is_secret_property(raw: &Value, id: &str) -> bool {
     raw.get("requestedSchema")
         .and_then(|s| s.get("properties"))
@@ -1362,7 +1383,7 @@ fn is_secret_property(raw: &Value, id: &str) -> bool {
 /// always-present "Other" input) — including plain strings, numbers, integers,
 /// and choice fields whose options were all empty/duplicate.
 fn parse_form_questions(
-    form: &sacp::schema::ElicitationFormMode,
+    form: &agent_client_protocol::schema::v1::ElicitationFormMode,
     raw: &Value,
     peer: ElicitationPeer,
 ) -> ElicitationQuestions {
@@ -1892,7 +1913,11 @@ mod tests {
             q.specs[0].header, "Approach",
             "…and the short tab label in `description`"
         );
-        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+        let labels: Vec<_> = q.specs[0]
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect();
         assert_eq!(
             labels,
             ["Incremental", "Rewrite"],
@@ -1926,7 +1951,11 @@ mod tests {
             json!(["q1"]),
         );
         let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
-        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+        let labels: Vec<_> = q.specs[0]
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect();
         assert_eq!(labels, ["Incremental", "None of the above"]);
     }
 
@@ -1989,7 +2018,11 @@ mod tests {
 
         // Running ≥1.12.0 — `title` is the question.
         let q = expect_questions(
-            classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle))).unwrap(),
+            classify_elicitation(
+                &raw,
+                ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle)),
+            )
+            .unwrap(),
         );
         assert_eq!(q.specs[0].question, "Which approach should I take?");
         assert_eq!(q.specs[0].header, "Approach");
@@ -1997,7 +2030,11 @@ mod tests {
         // Running ≤1.11.0 — the old reading, even though no marker dates the
         // form. A custom pin is a supported configuration.
         let q = expect_questions(
-            classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInDescription))).unwrap(),
+            classify_elicitation(
+                &raw,
+                ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInDescription)),
+            )
+            .unwrap(),
         );
         assert_eq!(q.specs[0].question, "Approach");
         // …and the question text lands in the header slot, where the
@@ -2039,7 +2076,11 @@ mod tests {
             json!([]),
         );
         let q = expect_questions(
-            classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle))).unwrap(),
+            classify_elicitation(
+                &raw,
+                ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle)),
+            )
+            .unwrap(),
         );
         assert_eq!(q.specs[0].question, "Approach", "running version wins");
         // …and with no running version, the marker dates it the old way.
@@ -2078,7 +2119,11 @@ mod tests {
             ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInDescription)),
         ] {
             let q = expect_questions(classify_elicitation(&raw, peer).unwrap());
-            let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+            let labels: Vec<_> = q.specs[0]
+                .options
+                .iter()
+                .map(|o| o.label.as_str())
+                .collect();
             assert_eq!(
                 labels,
                 ["Incremental", "None of the above"],
@@ -2136,7 +2181,11 @@ mod tests {
         );
         assert_eq!(q.specs[0].question, "Which approach should I take?");
         assert_eq!(q.specs[0].header, "Approach");
-        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+        let labels: Vec<_> = q.specs[0]
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect();
         assert_eq!(labels, ["Incremental", "None of the above"]);
 
         // The identical payload from codex: companion skipped, 1.12 orientation,
@@ -2151,7 +2200,11 @@ mod tests {
         );
         assert_eq!(q.specs.len(), 1);
         assert_eq!(q.specs[0].question, "Approach");
-        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+        let labels: Vec<_> = q.specs[0]
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect();
         assert_eq!(labels, ["Incremental"]);
     }
 
@@ -2196,7 +2249,11 @@ mod tests {
             )
             .unwrap(),
         );
-        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+        let labels: Vec<_> = q.specs[0]
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect();
         assert_eq!(
             labels,
             ["None of the above"],
@@ -2233,9 +2290,17 @@ mod tests {
             json!(["q1"]),
         );
         let q = expect_questions(
-            classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle))).unwrap(),
+            classify_elicitation(
+                &raw,
+                ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle)),
+            )
+            .unwrap(),
         );
-        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+        let labels: Vec<_> = q.specs[0]
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect();
         assert_eq!(labels, ["Incremental", "None of the above"]);
     }
 
@@ -2255,7 +2320,10 @@ mod tests {
             json!(["port"]),
         );
         let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
-        assert_eq!(q.specs[0].question, "Which port should the server listen on?");
+        assert_eq!(
+            q.specs[0].question,
+            "Which port should the server listen on?"
+        );
         assert_eq!(q.specs[0].header, "Port");
     }
 
@@ -2537,7 +2605,8 @@ mod tests {
             },
             "_meta": {"codex_approval_kind": "mcp_tool_call", "persist": ["session", "always"]}
         });
-        let approval = expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        let approval =
+            expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert_eq!(approval.message, "Allow tool call?");
         assert_eq!(approval.tool_call_id.as_deref(), Some("call-1"));
         assert!(approval.persist_in_content);
@@ -2584,7 +2653,8 @@ mod tests {
             "requestedSchema": {"type": "object", "properties": {}},
             "_meta": {"codex_approval_kind": "mcp_tool_call"}
         });
-        let approval = expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        let approval =
+            expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert!(!approval.persist_in_content);
         let ids: Vec<_> = approval
             .options
@@ -2606,7 +2676,8 @@ mod tests {
         // A non-approval form with nothing to fill in (a bare MCP server
         // confirmation) renders Accept/Decline rather than auto-declining.
         let raw = elicitation_raw(json!({}), json!([]));
-        let approval = expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        let approval =
+            expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert_eq!(approval.message, "Input requested");
         let ids: Vec<_> = approval
             .options
@@ -3163,6 +3234,50 @@ mod tests {
             ("deny".to_string(), "Deny".to_string()),
         ];
         assert!(parse_pi_select_ask(&pi_select_tool_call(), &foreign).is_none());
+    }
+
+    #[test]
+    fn is_houhub_ask_tool_name_accepts_every_host_spelling_of_houhubs_own_tool() {
+        for spelling in [
+            // claude-agent-acp: an MCP tool's permission card title IS the
+            // raw tool name.
+            "mcp__houhub-mcp__ask_user_question",
+            "houhub-mcp/ask_user_question",
+            "houhub-mcp: ask_user_question",
+            "mcp.houhub-mcp.ask_user_question",
+            // Hosts that title-case or pad it.
+            "  MCP__HouHub-MCP__Ask_User_Question  ",
+        ] {
+            assert!(
+                is_houhub_ask_tool_name(spelling),
+                "{spelling} is houhub's own ask tool"
+            );
+        }
+    }
+
+    #[test]
+    fn is_houhub_ask_tool_name_rejects_tools_that_are_not_houhubs_ask() {
+        for other in [
+            // A third-party MCP server's similarly named tool: approving it is
+            // the user's decision, so the bare suffix must NOT be enough.
+            "mcp__other-server__ask_user_question",
+            "ask_user_question",
+            // grok's NATIVE ask arrives on its own ext channel, never as a
+            // permission request — and it is not houhub-mcp's tool either.
+            "_x.ai/ask_user_question",
+            // HouHub's other companion tools keep their approval gate.
+            "mcp__houhub-mcp__delegate_to_agent",
+            "mcp__houhub-mcp__check_user_feedback",
+            // Right server, right words, wrong tool — the match is anchored at
+            // the END so a longer name cannot borrow it.
+            "mcp__houhub-mcp__ask_user_question_twice",
+            "",
+        ] {
+            assert!(
+                !is_houhub_ask_tool_name(other),
+                "{other} must keep its approval card"
+            );
+        }
     }
 
     #[test]

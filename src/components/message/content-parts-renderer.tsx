@@ -7,6 +7,7 @@ import {
 } from "@/lib/adapters/tool-kind-classifier"
 import type { MessageRole, PlanEntryInfo } from "@/lib/types"
 import {
+  aliasToolInputKeys,
   extractClaudeCodeMetaTitle,
   extractClaudeCodeSkillName,
   normalizeToolName,
@@ -55,6 +56,7 @@ import {
   ContextCompactionCard,
   isContextCompactionMeta,
 } from "./context-compaction-card"
+import { contextCompactionSummary } from "@/lib/context-compaction"
 import { FeedbackCheckResultCard } from "./feedback-check-result-card"
 import { SearchResultsOutput } from "./search-results-output"
 import {
@@ -887,8 +889,11 @@ function getToolIcon(
   if (name === "edit") return <FilePenLineIcon className={ICON_CLASS} />
   if (name === "write" || name === "notebookedit")
     return <FilePlusIcon className={ICON_CLASS} />
-  // `powershell` is pi's Windows stand-in for `bash` — same tool, same icon.
-  if (name === "bash" || name === "exec_command" || name === "powershell")
+  // No `powershell` arm: every caller passes the NORMALIZED name, and
+  // `normalizeToolName` now aliases the Windows shells onto `bash` so the icon
+  // and the card body can no longer disagree about what the call is. The raw
+  // name still reaches `classifyToolKind`, which keeps its own arm.
+  if (name === "bash" || name === "exec_command")
     return <TerminalIcon className={ICON_CLASS} />
   if (name === CODEX_SCRIPT_TOOL_NAME)
     return <CodeIcon className={ICON_CLASS} />
@@ -1143,9 +1148,11 @@ function deriveToolTitle(
     return "TodoWrite"
   }
 
-  // Skill
+  // Skill. OpenCode's native `skill` tool takes `{name}`; the other hosts pass
+  // `{skill}`, so accept either rather than falling through to a title-less
+  // generic card.
   if (name === "skill") {
-    const sk = getField("skill")
+    const sk = getField("skill") ?? getField("name")
     if (sk) return `Skill: ${sk}`
   }
 
@@ -1427,6 +1434,10 @@ function BashToolInput({ input }: { input: Record<string, unknown> }) {
 }
 
 /**
+ * Parse structured read output from backend: `{"start_line":N,"content":"..."}`.
+ * Falls back to raw text with startLine=1 if not structured.
+ */
+/**
  * codex classifies file-reading shell commands (sed/cat/head) as ACP `read`
  * commandActions whose output is a command-execution envelope — codex-acp's
  * `createCommandExecutionCompleteUpdate` always sends BOTH
@@ -1448,7 +1459,7 @@ export function codexCommandReadOutput(raw: string): string | null {
   // when the output actually STARTS with that metadata — so a clean file whose
   // first line happens to be "Output:" is never truncated by the envelope parser.
   const firstLine = (
-    out.split("\n").find((line) => line.trim().length > 0) ?? ""
+    out.split("\n").find((l) => l.trim().length > 0) ?? ""
   ).trim()
   return CLI_META_LINE_RE.test(firstLine)
     ? parseCliExecutionEnvelope(out).output
@@ -1555,6 +1566,11 @@ function FileToolInput({
         <span className="shrink-0 rounded border border-border bg-background px-1.5 py-0.5 text-3xs text-muted-foreground">
           {isRead ? "READ" : "WRITE"}
         </span>
+        {/* No path in the input is not worth an "unknown" placeholder: the
+            enclosing tool card's header already names the file (it derives the
+            title from the call's `title`/`locations`, which agents fill even
+            when their arguments don't). Printing "unknown" under a header that
+            says `minimal/page.tsx` only reads as a bug. */}
         {filePath ? (
           <FilePathLink
             filePath={filePath}
@@ -1563,9 +1579,7 @@ function FileToolInput({
             {filePath}
           </FilePathLink>
         ) : (
-          <span className="min-w-0 flex-1 truncate font-mono text-foreground">
-            {t("unknown")}
-          </span>
+          <span className="min-w-0 flex-1" />
         )}
         {badges.length > 0 && (
           <span className="ml-auto inline-flex shrink-0 items-center gap-2 text-3xs text-muted-foreground">
@@ -1893,7 +1907,12 @@ function StructuredToolInput({
 }) {
   const t = useTranslations("Folder.chat.contentParts")
   const name = toolName.toLowerCase()
-  const parsed = useMemo(() => tryParseJson(input), [input])
+  // Every dedicated card below reads the canonical (snake_case) argument names.
+  // The alias pass fills in the ones an agent spelled differently on the live
+  // wire — OpenCode's camelCase `filePath`/`oldString`, which its ACP adapter
+  // forwards verbatim while the history parser already rewrites them. Doing it
+  // once here rather than per card keeps Write/Read/Edit/Grep in agreement.
+  const parsed = useMemo(() => aliasToolInputKeys(tryParseJson(input)), [input])
   const truncated =
     (name === "edit" || name === "write" || name === "apply_patch") &&
     isTruncatedInput(input)
@@ -2271,7 +2290,6 @@ const ToolCallPart = memo(function ToolCallPart({
   const isCommandTool =
     toolNameLower === "bash" ||
     toolNameLower === "exec_command" ||
-    toolNameLower === "run_command" ||
     isShellSessionTool
   const isCommandLikeTool = isCommandTool || toolNameLower === "apply_patch"
   const isSearchTool = toolNameLower === "grep" || toolNameLower === "glob"
@@ -2630,7 +2648,13 @@ const ToolCallPart = memo(function ToolCallPart({
   // with `_meta.contextCompaction` (not addressed by tool name) → a subtle
   // status card instead of the generic tool shell.
   if (isContextCompactionMeta(part.meta)) {
-    return <ContextCompactionCard state={part.state} />
+    return (
+      <ContextCompactionCard
+        state={part.state}
+        meta={part.meta}
+        summary={contextCompactionSummary(part.meta, part.output)}
+      />
+    )
   }
 
   // Agent/subagent tools get a dedicated container rendering

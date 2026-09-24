@@ -14,6 +14,7 @@ import { CollapsibleUserMessage } from "./collapsible-user-message"
 import { CollapsibleSystemMessage } from "./collapsible-system-message"
 import {
   contextCompactionPayload,
+  contextCompactionSummary,
   isContextCompactionMeta,
 } from "@/lib/context-compaction"
 import {
@@ -25,11 +26,13 @@ import {
   type AdaptedContentPart,
   type AdaptedMessage,
   type MessageTurnAdapter,
+  type ToolCallState,
   type UserImageDisplay,
   type UserResourceDisplay,
 } from "@/lib/adapters/ai-elements-adapter"
 import { TurnStats } from "./turn-stats"
 import { LiveTurnStats } from "./live-turn-stats"
+import { ModelLabelProvider } from "./model-label-context"
 import { ReplyArtifacts } from "./reply-artifacts"
 import { UserResourceLinks } from "./user-resource-links"
 import { UserImageAttachments } from "./user-image-attachments"
@@ -56,10 +59,10 @@ import {
   AlertCircle,
   CheckIcon,
   CopyIcon,
-  ListTodo,
   Loader2,
   Plus,
   RefreshCw,
+  ListTodo,
 } from "lucide-react"
 import { useCreateTaskFromMessage } from "./use-create-task-from-message"
 import { Button } from "@/components/ui/button"
@@ -71,13 +74,14 @@ import {
 import type { AgentType, ConnectionStatus, MessageTurn } from "@/lib/types"
 import { copyTextToClipboard } from "@/lib/utils"
 import { VirtualizedMessageThread } from "@/components/message/virtualized-message-thread"
+import { SelectionActionBubble } from "@/components/message/selection-action-bubble"
 import {
   ConversationMessageNav,
   type MessageNavEntry,
 } from "@/components/message/conversation-message-nav"
-import { SelectionActionBubble } from "@/components/message/selection-action-bubble"
 import type { MessageScrollContextValue } from "@/components/message/message-scroll-context"
 import { extractSessionFilesGrouped } from "@/lib/session-files"
+import { useModelLabels } from "@/hooks/use-model-labels"
 import { unescapeComposerText } from "@/lib/composer-copy-text"
 import { useStickToBottomContext } from "use-stick-to-bottom"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -95,10 +99,11 @@ interface MessageListViewProps {
   detailError?: string | null
   /**
    * Set when the agent rejected `session/load` non-recoverably (e.g. the
-   * historical session_id was deleted). It replaces the message area only
-   * when there is no renderable local history; otherwise the owning panel
-   * surfaces the error in the composer dock with Reload/New conversation
-   * actions while keeping the transcript readable.
+   * historical session_id was deleted, or the conversation's folder is gone).
+   * Replaces the message area only when nothing is renderable; when the local
+   * DB has the message history, the transcript stays visible and the owning
+   * panel surfaces this error as a banner in the composer area instead (with
+   * Reload / New session actions), since the agent can't continue the thread.
    */
   acpLoadError?: string | null
   hideEmptyState?: boolean
@@ -109,9 +114,19 @@ interface MessageListViewProps {
    * conversation view; disabled in compact embeds (e.g. the sub-agent dialog).
    */
   showMessageNav?: boolean
-  /** Optional per-user-turn phase label used by task transcripts. */
+  /**
+   * Optional phase label for a user turn (work-task transcripts label each
+   * engine-dispatched round: work / retry / return / merge). Called at render
+   * time per user-role turn; MUST be pure — the thread is virtualized, so
+   * items render in arbitrary order and multiplicity. `null` = no divider.
+   */
   userTurnHeader?: ((group: ResolvedMessageGroup) => string | null) | null
-  /** Quote a transcript selection into the owning composer. */
+  /**
+   * Quote a text selection made in this transcript into the conversation
+   * composer. Enables the "quote" entry on the selection bubble; omitted on
+   * read-only surfaces (sub-agent dialog, task transcripts), which then offer
+   * copy alone. MUST be referentially stable.
+   */
   onQuoteSelection?: (text: string) => void
   /**
    * Ask a question about a text selection made in this transcript: the host
@@ -183,8 +198,7 @@ export type ThreadRenderItem =
     }
   | {
       key: string
-      kind: "compaction"
-      meta: Record<string, unknown> | null
+      kind: "typing"
     }
   | {
       // A context-compaction event hoisted OUT of an assistant turn into its own
@@ -196,7 +210,14 @@ export type ThreadRenderItem =
       // dedicated kind it breaks the assistant-merge run and renders as a
       // chrome-less centered divider in the correct between-turns position.
       key: string
-      kind: "typing"
+      kind: "compaction"
+      meta: Record<string, unknown> | null
+      /** The retained summary, when the backend claimed one for this call
+       *  (see `contextCompactionSummary`). */
+      summary?: string | null
+      /** The call's lifecycle, so a `/compact` still running reads as
+       *  compacting and its summary streams. */
+      state?: ToolCallState
     }
 
 /**
@@ -361,14 +382,20 @@ const EMPTY_DELEGATIONS: DelegationCardSource[] = []
 // when a conversation has no user messages.
 const EMPTY_NAV_ENTRIES: MessageNavEntry[] = []
 
-const singletonSourceTurnsCache = new WeakMap<MessageTurn, MessageTurn[]>()
-
+// A single turn's `sourceTurns` is just `[turn]`. Cache the wrapper per turn
+// object so an unchanged historical turn keeps a stable `sourceTurns` reference
+// across streaming-token re-renders — that's the last prop preventing
+// `HistoricalMessageGroup`'s memo from bailing out (its `group` and the
+// phase-derived flags are already reference-/value-stable). The streaming turn
+// is rebuilt every token, so it gets a fresh wrapper and still re-renders.
+const sourceTurnsSingletonCache = new WeakMap<MessageTurn, MessageTurn[]>()
 export function singletonSourceTurns(turn: MessageTurn): MessageTurn[] {
-  const cached = singletonSourceTurnsCache.get(turn)
-  if (cached) return cached
-  const turns = [turn]
-  singletonSourceTurnsCache.set(turn, turns)
-  return turns
+  let cached = sourceTurnsSingletonCache.get(turn)
+  if (!cached) {
+    cached = [turn]
+    sourceTurnsSingletonCache.set(turn, cached)
+  }
+  return cached
 }
 
 // Collect the sub-agent delegations within a turn's adapted parts, recursing
@@ -466,8 +493,11 @@ type AssistantTurnItem = Extract<ThreadRenderItem, { kind: "turn" }>
  * Cache entry for one merged assistant run, keyed on the run's FIRST member
  * group. Valid only while every member's group reference and item key still
  * match: group identity flows through the per-turn adapter + group caches, so
- * member-group equality implies unchanged content AND sourceTurns, while the
- * keys embed phase/id/index so ordering or phase drift invalidates too. A run
+ * member-group equality implies unchanged content AND sourceTurns — the merged
+ * item FREEZES its members' `sourceTurns`, so any turn field the adapter's
+ * cache ignores would be stale here forever (`source_turn_id`, which the fork
+ * affordance reads, is in that tuple for exactly this reason). The keys embed
+ * phase/id/index so ordering or phase drift invalidates too. A run
  * containing the streaming turn misses every batch by construction (the
  * streaming turn re-adapts per batch) — that residual rebuild is the point;
  * purely historical runs hit and keep their group/parts/sourceTurns
@@ -495,27 +525,33 @@ function isEmptyTurnItem(item: ThreadRenderItem): boolean {
 
 /**
  * When a resolved group's ONLY meaningful content is a single context-compaction
- * tool-call part, return that part's `_meta` (so the caller can hoist it to a
- * standalone `"compaction"` divider item); otherwise `null`. Empty text parts are
- * ignored so a bare compaction turn still qualifies. Scoped to assistant groups
- * with no user resources/images. A compaction part always carries a truthy
- * `_meta` (`contextCompaction` as the boolean marker or the 1.3.0+ versioned
- * object), so a non-null return is unambiguous.
+ * tool-call part, return that part's `_meta` and retained summary (so the caller
+ * can hoist it to a standalone `"compaction"` divider item); otherwise `null`.
+ * Empty text parts are ignored so a bare compaction turn still qualifies. Scoped
+ * to assistant groups with no user resources/images. A compaction part always
+ * carries a truthy `_meta` (`contextCompaction` as the boolean marker or the
+ * 1.3.0+ versioned object), so a non-null return is unambiguous.
  */
-function compactionOnlyMeta(
-  group: ResolvedMessageGroup
-): Record<string, unknown> | null {
+export function compactionOnlyPart(group: ResolvedMessageGroup): {
+  meta: Record<string, unknown> | null
+  summary: string | null
+  state: ToolCallState
+} | null {
   if (group.role !== "assistant") return null
   if (group.resources.length > 0 || group.images.length > 0) return null
   const meaningful = group.parts.filter(
-    (part) => !(part.type === "text" && part.text.trim().length === 0)
+    (p) => !(p.type === "text" && p.text.trim().length === 0)
   )
   if (meaningful.length !== 1) return null
   const only = meaningful[0]
   if (only.type !== "tool-call" || !isContextCompactionMeta(only.meta)) {
     return null
   }
-  return only.meta ?? null
+  return {
+    meta: only.meta ?? null,
+    summary: contextCompactionSummary(only.meta, only.output),
+    state: only.state,
+  }
 }
 
 /**
@@ -1029,8 +1065,13 @@ export function MessageListView({
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
-  // Subscribe only to this conversation's runtime session and derived timeline.
-  // Streaming another conversation must not re-render this message list.
+  // Resolved once for the whole thread rather than per reply: the labels are a
+  // property of the agent, not of any one turn.
+  const modelLabel = useModelLabels(agentType)
+  // Subscribe to only this conversation's session + derived timeline. Another
+  // conversation's streaming token no longer re-renders this view; the timeline
+  // selector returns a reference-stable array (memoized per session object) so
+  // unrelated dispatches are inert here.
   const session = useConversationRuntimeStore(
     (s) => s.byConversationId.get(conversationId) ?? null
   )
@@ -1108,11 +1149,13 @@ export function MessageListView({
     const streamingIndices = new Set<number>()
     const inProgressToolCallIdsByIndex = new Map<number, Set<string>>()
     timelineTurns.forEach((item, i) => {
-      if (item.phase === "streaming") {
-        streamingIndices.add(i)
-        if (item.inProgressToolCallIds && item.inProgressToolCallIds.size > 0) {
-          inProgressToolCallIdsByIndex.set(i, item.inProgressToolCallIds)
-        }
+      if (item.phase === "streaming") streamingIndices.add(i)
+      // Not gated on the streaming phase: a PERSISTED turn of a conversation
+      // that is still running (viewer without the live stream) also carries
+      // in-flight calls, marked by the store from the backend's
+      // `in_flight_user_turn_id`. Both phases feed the same adapter knob.
+      if (item.inProgressToolCallIds && item.inProgressToolCallIds.size > 0) {
+        inProgressToolCallIdsByIndex.set(i, item.inProgressToolCallIds)
       }
     })
     const allAdapted = turnAdapter.adapt(
@@ -1149,17 +1192,30 @@ export function MessageListView({
         }
         groupCache.set(msg, group)
       }
-      const key = `${phase}-${msg.id}-${i}`
-      const compactionMeta = compactionOnlyMeta(group)
-      if (compactionMeta !== null) {
-        return { key, kind: "compaction" as const, meta: compactionMeta }
+      // Include phase so a turn that briefly coexists across phases (e.g.
+      // a streaming turn that has just been promoted to localTurns while the
+      // liveMessage is still attached) doesn't collide with itself in the
+      // virtualized list, and role because the timeline dedup deliberately
+      // keeps different-role turns that share an id. NO positional index:
+      // paging in older history prepends items, and an index-bearing key
+      // would shift every existing row's identity — remounting the whole
+      // list and dropping the virtualizer's measurement cache mid-scroll.
+      const key = `${phase}-${role}-${msg.id}`
+      // Hoist a compaction-only turn to its own standalone divider item so it
+      // renders BETWEEN turns instead of being merged into (and wedged inside)
+      // the preceding assistant reply by `mergeConsecutiveAssistantTurns`.
+      const compaction = compactionOnlyPart(group)
+      if (compaction !== null) {
+        return {
+          key,
+          kind: "compaction" as const,
+          meta: compaction.meta,
+          summary: compaction.summary,
+          state: compaction.state,
+        }
       }
       return {
-        // Include phase so a turn that briefly coexists across phases (e.g.
-        // a streaming turn that has just been promoted to localTurns while the
-        // liveMessage is still attached) doesn't collide with itself in the
-        // virtualized list. Index disambiguates further within a phase.
-        key: `${phase}-${msg.id}-${i}`,
+        key,
         kind: "turn" as const,
         group,
         phase,
@@ -1344,7 +1400,11 @@ export function MessageListView({
           // Chrome-less centered divider between turns (no avatar / stats footer).
           return (
             <div className="px-1 py-2">
-              <ContextCompactionCard meta={item.meta} />
+              <ContextCompactionCard
+                state={item.state}
+                meta={item.meta}
+                summary={item.summary}
+              />
             </div>
           )
         default:
@@ -1496,10 +1556,12 @@ export function MessageListView({
     )
   }
 
-  // A failed ACP resume does not invalidate the local transcript. Keep the
-  // history visible and let the composer-docked banner provide the recovery
-  // actions; only replace the message area when there is no local content to
-  // show at all.
+  // An ACP load failure replaces content only when there is nothing to show
+  // (e.g. the DB detail also failed). When the local DB has the conversation,
+  // keep the transcript visible — the failure is not silent: the detail panel
+  // renders the load error as a banner in the composer area (with Reload /
+  // New session actions), so the user still learns that a follow-up message
+  // can't extend this thread.
   const blockingLoadError = hasRenderableContent ? null : (acpLoadError ?? null)
   const fallbackLoadError =
     detailError && !hasRenderableContent ? detailError : null
@@ -1660,7 +1722,7 @@ export function MessageListView({
     <MarkdownImageProvider
       rootPath={imageRoot === undefined ? storedImageRoot : imageRoot}
     >
-      {thread}
+      <ModelLabelProvider value={modelLabel}>{thread}</ModelLabelProvider>
     </MarkdownImageProvider>
   )
 }

@@ -24,6 +24,7 @@ import {
   patchCodexConfigTomlText,
   patchEnvByImportantKey,
   patchImportantConfigText,
+  codexModelListForProvider,
   codexSandboxSeedsAcpPreset,
   rebaseDeepSeekDraft,
   setAdapterChannel,
@@ -104,6 +105,49 @@ describe("model provider engine bindings", () => {
     expect(
       modelProviderSupportsAgent({ ...provider, agent_types: [] }, "gemini")
     ).toBe(false)
+  })
+
+  // A shared provider's fetched models are the only record of what the gateway
+  // serves — its `model` column belongs to Claude. Binding codex to it used to
+  // yield no catalog at all, so the composer offered only codex's bundled
+  // official models (see the bug report: a Houflow gateway with deepseek.
+  it("derives codex's catalog from a shared provider's fetched models", () => {
+    const shared = {
+      ...provider,
+      model: JSON.stringify({ main: "claude-sonnet-5" }),
+      models: ["deepseek-flash", "kimi-k2"],
+    }
+    const list = codexModelListForProvider(shared)
+    expect(list.customs.map((entry) => entry.slug)).toEqual([
+      "deepseek-flash",
+      "kimi-k2",
+    ])
+    expect(list.default).toBe("deepseek-flash")
+    // The listing gates the catalog file + `model_catalog_json` reference.
+    expect(list.customs.length).toBeGreaterThan(0)
+  })
+
+  it("keeps a codex-only provider's structured catalog authoritative", () => {
+    const codexOnly = {
+      ...provider,
+      agent_types: ["codex"],
+      agent_type: "codex",
+      model: JSON.stringify({
+        customs: [{ slug: "gw/opus", base: "gw/opus" }],
+        default: "gw/opus",
+      }),
+      models: ["gw/opus", "noise"],
+    }
+    const list = codexModelListForProvider(codexOnly)
+    expect(list.customs.map((entry) => entry.slug)).toEqual(["gw/opus"])
+    expect(list.default).toBe("gw/opus")
+  })
+
+  it("yields no catalog for a shared provider with nothing fetched", () => {
+    expect(
+      codexModelListForProvider({ ...provider, models: [] }).customs
+    ).toEqual([])
+    expect(codexModelListForProvider(null).customs).toEqual([])
   })
 })
 

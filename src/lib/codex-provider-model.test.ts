@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   applyCodexCompatOverrides,
+  codexConfigFromProviderModels,
   CODEX_COMPAT_OVERRIDES,
   hasCodexCustomization,
   isCodexCompatEntry,
@@ -235,5 +236,86 @@ describe("Codex OpenAI-compatible template", () => {
         gptBase
       )
     ).toBe(false)
+  })
+})
+
+// A shared (multi-agent) provider cannot keep its codex catalog in `model` —
+// that column belongs to whichever agent owns it — so the codex binding derives
+// the catalog from the provider's fetched `models`. Mirrors the Rust
+// `catalog_from_provider_models`, and is what makes a gateway's models
+// selectable in codex at all.
+describe("Codex catalog derived from a provider's model list", () => {
+  it("turns the fetched list into compat-tuned customs, first entry default", () => {
+    const config = codexConfigFromProviderModels(
+      ["deepseek-flash", "kimi-k2"],
+      null
+    )
+    expect(config.customs.map((c) => c.slug)).toEqual([
+      "deepseek-flash",
+      "kimi-k2",
+    ])
+    expect(config.default).toBe("deepseek-flash")
+    for (const entry of config.customs) {
+      // Every derived model speaks plain OpenAI Responses — a third-party
+      // gateway cannot serve GPT's code-mode/multi-agent dialect.
+      expect(entry.base).toBe(entry.slug)
+      expect(entry.overrides).toEqual({ ...CODEX_COMPAT_OVERRIDES })
+      expect(isCodexCompatEntry(entry, {})).toBe(true)
+    }
+  })
+
+  it("prefers the provider's own model as default when it is in the list", () => {
+    const config = codexConfigFromProviderModels(
+      ["deepseek-flash", "kimi-k2"],
+      "kimi-k2"
+    )
+    expect(config.default).toBe("kimi-k2")
+  })
+
+  it("falls back to the first model when the provider's model is not listed", () => {
+    expect(
+      codexConfigFromProviderModels(
+        ["deepseek-flash", "kimi-k2"],
+        "claude-sonnet-5"
+      ).default
+    ).toBe("deepseek-flash")
+  })
+
+  it("trims, drops blanks, and de-duplicates the fetched list", () => {
+    expect(
+      codexConfigFromProviderModels(
+        [" deepseek-flash ", "deepseek-flash", "  ", "kimi-k2"],
+        null
+      ).customs.map((c) => c.slug)
+    ).toEqual(["deepseek-flash", "kimi-k2"])
+  })
+
+  it("an empty list is no catalog at all, so codex keeps its own table", () => {
+    expect(codexConfigFromProviderModels([], null)).toEqual({ customs: [] })
+    expect(codexConfigFromProviderModels(["  "], null)).toEqual({
+      customs: [],
+    })
+    expect(
+      serializeCodexModelConfig(codexConfigFromProviderModels([], null))
+    ).toBeNull()
+  })
+
+  it("serializes to canonical JSON the backend can consume verbatim", () => {
+    const raw = serializeCodexModelConfig(
+      codexConfigFromProviderModels(["deepseek-flash"], "deepseek-flash")
+    )
+    expect(raw).not.toBeNull()
+    // Round-trips byte-stably, so the editor never reports a spurious change.
+    expect(serializeCodexModelConfig(parseCodexModelConfig(raw))).toBe(raw)
+    expect(parseCodexModelConfig(raw)).toEqual({
+      customs: [
+        {
+          slug: "deepseek-flash",
+          base: "deepseek-flash",
+          overrides: { ...CODEX_COMPAT_OVERRIDES },
+        },
+      ],
+      default: "deepseek-flash",
+    })
   })
 })

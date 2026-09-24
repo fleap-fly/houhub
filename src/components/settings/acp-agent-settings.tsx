@@ -126,6 +126,7 @@ import type {
 } from "@/lib/types"
 import {
   HERMES_PROVIDERS,
+  codexConfigFromProviderModels,
   parseClaudeProviderModel,
   parseCodexModelConfig,
   serializeCodexModelConfig,
@@ -173,6 +174,21 @@ interface AgentCheckState {
   error?: string
 }
 
+/** The engines a shared model provider advertises. New providers list every
+ * supported engine in `agent_types`; old rows only have the legacy primary
+ * `agent_type`, which remains the fallback. */
+function providerTypesOf(
+  provider:
+    | Pick<ModelProviderInfo, "agent_types" | "agent_type">
+    | null
+    | undefined
+): AgentType[] {
+  if (!provider) return []
+  return provider.agent_types.length > 0
+    ? provider.agent_types
+    : [provider.agent_type]
+}
+
 /** Whether a shared model provider is valid for the selected engine. New
  * providers advertise all supported engines in `agent_types`; old rows only
  * have the legacy primary `agent_type`, which remains the fallback. */
@@ -180,11 +196,34 @@ export function modelProviderSupportsAgent(
   provider: ModelProviderInfo,
   agentType: AgentType
 ): boolean {
-  const types =
-    provider.agent_types.length > 0
-      ? provider.agent_types
-      : [provider.agent_type]
-  return types.includes(agentType)
+  return providerTypesOf(provider).includes(agentType)
+}
+
+/** The codex model list a provider binding implies, mirroring the backend's
+ *  `codex_catalog_source`.
+ *
+ *  Two possible homes for that list:
+ *   - a **codex-only** provider stores the structured catalog in `model` (the
+ *     structured editor owns it, and it is authoritative);
+ *   - a **multi-agent** provider cannot — `model` belongs to another agent
+ *     (Claude keeps a JSON object there) — so its fetched `models` list is what
+ *     becomes the catalog. Without this the models the user fetched in the
+ *     provider dialog never reach codex, which falls back to its own bundled
+ *     official list and offers nothing the gateway actually serves. */
+export function codexModelListForProvider(
+  provider:
+    | Pick<ModelProviderInfo, "agent_types" | "agent_type" | "model" | "models">
+    | null
+    | undefined
+): CodexModelConfig {
+  const types = providerTypesOf(provider)
+  if (types.length === 1 && types[0] === "codex") {
+    return parseCodexModelConfig(provider?.model ?? null)
+  }
+  return codexConfigFromProviderModels(
+    provider?.models ?? [],
+    provider?.model ?? null
+  )
 }
 
 const CLAUDE_AUTH_MODES = [
@@ -4894,6 +4933,15 @@ export function AcpAgentSettings() {
                     typeof options?.codexConfigTomlText === "string"
                       ? options.codexConfigTomlText
                       : agent.codex_config_toml,
+                  // The generated catalog's compact source is what
+                  // `buildAgentDraft` reads back as `codexModelList`, so the
+                  // in-memory row has to move with it — otherwise a later save
+                  // in this same window would post the pre-save list back over
+                  // the one just written.
+                  codex_model_catalog:
+                    typeof options?.codexModelCatalog === "string"
+                      ? options.codexModelCatalog
+                      : agent.codex_model_catalog,
                   grok_config_toml:
                     typeof options?.grokConfigTomlText === "string"
                       ? options.grokConfigTomlText
@@ -6112,9 +6160,9 @@ export function AcpAgentSettings() {
           }
         })
       } else if (agentType === "codex") {
-        // The provider stores a structured model config; root `model` is its
-        // default slug and we reference the catalog the bind path generates.
-        const codexList = parseCodexModelConfig(provider?.model ?? null)
+        // Root `model` is the catalog's default slug, and the catalog file the
+        // bind path generates is what we reference.
+        const codexList = codexModelListForProvider(provider)
         const codexHasConfig =
           codexList.customs.length > 0 ||
           (codexList.excludedOfficials?.length ?? 0) > 0
@@ -8784,7 +8832,7 @@ export function AcpAgentSettings() {
                           handleCodexConfigTomlTextChange(event.target.value)
                         }}
                         placeholder={`disable_response_storage = true
-model = "gpt-5"
+model = "gpt-6-astra"
 model_reasoning_effort = "high"
 model_provider = "houhub"
 
@@ -11738,7 +11786,7 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-opus-5"
+                              placeholder="claude-opus-5-5"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -11795,7 +11843,7 @@ supports_websockets = true`}
                                   event.target.value
                                 )
                               }}
-                              placeholder="claude-opus-5"
+                              placeholder="claude-opus-5-5"
                             />
                           </div>
                         </div>
@@ -11820,7 +11868,7 @@ supports_websockets = true`}
                                     event.target.value
                                   )
                                 }}
-                                placeholder="my-gateway/claude-opus-5"
+                                placeholder="my-gateway/claude-opus-5-5"
                               />
                             </div>
                             <div className="space-y-1.5">
@@ -11928,7 +11976,7 @@ supports_websockets = true`}
                                 event.target.value
                               )
                             }}
-                            placeholder="gpt-5 / claude-sonnet / gemini-2.5-pro"
+                            placeholder="gpt-6-astra / claude-sonnet-5 / gemini-3.1-pro-preview"
                           />
                         </div>
                       )
@@ -11946,7 +11994,7 @@ supports_websockets = true`}
                         placeholder={`{
   "apiBaseUrl": "https://api.example.com",
   "apiKey": "sk-...",
-  "model": "gpt-5",
+  "model": "gpt-6-astra",
   "env": {
     "CUSTOM_KEY": "VALUE"
   }
