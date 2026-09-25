@@ -16421,27 +16421,39 @@ wire_api = "chat"
 
     #[test]
     fn ensure_codex_home_env_sets_default_only_for_codex() {
-        let mut codex_env = BTreeMap::new();
-        ensure_codex_home_env(AgentType::Codex, &mut codex_env);
-        let expected_home = codex_home_dir().display().to_string();
-        assert_eq!(
-            codex_env.get("CODEX_HOME").map(String::as_str),
-            Some(expected_home.as_str())
-        );
+        // `ensure_codex_home_env` takes its default from `codex_home_dir`, which
+        // re-reads the process-wide `CODEX_HOME` on every call. Every other test
+        // that touches that variable pins it through `temp_env`, so reading it
+        // bare here could land inside a neighbour's scope and observe that
+        // neighbour's throwaway home — the same parallel-test hazard the
+        // fingerprint tests below call out. Pinning it through `temp_env` takes
+        // the one SERIAL_TEST mutex, which is what actually serializes the two
+        // reads in this test against everyone else.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path().join("codex-home");
+        temp_env::with_var("CODEX_HOME", Some(home.as_os_str()), || {
+            let mut codex_env = BTreeMap::new();
+            ensure_codex_home_env(AgentType::Codex, &mut codex_env);
+            let expected_home = codex_home_dir().display().to_string();
+            assert_eq!(
+                codex_env.get("CODEX_HOME").map(String::as_str),
+                Some(expected_home.as_str())
+            );
 
-        codex_env.insert(
-            "CODEX_HOME".to_string(),
-            "C:\\Custom\\CodexHome".to_string(),
-        );
-        ensure_codex_home_env(AgentType::Codex, &mut codex_env);
-        assert_eq!(
-            codex_env.get("CODEX_HOME").map(String::as_str),
-            Some("C:\\Custom\\CodexHome")
-        );
+            codex_env.insert(
+                "CODEX_HOME".to_string(),
+                "C:\\Custom\\CodexHome".to_string(),
+            );
+            ensure_codex_home_env(AgentType::Codex, &mut codex_env);
+            assert_eq!(
+                codex_env.get("CODEX_HOME").map(String::as_str),
+                Some("C:\\Custom\\CodexHome")
+            );
 
-        let mut claude_env = BTreeMap::new();
-        ensure_codex_home_env(AgentType::ClaudeCode, &mut claude_env);
-        assert!(!claude_env.contains_key("CODEX_HOME"));
+            let mut claude_env = BTreeMap::new();
+            ensure_codex_home_env(AgentType::ClaudeCode, &mut claude_env);
+            assert!(!claude_env.contains_key("CODEX_HOME"));
+        });
     }
 
     #[test]
