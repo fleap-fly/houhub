@@ -2,6 +2,7 @@
 
 import { BrowserEvalConfirm } from "@/components/browser/browser-eval-confirm"
 import { BrowserEventsBridge } from "@/components/browser/browser-events-bridge"
+import { BrowserScreenshotMarkupHost } from "@/components/browser/browser-screenshot-markup"
 import { BrowserServiceBridge } from "@/components/browser/browser-service-bridge"
 import { BrowserTabsPersistence } from "@/components/browser/browser-tabs-persistence"
 import { BrowserTabsSuspender } from "@/components/browser/browser-tabs-suspender"
@@ -1283,6 +1284,10 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                       <BrowserEventsBridge />
                       <BrowserServiceBridge />
                       <BrowserEvalConfirm />
+                      {/* Here and not in the browser tab it is opened from:
+                          only the tab on screen is mounted, and a tab opening
+                          on its own would take the marks with it. */}
+                      <BrowserScreenshotMarkupHost />
                       <BrowserTabsPersistence />
                       <BrowserTabsSuspender />
                       <HeavyPluginsWarmup />

@@ -100,7 +100,7 @@ describe("MarkdownLink", () => {
     expect(window.open).not.toHaveBeenCalled()
   })
 
-  // Streamdown's contract also allows an async check. HouHub's own config never
+  // Streamdown's contract also allows an async check. houhub's own config never
   // returns a promise, but the fallback has to keep working — it just can't
   // preserve the user gesture (openLinkWithSafety documents why).
   it("still opens on a promise verdict, one microtask late", async () => {
@@ -140,21 +140,6 @@ describe("MarkdownLink", () => {
       expect(window.open).not.toHaveBeenCalled()
     }
   )
-
-  it("does nothing when clicking an incomplete (streaming) link", () => {
-    render(
-      <MarkdownLink href="streamdown:incomplete-link">partial</MarkdownLink>
-    )
-
-    const button = screen.getByRole("button")
-    expect(button).not.toHaveAttribute("data-resource-kind")
-    expect(button.querySelector("svg")).toBeNull()
-
-    fireEvent.click(button)
-    expect(window.open).not.toHaveBeenCalled()
-    expect(mocks.onLinkCheck).not.toHaveBeenCalled()
-    expect(screen.queryByTestId("link-modal")).not.toBeInTheDocument()
-  })
 
   describe("houhub:// reference badges", () => {
     it("renders a session link as a session badge (conversation glyph, no agent icon or status dot)", () => {

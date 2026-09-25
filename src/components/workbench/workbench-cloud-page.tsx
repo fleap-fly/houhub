@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { BriefcaseBusiness, Loader2, RefreshCw } from "lucide-react"
 import { useTranslations } from "next-intl"
+import { usePageHandoffName } from "@/lib/browser/use-page-handoff-name"
 import { toast } from "sonner"
 
 import {
@@ -62,6 +63,7 @@ export function WorkbenchCloudPage() {
   const requestRef = useRef(0)
   const linkSafety = useWorkbenchSessionLinkSafety()
   const sharedT = useTranslations("Folder.chat.shared")
+  const pageHandoffName = usePageHandoffName()
   const [turnAdapter] = useState<MessageTurnAdapter>(() =>
     createMessageTurnAdapter()
   )
@@ -84,8 +86,9 @@ export function WorkbenchCloudPage() {
     () => ({
       attachedResources: sharedT("attachedResources"),
       toolCallFailed: sharedT("toolCallFailed"),
+      pageHandoffName,
     }),
-    [sharedT]
+    [pageHandoffName, sharedT]
   )
   const turns = useMemo(() => workbenchAiMessagesToTurns(messages), [messages])
   const adaptedMessages = useMemo(

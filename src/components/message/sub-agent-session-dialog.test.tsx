@@ -215,6 +215,7 @@ function makeConnState(overrides: Partial<ConnectionState>): ConnectionState {
     sessionFailures: [],
     asyncTasks: [],
     error: null,
+    errorLevel: "error",
     loadError: null,
     loadErrorCommand: null,
     lastAppliedSeq: 0,

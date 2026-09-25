@@ -15,6 +15,7 @@ import {
   RefreshCw,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
+import { usePageHandoffName } from "@/lib/browser/use-page-handoff-name"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 import type { LinkSafetyConfig, LinkSafetyModalProps } from "streamdown"
@@ -164,6 +165,7 @@ function useCloudSessionLinkSafety(sessionId: string | null): LinkSafetyConfig {
 export function CloudSessionPage() {
   const t = useTranslations("HouflowCloud")
   const sharedT = useTranslations("Folder.chat.shared")
+  const pageHandoffName = usePageHandoffName()
   const configT = useTranslations("AcpAgentSettings")
   const houflow = useHouflowDesktopStore(
     useShallow((state) => ({
@@ -347,8 +349,9 @@ export function CloudSessionPage() {
     () => ({
       attachedResources: sharedT("attachedResources"),
       toolCallFailed: sharedT("toolCallFailed"),
+      pageHandoffName,
     }),
-    [sharedT]
+    [pageHandoffName, sharedT]
   )
   const visibleEvents = useMemo(
     () =>
@@ -1164,6 +1167,7 @@ function HostedSessionPage({
 }) {
   const t = useTranslations("HouflowCloud")
   const sharedT = useTranslations("Folder.chat.shared")
+  const pageHandoffName = usePageHandoffName()
   const [turnAdapter] = useState<MessageTurnAdapter>(() =>
     createMessageTurnAdapter()
   )
@@ -1182,8 +1186,9 @@ function HostedSessionPage({
     () => ({
       attachedResources: sharedT("attachedResources"),
       toolCallFailed: sharedT("toolCallFailed"),
+      pageHandoffName,
     }),
-    [sharedT]
+    [pageHandoffName, sharedT]
   )
   const hostedTurns = useMemo(
     () => houflowCloudEventsToTurns(hostedEvents),
@@ -1396,6 +1401,7 @@ function CloudSessionStarter({
 }) {
   const t = useTranslations("HouflowCloud")
   const sharedT = useTranslations("Folder.chat.shared")
+  const pageHandoffName = usePageHandoffName()
   const [open, setOpen] = useState(false)
   const [turnAdapter] = useState<MessageTurnAdapter>(() =>
     createMessageTurnAdapter()
@@ -1408,8 +1414,9 @@ function CloudSessionStarter({
     () => ({
       attachedResources: sharedT("attachedResources"),
       toolCallFailed: sharedT("toolCallFailed"),
+      pageHandoffName,
     }),
-    [sharedT]
+    [pageHandoffName, sharedT]
   )
   const pendingMessages = useMemo(
     () =>
