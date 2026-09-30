@@ -17071,6 +17071,186 @@ async fn emit_conversation_update(
     }
 }
 
+fn prepend_path_value(current: Option<&str>, dirs: impl IntoIterator<Item = PathBuf>) -> String {
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let mut parts: Vec<String> = Vec::new();
+    for dir in dirs {
+        let value = dir.to_string_lossy().to_string();
+        if !value.is_empty() && !parts.iter().any(|item| item == &value) {
+            parts.push(value);
+        }
+    }
+    if let Some(value) = current.filter(|value| !value.is_empty()) {
+        parts.push(value.to_string());
+    }
+    parts.join(sep)
+}
+
+async fn patch_pi_launch_env(env: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut map: BTreeMap<String, String> = env.into_iter().collect();
+    let mut path_dirs = Vec::new();
+    if let Some(bin_dir) = crate::commands::acp::node_command_bin_dir() {
+        path_dirs.push(bin_dir);
+    }
+    if let Some(bin_dir) = crate::commands::acp::npm_command_bin_dir("pi-acp").await {
+        path_dirs.push(bin_dir);
+    }
+    if let Some(bin_dir) = crate::commands::acp::npm_command_bin_dir("pi").await {
+        path_dirs.push(bin_dir);
+    }
+    if let Some(bin_dir) = crate::commands::acp::resolve_pi_command_path("pi")
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+    {
+        path_dirs.push(bin_dir);
+    }
+    if !path_dirs.is_empty() {
+        let next_path = prepend_path_value(map.get("PATH").map(String::as_str), path_dirs);
+        map.insert("PATH".to_string(), next_path);
+    }
+    map.into_iter().collect()
+}
+
+fn sanitize_agent_env(agent_type: AgentType, env: Vec<(String, String)>) -> Vec<(String, String)> {
+    if agent_type != AgentType::Codex {
+        return env;
+    }
+    sanitize_agent_env_with_fallback(
+        agent_type,
+        env,
+        crate::commands::acp::default_codex_home_dir_for_launch(),
+    )
+}
+
+fn sanitize_agent_env_with_fallback(
+    agent_type: AgentType,
+    env: Vec<(String, String)>,
+    fallback_home: PathBuf,
+) -> Vec<(String, String)> {
+    if agent_type != AgentType::Codex {
+        return env;
+    }
+
+    let mut saw_valid_codex_home = false;
+    let mut cleaned = Vec::with_capacity(env.len() + 1);
+    env.into_iter().for_each(|(key, value)| {
+        if !key.eq_ignore_ascii_case("CODEX_HOME") {
+            cleaned.push((key, value));
+            return;
+        }
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            tracing::warn!("[ACP][Codex] ignoring empty CODEX_HOME");
+            return;
+        }
+        if std::path::Path::new(trimmed).exists() {
+            saw_valid_codex_home = true;
+            cleaned.push((key, value));
+            return;
+        }
+        tracing::warn!(
+            "[ACP][Codex] ignoring CODEX_HOME={trimmed:?} because the path does not exist"
+        );
+    });
+    if !saw_valid_codex_home {
+        if let Err(err) = std::fs::create_dir_all(&fallback_home) {
+            tracing::warn!(
+                "[ACP][Codex] failed to create fallback CODEX_HOME {fallback_home:?}: {err}"
+            );
+        } else {
+            cleaned.push((
+                "CODEX_HOME".to_string(),
+                fallback_home.display().to_string(),
+            ));
+        }
+    }
+    cleaned
+}
+
+fn pi_bound_model_value(provider: &str, model: &str) -> String {
+    let provider = provider.trim();
+    let model = model.trim();
+    if model.starts_with(&format!("{provider}/")) {
+        model.to_string()
+    } else {
+        format!("{provider}/{model}")
+    }
+}
+
+fn pi_model_belongs_to_provider(value: &str, provider: &str) -> bool {
+    let prefix = format!("{}/", provider.trim());
+    value.trim().starts_with(&prefix) && value.trim().len() > prefix.len()
+}
+
+/// Keep the wire-facing Pi model selector scoped to the HouHub-bound provider.
+/// Pi intentionally advertises every authenticated provider, so filtering only
+/// in the React picker would leave snapshots and reconnect preferences able to
+/// select an old provider. This projection is applied on every emission.
+fn filter_pi_bound_model_options(
+    options: &mut [SessionConfigOptionInfo],
+    provider: Option<&str>,
+    model: Option<&str>,
+) {
+    let Some(provider) = provider.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let desired = model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| pi_bound_model_value(provider, value));
+
+    for option in options {
+        if option.id != "model" && option.category.as_deref() != Some("model") {
+            continue;
+        }
+        let SessionConfigKindInfo::Select(select) = &mut option.kind else {
+            continue;
+        };
+        select
+            .options
+            .retain(|item| pi_model_belongs_to_provider(&item.value, provider));
+        for group in &mut select.groups {
+            group
+                .options
+                .retain(|item| pi_model_belongs_to_provider(&item.value, provider));
+        }
+        select.groups.retain(|group| !group.options.is_empty());
+
+        // A provider catalog can arrive a tick after the initial selector
+        // event. Keep a stable, usable value instead of exposing another
+        // provider while that catalog is settling.
+        if select.options.is_empty() {
+            if let Some(value) = desired.clone() {
+                let label = value
+                    .split_once('/')
+                    .map(|(_, model)| model)
+                    .unwrap_or(value.as_str())
+                    .to_string();
+                select.options.push(SessionConfigSelectOptionInfo {
+                    value: value.clone(),
+                    name: label,
+                    description: None,
+                });
+                select.groups.clear();
+            }
+        }
+
+        let current_is_bound = select
+            .options
+            .iter()
+            .any(|item| item.value == select.current_value);
+        if !current_is_bound {
+            if let Some(value) = desired
+                .as_deref()
+                .filter(|value| select.options.iter().any(|item| item.value == *value))
+            {
+                select.current_value = value.to_string();
+            } else if let Some(first) = select.options.first() {
+                select.current_value = first.value.clone();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -31216,184 +31396,3 @@ mod tests {
         );
     }
 }
-
-fn prepend_path_value(current: Option<&str>, dirs: impl IntoIterator<Item = PathBuf>) -> String {
-    let sep = if cfg!(windows) { ";" } else { ":" };
-    let mut parts: Vec<String> = Vec::new();
-    for dir in dirs {
-        let value = dir.to_string_lossy().to_string();
-        if !value.is_empty() && !parts.iter().any(|item| item == &value) {
-            parts.push(value);
-        }
-    }
-    if let Some(value) = current.filter(|value| !value.is_empty()) {
-        parts.push(value.to_string());
-    }
-    parts.join(sep)
-}
-
-async fn patch_pi_launch_env(env: Vec<(String, String)>) -> Vec<(String, String)> {
-    let mut map: BTreeMap<String, String> = env.into_iter().collect();
-    let mut path_dirs = Vec::new();
-    if let Some(bin_dir) = crate::commands::acp::node_command_bin_dir() {
-        path_dirs.push(bin_dir);
-    }
-    if let Some(bin_dir) = crate::commands::acp::npm_command_bin_dir("pi-acp").await {
-        path_dirs.push(bin_dir);
-    }
-    if let Some(bin_dir) = crate::commands::acp::npm_command_bin_dir("pi").await {
-        path_dirs.push(bin_dir);
-    }
-    if let Some(bin_dir) = crate::commands::acp::resolve_pi_command_path("pi")
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-    {
-        path_dirs.push(bin_dir);
-    }
-    if !path_dirs.is_empty() {
-        let next_path = prepend_path_value(map.get("PATH").map(String::as_str), path_dirs);
-        map.insert("PATH".to_string(), next_path);
-    }
-    map.into_iter().collect()
-}
-
-fn sanitize_agent_env(agent_type: AgentType, env: Vec<(String, String)>) -> Vec<(String, String)> {
-    if agent_type != AgentType::Codex {
-        return env;
-    }
-    sanitize_agent_env_with_fallback(
-        agent_type,
-        env,
-        crate::commands::acp::default_codex_home_dir_for_launch(),
-    )
-}
-
-fn sanitize_agent_env_with_fallback(
-    agent_type: AgentType,
-    env: Vec<(String, String)>,
-    fallback_home: PathBuf,
-) -> Vec<(String, String)> {
-    if agent_type != AgentType::Codex {
-        return env;
-    }
-
-    let mut saw_valid_codex_home = false;
-    let mut cleaned = Vec::with_capacity(env.len() + 1);
-    env.into_iter().for_each(|(key, value)| {
-        if !key.eq_ignore_ascii_case("CODEX_HOME") {
-            cleaned.push((key, value));
-            return;
-        }
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            tracing::warn!("[ACP][Codex] ignoring empty CODEX_HOME");
-            return;
-        }
-        if std::path::Path::new(trimmed).exists() {
-            saw_valid_codex_home = true;
-            cleaned.push((key, value));
-            return;
-        }
-        tracing::warn!(
-            "[ACP][Codex] ignoring CODEX_HOME={trimmed:?} because the path does not exist"
-        );
-    });
-    if !saw_valid_codex_home {
-        if let Err(err) = std::fs::create_dir_all(&fallback_home) {
-            tracing::warn!(
-                "[ACP][Codex] failed to create fallback CODEX_HOME {fallback_home:?}: {err}"
-            );
-        } else {
-            cleaned.push((
-                "CODEX_HOME".to_string(),
-                fallback_home.display().to_string(),
-            ));
-        }
-    }
-    cleaned
-}
-
-fn pi_bound_model_value(provider: &str, model: &str) -> String {
-    let provider = provider.trim();
-    let model = model.trim();
-    if model.starts_with(&format!("{provider}/")) {
-        model.to_string()
-    } else {
-        format!("{provider}/{model}")
-    }
-}
-
-fn pi_model_belongs_to_provider(value: &str, provider: &str) -> bool {
-    let prefix = format!("{}/", provider.trim());
-    value.trim().starts_with(&prefix) && value.trim().len() > prefix.len()
-}
-
-/// Keep the wire-facing Pi model selector scoped to the HouHub-bound provider.
-/// Pi intentionally advertises every authenticated provider, so filtering only
-/// in the React picker would leave snapshots and reconnect preferences able to
-/// select an old provider. This projection is applied on every emission.
-fn filter_pi_bound_model_options(
-    options: &mut [SessionConfigOptionInfo],
-    provider: Option<&str>,
-    model: Option<&str>,
-) {
-    let Some(provider) = provider.map(str::trim).filter(|value| !value.is_empty()) else {
-        return;
-    };
-    let desired = model
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| pi_bound_model_value(provider, value));
-
-    for option in options {
-        if option.id != "model" && option.category.as_deref() != Some("model") {
-            continue;
-        }
-        let SessionConfigKindInfo::Select(select) = &mut option.kind else {
-            continue;
-        };
-        select
-            .options
-            .retain(|item| pi_model_belongs_to_provider(&item.value, provider));
-        for group in &mut select.groups {
-            group
-                .options
-                .retain(|item| pi_model_belongs_to_provider(&item.value, provider));
-        }
-        select.groups.retain(|group| !group.options.is_empty());
-
-        // A provider catalog can arrive a tick after the initial selector
-        // event. Keep a stable, usable value instead of exposing another
-        // provider while that catalog is settling.
-        if select.options.is_empty() {
-            if let Some(value) = desired.clone() {
-                let label = value
-                    .split_once('/')
-                    .map(|(_, model)| model)
-                    .unwrap_or(value.as_str())
-                    .to_string();
-                select.options.push(SessionConfigSelectOptionInfo {
-                    value: value.clone(),
-                    name: label,
-                    description: None,
-                });
-                select.groups.clear();
-            }
-        }
-
-        let current_is_bound = select
-            .options
-            .iter()
-            .any(|item| item.value == select.current_value);
-        if !current_is_bound {
-            if let Some(value) = desired
-                .as_deref()
-                .filter(|value| select.options.iter().any(|item| item.value == *value))
-            {
-                select.current_value = value.to_string();
-            } else if let Some(first) = select.options.first() {
-                select.current_value = first.value.clone();
-            }
-        }
-    }
-}
-

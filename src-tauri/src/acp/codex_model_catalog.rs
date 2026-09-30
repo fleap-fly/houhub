@@ -675,6 +675,94 @@ pub fn write_catalog_files(
     }))
 }
 
+/// The OpenAI-compatible bundle a derived gateway model carries, as key/value
+/// pairs. Exposed so the provider-binding tests can assert a derived catalog is
+/// actually flattened without duplicating the list.
+pub fn gateway_compat_overrides() -> Vec<(&'static str, Value)> {
+    GATEWAY_COMPAT_OVERRIDES.to_vec()
+}
+
+/// The compatibility bundle that makes a cloned GPT entry speak plain OpenAI
+/// Responses — the same keys the editor's "OpenAI-compatible" preset writes
+/// (see `CODEX_COMPAT_OVERRIDES` on the TS side). Kept here so a gateway-derived
+/// catalog (see [`catalog_from_provider_models`]) can be built without the
+/// frontend: a third-party endpoint implements only the public API, so every
+/// model derived from one has to be flattened.
+const GATEWAY_COMPAT_OVERRIDES: &[(&str, Value)] = &[
+    ("tool_mode", Value::Null),
+    ("multi_agent_version", Value::Null),
+    ("use_responses_lite", Value::Bool(false)),
+    ("apply_patch_tool_type", Value::Null),
+    ("supports_image_detail_original", Value::Bool(false)),
+];
+
+/// Build a compact codex model config out of a **model-provider's** fetched
+/// model list, for a provider that is not codex-only.
+///
+/// Codex is the one agent whose provider binding is a whole catalog rather than
+/// a single model name: `model_catalog_json` replaces codex's entire model
+/// table, so a gateway's models only become selectable in the composer once
+/// they exist as catalog entries. A codex-only provider carries that catalog
+/// itself (in `provider.model`, as a structured `CodexModelConfig`). A
+/// **multi-agent** provider cannot: its `model` column is already spoken for by
+/// whichever agent owns it (Claude stores a JSON object there), and its fetched
+/// list lives in `models_json`. Binding codex to such a provider therefore
+/// derives the catalog from that list, so the models the user fetched in the
+/// provider dialog are exactly what codex offers.
+///
+/// Every derived entry carries [`GATEWAY_COMPAT_OVERRIDES`], because a
+/// third-party gateway only implements the public OpenAI API, and takes its own
+/// slug as `base` — the same shape the legacy single-slug path uses, and the one
+/// [`expand_to_catalog`] resolves to the highest-priority official when the slug
+/// is not itself an official (which a gateway model never is). Deriving `base`
+/// from the live snapshot here instead would make the value the settings panel
+/// round-trips disagree with the value the backend generates.
+/// `default` is `preferred` when it names a fetched model (so the provider's own
+/// default keeps winning), else the first entry — and it is always one of the
+/// derived slugs, so `default_slug` can never point codex's root `model` at
+/// something the generated catalog does not list.
+pub fn catalog_from_provider_models(
+    models: &[String],
+    preferred: Option<&str>,
+) -> CodexModelConfig {
+    let mut seen = HashSet::new();
+    let slugs: Vec<String> = models
+        .iter()
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty())
+        .map(str::to_owned)
+        .filter(|m| seen.insert(m.clone()))
+        .collect();
+    if slugs.is_empty() {
+        return CodexModelConfig::default();
+    }
+    let overrides = Map::from_iter(
+        GATEWAY_COMPAT_OVERRIDES
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), v.clone())),
+    );
+    let customs = slugs
+        .iter()
+        .map(|slug| CodexCustomEntry {
+            slug: slug.clone(),
+            display_name: None,
+            context_window: None,
+            base: slug.clone(),
+            overrides: overrides.clone(),
+        })
+        .collect();
+    let default = preferred
+        .map(str::trim)
+        .filter(|p| slugs.iter().any(|s| s == p))
+        .map(str::to_owned)
+        .or_else(|| slugs.first().cloned());
+    CodexModelConfig {
+        customs,
+        excluded_officials: Vec::new(),
+        default,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1339,93 +1427,5 @@ mod tests {
         // provider bind writes the same value the catalog was built around.
         let config = catalog_from_provider_models(&models, Some("kimi-k2"));
         assert_eq!(default_slug_for_env(&config).as_deref(), Some("kimi-k2"));
-    }
-}
-
-/// The OpenAI-compatible bundle a derived gateway model carries, as key/value
-/// pairs. Exposed so the provider-binding tests can assert a derived catalog is
-/// actually flattened without duplicating the list.
-pub fn gateway_compat_overrides() -> Vec<(&'static str, Value)> {
-    GATEWAY_COMPAT_OVERRIDES.to_vec()
-}
-
-/// The compatibility bundle that makes a cloned GPT entry speak plain OpenAI
-/// Responses — the same keys the editor's "OpenAI-compatible" preset writes
-/// (see `CODEX_COMPAT_OVERRIDES` on the TS side). Kept here so a gateway-derived
-/// catalog (see [`catalog_from_provider_models`]) can be built without the
-/// frontend: a third-party endpoint implements only the public API, so every
-/// model derived from one has to be flattened.
-const GATEWAY_COMPAT_OVERRIDES: &[(&str, Value)] = &[
-    ("tool_mode", Value::Null),
-    ("multi_agent_version", Value::Null),
-    ("use_responses_lite", Value::Bool(false)),
-    ("apply_patch_tool_type", Value::Null),
-    ("supports_image_detail_original", Value::Bool(false)),
-];
-
-/// Build a compact codex model config out of a **model-provider's** fetched
-/// model list, for a provider that is not codex-only.
-///
-/// Codex is the one agent whose provider binding is a whole catalog rather than
-/// a single model name: `model_catalog_json` replaces codex's entire model
-/// table, so a gateway's models only become selectable in the composer once
-/// they exist as catalog entries. A codex-only provider carries that catalog
-/// itself (in `provider.model`, as a structured `CodexModelConfig`). A
-/// **multi-agent** provider cannot: its `model` column is already spoken for by
-/// whichever agent owns it (Claude stores a JSON object there), and its fetched
-/// list lives in `models_json`. Binding codex to such a provider therefore
-/// derives the catalog from that list, so the models the user fetched in the
-/// provider dialog are exactly what codex offers.
-///
-/// Every derived entry carries [`GATEWAY_COMPAT_OVERRIDES`], because a
-/// third-party gateway only implements the public OpenAI API, and takes its own
-/// slug as `base` — the same shape the legacy single-slug path uses, and the one
-/// [`expand_to_catalog`] resolves to the highest-priority official when the slug
-/// is not itself an official (which a gateway model never is). Deriving `base`
-/// from the live snapshot here instead would make the value the settings panel
-/// round-trips disagree with the value the backend generates.
-/// `default` is `preferred` when it names a fetched model (so the provider's own
-/// default keeps winning), else the first entry — and it is always one of the
-/// derived slugs, so `default_slug` can never point codex's root `model` at
-/// something the generated catalog does not list.
-pub fn catalog_from_provider_models(
-    models: &[String],
-    preferred: Option<&str>,
-) -> CodexModelConfig {
-    let mut seen = HashSet::new();
-    let slugs: Vec<String> = models
-        .iter()
-        .map(|m| m.trim())
-        .filter(|m| !m.is_empty())
-        .map(str::to_owned)
-        .filter(|m| seen.insert(m.clone()))
-        .collect();
-    if slugs.is_empty() {
-        return CodexModelConfig::default();
-    }
-    let overrides = Map::from_iter(
-        GATEWAY_COMPAT_OVERRIDES
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), v.clone())),
-    );
-    let customs = slugs
-        .iter()
-        .map(|slug| CodexCustomEntry {
-            slug: slug.clone(),
-            display_name: None,
-            context_window: None,
-            base: slug.clone(),
-            overrides: overrides.clone(),
-        })
-        .collect();
-    let default = preferred
-        .map(str::trim)
-        .filter(|p| slugs.iter().any(|s| s == p))
-        .map(str::to_owned)
-        .or_else(|| slugs.first().cloned());
-    CodexModelConfig {
-        customs,
-        excluded_officials: Vec::new(),
-        default,
     }
 }

@@ -3400,6 +3400,35 @@ pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn
     turns
 }
 
+/// Regex that matches an optional model capacity suffix like `[1M]` / `[500k]`.
+fn model_capacity_suffix_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)\[\s*([0-9]+(?:\.[0-9]+)?)\s*([km])\s*\]\s*$")
+            .expect("valid model capacity regex")
+    })
+}
+
+fn parse_model_capacity_suffix(model: &str) -> Option<u64> {
+    let captures = model_capacity_suffix_regex().captures(model.trim())?;
+    let value = captures.get(1)?.as_str().parse::<f64>().ok()?;
+    if !value.is_finite() || value <= 0.0 {
+        return None;
+    }
+
+    let unit = captures
+        .get(2)
+        .map(|m| m.as_str().to_ascii_lowercase())
+        .unwrap_or_default();
+    let multiplier = match unit.as_str() {
+        "m" => 1_000_000.0,
+        "k" => 1_000.0,
+        _ => return None,
+    };
+
+    Some((value * multiplier) as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -7133,33 +7162,4 @@ mod tests {
         );
         assert_eq!(parse_model_capacity_suffix("claude-sonnet-4-6"), None);
     }
-}
-
-/// Regex that matches an optional model capacity suffix like `[1M]` / `[500k]`.
-fn model_capacity_suffix_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)\[\s*([0-9]+(?:\.[0-9]+)?)\s*([km])\s*\]\s*$")
-            .expect("valid model capacity regex")
-    })
-}
-
-fn parse_model_capacity_suffix(model: &str) -> Option<u64> {
-    let captures = model_capacity_suffix_regex().captures(model.trim())?;
-    let value = captures.get(1)?.as_str().parse::<f64>().ok()?;
-    if !value.is_finite() || value <= 0.0 {
-        return None;
-    }
-
-    let unit = captures
-        .get(2)
-        .map(|m| m.as_str().to_ascii_lowercase())
-        .unwrap_or_default();
-    let multiplier = match unit.as_str() {
-        "m" => 1_000_000.0,
-        "k" => 1_000.0,
-        _ => return None,
-    };
-
-    Some((value * multiplier) as u64)
 }
