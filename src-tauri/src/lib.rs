@@ -2142,16 +2142,6 @@ mod tauri_app {
                 _ => {}
             });
     }
-
-    /// On Windows, opt-out users can disable WebView2 hardware acceleration to
-    /// work around AMD/Intel GPU driver bugs that produce a black-screen
-    /// webview. The flag is stored in a tiny sidecar file at
-    /// `~/.houhub/preferences.json` so it can be read **before** the Tauri
-    /// builder, plugins, or tokio runtime start — once a tokio worker is alive,
-    /// `std::env::set_var` would race with concurrent `getenv` calls from
-    /// libraries like reqwest/rustls that read `HTTP_PROXY` etc.
-    #[cfg(target_os = "windows")]
-    const WEBVIEW2_ARGS_ENV: &str = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
 }
 
 #[cfg(feature = "tauri-runtime")]

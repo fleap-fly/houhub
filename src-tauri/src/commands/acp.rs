@@ -15831,19 +15831,25 @@ base_url = \"https://example.test/v1\"
 
     #[test]
     fn pi_agent_dir_expands_tilde_override_like_the_pi_runtime() {
-        let mut env = BTreeMap::new();
-        env.insert("PI_CODING_AGENT_DIR".to_string(), "~/custom-pi".to_string());
-        assert_eq!(
-            pi_agent_dir_for_env(&env),
-            pi_child_home(&env).join("custom-pi")
-        );
-        // pi's `normalizePath` takes the value verbatim: a padded value is a
-        // different (here: relative) directory, not the trimmed one.
-        env.insert(
-            "PI_CODING_AGENT_DIR".to_string(),
-            " ~/custom-pi".to_string(),
-        );
-        assert_eq!(pi_agent_dir_for_env(&env), PathBuf::from(" ~/custom-pi"));
+        // `pi_child_home` reads the process `HOME`, and the neighbouring
+        // `temp_env::with_vars` tests relocate it; hold that same serial mutex
+        // (an empty var list still takes it) so both calls in this test observe
+        // one home instead of racing a relocated one between them.
+        temp_env::with_vars(Vec::<(&str, Option<&str>)>::new(), || {
+            let mut env = BTreeMap::new();
+            env.insert("PI_CODING_AGENT_DIR".to_string(), "~/custom-pi".to_string());
+            assert_eq!(
+                pi_agent_dir_for_env(&env),
+                pi_child_home(&env).join("custom-pi")
+            );
+            // pi's `normalizePath` takes the value verbatim: a padded value is a
+            // different (here: relative) directory, not the trimmed one.
+            env.insert(
+                "PI_CODING_AGENT_DIR".to_string(),
+                " ~/custom-pi".to_string(),
+            );
+            assert_eq!(pi_agent_dir_for_env(&env), PathBuf::from(" ~/custom-pi"));
+        });
     }
 
     /// `~` is the CHILD's home — a launch that relocates `HOME` relocates pi's
