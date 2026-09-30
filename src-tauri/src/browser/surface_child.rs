@@ -19,35 +19,53 @@
 //! opener. The host never navigates on the page's behalf.
 
 use std::cell::RefCell;
+
 use std::collections::HashMap;
+
 use std::sync::atomic::{AtomicU64, Ordering};
+
 use std::sync::mpsc;
+
 use std::sync::{Arc, OnceLock};
+
 use std::thread::ThreadId;
+
 #[cfg(target_os = "windows")]
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager, Url, WebviewWindow};
+
 #[cfg(target_os = "windows")]
 use tauri_runtime_wry::wry::WebContext;
+
 use tauri_runtime_wry::wry::{
     self, dpi, NewWindowFeatures, NewWindowResponse, PageLoadEvent, Rect, WebViewBuilder,
 };
 
 use super::channel::{self, MessageSink};
+
 use super::doc_guest::{self, DocGrant, DocGuests, GuestNavigation};
+
 use super::events;
+
 use super::hooks;
+
 use super::policy::{self, BrowserPolicy};
+
 use super::profile;
+
 use super::registry::{BrowserRegistry, BrowserTab};
+
 use super::surface::BrowserSurface;
+
 use super::types::{
     Bounds, BrowserOpenRequestPayload, BrowserPopupPayload, BrowserTabState, ChannelKind,
     NavigationBlockReason, PopupPresentation, SurfaceKind, TabKind,
 };
+
 #[cfg(target_os = "macos")]
 use super::shim::macos as shim;
+
 #[cfg(target_os = "windows")]
 use super::shim::windows as shim;
 
@@ -56,6 +74,7 @@ thread_local! {
 }
 
 static MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
+
 static POPUP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Must be called once from the main thread (tauri's `setup` hook) before any
@@ -110,6 +129,15 @@ fn tab_id_for_webview(pointer: usize) -> Option<String> {
             .find(|(_, wv)| shim::webview_pointer(wv) == pointer)
             .map(|(id, _)| id.clone())
     })
+}
+
+/// Main thread only: the tab whose surface has keyboard focus in `window` —
+/// its webview is the window's first responder, or holds the view that is.
+#[cfg(target_os = "macos")]
+pub fn tab_with_keyboard_focus(window: &objc2_app_kit::NSWindow) -> Option<String> {
+    shim::first_responder_chain(window)
+        .into_iter()
+        .find_map(tab_id_for_webview)
 }
 
 /// One sink for every tab: messages are attributed by source webview, because
@@ -547,6 +575,7 @@ impl ChildHandle {
 /// new window be created from on Windows.
 #[cfg(target_os = "macos")]
 type OpenerConfiguration = objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>;
+
 #[cfg(target_os = "windows")]
 type OpenerConfiguration = webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment;
 

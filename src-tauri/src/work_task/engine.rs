@@ -1,4 +1,3 @@
-
 //! Work-task execution engine: drives the manual pipeline
 //! `todo → queued → running ⇄ awaiting_input → review → merging → done`.
 //!
@@ -18,47 +17,73 @@
 //!   persisted before execution so crash recovery can replay git truth.
 
 use std::collections::{HashMap, HashSet};
+
 use std::path::{Path, PathBuf};
+
 use std::sync::{Arc, OnceLock};
+
 use std::time::Duration;
 
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
+
 use tokio::sync::broadcast::error::RecvError;
+
 use tokio::sync::{oneshot, Mutex, Notify};
+
 use tokio::time::MissedTickBehavior;
 
 use crate::acp::manager::ConnectionManager;
+
 use crate::acp::types::{
     AcpEvent, ConnectionStatus, EventEnvelope, PromptCapabilitiesInfo, PromptInputBlock,
 };
+
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
+
 use crate::acp::InternalEventBus;
+
 use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
+
 use crate::commands::conversations::{
     create_conversation_core, emit_conversation_upsert, get_folder_conversation_core,
 };
+
 use crate::commands::folders::{
     emit_folder_deleted, emit_folder_upsert, get_folder_core, git_worktree_add,
     open_worktree_folder_core, resolve_git_head,
 };
+
 use crate::db::entities::conversation::{self, ConversationStatus};
+
 use crate::db::entities::work_task::WorkTaskStatus;
+
 use crate::db::entities::{folder, folder_command};
+
 use crate::db::service::{conversation_service, tab_service, work_task_service};
+
 use crate::db::AppDatabase;
+
 use crate::forge::deliver::{
     adopt_pull_request, pull_request_body, writeback_comment_body, DeliveryCtx, ForgeDeliveryApi,
     ForgePr, NewPullRequest, PrAdoption, TaskOutcome,
 };
+
 use crate::forge::{ForgeItemKind, ForgeSourceMeta, SOURCE_KIND_ISSUE, SOURCE_KIND_PR};
+
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
+
 use crate::models::{
     AgentType, FollowUpIntent, WorkTaskConfig, WorkTaskFolderSettings, WorkTaskMergeOp,
     WorkTaskMergeState, WorkTaskPreflight, WorkTaskQueuedMerge, DELIVERABLE_REPORT,
     STAGE_PROMPT_ALL,
 };
-use crate::web::event_bridge::{emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT};
+
+use crate::web::event_bridge::{
+    emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT,
+};
+
 use crate::work_task::compact;
+
 use crate::work_task::git as task_git;
 
 /// Reconcile sweep cadence.
@@ -495,6 +520,14 @@ pub enum MergeDispatch {
     Queued,
 }
 
+/// How a task finished, carried to the asynchronous forge write-back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WritebackOutcome {
+    Merged(String),
+    Delivered(String),
+    Accepted { nothing_to_land: bool },
+}
+
 impl MergeDispatch {
     pub fn is_queued(self) -> bool {
         matches!(self, MergeDispatch::Queued)
@@ -565,14 +598,6 @@ enum LaunchMode {
         /// existed, and the auto-merge sweep's every landing.
         instructions: Option<String>,
     },
-}
-
-/// How a task finished, carried to the asynchronous forge write-back.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum WritebackOutcome {
-    Merged(String),
-    Delivered(String),
-    Accepted { nothing_to_land: bool },
 }
 
 impl LaunchMode {
@@ -686,8 +711,8 @@ impl TaskEngine {
                     "user",
                 )
                 .await
-                .map_err(|e| e.to_string())?
-                .is_some()
+                    .map_err(|e| e.to_string())?
+                    .is_some()
                 {
                     folder_claimed += 1;
                     self.emit_upsert(id);
@@ -2960,7 +2985,7 @@ impl TaskEngine {
                     .await
                     .unwrap_or(false);
                     if settled {
-                        self.spawn_preflight(task_id, run_seq);
+                        self.spawn_post_review(task_id, run_seq);
                     }
                     settled
                 }
@@ -3097,10 +3122,13 @@ impl TaskEngine {
 
     // ── preflight (acceptance red/green light) ──────────────────────────────
 
-    /// Run the folder's configured preflight command against the task worktree
-    /// after a settle into review. Fire-and-forget: the result is written CAS
-    /// (review + run_seq), so a task that moved on ignores a slow finish.
-    fn spawn_preflight(self: &Arc<Self>, task_id: i32, run_seq: i32) {
+    /// After a settle into review: run the folder's preflight command (if one
+    /// is configured), then give auto-merge its chance. One spawned task, in
+    /// that order — the sweep requires a green light whenever a preflight is
+    /// configured, so the light must be on the row before the sweep reads it.
+    /// Fire-and-forget: the light is written CAS (review + run_seq), so a task
+    /// that moved on ignores a slow finish, and the sweep re-checks status.
+    fn spawn_post_review(self: &Arc<Self>, task_id: i32, run_seq: i32) {
         let engine = self.clone();
         tokio::spawn(async move {
             engine.run_preflight(task_id, run_seq).await;
@@ -3316,6 +3344,12 @@ impl TaskEngine {
             return Err("task left review before it could be completed".to_string());
         }
         self.emit_upsert(task_id);
+        // The third settlement gets a comment too: the setting promises one
+        // whenever a forge task finishes, and a task that landed nothing is an
+        // outcome the thread's readers want as much as the other two — told as
+        // what did not happen to their item, never as "accepted" (see
+        // `writeback_comment_body`). The CAS above is what makes it one comment
+        // and not one per attempt.
         self.spawn_forge_writeback(task_id, WritebackOutcome::Accepted { nothing_to_land });
 
         if live_wt.is_none() {
@@ -4768,7 +4802,9 @@ impl TaskEngine {
                 nothing_to_land: *nothing_to_land,
             },
         };
-        let body = writeback_comment_body(task_id, &outcome, stats);
+        // Where it is posted shapes what it may say: a pull request's thread
+        // hears what happened to that pull request, in its forge's own noun.
+        let body = writeback_comment_body(task_id, meta.provider, item_kind, &outcome, stats);
 
         let ctx = DeliveryCtx {
             conn: &self.db.conn,
@@ -5635,7 +5671,7 @@ impl TaskEngine {
                         // The dropped TurnComplete owed review its preflight
                         // and its auto-merge chance — same hook as the live
                         // settle path.
-                        self.spawn_preflight(task.id, task.run_seq);
+                        self.spawn_post_review(task.id, task.run_seq);
                     }
                     settled
                 }
@@ -5781,6 +5817,9 @@ impl TaskEngine {
             }
         }
     }
+
+    // ── preflight (acceptance red/green light) ──────────────────────────────
+
 }
 
 struct WorktreeRef {
@@ -7205,6 +7244,7 @@ mod tests {
     /// as absolute on both platforms.
     #[cfg(windows)]
     const ABS_PREFIX: &str = "C:";
+
     #[cfg(not(windows))]
     const ABS_PREFIX: &str = "";
 
@@ -7828,6 +7868,7 @@ mod tests {
             .iter()
             .any(|t| t.contains("Commit to the current branch as you like")));
     }
+
     /// A report-deliverable task (forge plan-first / review-only)
     /// swaps the commit licence on its ORIGINAL order — otherwise the guard's
     /// "commit as you like", being the last block read, would quietly undo the
@@ -7935,6 +7976,7 @@ mod tests {
         .expect("compose");
         assert!(guard_of(&odd).contains("Commit to the current branch as you like"));
     }
+
     /// A retry stands in for the turn it interrupted, and a retry/requeue note
     /// refines that turn without changing its KIND — so the guard's licence
     /// follows the unsettled follow-up underneath the note, not the note.
@@ -8438,6 +8480,7 @@ mod tests {
         assert!(joined.contains("rename the column"));
         assert!(joined.contains("install deps first"));
     }
+
     /// A screenshot pasted into the follow-up box has to reach the agent as an
     /// image block, right behind the sentence that framed it — dropping it
     /// would leave the framing pointing at nothing.
@@ -8488,6 +8531,7 @@ mod tests {
             1
         );
     }
+
     /// The same attachments have to survive the replay path: a run interrupted
     /// before it answered owes the user the screenshot as well as the sentence.
     #[tokio::test]
@@ -8531,6 +8575,7 @@ mod tests {
             "the replayed instruction keeps its image: {blocks:?}"
         );
     }
+
     /// A task's image blocks are stored, so the encoding the composer chose can
     /// be stale by the time the run happens (a slow probe then, a different
     /// agent now). Dispatch re-encodes for whoever actually answered.
@@ -8614,6 +8659,7 @@ mod tests {
                 if mime_type.as_deref() == Some("text/markdown")
         ));
     }
+
     /// An event written before follow-ups could carry attachments has no
     /// `blocks` field at all — that has to read as "nothing was attached".
     #[tokio::test]
@@ -9038,6 +9084,7 @@ mod tests {
     // -- blocking prompts raised by a delegation sub-agent (#447) -----------
 
     const PARENT_CONN: &str = "conn-task";
+
     const CHILD_CONN: &str = "conn-child";
 
     /// A task driven to `running` on `PARENT_CONN`, with the engine's live
@@ -10621,6 +10668,40 @@ mod tests {
             (ForgeItemKind::Change, 7),
             "the comment belongs on the pull request the task came from"
         );
+    }
+
+    /// Completing a pull-request task that pushed nothing — a review-only
+    /// report, or a review that stopped at an unsound approach — must not tell
+    /// the pull request's thread it was "accepted". That is houhub's word for
+    /// signing off on the TASK; on a pull request it reads as approval of the
+    /// change, which may be the opposite of what the review found. The thread
+    /// hears what happened to its pull request: nothing was pushed to it.
+    #[tokio::test]
+    async fn completing_a_pull_request_task_tells_its_thread_nothing_was_pushed() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // The pull request's head IS the task branch's head: the task made no
+        // changes of its own, which is when the board offers "complete".
+        let pr = open_pull(&f.head, "feature", "acme/app");
+        as_pull_request_task(&f, pr).await;
+        enable_writeback(&f).await;
+
+        f.engine
+            .complete_task(f.task_id, false)
+            .await
+            .expect("completed with nothing to push");
+
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        assert_eq!(comments.len(), 1, "one settle, one comment");
+        let (kind, number, body) = &comments[0];
+        assert_eq!((*kind, *number), (ForgeItemKind::Change, 7));
+        assert!(body.contains("nothing was pushed to this pull request"), "{body}");
+        assert!(!body.to_lowercase().contains("accept"), "reads as an approval: {body}");
     }
 
     /// The comment is a fact sheet: the link and the counters. Nothing the

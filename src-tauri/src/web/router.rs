@@ -10,12 +10,17 @@ use axum::{
 };
 
 use crate::web::handlers::files::UPLOAD_MAX_BYTES;
+
 use tower_http::cors::{Any, CorsLayer};
+
 use tower_http::services::{ServeDir, ServeFile};
 
 use super::shutdown::ShutdownSignal;
+
 use super::{auth, handlers, ws};
+
 use crate::app_state::AppState;
+
 use tracing::Instrument;
 
 pub fn build_router(
@@ -284,6 +289,22 @@ pub fn build_router(
             post(handlers::folder_links::remove_folder_link),
         )
         // ─── Canvas ───
+        .route(
+            "/canvas_list_boards",
+            post(handlers::canvas::canvas_list_boards),
+        )
+        .route(
+            "/canvas_create_board",
+            post(handlers::canvas::canvas_create_board),
+        )
+        .route(
+            "/canvas_update_board",
+            post(handlers::canvas::canvas_update_board),
+        )
+        .route(
+            "/canvas_delete_board",
+            post(handlers::canvas::canvas_delete_board),
+        )
         .route(
             "/canvas_list_nodes",
             post(handlers::canvas::canvas_list_nodes),
@@ -924,6 +945,10 @@ pub fn build_router(
             post(handlers::acp::acp_load_pi_config),
         )
         .route(
+            "/acp_list_pi_model_capabilities",
+            post(handlers::acp::acp_list_pi_model_capabilities),
+        )
+        .route(
             "/acp_load_deepseek_model_catalog",
             post(handlers::acp::acp_load_deepseek_model_catalog),
         )
@@ -990,6 +1015,10 @@ pub fn build_router(
         .route(
             "/acp_detect_agent_local_version",
             post(handlers::acp::acp_detect_agent_local_version),
+        )
+        .route(
+            "/acp_fetch_agent_latest_release",
+            post(handlers::acp::acp_fetch_agent_latest_release),
         )
         .route(
             "/acp_prepare_npx_agent",

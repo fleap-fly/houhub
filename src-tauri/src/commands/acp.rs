@@ -1,20 +1,32 @@
-
 use std::collections::{BTreeMap, HashMap};
+
 use std::fs;
+
 use std::path::{Path, PathBuf};
+
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
 #[cfg(feature = "tauri-runtime")]
 use tauri::{Manager, State};
 
 use crate::acp::binary_cache;
+
 use crate::acp::custom_registry;
+
 use crate::acp::error::AcpError;
+
+use crate::acp::latest_release;
+
 use crate::acp::manager::ConnectionManager;
+
 use crate::acp::opencode_plugins::{self, PluginCheckSummary};
+
 use crate::acp::preflight::{self, PreflightResult};
+
 use crate::acp::registry;
+
 use crate::acp::types::{
     AcpAgentInfo, AgentDiagnosticsReport, AgentSkillContent, AgentSkillItem, AgentSkillLayout,
     AgentSkillLocation, AgentSkillScope, AgentSkillsListResult, CodexGranularApproval,
@@ -22,25 +34,23 @@ use crate::acp::types::{
     ConnectionStatus, DiagCheck, DiagLevel, DiagSection, DiagnosticsVerdict, GrokSettings,
     GrokStructuredConfig,
 };
+
 #[cfg(feature = "tauri-runtime")]
 use crate::acp::types::{ConnectionInfo, ForkResultInfo, PromptInputBlock};
+
 use crate::db::service::agent_setting_service;
+
 use crate::db::service::model_provider_service;
+
 use crate::db::AppDatabase;
+
 use crate::models::agent::AgentType;
+
 use crate::web::event_bridge::EventEmitter;
 
 const ACP_AGENTS_UPDATED_EVENT: &str = "app://acp-agents-updated";
-const NPM_PREFIX_TIMEOUT: Duration = Duration::from_millis(1500);
-const NPM_RUN_SCRIPTS_OVERRIDE: &str = "--ignore-scripts=false";
-const PI_CODING_AGENT_PACKAGE: &str = "@earendil-works/pi-coding-agent";
 
-/// Backend-only markers carried in the per-agent runtime env. They let the
-/// connection layer keep Pi's model selector scoped to the model provider
-/// selected in HouHub, while the native Pi process still receives its normal
-/// provider/model configuration.
-pub(crate) const PI_BOUND_PROVIDER_ENV: &str = "HOUHUB_PI_BOUND_PROVIDER";
-pub(crate) const PI_BOUND_MODEL_ENV: &str = "HOUHUB_PI_BOUND_MODEL";
+const NPM_PREFIX_TIMEOUT: Duration = Duration::from_millis(1500);
 
 static NPM_GLOBAL_PREFIX_CACHE: tokio::sync::OnceCell<PathBuf> = tokio::sync::OnceCell::const_new();
 
@@ -120,7 +130,7 @@ fn version_from_package_spec(package: &str) -> Option<String> {
     normalize_version_candidate(version)
 }
 
-fn package_name_from_spec(package: &str) -> String {
+pub(crate) fn package_name_from_spec(package: &str) -> String {
     let normalized = package.trim();
     if normalized.is_empty() {
         return String::new();
@@ -147,7 +157,7 @@ fn package_name_from_spec(package: &str) -> String {
 /// anything containing whitespace, `@`, or path separators, so the result is
 /// safe to interpolate into an npm package spec (`name@<v>`) and to substitute
 /// into a binary download URL. Returns the version without the leading `v`.
-fn sanitize_custom_version(input: &str) -> Option<String> {
+pub(crate) fn sanitize_custom_version(input: &str) -> Option<String> {
     let trimmed = input.trim();
     let normalized = trimmed
         .strip_prefix('v')
@@ -196,59 +206,12 @@ fn build_npm_install_spec(
 /// embedded in the GitHub release URL (the path tag, and for some agents the
 /// asset filename), so a plain replace yields the URL for the requested version
 /// — assuming the upstream release reuses the same asset-naming convention.
-fn apply_custom_version_to_url(url: &str, registry_version: &str, custom_version: &str) -> String {
+pub(crate) fn apply_custom_version_to_url(
+    url: &str,
+    registry_version: &str,
+    custom_version: &str,
+) -> String {
     url.replace(registry_version, custom_version)
-}
-
-/// Per-agent `env_json` key that opts an npx agent into installing the
-/// package's `latest` npm dist-tag instead of the reviewed registry pin.
-/// Owned by the "Adapter version" control in Agent Settings, riding the same
-/// per-agent env store as pi's `PI_ACP_PI_COMMAND` runtime override and the
-/// host-tools knob. Consulted at install/upgrade time ONLY: a launch always
-/// runs whatever is installed, and nothing polls npm in the background.
-///
-/// Exactly the value `latest` opts in; absence or any other value stays on the
-/// pin. Unlike `HOUHUB_ACP_HOST_TOOLS` there is no process-env second layer to
-/// make "absent" ambiguous, so the settings control may delete the key for the
-/// pinned default — both readers (this one and `adapterChannelFromEnvText` in
-/// acp-agent-settings.tsx) treat absent as pinned.
-pub(crate) const ADAPTER_CHANNEL_ENV: &str = "HOUHUB_ADAPTER_CHANNEL";
-const ADAPTER_CHANNEL_LATEST: &str = "latest";
-
-/// Whether a resolved per-agent env opts into the `latest` adapter channel.
-/// Takes the MERGED env (`build_runtime_env_from_setting`) rather than raw
-/// `env_json`, so it reads the same layers the launch path and the settings
-/// page display — a value set through the agent's local config file counts too.
-fn adapter_channel_is_latest(env: &BTreeMap<String, String>) -> bool {
-    env.get(ADAPTER_CHANNEL_ENV)
-        .is_some_and(|value| value.trim() == ADAPTER_CHANNEL_LATEST)
-}
-
-/// The npm install spec(s) one prepare call will attempt, in order: the spec to
-/// try first, plus the fallback to retry on failure (at most one).
-///
-/// An explicit `version_override` (the Custom install dialog) always wins and
-/// never falls back — the user asked for that exact version, and quietly
-/// installing a different one would relabel their choice. With no override, a
-/// latest-channel agent tries the `latest` dist-tag first and keeps the pinned
-/// registry spec as the fallback, so npm being unreachable (or a mirror not
-/// yet carrying the tag's target) degrades to the reviewed pin instead of a
-/// failed install. The default stays byte-identical to `build_npm_install_spec`.
-fn npm_install_attempts(
-    package: &str,
-    version_override: Option<&str>,
-    latest_channel: bool,
-) -> Result<(String, Option<String>), AcpError> {
-    let pinned = build_npm_install_spec(package, version_override)?;
-    let overridden = version_override.is_some_and(|raw| !raw.trim().is_empty());
-    if latest_channel && !overridden {
-        let latest = format!(
-            "{}@{ADAPTER_CHANNEL_LATEST}",
-            package_name_from_spec(package)
-        );
-        return Ok((latest, Some(pinned)));
-    }
-    Ok((pinned, None))
 }
 
 /// Check whether an NPX agent command is spawnable.
@@ -256,13 +219,6 @@ fn npm_install_attempts(
 /// GUI environments that don't inherit the user's shell PATH.
 pub(crate) async fn is_cmd_available(cmd: &str) -> bool {
     resolve_npx_command(cmd).await.is_some()
-}
-
-pub(crate) async fn npx_agent_launchable(agent_type: AgentType) -> bool {
-    match registry::get_agent_meta(agent_type).distribution {
-        registry::AgentDistribution::Npx { cmd, .. } => is_cmd_available(cmd).await,
-        _ => false,
-    }
 }
 
 pub(crate) fn resolve_command_on_path(cmd: &str) -> Option<PathBuf> {
@@ -390,6 +346,26 @@ pub(crate) fn uvx_python_args(python: Option<&str>) -> Vec<String> {
     }
 }
 
+/// The version to display for a `Uvx` agent, shared by `detect_local_version`
+/// and the status/list paths so they can't disagree: houhub's prepared marker
+/// first, then the package's console script on PATH, then the system-fallback
+/// command a launch would actually use (a pipx / `uv tool install` CLI).
+async fn uvx_displayed_version(
+    agent_type: AgentType,
+    cmd: &str,
+    system_cmd: Option<(&'static str, &'static [&'static str])>,
+) -> Option<String> {
+    let mut version = binary_cache::uvx_prepared_version(agent_type);
+    if version.is_none() {
+        let bin = resolve_command_on_path(cmd)
+            .or_else(|| system_cmd.and_then(|(c, _)| resolve_command_on_path(c)));
+        if let Some(bin) = bin {
+            version = system_probed_version(agent_type, &bin, None).await;
+        }
+    }
+    version
+}
+
 /// Pre-fetch a `Uvx` agent's pinned package into uvx's cache by running
 /// `uvx --from <package> <cmd> --version`, so the first real connect doesn't
 /// pay the download cost. Streams progress to the install event stream.
@@ -455,18 +431,6 @@ pub(crate) async fn resolve_npx_command(cmd: &str) -> Option<PathBuf> {
         return Some(path);
     }
     resolve_npx_command_from_current_npm_prefix(cmd).await
-}
-
-pub(crate) async fn npm_command_bin_dir(cmd: &str) -> Option<PathBuf> {
-    resolve_npx_command(cmd)
-        .await
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-}
-
-pub(crate) fn node_command_bin_dir() -> Option<PathBuf> {
-    which::which("node")
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
 }
 
 #[derive(Default)]
@@ -716,26 +680,6 @@ async fn npm_list_version(
         .get("version")?
         .as_str()?;
     normalize_version_candidate(version)
-}
-
-/// The version to display for a `Uvx` agent, shared by `detect_local_version`
-/// and the status/list paths so they can't disagree: houhub's prepared marker
-/// first, then the package's console script on PATH, then the system-fallback
-/// command a launch would actually use (a pipx / `uv tool install` CLI).
-async fn uvx_displayed_version(
-    agent_type: AgentType,
-    cmd: &str,
-    system_cmd: Option<(&'static str, &'static [&'static str])>,
-) -> Option<String> {
-    let mut version = binary_cache::uvx_prepared_version(agent_type);
-    if version.is_none() {
-        let bin = resolve_command_on_path(cmd)
-            .or_else(|| system_cmd.and_then(|(c, _)| resolve_command_on_path(c)));
-        if let Some(bin) = bin {
-            version = system_probed_version(agent_type, &bin, None).await;
-        }
-    }
-    version
 }
 
 async fn detect_local_version(agent_type: AgentType) -> Option<String> {
@@ -2187,7 +2131,31 @@ async fn probe_binary_version(bin: &std::path::Path) -> Option<String> {
 
 /// Official npm registry URL – used to bypass local mirror configurations that
 /// may not have synced niche packages like `@agentclientprotocol/*`.
-const NPM_OFFICIAL_REGISTRY: &str = "https://registry.npmjs.org";
+pub(crate) const NPM_OFFICIAL_REGISTRY: &str = "https://registry.npmjs.org";
+
+/// Force npm to install platform-specific `optionalDependencies`. Several
+/// agents ship their native CLI as a per-platform optional package. A machine
+/// with `omit=optional` in `.npmrc` can otherwise report a successful install
+/// while omitting the native binary needed at launch.
+const NPM_INCLUDE_OPTIONAL: &str = "--include=optional";
+
+/// npm hides lifecycle-script output by default. Hermes uses its postinstall
+/// script to bootstrap the runtime behind the `hermes` command, so its install
+/// must stream that work visibly instead of appearing hung. The flag is
+/// harmless for agents without lifecycle scripts.
+const NPM_FOREGROUND_SCRIPTS: &str = "--foreground-scripts";
+
+const NPM_RUN_SCRIPTS_OVERRIDE: &str = "--ignore-scripts=false";
+
+/// Explicitly enable lifecycle scripts for Hermes. A user-level
+/// `ignore-scripts=true` setting otherwise creates a broken shim while npm
+/// still reports a successful install. This override is scoped to the one
+/// package where postinstall is load-bearing.
+const NODE_ENV_PROXY_VAR: &str = "NODE_USE_ENV_PROXY";
+
+fn npm_package_requires_scripts(package: &str) -> bool {
+    package_name_from_spec(package) == "hermes-agent"
+}
 
 /// Hermes' npm package bootstraps a Python runtime from its postinstall
 /// script. When that download fails, surface the proxy requirement instead of
@@ -2209,28 +2177,6 @@ fn annotate_npm_bootstrap_failure(package: &str, err: AcpError) -> AcpError {
     AcpError::Protocol(format!(
         "{message}\n\nThe bootstrap downloads its runtime from github.com with Node's own fetch, which reads HTTP(S)_PROXY only on Node 24+. Behind a proxy on an older Node, upgrade Node or run the official installer - HouHub picks up a `hermes` on PATH."
     ))
-}
-
-/// Force npm to install platform-specific `optionalDependencies`. Several
-/// agents ship their native CLI as a per-platform optional package. A machine
-/// with `omit=optional` in `.npmrc` can otherwise report a successful install
-/// while omitting the native binary needed at launch.
-const NPM_INCLUDE_OPTIONAL: &str = "--include=optional";
-
-/// npm hides lifecycle-script output by default. Hermes uses its postinstall
-/// script to bootstrap the runtime behind the `hermes` command, so its install
-/// must stream that work visibly instead of appearing hung. The flag is
-/// harmless for agents without lifecycle scripts.
-const NPM_FOREGROUND_SCRIPTS: &str = "--foreground-scripts";
-
-/// Explicitly enable lifecycle scripts for Hermes. A user-level
-/// `ignore-scripts=true` setting otherwise creates a broken shim while npm
-/// still reports a successful install. This override is scoped to the one
-/// package where postinstall is load-bearing.
-const NODE_ENV_PROXY_VAR: &str = "NODE_USE_ENV_PROXY";
-
-fn npm_package_requires_scripts(package: &str) -> bool {
-    package_name_from_spec(package) == "hermes-agent"
 }
 
 /// Name the proxy when npm refused to parse the proxy address itself.
@@ -2686,8 +2632,39 @@ fn codex_home_dir() -> PathBuf {
     }
 }
 
-pub(crate) fn default_codex_home_dir_for_launch() -> PathBuf {
-    home_dir_or_default().join(".codex")
+/// Hermes config/data directory. Honors `HERMES_HOME`, defaults to `~/.hermes`.
+/// Hermes self-manages credentials (`.env`), config (`config.yaml`), session
+/// store (`state.db`), and skills (`skills/`) here.
+pub(crate) fn hermes_home_dir() -> PathBuf {
+    let configured = std::env::var("HERMES_HOME").ok().and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+
+    match configured {
+        Some(value) => {
+            if value == "~" {
+                home_dir_or_default()
+            } else if let Some(remain) = value.strip_prefix("~/") {
+                home_dir_or_default().join(remain)
+            } else {
+                PathBuf::from(value)
+            }
+        }
+        None => home_dir_or_default().join(".hermes"),
+    }
+}
+
+fn codex_config_toml_path() -> PathBuf {
+    codex_home_dir().join("config.toml")
+}
+
+fn codex_auth_json_path() -> PathBuf {
+    codex_home_dir().join("auth.json")
 }
 
 /// Header codex reads to decide whether a provider authenticates through the
@@ -2746,58 +2723,6 @@ fn opencode_config_dir() -> PathBuf {
     crate::acp::opencode_plugins::xdg_config_home()
         .unwrap_or_else(|| home_dir_or_default().join(".config"))
         .join("opencode")
-}
-
-/// Hermes config/data directory. Honors `HERMES_HOME`, defaults to `~/.hermes`.
-/// Hermes self-manages credentials (`.env`), config (`config.yaml`), session
-/// store (`state.db`), and skills (`skills/`) here.
-pub(crate) fn hermes_home_dir() -> PathBuf {
-    let configured = std::env::var("HERMES_HOME").ok().and_then(|raw| {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    });
-
-    match configured {
-        Some(value) => {
-            if value == "~" {
-                home_dir_or_default()
-            } else if let Some(remain) = value.strip_prefix("~/") {
-                home_dir_or_default().join(remain)
-            } else {
-                PathBuf::from(value)
-            }
-        }
-        None => home_dir_or_default().join(".hermes"),
-    }
-}
-
-fn codex_config_toml_path() -> PathBuf {
-    codex_home_dir().join("config.toml")
-}
-
-fn codex_auth_json_path() -> PathBuf {
-    codex_home_dir().join("auth.json")
-}
-
-fn ensure_codex_home_env(agent_type: AgentType, runtime_env: &mut BTreeMap<String, String>) {
-    if agent_type != AgentType::Codex {
-        return;
-    }
-    if runtime_env
-        .get("CODEX_HOME")
-        .is_some_and(|value| !value.trim().is_empty())
-    {
-        return;
-    }
-    let codex_home = codex_home_dir();
-    if let Err(err) = fs::create_dir_all(&codex_home) {
-        tracing::warn!("[ACP][Codex] failed to create CODEX_HOME {codex_home:?}: {err}");
-    }
-    runtime_env.insert("CODEX_HOME".to_string(), codex_home.display().to_string());
 }
 
 fn opencode_primary_config_path() -> PathBuf {
@@ -3873,6 +3798,7 @@ fn read_codex_config_or_empty() -> Result<String, AcpError> {
 }
 
 const CODEX_APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
+
 const CODEX_SANDBOX_MODES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
 
 /// Project the sandbox and approval keys into a stable UI shape. Invalid TOML
@@ -3958,16 +3884,167 @@ fn parse_codex_sandbox_settings(raw_toml: &str) -> CodexSandboxSettings {
     }
 }
 
-fn is_absolute_codex_config_path(value: &str) -> bool {
+/// A `writable_roots` entry codex will accept as-is. Upstream types the field as
+/// `AbsolutePathBuf`, but a relative entry does NOT error — it is resolved
+/// against `CODEX_HOME`, so `"rel/dir"` silently becomes `~/.codex/rel/dir`.
+/// Rejecting it here is the only way the user learns their path was not what
+/// they meant. Both POSIX (`/x`) and Windows (`C:\x`, `\\server\share`) shapes
+/// are accepted regardless of the host, since the config file is portable.
+fn is_absolute_config_path(value: &str) -> bool {
     let value = value.trim();
     if value.starts_with('/') || value.starts_with("\\\\") {
         return true;
     }
     let mut chars = value.chars();
-    matches!(
-        (chars.next(), chars.next(), chars.next()),
-        (Some(drive), Some(':'), Some('\\' | '/')) if drive.is_ascii_alphabetic()
-    )
+    match (chars.next(), chars.next(), chars.next()) {
+        (Some(drive), Some(':'), Some('\\' | '/')) => drive.is_ascii_alphabetic(),
+        _ => false,
+    }
+}
+
+/// Whether a `model_catalog_json` value points at the catalog generated by
+/// HouHub. Any other path belongs to the user and must never be removed when
+/// the structured editor resets its own catalog.
+fn is_houhub_owned_catalog_ref(value: &str, codex_home: &Path) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    resolve_codex_home_relative(value, codex_home)
+        == codex_home.join(crate::acp::codex_model_catalog::CATALOG_REL)
+}
+
+/// Remove HouHub's generated `model_catalog_json` reference while preserving
+/// comments and every unmanaged TOML entry. User-owned catalog references are
+/// left untouched.
+fn remove_codex_catalog_key(
+    base_toml: &str,
+    codex_home: &Path,
+) -> Result<Option<String>, AcpError> {
+    let mut doc = base_toml
+        .parse::<toml_edit::Document>()
+        .map_err(|e| AcpError::protocol(format!("invalid codex config.toml: {e}")))?;
+    let owned = doc
+        .get("model_catalog_json")
+        .and_then(|v| v.as_str())
+        .map(|v| is_houhub_owned_catalog_ref(v, codex_home))
+        .unwrap_or(false);
+    if !owned {
+        return Ok(None);
+    }
+    doc.as_table_mut().remove("model_catalog_json");
+    Ok(Some(doc.to_string()))
+}
+
+/// Remove a dangling reference left by HouHub's generated catalog files.
+fn drop_codex_catalog_reference() -> Result<(), AcpError> {
+    let base = read_codex_config_or_empty()?;
+    if let Some(next) = remove_codex_catalog_key(&base, &codex_home_dir())? {
+        persist_codex_native_config_files(None, Some(&next))?;
+    }
+    Ok(())
+}
+
+/// What [`resync_codex_generated_catalog_at`] did.
+#[derive(Debug, PartialEq)]
+enum CodexCatalogResync {
+    /// No catalog houhub can regenerate: config.toml references none, references
+    /// the user's own, or houhub's intent sidecar is missing.
+    NotOwned,
+    /// The generated catalog was re-expanded against the new official list.
+    Rewritten,
+    /// Nothing deviates from codex's own list any more, so the reference and
+    /// the generated files were removed and codex's catalog applies untouched.
+    Released,
+}
+
+/// Re-expand houhub's generated codex catalog (`model_catalog_json`) against
+/// `snapshot`, the official catalog of the codex that is now installed.
+///
+/// The key is a whole-table replace that houhub only rewrites when the model
+/// settings are saved, so a codex upgrade that ships new official models left
+/// every user with custom models or removed officials on the OLD table: codex
+/// 0.159.1 (codex-acp 2.0.1) made GPT-6.1 Sol its default and they would not
+/// see it until they happened to re-save. Expanding the stored intent (the
+/// source sidecar) against the new catalog is exactly what that re-save writes.
+///
+/// Only a catalog houhub owns is touched — config.toml must reference houhub's
+/// own file, and the sidecar must exist. A catalog without a sidecar is NOT
+/// re-imported: read against the new list, every newly shipped official would
+/// look like one the user removed. The root `model` is left alone; the user's
+/// explicit default is part of the sidecar and survives the rewrite as-is.
+fn resync_codex_generated_catalog_at(
+    codex_home: &Path,
+    snapshot: &[serde_json::Value],
+) -> Result<CodexCatalogResync, AcpError> {
+    let config_path = codex_home.join("config.toml");
+    let config_toml = match fs::read_to_string(&config_path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CodexCatalogResync::NotOwned)
+        }
+        Err(e) => {
+            return Err(AcpError::protocol(format!(
+                "read codex config.toml failed: {e}"
+            )))
+        }
+    };
+    let owned = config_toml
+        .parse::<toml::Value>()
+        .ok()
+        .as_ref()
+        .and_then(|doc| doc.get("model_catalog_json"))
+        .and_then(toml::Value::as_str)
+        .is_some_and(|value| is_houhub_owned_catalog_ref(value, codex_home));
+    if !owned {
+        return Ok(CodexCatalogResync::NotOwned);
+    }
+    let raw = match fs::read_to_string(codex_home.join(crate::acp::codex_model_catalog::SOURCE_REL))
+    {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CodexCatalogResync::NotOwned)
+        }
+        Err(e) => {
+            return Err(AcpError::protocol(format!(
+                "read codex catalog source failed: {e}"
+            )))
+        }
+    };
+    let config = crate::acp::codex_model_catalog::parse_model_config(Some(&raw));
+    let released = crate::acp::codex_model_catalog::is_effectively_empty(&config, snapshot);
+    if released {
+        // Reference first, files second: codex refuses to start on a
+        // `model_catalog_json` that points at a missing file, so a failure in
+        // between must leave a stale-but-valid table, never a dangling key.
+        if let Some(next) = remove_codex_catalog_key(&config_toml, codex_home)? {
+            fs::write(&config_path, next)
+                .map_err(|e| AcpError::protocol(format!("write codex config.toml failed: {e}")))?;
+        }
+    }
+    crate::acp::codex_model_catalog::write_catalog_files(&raw, codex_home, snapshot)
+        .map_err(|e| AcpError::protocol(e.to_string()))?;
+    Ok(if released {
+        CodexCatalogResync::Released
+    } else {
+        CodexCatalogResync::Rewritten
+    })
+}
+
+/// After codex-acp is (re)installed: refresh the cached official catalog from
+/// the codex it now drives, then bring houhub's generated catalog in line (see
+/// [`resync_codex_generated_catalog_at`]). Only a LIVE catalog is used — the
+/// stale cache or the compiled-in snapshot would just rewrite the old table.
+/// Best-effort: an install never fails over this.
+async fn resync_codex_generated_catalog() {
+    let Some(snapshot) = crate::acp::codex_catalog_source::refresh_live_catalog().await else {
+        tracing::warn!("[acp] codex installed, but its model catalog could not be read");
+        return;
+    };
+    match resync_codex_generated_catalog_at(&codex_home_dir(), &snapshot) {
+        Ok(outcome) => tracing::info!("[acp] codex model catalog after install: {outcome:?}"),
+        Err(e) => tracing::warn!("[acp] codex model catalog resync failed: {e}"),
+    }
 }
 
 /// Apply only the fields provided by the structured panel and retain comments
@@ -4056,12 +4133,9 @@ fn apply_codex_sandbox_config(
                 .map(|root| root.trim().to_string())
                 .filter(|root| !root.is_empty())
                 .collect::<Vec<_>>();
-            if let Some(path) = roots
-                .iter()
-                .find(|path| !is_absolute_codex_config_path(path))
-            {
+            if let Some(bad) = roots.iter().find(|root| !is_absolute_config_path(root)) {
                 return Err(AcpError::protocol(format!(
-                    "writable_roots entries must be absolute paths: {path}"
+                    "writable_roots entries must be absolute paths (codex resolves relative entries against CODEX_HOME): {bad}"
                 )));
             }
             Some(roots)
@@ -4116,49 +4190,6 @@ fn apply_codex_sandbox_config(
     }
 
     Ok(doc.to_string())
-}
-
-/// Whether a `model_catalog_json` value points at the catalog generated by
-/// HouHub. Any other path belongs to the user and must never be removed when
-/// the structured editor resets its own catalog.
-fn is_houhub_owned_catalog_ref(value: &str, codex_home: &Path) -> bool {
-    let value = value.trim();
-    if value.is_empty() {
-        return false;
-    }
-    resolve_codex_home_relative(value, codex_home)
-        == codex_home.join(crate::acp::codex_model_catalog::CATALOG_REL)
-}
-
-/// Remove HouHub's generated `model_catalog_json` reference while preserving
-/// comments and every unmanaged TOML entry. User-owned catalog references are
-/// left untouched.
-fn remove_codex_catalog_key(
-    base_toml: &str,
-    codex_home: &Path,
-) -> Result<Option<String>, AcpError> {
-    let mut doc = base_toml
-        .parse::<toml_edit::Document>()
-        .map_err(|e| AcpError::protocol(format!("invalid codex config.toml: {e}")))?;
-    let owned = doc
-        .get("model_catalog_json")
-        .and_then(|v| v.as_str())
-        .map(|v| is_houhub_owned_catalog_ref(v, codex_home))
-        .unwrap_or(false);
-    if !owned {
-        return Ok(None);
-    }
-    doc.as_table_mut().remove("model_catalog_json");
-    Ok(Some(doc.to_string()))
-}
-
-/// Remove a dangling reference left by HouHub's generated catalog files.
-fn drop_codex_catalog_reference() -> Result<(), AcpError> {
-    let base = read_codex_config_or_empty()?;
-    if let Some(next) = remove_codex_catalog_key(&base, &codex_home_dir())? {
-        persist_codex_native_config_files(None, Some(&next))?;
-    }
-    Ok(())
 }
 
 /// Read the raw `~/.grok/config.toml` for the Grok settings panel's config-file
@@ -4319,7 +4350,8 @@ pub(crate) fn grok_launch_permission_mode() -> Option<String> {
 }
 
 /// Map a `~/.codex/config.toml` sandbox/approval pair onto the `INITIAL_AGENT_MODE`
-/// preset id codex-acp accepts (`read-only` / `agent` / `agent-full-access`).
+/// preset id codex-acp accepts (`read-only` / `workspace-write` / `agent` /
+/// `agent-full-access`).
 ///
 /// ## Why this mapping has to exist at all
 ///
@@ -4332,13 +4364,25 @@ pub(crate) fn grok_launch_permission_mode() -> Option<String> {
 /// launch-time channel that makes the user's own config mean anything, exactly
 /// like [`grok_launch_permission_mode`] above.
 ///
-/// ## What the three presets mean (codex-acp ≥1.7.0)
+/// ## What the presets mean, per adapter generation
 ///
-/// | preset | sandbox | approvals reviewer |
-/// |---|---|---|
-/// | `read-only` ("Ask for approval") | workspace-write | `user` |
-/// | `agent` ("Approve for me", DEFAULT) | workspace-write | `auto_review` |
-/// | `agent-full-access` ("Full access") | danger-full-access | policy `never` |
+/// | preset | ≤1.6.2 | 1.7.0–1.13.x | ≥2.0.0 |
+/// |---|---|---|---|
+/// | `read-only` | read-only | workspace-write, reviewer `user` | read-only, reviewer `user` |
+/// | `workspace-write` | — | — | workspace-write, reviewer `user` |
+/// | `agent` (DEFAULT) | workspace-write | workspace-write, reviewer `auto_review` | same |
+/// | `agent-full-access` | danger-full-access, `never` | same | same |
+///
+/// codex-acp 2.0.0 (#480, "restore read-only mode") puts the read-only sandbox
+/// back under `read-only` ("Read-only") and moves the 1.7.0 meaning of that id —
+/// a writable workspace whose every escalation goes to the user — to a NEW id,
+/// `workspace-write` ("Workspace access"). That new preset is the exact image
+/// of the codex CLI default (`sandbox_mode = "workspace-write"` with an
+/// on-request approval policy the user adjudicates), which none of 1.7.0's
+/// three presets was. An id an adapter does not know is not an error:
+/// `AgentMode.getInitialAgentMode` falls back to the DEFAULT (`agent`) on every
+/// version, so injecting `workspace-write` into a ≤1.13.x adapter yields exactly
+/// what this mapping chose before 2.0.0 existed.
 ///
 /// 1.7.0 redefined these. `read-only` used to carry a genuinely read-only
 /// sandbox; it now carries `workspaceWrite` like `agent`, and the two are
@@ -4383,9 +4427,16 @@ pub(crate) fn grok_launch_permission_mode() -> Option<String> {
 ///   trade.
 ///
 /// So the reviewer change is treated as what it is: an upstream default that
-/// every ACP client now inherits. HouHub DISCLOSES it in the Codex panel, and the
-/// composer's approval-preset selector ("Ask for approval") remains the
-/// first-class, per-session control for a user who wants to adjudicate directly.
+/// every ACP client now inherits. houhub DISCLOSES it in the Codex panel, and the
+/// composer's approval-preset selector remains the first-class, per-session
+/// control for a user who wants to adjudicate directly.
+///
+/// 2.0.0 dissolves that dilemma for the WRITABLE case, which is why a
+/// `workspace-write` config now maps to the new `workspace-write` preset: that id
+/// means "writable workspace, user-reviewed" on the one generation that has it,
+/// and nothing at all — hence the `agent` default, the old answer — on every
+/// other. Unlike `read-only`, there is no version on which it narrows the
+/// sandbox, so the first objection above does not apply to it.
 ///
 /// ## What is deliberately NOT preserved
 ///
@@ -4399,12 +4450,13 @@ pub(crate) fn grok_launch_permission_mode() -> Option<String> {
 /// the sandbox axis and neutral on the approval axis; the panel discloses the
 /// approval loss to the user rather than pretending it away.
 ///
-/// **The read-only sandbox, on codex-acp ≥1.7.0.** No preset carries one any
-/// more, and the adapter re-sends the selected preset's `sandboxPolicy` on every
-/// `runTurn`, so neither `config.toml` nor the `CODEX_CONFIG` session-config
-/// channel can put it back. `read-only` is still the right target for a
-/// read-only config — it is the tightest preset on both adapter generations —
-/// but on ≥1.7.0 the session really is workspace-writable, which the panel says
+/// **The read-only sandbox, on codex-acp 1.7.0–1.13.x.** No preset carries one
+/// there, and the adapter re-sends the selected preset's `sandboxPolicy` on
+/// every `runTurn`, so neither `config.toml` nor the `CODEX_CONFIG`
+/// session-config channel can put it back. `read-only` is still the right
+/// target for a read-only config — it is the tightest preset on every adapter
+/// generation, and 2.0.0 made it a real read-only sandbox again — but on
+/// 1.7.0–1.13.x the session really is workspace-writable, which the panel says
 /// out loud rather than papering over.
 fn codex_initial_agent_mode(settings: &CodexSandboxSettings) -> Option<&'static str> {
     // `default_permissions` makes codex resolve everything through that named
@@ -4431,17 +4483,27 @@ fn codex_initial_agent_mode(settings: &CodexSandboxSettings) -> Option<&'static 
     // `on-request` and dropped anything outside `CODEX_APPROVAL_POLICIES`.
     let never = settings.approval_policy.as_deref() == Some("never");
     match settings.sandbox_mode.as_deref() {
-        // The tightest preset on BOTH adapter generations: a real read-only
-        // sandbox on ≤1.6.2, and workspace-write with user-adjudicated
-        // approvals on ≥1.7.0 (see the note above on what 1.7.0 removed).
+        // The tightest preset on EVERY adapter generation: a real read-only
+        // sandbox on ≤1.6.2 and again from 2.0.0, and workspace-write with
+        // user-adjudicated approvals on 1.7.0–1.13.x (see the table above).
         Some("read-only") => Some("read-only"),
-        Some("workspace-write") => Some("agent"),
+        // A writable workspace. With an approval policy that wants the user,
+        // 2.0.0's `workspace-write` is the exact image (user-reviewed
+        // escalations); an older adapter does not know the id and starts in
+        // `agent`, which is what this arm used to pick for everyone. A config
+        // that asks for NO approvals has no exact preset on any version:
+        // `agent` (a model screens escalations) is the nearest one that does
+        // not widen the sandbox.
+        Some("workspace-write") if never => Some("agent"),
+        Some("workspace-write") => Some("workspace-write"),
         // Full access is the one preset that removes approvals entirely, so it
         // requires the config to say BOTH halves. A danger-full-access sandbox
-        // paired with any approval-requiring policy tightens to `agent` instead
-        // — narrower sandbox, and approvals still happen.
+        // paired with any approval-requiring policy tightens to a writable
+        // workspace instead — narrower sandbox, and approvals still happen,
+        // routed to the user where the adapter can (`workspace-write`, falling
+        // back to `agent` before 2.0.0).
         Some("danger-full-access") if never => Some("agent-full-access"),
-        Some("danger-full-access") => Some("agent"),
+        Some("danger-full-access") => Some("workspace-write"),
         // No sandbox expressed → nothing to preserve, so stay out of the way and
         // let codex-acp's own default stand. (codex-acp always sends an explicit
         // sandboxPolicy anyway, so config.toml's sandbox DEFAULT never applies.)
@@ -4792,13 +4854,19 @@ fn persist_opencode_auth_json(raw_auth: &str) -> Result<(), AcpError> {
 // ---------------------------------------------------------------------------
 
 const KIMI_MANAGED_PROVIDER: &str = "houhub";
+
 const KIMI_MANAGED_MODEL_ALIAS: &str = "houhub-managed";
+
 const KIMI_MODEL_API_KEY_ENV: &str = "KIMI_MODEL_API_KEY";
+
 const KIMI_MODEL_BASE_URL_ENV: &str = "KIMI_MODEL_BASE_URL";
+
 const KIMI_MODEL_NAME_ENV: &str = "KIMI_MODEL_NAME";
+
 /// Sentinel `access_token` value (and `_houhub_synthetic` marker) identifying the
 /// gate token houhub seeds, so we never clobber a real OAuth login.
 const KIMI_SYNTHETIC_TOKEN_ACCESS: &str = "houhub-local-gate";
+
 /// Fallback context window for the managed model. Kimi's config schema **requires**
 /// `[models.<alias>].max_context_size` to be a positive integer — omitting it makes
 /// kimi discard the whole model block ("Ignored invalid config … models.houhub-managed"),
@@ -4815,6 +4883,7 @@ const KIMI_SYNTHETIC_TOKEN_ACCESS: &str = "houhub-local-gate";
 /// `usage_update {size: 262144}`), so it is the compaction budget, not a fact about the
 /// model. Users on a bigger window raise it in the config panel.
 const KIMI_DEFAULT_MAX_CONTEXT_SIZE: i64 = 262_144;
+
 /// The six native provider `type` values Kimi accepts in `[providers.<name>]`.
 const KIMI_INTERFACE_TYPES: &[&str] = &[
     "kimi",
@@ -4824,13 +4893,6 @@ const KIMI_INTERFACE_TYPES: &[&str] = &[
     "google-genai",
     "vertexai",
 ];
-
-/// Input modalities that must remain enabled when a thinking capability is
-/// declared. Kimi treats a missing capabilities list as permissive, but a
-/// present list as a whitelist.
-const KIMI_BASE_CAPABILITIES: &[&str] = &["image_in", "video_in", "tool_use"];
-const KIMI_CAPABILITY_THINKING: &str = "thinking";
-const KIMI_CAPABILITY_ALWAYS_THINKING: &str = "always_thinking";
 
 fn kimi_code_config_toml_path() -> PathBuf {
     crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("config.toml")
@@ -4872,6 +4934,15 @@ struct KimiManagedSpec {
     support_efforts: Vec<String>,
     default_effort: Option<String>,
 }
+
+/// Input modalities that must remain enabled when a thinking capability is
+/// declared. Kimi treats a missing capabilities list as permissive, but a
+/// present list as a whitelist.
+const KIMI_BASE_CAPABILITIES: &[&str] = &["image_in", "video_in", "tool_use"];
+
+const KIMI_CAPABILITY_THINKING: &str = "thinking";
+
+const KIMI_CAPABILITY_ALWAYS_THINKING: &str = "always_thinking";
 
 /// Upsert (`Some`) or remove (`None`) the houhub-managed `[providers.houhub]` +
 /// `[models.houhub-managed]` block in a parsed config.toml document, preserving
@@ -5685,130 +5756,6 @@ pub(crate) async fn acp_fetch_kimi_models_core(
     Ok(ids)
 }
 
-/// Outcome of a model-provider connection test: a one-shot chat completion
-/// against the provider's endpoint with the configured key and model.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelProviderTestOutcome {
-    pub success: bool,
-    pub latency_ms: u64,
-    /// Provider-reported or transport error when `success` is false.
-    pub error: Option<String>,
-    /// First `PREVIEW_CHARS` of the assistant reply when `success` is true.
-    pub preview: Option<String>,
-}
-
-/// Characters of the reply echoed back to the settings dialog. Enough to tell a
-/// real completion from a truncated or garbled one, short enough that a verbose
-/// model cannot balloon the IPC frame.
-const MODEL_PROVIDER_TEST_PREVIEW_CHARS: usize = 200;
-
-/// Probe a model provider's endpoint with a real chat completion.
-///
-/// The renderer cannot do this itself: the desktop webview loads from
-/// `tauri://localhost`, so a cross-origin POST to a provider API is both
-/// blocked by CORS (no provider sends `Access-Control-Allow-Origin` for that
-/// origin) and, in server mode, would expose the user's key to the page. Every
-/// other outbound call in the app therefore goes through Rust — the settings
-/// panel's own "fetch models" button does too. This mirrors
-/// `acp_fetch_kimi_models_core`: same 20s ceiling, same Bearer auth.
-///
-/// `/chat/completions` is appended unless the URL already names it, so both a
-/// bare `https://host/v1` base and a pasted full endpoint work.
-pub(crate) async fn acp_test_model_provider_core(
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-) -> Result<ModelProviderTestOutcome, AcpError> {
-    let base = base_url.trim().trim_end_matches('/');
-    if base.is_empty() {
-        return Err(AcpError::protocol(
-            "base URL is required to test a provider",
-        ));
-    }
-    let key = api_key.trim();
-    if key.is_empty() {
-        return Err(AcpError::protocol("API key is required to test a provider"));
-    }
-    let model = model.trim();
-    if model.is_empty() {
-        return Err(AcpError::protocol("a model is required to test a provider"));
-    }
-    let url = if base.ends_with("/chat/completions") {
-        base.to_string()
-    } else {
-        format!("{base}/chat/completions")
-    };
-
-    let started = std::time::Instant::now();
-    let response = reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(key)
-        .json(&serde_json::json!({
-            "model": model,
-            "messages": [{ "role": "user", "content": "Hi, say hello in one sentence." }],
-            "max_tokens": 64,
-            "stream": false,
-        }))
-        .timeout(std::time::Duration::from_secs(20))
-        .send()
-        .await
-        .map_err(|e| AcpError::protocol(format!("provider test request failed: {e}")))?;
-
-    let latency_ms = started.elapsed().as_millis() as u64;
-    let status = response.status();
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| AcpError::protocol(format!("provider test returned invalid JSON: {e}")))?;
-
-    if !status.is_success() {
-        // Providers disagree on where the message lives; take the first one
-        // that reads as text rather than guessing at one shape.
-        let message = body
-            .get("error")
-            .and_then(|error| {
-                error
-                    .get("message")
-                    .and_then(serde_json::Value::as_str)
-                    .or_else(|| error.as_str())
-            })
-            .or_else(|| body.get("message").and_then(serde_json::Value::as_str))
-            .unwrap_or("request rejected");
-        return Ok(ModelProviderTestOutcome {
-            success: false,
-            latency_ms,
-            error: Some(format!("{status}: {message}")),
-            preview: None,
-        });
-    }
-
-    let content = body
-        .get("choices")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(|choice| {
-            choice
-                .get("message")
-                .and_then(|message| message.get("content"))
-                .and_then(serde_json::Value::as_str)
-                .or_else(|| choice.get("text").and_then(serde_json::Value::as_str))
-        })
-        .unwrap_or_default();
-
-    Ok(ModelProviderTestOutcome {
-        success: true,
-        latency_ms,
-        error: None,
-        preview: Some(
-            content
-                .chars()
-                .take(MODEL_PROVIDER_TEST_PREVIEW_CHARS)
-                .collect(),
-        ),
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Pi config helpers
 //
@@ -5821,44 +5768,142 @@ pub(crate) async fn acp_test_model_provider_core(
 // agent dir honors `PI_CODING_AGENT_DIR` so a custom pi install can be targeted.
 // ---------------------------------------------------------------------------
 
-/// Resolve pi's coding-agent dir: `PI_CODING_AGENT_DIR` if set (trimmed,
-/// non-empty), else `~/.pi/agent` (mirrors `codex_home_dir`/`resolve_kimi_*`).
+/// Resolve pi's coding-agent dir from houhub's own environment:
+/// `PI_CODING_AGENT_DIR` through pi's tilde rule, else `~/.pi/agent`. The same
+/// resolver the history parser uses, so the two cannot drift.
 pub(crate) fn pi_agent_dir() -> PathBuf {
-    match std::env::var("PI_CODING_AGENT_DIR")
-        .ok()
-        .map(|raw| raw.trim().to_string())
-        .filter(|s| !s.is_empty())
-    {
-        Some(value) => PathBuf::from(value),
-        None => home_dir_or_default().join(".pi").join("agent"),
+    crate::parsers::pi::resolve_pi_agent_dir()
+}
+
+/// A variable as a launch with `runtime_env` sets it for its child. On Windows
+/// names are case-insensitive — `pi_coding_agent_dir` in the per-agent env IS
+/// the `PI_CODING_AGENT_DIR` pi reads — and when several spellings are present
+/// the spawn applies them in the map's order, so the last one wins.
+fn launch_env_value<'a>(runtime_env: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
+    if cfg!(windows) {
+        runtime_env
+            .iter()
+            .rev()
+            .find(|(name, _)| name.eq_ignore_ascii_case(key))
+            .map(|(_, value)| value.as_str())
+    } else {
+        runtime_env.get(key).map(String::as_str)
     }
 }
 
-fn pi_settings_json_path_for_dir(dir: &Path) -> PathBuf {
-    dir.join("settings.json")
+#[cfg(windows)]
+const CHILD_HOME_KEY: &str = "USERPROFILE";
+
+#[cfg(not(windows))]
+const CHILD_HOME_KEY: &str = "HOME";
+
+/// What `os.homedir()` answers in the pi child of a launch with `runtime_env` —
+/// the home pi expands `~` against and puts its default `.pi/agent` under.
+fn pi_child_home(runtime_env: &BTreeMap<String, String>) -> PathBuf {
+    pi_child_home_from(runtime_env, std::env::var_os(CHILD_HOME_KEY))
 }
 
-fn pi_auth_json_path_for_dir(dir: &Path) -> PathBuf {
-    dir.join("auth.json")
+/// [`pi_child_home`] with houhub's own home variable (what the child inherits
+/// when the launch leaves it alone) handed in.
+///
+/// Node takes `HOME` (`USERPROFILE` on Windows) verbatim whenever the child HAS
+/// the variable — relative or even empty, which pi then resolves against its
+/// cwd, the workspace — and asks the OS for the account's home only when it has
+/// none: the launch removed it (a blank launch value) or houhub never had one.
+fn pi_child_home_from(
+    runtime_env: &BTreeMap<String, String>,
+    inherited: Option<std::ffi::OsString>,
+) -> PathBuf {
+    let variable = match launch_env_value(runtime_env, CHILD_HOME_KEY) {
+        Some("") => None,
+        Some(value) => Some(std::ffi::OsString::from(value)),
+        None => inherited,
+    };
+    variable
+        .map(PathBuf::from)
+        .or_else(account_home_dir)
+        // The OS has no home for this account either: pi cannot start then,
+        // so no answer here can be wrong about a pi that runs.
+        .unwrap_or_else(home_dir_or_default)
 }
 
-fn pi_models_json_path_for_dir(dir: &Path) -> PathBuf {
-    dir.join("models.json")
+/// The account's home as the OS records it — Node's fallback without a home
+/// variable: the passwd entry on unix.
+#[cfg(unix)]
+fn account_home_dir() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0 as libc::c_char; 4096];
+    loop {
+        // SAFETY: `entry`, `buf` and `found` are live locals of the stated
+        // sizes for the whole call, and `pw_dir` (which points into `buf`) is
+        // copied out before `buf` is touched again.
+        let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut found: *mut libc::passwd = std::ptr::null_mut();
+        let rc = unsafe {
+            libc::getpwuid_r(
+                libc::getuid(),
+                &mut entry,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut found,
+            )
+        };
+        if rc == libc::ERANGE && buf.len() < 1 << 20 {
+            buf.resize(buf.len() * 2, 0);
+            continue;
+        }
+        if rc != 0 || found.is_null() || entry.pw_dir.is_null() {
+            return None;
+        }
+        let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
+        return Some(PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes())));
+    }
 }
 
-/// Like [`pi_agent_dir`], but resolves `PI_CODING_AGENT_DIR` from a per-agent
-/// `runtime_env` map first (the BYO-pi override path) before falling back to the
-/// process env / `~/.pi/agent`. Launch-time trust seeding only has the per-agent
-/// env (the override never lands in houhub's own process env), so it must consult
-/// `runtime_env` to target the same agent dir pi-acp will spawn pi against.
+/// The account's profile folder, which libuv falls back to on Windows.
+#[cfg(not(unix))]
+fn account_home_dir() -> Option<PathBuf> {
+    dirs::home_dir()
+}
+
+/// Pi's agent dir as the pi CHILD of a launch with `runtime_env` resolves it —
+/// before a relative value is anchored (see [`pi_agent_dir_in_workspace`]).
+///
+/// Follows the spawn chain rather than one map: a non-empty `runtime_env` value
+/// replaces houhub's, an exactly-empty one is `env_remove`d (pi then falls back
+/// to its default instead of inheriting houhub's value), and an absent key
+/// inherits houhub's own. `~` and the default expand against the child's home
+/// ([`pi_child_home`]). Never trimmed: pi reads the raw value (`normalizePath`
+/// expands `~` and nothing else).
 fn pi_agent_dir_for_env(runtime_env: &BTreeMap<String, String>) -> PathBuf {
-    match runtime_env
-        .get("PI_CODING_AGENT_DIR")
-        .map(|raw| raw.trim().to_string())
-        .filter(|s| !s.is_empty())
-    {
-        Some(value) => PathBuf::from(value),
-        None => pi_agent_dir(),
+    pi_agent_dir_for_child(runtime_env, std::env::var_os("PI_CODING_AGENT_DIR"))
+}
+
+/// [`pi_agent_dir_for_env`] with houhub's own `PI_CODING_AGENT_DIR` (what the
+/// child inherits when the launch leaves the key alone) handed in.
+fn pi_agent_dir_for_child(
+    runtime_env: &BTreeMap<String, String>,
+    inherited: Option<std::ffi::OsString>,
+) -> PathBuf {
+    let value = match launch_env_value(runtime_env, "PI_CODING_AGENT_DIR") {
+        Some("") => None,
+        Some(value) => Some(std::ffi::OsString::from(value)),
+        None => inherited,
+    };
+    crate::parsers::pi::resolve_pi_agent_dir_from(value, Some(&pi_child_home(runtime_env)))
+}
+
+/// [`pi_agent_dir_for_env`] anchored where pi anchors it: pi-acp starts pi with
+/// the session's workspace as its cwd, so a relative `PI_CODING_AGENT_DIR` names
+/// a directory inside THAT workspace — and the `trust.json` pi consults there
+/// is one the repository itself can ship. Reading it relative to houhub's own cwd
+/// instead would let such a grant slip past the launch gate unseen.
+fn pi_agent_dir_in_workspace(runtime_env: &BTreeMap<String, String>, workspace: &Path) -> PathBuf {
+    let dir = pi_agent_dir_for_env(runtime_env);
+    if dir.is_relative() {
+        workspace.join(dir)
+    } else {
+        dir
     }
 }
 
@@ -6061,24 +6106,49 @@ pub struct PiTrustEntry {
     pub trusted: bool,
 }
 
-/// Resolve the pi agent dir the launch path will use: the per-agent `env_json`
-/// (BYO `PI_CODING_AGENT_DIR`) first, then the process env / `~/.pi/agent`.
+/// The per-agent env the launch path hands pi — where a BYO
+/// `PI_CODING_AGENT_DIR` lives. The override only ever lands in the per-agent
+/// env, never houhub's own process env, so reading `std::env` alone would
+/// silently target the wrong agent dir for BYO-pi users.
 ///
-/// The override only ever lands in the per-agent env, never houhub's own process
-/// env, so reading `std::env` here would silently target the wrong agent dir for
-/// BYO-pi users — the same trap the old launch-time seeding documented.
-async fn pi_agent_dir_from_db(db: &AppDatabase) -> PathBuf {
+/// Fails closed: when the setting cannot be read, guessing "no override" would
+/// point every read AND write at the default profile — writing API keys into a
+/// profile the sessions never open.
+async fn pi_runtime_env_from_db(db: &AppDatabase) -> Result<BTreeMap<String, String>, AcpError> {
     let setting = agent_setting_service::get_by_agent_type(&db.conn, AgentType::Pi)
         .await
-        .ok()
-        .flatten();
+        .map_err(|error| {
+            AcpError::protocol(format!(
+                "Cannot read Pi agent settings from the HouHub database: {error}. Check database access and retry; Pi profile files were not changed."
+            ))
+        })?;
     let local_config_json = load_agent_local_config_json(AgentType::Pi);
-    let runtime_env = build_runtime_env_from_setting(
+    Ok(build_runtime_env_from_setting(
         AgentType::Pi,
         setting.as_ref(),
         local_config_json.as_deref(),
-    );
-    pi_agent_dir_for_env(&runtime_env)
+    ))
+}
+
+/// Settings have no workspace, and a relative agent dir names a different
+/// directory in every workspace pi runs in (see [`pi_agent_dir_in_workspace`]),
+/// so there is no single profile they could read or write. Refuse rather than
+/// resolve it against houhub's own cwd, which no pi process ever uses.
+fn pi_settings_dir_checked(pi_dir: PathBuf) -> Result<PathBuf, AcpError> {
+    if pi_dir.is_absolute() {
+        Ok(pi_dir)
+    } else {
+        Err(AcpError::protocol(format!(
+            "Pi agent directory must be absolute or start with ~/ before editing native settings \
+             (this agent's pi uses \"{}\", relative to each workspace; check \
+             PI_CODING_AGENT_DIR and HOME in its environment)",
+            pi_dir.display()
+        )))
+    }
+}
+
+async fn pi_settings_dir_from_db(db: &AppDatabase) -> Result<PathBuf, AcpError> {
+    pi_settings_dir_checked(pi_agent_dir_for_env(&pi_runtime_env_from_db(db).await?))
 }
 
 /// Project-trust state for `cwd` against explicit files. Split from the DB-backed
@@ -6118,7 +6188,7 @@ pub(crate) fn pi_project_trust_launch_block(
     cwd: &Path,
     runtime_env: &BTreeMap<String, String>,
 ) -> Option<String> {
-    let trust_file = pi_agent_dir_for_env(runtime_env).join("trust.json");
+    let trust_file = pi_agent_dir_in_workspace(runtime_env, cwd).join("trust.json");
     let state = pi_project_trust_state_at(&trust_file, &pi_trust_ack_path(), cwd);
     if state.resources.is_empty() || state.decision != Some(true) || state.acknowledged {
         return None;
@@ -6314,14 +6384,16 @@ pub(crate) async fn acp_pi_project_trust_state_core(
     db: &AppDatabase,
     workspace: String,
 ) -> Result<PiProjectTrustState, AcpError> {
-    let trust_file = pi_agent_dir_from_db(db).await.join("trust.json");
     // Not trimmed, for the same reason as the write path: a directory name may
     // legitimately start or end with a space, and the state must describe the
     // exact folder the caller named.
+    let cwd = Path::new(&workspace);
+    let trust_file =
+        pi_agent_dir_in_workspace(&pi_runtime_env_from_db(db).await?, cwd).join("trust.json");
     Ok(pi_project_trust_state_at(
         &trust_file,
         &pi_trust_ack_path(),
-        Path::new(&workspace),
+        cwd,
     ))
 }
 
@@ -6358,7 +6430,10 @@ pub(crate) async fn acp_pi_set_project_trust_core(
     workspace: String,
     trusted: Option<bool>,
 ) -> Result<(), AcpError> {
-    let path = pi_agent_dir_from_db(db).await.join("trust.json");
+    // The same file the launch gate reads for this workspace — anchored in it
+    // when the agent dir is relative (see `pi_agent_dir_in_workspace`).
+    let path = pi_agent_dir_in_workspace(&pi_runtime_env_from_db(db).await?, Path::new(&workspace))
+        .join("trust.json");
     // The write takes pi's file lock and can sleep on contention, so keep it off
     // the async worker. NOTE: `workspace` is NOT trimmed — leading/trailing
     // spaces are legal in a directory name, and silently trimming them would key
@@ -6516,7 +6591,7 @@ fn pi_write_trust_decision_at(
 pub(crate) async fn acp_pi_list_trust_entries_core(
     db: &AppDatabase,
 ) -> Result<Vec<PiTrustEntry>, AcpError> {
-    let path = pi_agent_dir_from_db(db).await.join("trust.json");
+    let path = pi_settings_dir_from_db(db).await?.join("trust.json");
     Ok(pi_trust_entries_at(&path))
 }
 
@@ -6581,10 +6656,11 @@ pub struct PiModelReasoningSpec {
     pub thinking_level_map: BTreeMap<String, Option<String>>,
 }
 
-/// pi's fixed thinking-level vocabulary (`EXTENDED_THINKING_LEVELS` in pi-ai). A name
-/// outside this list is rejected by pi-acp with `invalidParams`, so it must never reach
-/// `models.json`.
-const PI_THINKING_LEVELS: [&str; 6] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+/// pi's fixed thinking-level vocabulary (`EXTENDED_THINKING_LEVELS` in pi-ai).
+/// `getSupportedThinkingLevels` only ever walks these seven, so a
+/// `thinkingLevelMap` key outside the list is dead weight in `models.json` that
+/// no picker will ever offer.
+const PI_THINKING_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /// Read a JSON file into an owned object map, returning an empty map when the
 /// file is absent, unreadable, or does not parse to a JSON object. Pi's native
@@ -6688,144 +6764,272 @@ fn apply_pi_custom_model(
     entry.insert("models".to_string(), serde_json::Value::Array(models));
 }
 
-fn validate_pi_config_update(update: &PiConfigUpdate) -> Result<(), AcpError> {
-    if update.provider.trim().is_empty() {
-        return Err(AcpError::protocol("pi provider is required"));
-    }
-    if update.model.trim().is_empty() {
-        return Err(AcpError::protocol("pi model is required"));
-    }
-    if let Some(key) = update
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        if key.contains('\n') || key.contains('\r') {
-            return Err(AcpError::protocol(
-                "pi API key must not contain line breaks",
-            ));
-        }
-    }
-    Ok(())
+/// One built-in model's thinking capability, as pi's own model registry reports
+/// it (`get_available_models`). Only these fields cross the settings API
+/// boundary — a registry entry also carries base URLs and headers.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PiModelCapability {
+    pub provider: String,
+    pub id: String,
+    #[serde(default)]
+    pub reasoning: bool,
+    #[serde(default)]
+    pub thinking_level_map: BTreeMap<String, Option<String>>,
 }
 
-/// Write Pi's native config files under an explicit agent directory. Keeping
-/// this operation path-parameterized is important for BYO Pi installations:
-/// the settings page, provider binding, and launch fingerprint must all target
-/// the same `PI_CODING_AGENT_DIR` rather than silently mixing directories.
-pub(crate) fn update_pi_config_files_at(
-    update: PiConfigUpdate,
-    dir: &Path,
-) -> Result<(), AcpError> {
-    validate_pi_config_update(&update)?;
+/// Whether pi answered the catalog query, and if not, why. The settings panel
+/// words its hint from this: "pi does not list this model" is only true when pi
+/// actually answered.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PiCatalogStatus {
+    /// pi answered. Its list covers only providers it has credentials for.
+    Ok,
+    /// The configured pi command does not resolve to an executable.
+    NotFound,
+    /// A relative command or agent dir names a different file in every workspace
+    /// pi runs in, and this query has no workspace.
+    RelativePath,
+    /// pi started but gave no usable answer (exited, refused, or unparseable).
+    Failed,
+    /// pi did not answer before the deadline.
+    TimedOut,
+}
 
-    let provider = update.provider.trim();
-    let model = update.model.trim();
-    let thinking_level = update
-        .thinking_level
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let api_key = update
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+/// pi's model catalog for the settings panel: `models` is empty unless `status`
+/// is [`PiCatalogStatus::Ok`].
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PiModelCatalog {
+    pub status: PiCatalogStatus,
+    pub models: Vec<PiModelCapability>,
+}
 
-    let settings_path = pi_settings_json_path_for_dir(dir);
-    let mut settings = read_json_object_or_empty(&settings_path);
-    settings.insert(
-        "defaultProvider".to_string(),
-        serde_json::Value::String(provider.to_string()),
-    );
-    settings.insert(
-        "defaultModel".to_string(),
-        serde_json::Value::String(model.to_string()),
-    );
-    if let Some(level) = thinking_level {
-        settings.insert(
-            "defaultThinkingLevel".to_string(),
-            serde_json::Value::String(level.to_string()),
-        );
-    }
-    write_json_object_pretty(&settings_path, &settings)?;
-
-    if let Some(key) = api_key {
-        let auth_path = pi_auth_json_path_for_dir(dir);
-        let mut auth = read_json_object_or_empty(&auth_path);
-        let mut entry = serde_json::Map::new();
-        entry.insert(
-            "type".to_string(),
-            serde_json::Value::String("api_key".to_string()),
-        );
-        entry.insert(
-            "key".to_string(),
-            serde_json::Value::String(key.to_string()),
-        );
-        auth.insert(provider.to_string(), serde_json::Value::Object(entry));
-        write_json_object_pretty(&auth_path, &auth)?;
-    }
-
-    let custom_base_url = update
-        .custom_base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    if let Some(base_url) = custom_base_url {
-        let custom_api = update
-            .custom_api
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("openai-completions");
-        let models_path = pi_models_json_path_for_dir(dir);
-        let mut models_doc = read_json_object_or_empty(&models_path);
-        let mut providers = match models_doc.remove("providers") {
-            Some(serde_json::Value::Object(map)) => map,
-            _ => serde_json::Map::new(),
-        };
-        let mut entry = match providers.remove(provider) {
-            Some(serde_json::Value::Object(map)) => map,
-            _ => serde_json::Map::new(),
-        };
-        entry.insert(
-            "baseUrl".to_string(),
-            serde_json::Value::String(base_url.to_string()),
-        );
-        entry.insert(
-            "api".to_string(),
-            serde_json::Value::String(custom_api.to_string()),
-        );
-
-        let mut model_ids = update
-            .models
-            .unwrap_or_default()
-            .into_iter()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .collect::<Vec<_>>();
-        if !model_ids.iter().any(|value| value == model) {
-            model_ids.push(model.to_string());
+impl PiModelCatalog {
+    fn unavailable(status: PiCatalogStatus) -> Self {
+        Self {
+            status,
+            models: Vec::new(),
         }
-        model_ids.sort();
-        model_ids.dedup();
-        for model_id in model_ids {
-            let reasoning = (model_id == model)
-                .then_some(update.model_reasoning.as_ref())
-                .flatten();
-            apply_pi_custom_model(&mut entry, &model_id, reasoning);
-        }
-
-        providers.insert(provider.to_string(), serde_json::Value::Object(entry));
-        models_doc.insert(
-            "providers".to_string(),
-            serde_json::Value::Object(providers),
-        );
-        write_json_object_pretty(&models_path, &models_doc)?;
     }
+}
 
-    Ok(())
+/// Read one line of pi's RPC output: `None` for anything that is not the answer
+/// to the catalog request (pi may emit other lines first), `Some(Err(()))` for
+/// an answer that refuses or cannot be read, `Some(Ok(models))` otherwise.
+fn parse_pi_model_capabilities(line: &str) -> Option<Result<Vec<PiModelCapability>, ()>> {
+    let response: serde_json::Value = serde_json::from_str(line).ok()?;
+    if response.get("id")?.as_str()? != "houhub-models"
+        || response.get("type")?.as_str()? != "response"
+        || response.get("command")?.as_str()? != "get_available_models"
+    {
+        return None;
+    }
+    if response.get("success").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Some(Err(()));
+    }
+    Some(
+        response
+            .get("data")
+            .and_then(|data| data.get("models"))
+            .and_then(|models| serde_json::from_value(models.clone()).ok())
+            .ok_or(()),
+    )
+}
+
+/// The command pi-acp spawns for a launch with `runtime_env`: its
+/// `PI_ACP_PI_COMMAND` as the child sees it (the same removed / inherited rules
+/// as [`pi_agent_dir_for_env`]), else `pi`. pi-acp uses the value verbatim, so it
+/// is not trimmed here either.
+pub(crate) fn pi_command_for_env(runtime_env: &BTreeMap<String, String>) -> String {
+    match launch_env_value(runtime_env, "PI_ACP_PI_COMMAND") {
+        Some("") => None,
+        Some(value) => Some(value.to_string()),
+        None => std::env::var("PI_ACP_PI_COMMAND")
+            .ok()
+            .filter(|value| !value.is_empty()),
+    }
+    .unwrap_or_else(|| "pi".to_string())
+}
+
+/// Whether a pi command is a path (spawned as-is) rather than a name looked up
+/// on `PATH`. `C:pi` is a drive-relative path on Windows, not a name.
+fn pi_command_looks_like_path(command: &str) -> bool {
+    command.contains('/')
+        || command.contains('\\')
+        || command.as_bytes().get(1) == Some(&b':')
+        || Path::new(command).is_absolute()
+}
+
+/// Resolve the command pi-acp will spawn the way that spawn resolves it: a path
+/// against `cwd` (the child's working directory), a bare name on the child's
+/// `PATH` — `env`'s when the launch sets one, else houhub's own, which the child
+/// inherits.
+///
+/// A relative `PATH` entry (an empty one means "the cwd") is anchored in `cwd`
+/// here, because that is where the child looks. `which` alone would test it
+/// against houhub's OWN cwd — a directory the child never searches, and on a
+/// server possibly one other users can write to.
+pub(crate) fn resolve_pi_command_in(
+    command: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Option<PathBuf> {
+    if command.is_empty() {
+        return None;
+    }
+    if pi_command_looks_like_path(command) {
+        let candidate = cwd.join(command);
+        return pi_path_is_executable(&candidate)
+            .then(|| fs::canonicalize(&candidate).unwrap_or(candidate));
+    }
+    let path = launch_env_value(env, "PATH")
+        .map(std::ffi::OsString::from)
+        .or_else(|| std::env::var_os("PATH"))?;
+    // `join_paths` cannot fail on what `split_paths` produced (no entry holds
+    // the separator, and Windows quotes the ones that do); should it anyway,
+    // searching the list as given still beats reporting pi missing.
+    let anchored = std::env::join_paths(
+        std::env::split_paths(&path).filter_map(|entry| anchor_path_entry(&entry, cwd)),
+    )
+    .unwrap_or(path);
+    which::which_in(command, Some(anchored), cwd).ok()
+}
+
+/// One `PATH` entry as the child searches it with `cwd` as its working
+/// directory. `which` alone would test a relative entry against houhub's OWN
+/// cwd. A Windows drive-relative entry (`C:tools`) is dropped instead: it
+/// follows that drive's current directory in the child, which nothing here can
+/// name, so no guess at it is safe. A rooted one (`\tools`) keeps `cwd`'s drive,
+/// as it does for the child.
+fn anchor_path_entry(entry: &Path, cwd: &Path) -> Option<PathBuf> {
+    if entry.is_absolute() {
+        return Some(entry.to_path_buf());
+    }
+    if matches!(
+        entry.components().next(),
+        Some(std::path::Component::Prefix(_))
+    ) {
+        return None;
+    }
+    Some(cwd.join(entry))
+}
+
+/// The catalog query has no workspace, and a relative command or agent dir
+/// names a different file in every workspace pi runs in. Decline rather than
+/// resolve it against the query's own scratch cwd.
+fn pi_runtime_paths_are_stable(runtime_env: &BTreeMap<String, String>) -> bool {
+    let command = pi_command_for_env(runtime_env);
+    let relative_command =
+        pi_command_looks_like_path(&command) && !Path::new(&command).is_absolute();
+    !relative_command && pi_agent_dir_for_env(runtime_env).is_absolute()
+}
+
+/// Ask pi itself for its model catalog — the same executable and agent dir a
+/// session would use — without an ACP session, a prompt, or the network.
+async fn query_pi_model_catalog(
+    runtime_env: &BTreeMap<String, String>,
+    deadline: Duration,
+) -> PiModelCatalog {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    if !pi_runtime_paths_are_stable(runtime_env) {
+        return PiModelCatalog::unavailable(PiCatalogStatus::RelativePath);
+    }
+    // A private, empty working directory: pi runs where no repository or other
+    // user put anything, and a relative `PATH` entry (an empty one means the
+    // cwd) cannot reach a `pi` someone planted in the shared temp dir. Kept
+    // alive until the child is reaped below.
+    let Ok(query_dir) = tempfile::Builder::new()
+        .prefix("houhub-pi-catalog-")
+        .tempdir()
+    else {
+        return PiModelCatalog::unavailable(PiCatalogStatus::Failed);
+    };
+    let Some(program) = resolve_pi_command_in(
+        &pi_command_for_env(runtime_env),
+        runtime_env,
+        query_dir.path(),
+    ) else {
+        return PiModelCatalog::unavailable(PiCatalogStatus::NotFound);
+    };
+    let mut command = crate::process::tokio_command(program);
+    command
+        .args([
+            "--mode",
+            "rpc",
+            // Without it, pi's RPC mode starts a background model refresh that
+            // renews EXPIRED OAuth logins (rotating the refresh token), and it
+            // exits on stdin EOF without waiting for that — so a query this short
+            // could cut a token rotation off mid-flight. Offline, pi still lists
+            // the same models from its registry and auth store.
+            "--offline",
+            "--no-session",
+            "--no-extensions",
+            "--no-skills",
+            "--no-prompt-templates",
+            "--no-context-files",
+            "--no-approve",
+        ])
+        .current_dir(query_dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    // The launch convention: an exactly-empty value removes the variable.
+    for (key, value) in runtime_env {
+        if value.is_empty() {
+            command.env_remove(key);
+        } else {
+            command.env(key, value);
+        }
+    }
+    let Ok(mut child) = command.spawn() else {
+        return PiModelCatalog::unavailable(PiCatalogStatus::Failed);
+    };
+    let query = async {
+        let mut stdin = child.stdin.take()?;
+        stdin
+            .write_all(b"{\"id\":\"houhub-models\",\"type\":\"get_available_models\"}\n")
+            .await
+            .ok()?;
+        stdin.flush().await.ok()?;
+        let stdout = child.stdout.take()?;
+        let mut lines = BufReader::new(stdout.take(8 * 1024 * 1024)).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if let Some(answer) = parse_pi_model_capabilities(&line) {
+                return Some(answer);
+            }
+        }
+        None
+    };
+    let result = tokio::time::timeout(deadline, query).await;
+    if tokio::time::timeout(Duration::from_secs(1), child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+    match result {
+        Err(_) => PiModelCatalog::unavailable(PiCatalogStatus::TimedOut),
+        Ok(Some(Ok(models))) => PiModelCatalog {
+            status: PiCatalogStatus::Ok,
+            models,
+        },
+        Ok(_) => PiModelCatalog::unavailable(PiCatalogStatus::Failed),
+    }
+}
+
+pub async fn list_pi_model_catalog_core(db: &AppDatabase, data_dir: &Path) -> PiModelCatalog {
+    let Ok(runtime_env) =
+        build_runtime_env_for_agent(db, AgentType::Pi, None, data_dir, true).await
+    else {
+        return PiModelCatalog::unavailable(PiCatalogStatus::Failed);
+    };
+    query_pi_model_catalog(&runtime_env, Duration::from_secs(12)).await
 }
 
 /// Apply a structured Pi config update to pi's native files. Validates the whole
@@ -6841,6 +7045,10 @@ pub(crate) async fn acp_update_pi_config_core(
 ) -> Result<(), AcpError> {
     validate_pi_config_update(&update)?;
 
+    // The profile sessions will read: resolved (and refused if unknowable) before
+    // anything is written anywhere.
+    let pi_dir = pi_settings_dir_from_db(db).await?;
+
     // Ensure the settings row exists (mirrors the kimi flow) so the agent shows
     // up as configured/enabled in the DB-backed settings list.
     let default = agent_setting_service::AgentDefaultInput {
@@ -6852,7 +7060,7 @@ pub(crate) async fn acp_update_pi_config_core(
         .await
         .map_err(|e| AcpError::protocol(e.to_string()))?;
 
-    update_pi_config_files_at(update, &pi_agent_dir_from_db(db).await)?;
+    update_pi_config_files_at(update, &pi_dir)?;
 
     emit_acp_agents_updated(emitter, "config_updated", Some(AgentType::Pi));
     Ok(())
@@ -6940,25 +7148,24 @@ pub struct PiConfigProjection {
     pub custom_providers: Vec<PiCustomProvider>,
 }
 
-/// Read pi's native files from an explicit agent directory. Never errors:
-/// absent or malformed files yield `None` / an empty provider list (the panel
-/// treats that as "not configured yet").
-fn load_pi_config_core_at(dir: &Path) -> PiConfigProjection {
-    let settings = read_json_object_or_empty(&pi_settings_json_path_for_dir(dir));
+/// Read pi's native files into a `PiConfigProjection`. Never errors: absent or
+/// malformed files yield `None` / an empty provider list (the panel treats that
+/// as "not configured yet").
+pub(crate) fn load_pi_config_at(pi_dir: &Path) -> PiConfigProjection {
+    let settings = read_json_object_or_empty(&pi_dir.join("settings.json"));
     let string_key = |key: &str| {
         settings
             .get(key)
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
     };
-    let mut auth_providers: Vec<String> =
-        read_json_object_or_empty(&pi_auth_json_path_for_dir(dir))
-            .keys()
-            .cloned()
-            .collect();
+    let mut auth_providers: Vec<String> = read_json_object_or_empty(&pi_dir.join("auth.json"))
+        .keys()
+        .cloned()
+        .collect();
     auth_providers.sort();
     let mut custom_providers: Vec<PiCustomProvider> =
-        read_json_object_or_empty(&pi_models_json_path_for_dir(dir))
+        read_json_object_or_empty(&pi_dir.join("models.json"))
             .get("providers")
             .and_then(serde_json::Value::as_object)
             .map(|providers| {
@@ -6991,13 +7198,8 @@ fn load_pi_config_core_at(dir: &Path) -> PiConfigProjection {
     }
 }
 
-/// Read pi's native files using the same per-agent directory resolution as the
-/// launch path, including a persisted `PI_CODING_AGENT_DIR` override.
-pub(crate) async fn load_pi_config_core_for_db(
-    db: &AppDatabase,
-) -> Result<PiConfigProjection, AcpError> {
-    let dir = pi_agent_dir_from_db(db).await;
-    Ok(load_pi_config_core_at(&dir))
+pub(crate) async fn load_pi_config_for_db(db: &AppDatabase) -> Result<PiConfigProjection, AcpError> {
+    Ok(load_pi_config_at(&pi_settings_dir_from_db(db).await?))
 }
 
 /// Result of validating a user-supplied custom pi binary (BYO-pi). `found=false`
@@ -7694,7 +7896,7 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
         // Unreachable: Hermes is always an Npx distribution. Fall through to
         // the npx guidance with the same pinned spec so a future match-arm
         // change can't resurrect a stale recipe.
-        _ => "hermes-agent@0.21.4",
+        _ => "hermes-agent@0.21.5",
     };
     let build = |tail: &[&str]| -> Vec<String> {
         let mut argv = vec![
@@ -9262,7 +9464,6 @@ fn persist_cursor_cli_config(text: &str) -> Result<(), AcpError> {
         .map_err(|e| AcpError::protocol(format!("write cursor cli-config failed: {e}")))
 }
 
-
 /// Write `<QODER_CONFIG_DIR>/settings.json` verbatim.
 ///
 /// Verbatim is the point: the Qoder panel's advanced editor is a whole-document
@@ -10037,118 +10238,6 @@ pub(crate) async fn apply_model_provider_env(
     }
 }
 
-fn parse_provider_models_json(raw: &str) -> Vec<String> {
-    serde_json::from_str::<Vec<String>>(raw)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect()
-}
-
-fn provider_model_is_structured_bundle(raw: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(raw)
-        .ok()
-        .is_some_and(|value| value.is_object() || value.is_array())
-}
-
-fn resolve_provider_default_model(
-    provider: &crate::db::entities::model_provider::Model,
-) -> Option<String> {
-    let models = parse_provider_models_json(&provider.models_json);
-    provider
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty() && !provider_model_is_structured_bundle(model))
-        .filter(|model| models.is_empty() || models.iter().any(|item| item == model))
-        .map(str::to_string)
-        .or_else(|| models.first().cloned())
-}
-
-fn pi_provider_id(provider: &crate::db::entities::model_provider::Model) -> String {
-    if provider.name.trim().eq_ignore_ascii_case("Houflow Gateway") {
-        "houflow".to_string()
-    } else {
-        format!("houhub-provider-{}", provider.id)
-    }
-}
-
-fn resolve_pi_provider_model(
-    provider: &crate::db::entities::model_provider::Model,
-    runtime_env: &BTreeMap<String, String>,
-) -> Result<String, AcpError> {
-    let models = parse_provider_models_json(&provider.models_json);
-    let env_model = runtime_env
-        .get("OPENAI_MODEL")
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|model| !model.is_empty());
-    if let Some(model) = env_model {
-        if models.is_empty() || models.iter().any(|item| item == model) {
-            return Ok(model.to_string());
-        }
-    }
-
-    let provider_model = provider
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty() && !provider_model_is_structured_bundle(model));
-    if let Some(model) = provider_model {
-        if models.is_empty() || models.iter().any(|item| item == model) {
-            return Ok(model.to_string());
-        }
-    }
-
-    models.first().cloned().ok_or_else(|| {
-        AcpError::protocol(format!(
-            "Pi model provider {} has no available models",
-            provider.id
-        ))
-    })
-}
-
-async fn sync_pi_model_provider_config(
-    setting: Option<&crate::db::entities::agent_setting::Model>,
-    runtime_env: &mut BTreeMap<String, String>,
-    conn: &sea_orm::DatabaseConnection,
-) -> Result<(), AcpError> {
-    let provider_id = match setting.and_then(|s| s.model_provider_id) {
-        Some(id) => id,
-        None => return Ok(()),
-    };
-    let provider = model_provider_service::get_by_id(conn, provider_id)
-        .await
-        .map_err(|err| AcpError::protocol(err.to_string()))?
-        .ok_or_else(|| AcpError::protocol(format!("model provider not found: {provider_id}")))?;
-    let provider_key = pi_provider_id(&provider);
-    let model = resolve_pi_provider_model(&provider, runtime_env)?;
-    if !provider.api_url.trim().is_empty() {
-        runtime_env.insert("OPENAI_BASE_URL".to_string(), provider.api_url.clone());
-    }
-    if !provider.api_key.trim().is_empty() {
-        runtime_env.insert("OPENAI_API_KEY".to_string(), provider.api_key.clone());
-    }
-    runtime_env.insert("OPENAI_MODEL".to_string(), model.clone());
-    runtime_env.insert(PI_BOUND_PROVIDER_ENV.to_string(), provider_key.clone());
-    runtime_env.insert(PI_BOUND_MODEL_ENV.to_string(), model.clone());
-    let pi_dir = pi_agent_dir_for_env(runtime_env);
-    update_pi_config_files_at(
-        PiConfigUpdate {
-            provider: provider_key,
-            model,
-            models: Some(parse_provider_models_json(&provider.models_json)),
-            thinking_level: None,
-            api_key: Some(provider.api_key),
-            custom_base_url: Some(provider.api_url),
-            custom_api: Some("openai-completions".to_string()),
-            model_reasoning: None,
-        },
-        &pi_dir,
-    )
-}
-
 /// Claude Code provider-model JSON keys → ANTHROPIC_*_MODEL env var names.
 const CLAUDE_MODEL_KEY_MAP: &[(&str, &str)] = &[
     ("main", "ANTHROPIC_MODEL"),
@@ -10156,9 +10245,13 @@ const CLAUDE_MODEL_KEY_MAP: &[(&str, &str)] = &[
     ("haiku", "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
     ("sonnet", "ANTHROPIC_DEFAULT_SONNET_MODEL"),
     ("opus", "ANTHROPIC_DEFAULT_OPUS_MODEL"),
+    // What the `fable` alias resolves to (and so `best`, where Fable is
+    // available), and the id the CLI recognizes as a Fable model for its
+    // automatic model fallback on third-party providers.
+    ("fable", "ANTHROPIC_DEFAULT_FABLE_MODEL"),
     // The custom model option trio appends one entry to the in-session /model
     // picker (a model the provider's gateway serves). Carried by the provider's
-    // model JSON like the five model fields, so binding/cascade pushes it too.
+    // model JSON like the six model fields, so binding/cascade pushes it too.
     ("customOption", "ANTHROPIC_CUSTOM_MODEL_OPTION"),
     ("customOptionName", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"),
     (
@@ -10176,7 +10269,7 @@ const CLAUDE_MODEL_KEY_MAP: &[(&str, &str)] = &[
 /// agent's own settings. Mixing those two levels can route Codex/Gemini/Pi to a
 /// model name the HouFlow gateway does not serve and surface as a 404.
 ///
-/// - Claude: returns one entry per `CLAUDE_MODEL_KEY_MAP` row — the five
+/// - Claude: returns one entry per `CLAUDE_MODEL_KEY_MAP` row — the six
 ///   ANTHROPIC_*_MODEL fields plus the ANTHROPIC_CUSTOM_MODEL_OPTION trio. Each
 ///   entry is `None` when the provider's JSON omits that key or has an empty
 ///   value.
@@ -10258,68 +10351,6 @@ pub(crate) fn provider_codex_model_action(
         Some(model) => CodexModelAction::Set(model),
         None => CodexModelAction::Clear,
     }
-}
-
-fn has_codex_model_config(raw: Option<&str>) -> bool {
-    let config = crate::acp::codex_model_catalog::parse_model_config(raw);
-    crate::acp::codex_model_catalog::default_slug_for_env(&config).is_some()
-        || !config.excluded_officials.is_empty()
-}
-
-fn is_structured_codex_model_config(raw: Option<&str>) -> bool {
-    raw.and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
-        .and_then(|value| value.as_object().cloned())
-        .is_some_and(|object| {
-            ["customs", "models", "excludedOfficials", "default"]
-                .iter()
-                .any(|key| object.contains_key(*key))
-        })
-}
-
-/// The compact codex catalog source a provider binding should apply, or `None`
-/// when codex should keep its own model table.
-///
-/// Three shapes, in priority order:
-///
-///   1. A **structured** catalog in `model` (the codex-only editor's authority,
-///      and the shape the Houflow gateway sync writes) is used verbatim.
-///   2. Otherwise a **multi-agent** provider that advertises codex AND has a
-///      fetched model list gets a catalog **derived** from that list. This is
-///      what makes a shared gateway usable by codex at all: its `model` column
-///      is already spoken for by another agent (Claude stores a JSON object
-///      there), so the models the user fetched live only in `models_json` — and
-///      without them codex falls back to its bundled official list, which has
-///      nothing the gateway actually serves.
-///   3. Otherwise a codex-only provider's plain `model` string stays a single
-///      custom entry (legacy rows), and everything else yields `None`.
-///
-/// A codex-only provider is deliberately left to case (3): the structured
-/// editor owns its list, and deriving over a plain slug there would shadow the
-/// real official entry with a compatibility-flattened duplicate.
-///
-/// The returned string is exactly what `write_catalog_files` consumes and what
-/// the settings panel round-trips, so the panel and the generated catalog can
-/// never disagree about which models exist.
-fn codex_catalog_source(
-    agent_types: &[AgentType],
-    raw: Option<&str>,
-    models: &[String],
-) -> Option<String> {
-    let trimmed = raw.map(str::trim).filter(|value| !value.is_empty());
-    if let Some(value) = trimmed.filter(|value| is_structured_codex_model_config(Some(value))) {
-        return Some(value.to_string());
-    }
-    let codex_only = agent_types.len() == 1 && agent_types.contains(&AgentType::Codex);
-    if !codex_only && !models.is_empty() && agent_types.contains(&AgentType::Codex) {
-        let config = crate::acp::codex_model_catalog::catalog_from_provider_models(
-            models, trimmed,
-        );
-        return serde_json::to_string(&config).ok();
-    }
-    if codex_only {
-        return trimmed.map(str::to_owned);
-    }
-    None
 }
 
 /// Update on-disk config files for a single agent when model provider credentials change.
@@ -10726,6 +10757,19 @@ pub(crate) async fn build_session_runtime_env(
     session_id: Option<&str>,
     data_dir: &Path,
 ) -> Result<BTreeMap<String, String>, AcpError> {
+    build_runtime_env_for_agent(db, agent_type, session_id, data_dir, false).await
+}
+
+/// Settings may inspect Pi's local model catalog while the agent is disabled.
+/// Reuse the exact launch environment, bypassing only the connection permission
+/// gate; this path starts no ACP session and sends no prompt.
+async fn build_runtime_env_for_agent(
+    db: &AppDatabase,
+    agent_type: AgentType,
+    session_id: Option<&str>,
+    data_dir: &Path,
+    allow_disabled: bool,
+) -> Result<BTreeMap<String, String>, AcpError> {
     let setting = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
         .await
         .map_err(|e| AcpError::protocol(e.to_string()))?;
@@ -10733,7 +10777,7 @@ pub(crate) async fn build_session_runtime_env(
         .as_ref()
         .map(|model| !model.enabled)
         .unwrap_or(false);
-    if disabled {
+    if disabled && !allow_disabled {
         return Err(AcpError::protocol(format!(
             "{agent_type} is disabled in settings"
         )));
@@ -10758,8 +10802,11 @@ pub(crate) async fn build_session_runtime_env(
     }
 
     // codex resume no longer needs a `MODEL_PROVIDER` pin: codex-acp 1.0.1
-    // resolves the resumed provider from `~/.codex/config.toml`, matching new
-    // sessions that let codex read the config's own `model_provider`.
+    // (#224) resolves the resumed provider from `~/.codex/config.toml` via
+    // `config/read`, matching new sessions (which pass `null` so codex reads the
+    // config's own `model_provider`). The 1.0.0 workaround that injected
+    // `MODEL_PROVIDER` to stop resumed sessions falling back to "openai" is now
+    // redundant and was removed.
 
     if let Some(cred_env) = crate::commands::terminal::prepare_credential_env(data_dir) {
         for (key, value) in cred_env {
@@ -10905,38 +10952,6 @@ pub(crate) async fn acp_update_agent_env_and_refresh(
     emitter: &EventEmitter,
 ) -> Result<usize, AcpError> {
     acp_update_agent_env_core(agent_type, enabled, env, model_provider_id, db, emitter).await?;
-    Ok(refresh_config_staleness(
-        manager,
-        db,
-        data_dir,
-        &[agent_type],
-        ConfigStaleKind::AgentConfig,
-    )
-    .await)
-}
-
-/// Same env/provider sync as `acp_update_agent_env_and_refresh`, but leaves the
-/// user's enabled/disabled choice untouched. Used by managed gateway sync,
-/// which should bind credentials without re-enabling agents the user disabled.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn acp_update_agent_env_preserving_enabled_and_refresh(
-    agent_type: AgentType,
-    env: BTreeMap<String, String>,
-    model_provider_id: Option<i32>,
-    db: &AppDatabase,
-    manager: &ConnectionManager,
-    data_dir: &Path,
-    emitter: &EventEmitter,
-) -> Result<usize, AcpError> {
-    acp_update_agent_env_core_with_enabled_update(
-        agent_type,
-        None,
-        env,
-        model_provider_id,
-        db,
-        emitter,
-    )
-    .await?;
     Ok(refresh_config_staleness(
         manager,
         db,
@@ -11706,33 +11721,6 @@ pub async fn acp_clear_binary_cache(agent_type: AgentType) -> Result<(), AcpErro
     Ok(())
 }
 
-/// Decide what to write to OpenCode's `auth.json`. `None` leaves the existing
-/// file untouched; an explicitly empty payload clears it to an empty object.
-fn opencode_auth_payload_to_write(raw: Option<&str>) -> Option<String> {
-    let trimmed = raw?.trim();
-    Some(if trimmed.is_empty() {
-        "{}".to_string()
-    } else {
-        trimmed.to_string()
-    })
-}
-
-/// Persist OpenCode's native auth/config files through one shared path. This
-/// keeps the config and preferences commands consistent when the last provider
-/// is disconnected.
-fn persist_opencode_native_config(
-    opencode_auth_json: Option<&str>,
-    config_json: Option<&str>,
-) -> Result<(), AcpError> {
-    if let Some(auth) = opencode_auth_payload_to_write(opencode_auth_json) {
-        persist_opencode_auth_json(&auth)?;
-    }
-    if let Some(raw) = config_json {
-        persist_agent_local_config_json(AgentType::OpenCode, Some(raw))?;
-    }
-    Ok(())
-}
-
 /// Scan the system temp directory for artifacts leaked by agent launches from
 /// BEFORE per-launch temp isolation shipped. Read-only.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
@@ -11886,43 +11874,6 @@ pub async fn acp_update_agent_preferences(
     .await
 }
 
-fn provider_agent_types_for_binding(
-    provider: &crate::db::entities::model_provider::Model,
-    provider_id: i32,
-) -> Result<Vec<AgentType>, AcpError> {
-    let mut raw_types = serde_json::from_str::<Vec<String>>(&provider.agent_types_json)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect::<Vec<_>>();
-    if raw_types.is_empty() {
-        let fallback = provider.agent_type.trim();
-        if !fallback.is_empty() {
-            raw_types.push(fallback.to_string());
-        }
-    }
-
-    let mut agent_types = Vec::new();
-    for raw in raw_types {
-        let agent_type: AgentType = serde_json::from_value(serde_json::Value::String(raw.clone()))
-            .map_err(|_| {
-                AcpError::protocol(format!(
-                    "model provider {provider_id} has invalid agent_type: {raw}"
-                ))
-            })?;
-        if !agent_types.contains(&agent_type) {
-            agent_types.push(agent_type);
-        }
-    }
-    if agent_types.is_empty() {
-        return Err(AcpError::protocol(format!(
-            "model provider {provider_id} has no valid agent_type"
-        )));
-    }
-    Ok(agent_types)
-}
-
 pub(crate) async fn acp_update_agent_env_core(
     agent_type: AgentType,
     enabled: bool,
@@ -11940,171 +11891,6 @@ pub(crate) async fn acp_update_agent_env_core(
         emitter,
     )
     .await
-}
-
-async fn acp_update_agent_env_core_with_enabled_update(
-    agent_type: AgentType,
-    enabled: Option<bool>,
-    env: BTreeMap<String, String>,
-    model_provider_id: Option<i32>,
-    db: &AppDatabase,
-    emitter: &EventEmitter,
-) -> Result<(), AcpError> {
-    let default = agent_setting_service::AgentDefaultInput {
-        agent_type,
-        registry_id: registry::registry_id_for(agent_type).to_string(),
-        default_sort_order: i32::MAX / 2,
-    };
-
-    agent_setting_service::ensure_defaults(&db.conn, &[default])
-        .await
-        .map_err(|e| AcpError::protocol(e.to_string()))?;
-
-    // If a provider is selected, URL/key come from the provider. Only Claude
-    // treats provider.model as authoritative runtime model data; other agents
-    // keep their model in their own engine-specific config.
-    let mut merged_env = env;
-    if agent_type == AgentType::Pi {
-        // The settings panel sends the previous env map back when changing a
-        // binding. Remove HouHub's internal selector markers first so clearing
-        // the provider cannot leave a stale selector scope behind.
-        merged_env.remove(PI_BOUND_PROVIDER_ENV);
-        merged_env.remove(PI_BOUND_MODEL_ENV);
-    }
-    let mut codex_bound_model: Option<Option<String>> = None;
-    let mut codex_action = CodexModelAction::NoOp;
-    // When a Claude provider is bound, capture the inputs to also rewrite the
-    // on-disk config.env below. Claude's model fields live in config.env, which
-    // the runtime overlays OVER db env_json (see `build_runtime_env_from_setting`),
-    // so clearing a key from db env alone is not enough — a stale value left in
-    // `~/.claude/settings.json` (e.g. ANTHROPIC_CUSTOM_MODEL_OPTION) would win at
-    // launch. Binding must therefore be authoritative on disk too, matching the
-    // provider-edit cascade.
-    let mut claude_local_cascade: Option<(String, String, BTreeMap<String, Option<String>>)> = None;
-    let mut pi_config_update: Option<PiConfigUpdate> = None;
-    if let Some(pid) = model_provider_id {
-        let provider = crate::db::service::model_provider_service::get_by_id(&db.conn, pid)
-            .await
-            .map_err(|e| AcpError::protocol(e.to_string()))?
-            .ok_or_else(|| AcpError::protocol(format!("model provider not found: {pid}")))?;
-
-        // Reject cross-type binding unless the provider explicitly supports
-        // the current agent through agent_types_json. HouFlow-managed gateway
-        // providers are intentionally multi-agent, while older providers may
-        // only have the legacy single agent_type column populated.
-        let provider_agent_types = provider_agent_types_for_binding(&provider, pid)?;
-        if !provider_agent_types.contains(&agent_type) {
-            let supported = provider_agent_types
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(AcpError::protocol(format!(
-                "model provider {pid} is for {supported}, cannot be bound to {agent_type}"
-            )));
-        }
-
-        // A multi-agent provider keeps its fetched models in `models_json` (its
-        // `model` column belongs to whichever agent owns it), so the catalog
-        // codex binds to has to be derived from that list. Without this, binding
-        // codex to a gateway left it on its own bundled official models and none
-        // of the gateway's models were selectable in the composer.
-        let codex_catalog_source = codex_catalog_source(
-            &provider_agent_types,
-            provider.model.as_deref(),
-            &parse_provider_models_json(&provider.models_json),
-        );
-        let codex_catalog_enabled = codex_catalog_source.is_some();
-        let model_env = if agent_type == AgentType::Codex {
-            match codex_catalog_source.as_deref() {
-                Some(source) => parse_provider_model(agent_type, Some(source)),
-                None => BTreeMap::new(),
-            }
-        } else {
-            parse_provider_model(agent_type, provider.model.as_deref())
-        };
-        for (k, v) in &model_env {
-            match v {
-                Some(value) => {
-                    merged_env.insert(k.clone(), value.clone());
-                }
-                None => {
-                    merged_env.remove(k);
-                }
-            }
-        }
-        if agent_type == AgentType::Codex && codex_catalog_enabled {
-            codex_bound_model = Some(codex_catalog_source.clone());
-        }
-        if agent_type == AgentType::Codex {
-            codex_action = provider_codex_model_action(agent_type, provider.model.as_deref());
-        }
-        // Gemini's analogous config.env gap is pre-existing and out of scope
-        // here. Only Claude needs the local-config cascade on bind.
-        if agent_type == AgentType::ClaudeCode {
-            claude_local_cascade = Some((
-                provider.api_url.clone(),
-                provider.api_key.clone(),
-                model_env,
-            ));
-        }
-        if agent_type == AgentType::Pi {
-            let model = resolve_pi_provider_model(&provider, &merged_env)?;
-            merged_env.insert("OPENAI_MODEL".to_string(), model.clone());
-            let provider_key = pi_provider_id(&provider);
-            merged_env.insert(PI_BOUND_PROVIDER_ENV.to_string(), provider_key.clone());
-            merged_env.insert(PI_BOUND_MODEL_ENV.to_string(), model.clone());
-            pi_config_update = Some(PiConfigUpdate {
-                provider: provider_key,
-                model,
-                models: Some(parse_provider_models_json(&provider.models_json)),
-                thinking_level: None,
-                api_key: Some(provider.api_key.clone()),
-                custom_base_url: Some(provider.api_url.clone()),
-                custom_api: Some("openai-completions".to_string()),
-                model_reasoning: None,
-            });
-        }
-    }
-
-    let patch = agent_setting_service::AgentSettingsUpdate {
-        enabled,
-        env_json: serialize_env_map(&merged_env)?,
-        model_provider_id,
-    };
-    agent_setting_service::update(&db.conn, agent_type, patch)
-        .await
-        .map_err(|e| AcpError::protocol(e.to_string()))?;
-
-    // Authoritatively rewrite the local config.env so a stale model key (e.g. the
-    // custom model option) cannot survive a bind/rebind via any save path. `None`
-    // entries become JSON-null and are removed by `merge_json_values`.
-    if let Some((api_url, api_key, model_env)) = claude_local_cascade {
-        if let Err(e) = cascade_update_agent_config(
-            agent_type,
-            &api_url,
-            &api_key,
-            &model_env,
-            &CodexModelAction::NoOp,
-            None,
-        ) {
-            eprintln!(
-                "[acp_update_agent_env] cascade_update_agent_config({agent_type}) failed: {e}"
-            );
-        }
-    }
-    if let Some(update) = pi_config_update {
-        let pi_dir = pi_agent_dir_for_env(&merged_env);
-        update_pi_config_files_at(update, &pi_dir)?;
-    }
-    if let Some(model) = codex_bound_model {
-        apply_codex_catalog_and_model(model.as_deref())?;
-    } else if let Err(e) = apply_codex_root_model_action(&codex_action) {
-        tracing::error!("[acp_update_agent_env] apply_codex_root_model_action failed: {e}");
-    }
-
-    emit_acp_agents_updated(emitter, "env_updated", Some(agent_type));
-    Ok(())
 }
 
 /// Apply a provider-derived model action to Codex's root `model` field while
@@ -12228,6 +12014,33 @@ pub async fn acp_update_agent_env(
         &emitter,
     )
     .await
+}
+
+/// Decide what to write to OpenCode's `auth.json`. `None` leaves the existing
+/// file untouched; an explicitly empty payload clears it to an empty object.
+fn opencode_auth_payload_to_write(raw: Option<&str>) -> Option<String> {
+    let trimmed = raw?.trim();
+    Some(if trimmed.is_empty() {
+        "{}".to_string()
+    } else {
+        trimmed.to_string()
+    })
+}
+
+/// Persist OpenCode's native auth/config files through one shared path. This
+/// keeps the config and preferences commands consistent when the last provider
+/// is disconnected.
+fn persist_opencode_native_config(
+    opencode_auth_json: Option<&str>,
+    config_json: Option<&str>,
+) -> Result<(), AcpError> {
+    if let Some(auth) = opencode_auth_payload_to_write(opencode_auth_json) {
+        persist_opencode_auth_json(&auth)?;
+    }
+    if let Some(raw) = config_json {
+        persist_agent_local_config_json(AgentType::OpenCode, Some(raw))?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -12569,18 +12382,6 @@ pub async fn acp_fetch_kimi_models(
     acp_fetch_kimi_models_core(&base_url, &api_key).await
 }
 
-/// Probe a model provider endpoint with a real chat completion. Desktop
-/// command; the web handler calls `acp_test_model_provider_core` directly.
-#[cfg(feature = "tauri-runtime")]
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_test_model_provider(
-    base_url: String,
-    api_key: String,
-    model: String,
-) -> Result<ModelProviderTestOutcome, AcpError> {
-    acp_test_model_provider_core(&base_url, &api_key, &model).await
-}
-
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 #[allow(clippy::too_many_arguments)]
@@ -12614,12 +12415,29 @@ pub async fn acp_update_pi_config(
     .await
 }
 
+/// Read pi's current native config from the same per-agent directory that
+/// the ACP launch path passes to Pi. Desktop and web use the same DB-backed
+/// directory resolution.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_load_pi_config(
+pub async fn acp_load_pi_config(db: State<'_, AppDatabase>) -> Result<PiConfigProjection, AcpError> {
+    load_pi_config_for_db(&db).await
+}
+
+/// pi's built-in model catalog, asked of the configured runtime (see
+/// [`list_pi_model_catalog_core`]).
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_list_pi_model_capabilities(
     db: State<'_, AppDatabase>,
-) -> Result<PiConfigProjection, AcpError> {
-    load_pi_config_core_for_db(&db).await
+    app: tauri::AppHandle,
+) -> Result<PiModelCatalog, AcpError> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map(|p| crate::paths::resolve_effective_data_dir(&p))
+        .unwrap_or_else(|_| PathBuf::from("."));
+    Ok(list_pi_model_catalog_core(&db, &data_dir).await)
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -13101,6 +12919,25 @@ pub async fn acp_detect_agent_local_version(
     acp_detect_agent_local_version_core(agent_type, &db.conn, &emitter).await
 }
 
+/// The newest upstream release of an agent that is newer than houhub's pin and
+/// that Custom install can fetch, for Version Status' "Upgrade to unreviewed
+/// latest". The settings page asks once each time the user opens the agent.
+pub(crate) async fn acp_fetch_agent_latest_release_core(
+    agent_type: AgentType,
+) -> Result<Option<latest_release::AgentLatestRelease>, AcpError> {
+    latest_release::resolve(agent_type)
+        .await
+        .map_err(|e| AcpError::protocol(e.to_string()))
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_fetch_agent_latest_release(
+    agent_type: AgentType,
+) -> Result<Option<latest_release::AgentLatestRelease>, AcpError> {
+    acp_fetch_agent_latest_release_core(agent_type).await
+}
+
 pub(crate) async fn acp_prepare_npx_agent_core(
     agent_type: AgentType,
     registry_version: Option<String>,
@@ -13115,6 +12952,10 @@ pub(crate) async fn acp_prepare_npx_agent_core(
     let meta = registry::get_agent_meta(agent_type);
     let result = match meta.distribution {
         registry::AgentDistribution::Npx { package, cmd, .. } => {
+            // `version_override` of None/empty keeps the registry-pinned spec;
+            // a custom version installs `<name>@<version>` instead.
+            let install_spec = build_npm_install_spec(package, version_override.as_deref())?;
+
             let default = agent_setting_service::AgentDefaultInput {
                 agent_type,
                 registry_id: registry::registry_id_for(agent_type).to_string(),
@@ -13124,25 +12965,11 @@ pub(crate) async fn acp_prepare_npx_agent_core(
                 .await
                 .map_err(|e| AcpError::protocol(e.to_string()))?;
 
-            let setting = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
+            let existing = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
                 .await
                 .ok()
-                .flatten();
-            let existing = setting.as_ref().and_then(|m| m.installed_version.clone());
-            // The latest-channel opt-in reads the same merged env layers the
-            // launch and the settings page resolve, so the control can never
-            // show one channel while the install applies another.
-            let latest_channel = adapter_channel_is_latest(&build_runtime_env_from_setting(
-                agent_type,
-                setting.as_ref(),
-                load_agent_local_config_json(agent_type).as_deref(),
-            ));
-            // `version_override` of None/empty keeps the channel's spec (the
-            // registry pin, or `<name>@latest` for a latest-channel agent); a
-            // custom version installs `<name>@<version>` instead, on either
-            // channel.
-            let (first_spec, fallback_spec) =
-                npm_install_attempts(package, version_override.as_deref(), latest_channel)?;
+                .flatten()
+                .and_then(|m| m.installed_version);
 
             // Best-effort uninstall before reinstall. Forces npm to re-resolve
             // the dependency graph from scratch, which is required for
@@ -13172,51 +12999,11 @@ pub(crate) async fn acp_prepare_npx_agent_core(
                 emitter,
                 &task_id,
                 AgentInstallEventKind::Log,
-                format!("Installing {} ({first_spec})", meta.name),
+                format!("Installing {} ({install_spec})", meta.name),
             );
-            let install_spec =
-                match install_npm_global_package_streaming(&first_spec, &task_id, emitter).await {
-                    Ok(()) => first_spec,
-                    Err(err) => {
-                        // FAIL SAFE TO THE PIN. A latest-channel install can die on
-                        // things the pin does not (npm unreachable, a mirror not yet
-                        // carrying the tag's target, a yanked release), and the user
-                        // asked for "newest when possible", not "nothing unless
-                        // newest". Retry the reviewed pinned spec, saying so in the
-                        // same install log — and let the recorded installed version
-                        // report what actually landed.
-                        let Some(pinned_spec) = fallback_spec else {
-                            return Err(annotate_npm_bootstrap_failure(&first_spec, err));
-                        };
-                        let err = annotate_npm_bootstrap_failure(&first_spec, err);
-                        tracing::warn!(
-                            "[acp] latest install {first_spec} failed ({err}); \
-                         falling back to pinned {pinned_spec}"
-                        );
-                        emit_agent_install_event(
-                            emitter,
-                            &task_id,
-                            AgentInstallEventKind::Log,
-                            format!("ERROR: installing {first_spec} failed: {err}"),
-                        );
-                        emit_agent_install_event(
-                            emitter,
-                            &task_id,
-                            AgentInstallEventKind::Log,
-                            format!("Falling back to the pinned version ({pinned_spec})..."),
-                        );
-                        emit_agent_install_event(
-                            emitter,
-                            &task_id,
-                            AgentInstallEventKind::Log,
-                            format!("Installing {} ({pinned_spec})", meta.name),
-                        );
-                        install_npm_global_package_streaming(&pinned_spec, &task_id, emitter)
-                            .await
-                            .map_err(|e| annotate_npm_bootstrap_failure(&pinned_spec, e))?;
-                        pinned_spec
-                    }
-                };
+            install_npm_global_package_streaming(&install_spec, &task_id, emitter)
+                .await
+                .map_err(|e| annotate_npm_bootstrap_failure(&install_spec, e))?;
 
             // For a bootstrap-wrapper package (hermes-agent), npm metadata
             // existing does NOT mean the agent can run: a skipped or broken
@@ -13279,6 +13066,18 @@ pub(crate) async fn acp_prepare_npx_agent_core(
             )
             .await
             .map_err(|e| AcpError::protocol(e.to_string()))?;
+
+            // A new codex-acp can drive a codex with a different official
+            // model list; houhub's generated catalog must follow it.
+            if agent_type == AgentType::Codex {
+                emit_agent_install_event(
+                    emitter,
+                    &task_id,
+                    AgentInstallEventKind::Log,
+                    "Refreshing the Codex model catalog...",
+                );
+                resync_codex_generated_catalog().await;
+            }
             emit_acp_agents_updated(emitter, "npx_prepared", Some(agent_type));
             Ok(resolved)
         }
@@ -13451,6 +13250,8 @@ pub async fn acp_uninstall_agent(
     let emitter = EventEmitter::Tauri(app);
     acp_uninstall_agent_core(agent_type, task_id, &db, &emitter).await
 }
+
+const PI_CODING_AGENT_PACKAGE: &str = "@earendil-works/pi-coding-agent";
 
 pub(crate) async fn acp_install_pi_binary_core(
     task_id: String,
@@ -13846,6 +13647,7 @@ pub async fn opencode_uninstall_plugin(name: String) -> Result<PluginCheckSummar
 // ─── Codex Device Code OAuth ───
 
 const CODEX_OAUTH_ISSUER: &str = "https://auth.openai.com";
+
 const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
 #[derive(Serialize)]
@@ -14065,123 +13867,6 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    /// A fake OpenAI-compatible provider: `/chat/completions` answers with
-    /// `status` and `body`. Returns the bound port.
-    async fn spawn_fake_provider(
-        status: u16,
-        body: serde_json::Value,
-    ) -> (u16, Arc<std::sync::Mutex<Option<serde_json::Value>>>) {
-        let seen: Arc<std::sync::Mutex<Option<serde_json::Value>>> =
-            Arc::new(std::sync::Mutex::new(None));
-        let seen_for_route = Arc::clone(&seen);
-        let app = axum::Router::new().route(
-            "/v1/chat/completions",
-            axum::routing::post(move |axum::Json(payload): axum::Json<serde_json::Value>| {
-                let seen = Arc::clone(&seen_for_route);
-                async move {
-                    *seen.lock().unwrap() = Some(payload);
-                    (
-                        axum::http::StatusCode::from_u16(status).unwrap(),
-                        axum::Json(body),
-                    )
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-        (port, seen)
-    }
-
-    #[tokio::test]
-    async fn provider_test_reports_the_assistant_reply() {
-        let (port, seen) = spawn_fake_provider(
-            200,
-            serde_json::json!({
-                "choices": [{ "message": { "role": "assistant", "content": "Hello there!" } }]
-            }),
-        )
-        .await;
-
-        let outcome = acp_test_model_provider_core(
-            &format!("http://127.0.0.1:{port}/v1"),
-            "sk-test",
-            "deepseek-chat",
-        )
-        .await
-        .unwrap();
-
-        assert!(outcome.success);
-        assert!(outcome.error.is_none());
-        assert_eq!(outcome.preview.as_deref(), Some("Hello there!"));
-        // The probe has to be a real completion request, not a `/models` call:
-        // only the former proves the endpoint accepts this model.
-        let payload = seen.lock().unwrap().clone().unwrap();
-        assert_eq!(payload["model"], "deepseek-chat");
-        assert_eq!(payload["stream"], false);
-    }
-
-    #[tokio::test]
-    async fn provider_test_surfaces_the_provider_error_message() {
-        let (port, _seen) = spawn_fake_provider(
-            401,
-            serde_json::json!({ "error": { "message": "invalid api key" } }),
-        )
-        .await;
-
-        let outcome = acp_test_model_provider_core(
-            &format!("http://127.0.0.1:{port}/v1"),
-            "sk-bad",
-            "deepseek-chat",
-        )
-        .await
-        .unwrap();
-
-        assert!(!outcome.success);
-        assert_eq!(
-            outcome.error.as_deref(),
-            Some("401 Unauthorized: invalid api key")
-        );
-        assert!(outcome.preview.is_none());
-    }
-
-    #[tokio::test]
-    async fn provider_test_accepts_a_full_chat_completions_url() {
-        let (port, _seen) = spawn_fake_provider(
-            200,
-            serde_json::json!({ "choices": [{ "message": { "content": "hi" } }] }),
-        )
-        .await;
-
-        // A pasted full endpoint must not end up as `/chat/completions/chat/completions`.
-        let outcome = acp_test_model_provider_core(
-            &format!("http://127.0.0.1:{port}/v1/chat/completions"),
-            "sk-test",
-            "deepseek-chat",
-        )
-        .await
-        .unwrap();
-
-        assert!(outcome.success);
-    }
-
-    #[tokio::test]
-    async fn provider_test_requires_a_key_and_a_model() {
-        assert!(
-            acp_test_model_provider_core("https://example.com/v1", "", "m")
-                .await
-                .is_err()
-        );
-        assert!(
-            acp_test_model_provider_core("https://example.com/v1", "k", "  ")
-                .await
-                .is_err()
-        );
-        assert!(acp_test_model_provider_core("   ", "k", "m").await.is_err());
-    }
-
     #[test]
     fn extract_version_token_finds_the_version_in_common_banners() {
         assert_eq!(extract_version_token("0.21.0").as_deref(), Some("0.21.0"));
@@ -14213,6 +13898,7 @@ mod tests {
             Some("17.1.7")
         );
     }
+
     #[test]
     fn extract_version_token_rejects_non_versions() {
         assert!(extract_version_token("").is_none());
@@ -14264,6 +13950,7 @@ mod tests {
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         bin
     }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn system_probed_version_reads_a_system_cli_via_the_version_convention() {
@@ -14276,6 +13963,7 @@ mod tests {
         let version = system_probed_version(AgentType::Custom("probe-e2e-test"), &bin, None).await;
         assert_eq!(version.as_deref(), Some("1.2.3"));
     }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn a_failing_declared_probe_falls_back_to_the_version_convention() {
@@ -14287,26 +13975,6 @@ mod tests {
         // nothing; the convention path must still read the real install.
         let version =
             system_probed_version_with(Some("houhub-missing-probe-cmd-e2e --version"), &bin, None)
-                .await;
-        assert_eq!(version.as_deref(), Some("3.2.1"));
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn system_probed_version_reads_a_system_cli() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let bin = fake_version_script(dir.path(), "fake-agent", "fake-agent version 1.2.3");
-        let version = system_probed_version(AgentType::Custom("probe-e2e-test"), &bin, None).await;
-        assert_eq!(version.as_deref(), Some("1.2.3"));
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn failing_declared_probe_falls_back_to_cli_version() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let bin = fake_version_script(dir.path(), "fallback-agent", "fallback-agent/3.2.1");
-        let version =
-            system_probed_version_with(Some("houhub-missing-probe-e2e --version"), &bin, None)
                 .await;
         assert_eq!(version.as_deref(), Some("3.2.1"));
     }
@@ -14499,7 +14167,7 @@ mod tests {
         }
         for policy in ["", "approval_policy = \"untrusted\"\n"] {
             let toml = format!("{policy}sandbox_mode = \"workspace-write\"\n");
-            assert_eq!(initial_mode_for(&toml), Some("agent"));
+            assert_eq!(initial_mode_for(&toml), Some("workspace-write"));
         }
     }
 
@@ -14515,6 +14183,13 @@ mod tests {
         // the running adapter's version is not knowable here; the mapping must
         // therefore stay keyed on the sandbox, which is the axis whose meaning
         // did not move. See the "Why the reviewer axis is NOT used" note above.
+        //
+        // codex-acp 2.0.0 adds the preset that config actually describes —
+        // `workspace-write`, a writable workspace whose escalations go to the
+        // user — and an adapter that predates the id starts in its `agent`
+        // default instead (`getInitialAgentMode`: an unknown id falls back),
+        // which is exactly the old mapping. Writable on every version either
+        // way; never `read-only`.
         for policy in [
             "",
             "approval_policy = \"on-request\"\n",
@@ -14524,10 +14199,18 @@ mod tests {
             let toml = format!("{policy}sandbox_mode = \"workspace-write\"\n");
             assert_eq!(
                 initial_mode_for(&toml),
-                Some("agent"),
+                Some("workspace-write"),
                 "a writable config must never be handed the read-only preset ({policy:?})"
             );
         }
+        // No approvals wanted: no preset says exactly that without widening the
+        // sandbox, and the model-screened default is the nearest.
+        assert_eq!(
+            initial_mode_for(
+                "approval_policy = \"never\"\nsandbox_mode = \"workspace-write\"\n"
+            ),
+            Some("agent")
+        );
     }
 
     #[test]
@@ -14550,7 +14233,7 @@ mod tests {
             let toml = format!("{policy}sandbox_mode = \"danger-full-access\"\n");
             assert_eq!(
                 initial_mode_for(&toml),
-                Some("agent"),
+                Some("workspace-write"),
                 "must not remove approvals for {policy:?}"
             );
         }
@@ -14846,6 +14529,191 @@ base_url = \"https://example.test/v1\"
         assert!(!is_houhub_owned_catalog_ref("manual.json", home));
     }
 
+    fn catalog_slugs(home: &Path) -> Vec<String> {
+        let text = fs::read_to_string(home.join(crate::acp::codex_model_catalog::CATALOG_REL))
+            .expect("generated catalog");
+        serde_json::from_str::<serde_json::Value>(&text).expect("catalog json")["models"]
+            .as_array()
+            .expect("models")
+            .iter()
+            .filter_map(|m| m["slug"].as_str().map(str::to_owned))
+            .collect()
+    }
+
+    /// The official list before codex 0.159.1: today's minus GPT-6.1 Sol.
+    fn catalog_without_gpt_6_1_sol() -> Vec<serde_json::Value> {
+        crate::acp::codex_model_catalog::bundled_snapshot_models()
+            .into_iter()
+            .filter(|m| m["slug"] != "gpt-6.1-sol")
+            .collect()
+    }
+
+    /// A catalog houhub generated before an upgrade is re-expanded from its
+    /// stored intent, so the new official model shows up — in codex's own
+    /// rank, behind the custom — without the user re-saving anything.
+    #[test]
+    fn resync_rewrites_codegs_catalog_against_the_new_official_list() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = dir.path();
+        let config = config_with_catalog_ref(crate::acp::codex_model_catalog::CATALOG_REL);
+        fs::write(home.join("config.toml"), &config).unwrap();
+        let intent = r#"{"customs":[{"slug":"gw/x","base":"gpt-5.6-sol"}],"default":"gw/x"}"#;
+        crate::acp::codex_model_catalog::write_catalog_files(
+            intent,
+            home,
+            &catalog_without_gpt_6_1_sol(),
+        )
+        .unwrap()
+        .expect("customs → generated catalog");
+        assert!(!catalog_slugs(home).iter().any(|s| s == "gpt-6.1-sol"));
+
+        // Today's list plus one model no compiled-in snapshot has, so only
+        // the list passed in can put it in the table.
+        let mut new = crate::acp::codex_model_catalog::bundled_snapshot_models();
+        let mut unshipped = new
+            .iter()
+            .find(|m| m["slug"] == "gpt-5.5")
+            .cloned()
+            .expect("gpt-5.5 in snapshot");
+        unshipped["slug"] = serde_json::Value::String("gpt-test-unshipped".into());
+        new.push(unshipped);
+        assert_eq!(
+            resync_codex_generated_catalog_at(home, &new).unwrap(),
+            CodexCatalogResync::Rewritten
+        );
+        let slugs = catalog_slugs(home);
+        assert_eq!(slugs[..3], ["gw/x", "gpt-6.1-sol", "gpt-6-astra"]);
+        assert!(slugs.iter().any(|s| s == "gpt-test-unshipped"));
+        assert_eq!(slugs.len(), new.len() + 1);
+        // The intent and config.toml are untouched: same bytes as before.
+        assert_eq!(
+            fs::read_to_string(home.join(crate::acp::codex_model_catalog::SOURCE_REL)).unwrap(),
+            intent
+        );
+        assert_eq!(
+            fs::read_to_string(home.join("config.toml")).unwrap(),
+            config
+        );
+    }
+
+    /// Nothing that houhub cannot regenerate is touched: the user's own catalog,
+    /// a config with no catalog at all, and a houhub catalog whose intent sidecar
+    /// is gone (re-importing it against the NEW list would read every newly
+    /// shipped official as one the user removed).
+    #[test]
+    fn resync_leaves_catalogs_houhub_cannot_regenerate_alone() {
+        let new = crate::acp::codex_model_catalog::bundled_snapshot_models();
+        let intent = r#"{"customs":[{"slug":"gw/x","base":"gpt-5.6-sol"}]}"#;
+        let catalog_path = |home: &Path| home.join(crate::acp::codex_model_catalog::CATALOG_REL);
+
+        // No config.toml at all.
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(
+            resync_codex_generated_catalog_at(dir.path(), &new).unwrap(),
+            CodexCatalogResync::NotOwned
+        );
+
+        // The user's own catalog, even with a houhub sidecar lying around.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = dir.path();
+        fs::write(
+            home.join("config.toml"),
+            config_with_catalog_ref("manual.json"),
+        )
+        .unwrap();
+        fs::write(
+            home.join(crate::acp::codex_model_catalog::SOURCE_REL),
+            intent,
+        )
+        .unwrap();
+        assert_eq!(
+            resync_codex_generated_catalog_at(home, &new).unwrap(),
+            CodexCatalogResync::NotOwned
+        );
+        assert!(!catalog_path(home).exists(), "no catalog was generated");
+        assert_eq!(
+            fs::read_to_string(home.join("config.toml")).unwrap(),
+            config_with_catalog_ref("manual.json"),
+            "the user's reference is left byte-identical"
+        );
+
+        // No `model_catalog_json` key.
+        fs::write(home.join("config.toml"), "model = \"gpt-5.5\"\n").unwrap();
+        assert_eq!(
+            resync_codex_generated_catalog_at(home, &new).unwrap(),
+            CodexCatalogResync::NotOwned
+        );
+        assert!(!catalog_path(home).exists(), "no catalog was generated");
+
+        // houhub's reference, but no sidecar: the old table stays as it is.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = dir.path();
+        fs::write(
+            home.join("config.toml"),
+            config_with_catalog_ref(crate::acp::codex_model_catalog::CATALOG_REL),
+        )
+        .unwrap();
+        crate::acp::codex_model_catalog::write_catalog_files(
+            intent,
+            home,
+            &catalog_without_gpt_6_1_sol(),
+        )
+        .unwrap()
+        .expect("seeded");
+        fs::remove_file(home.join(crate::acp::codex_model_catalog::SOURCE_REL)).unwrap();
+        let before = fs::read_to_string(catalog_path(home)).unwrap();
+        assert_eq!(
+            resync_codex_generated_catalog_at(home, &new).unwrap(),
+            CodexCatalogResync::NotOwned
+        );
+        assert_eq!(fs::read_to_string(catalog_path(home)).unwrap(), before);
+    }
+
+    /// When the new list makes the takeover moot (the only removal names a model
+    /// codex has since retired), control goes back to codex: the reference is
+    /// dropped — format-preservingly — and the generated files with it, so
+    /// config.toml never points at a file that is gone.
+    #[test]
+    fn resync_releases_a_takeover_the_new_list_makes_moot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = dir.path();
+        fs::write(
+            home.join("config.toml"),
+            config_with_catalog_ref(crate::acp::codex_model_catalog::CATALOG_REL),
+        )
+        .unwrap();
+        // The old list still LISTED a model the user removed; the new one no
+        // longer ships it at all.
+        let mut old = crate::acp::codex_model_catalog::bundled_snapshot_models();
+        let mut retired = old
+            .iter()
+            .find(|m| m["slug"] == "gpt-5.5")
+            .cloned()
+            .expect("gpt-5.5 in snapshot");
+        retired["slug"] = serde_json::Value::String("gpt-5.4-retired".into());
+        old.push(retired);
+        let intent = r#"{"customs":[],"excludedOfficials":["gpt-5.4-retired"]}"#;
+        crate::acp::codex_model_catalog::write_catalog_files(intent, home, &old)
+            .unwrap()
+            .expect("a live removal → generated catalog");
+
+        let new = crate::acp::codex_model_catalog::bundled_snapshot_models();
+        assert_eq!(
+            resync_codex_generated_catalog_at(home, &new).unwrap(),
+            CodexCatalogResync::Released
+        );
+        let config = fs::read_to_string(home.join("config.toml")).unwrap();
+        assert!(!config.contains("model_catalog_json"), "{config}");
+        assert!(config.contains("# my codex config"));
+        assert!(config.contains("model = \"gw/x\"           # the model"));
+        assert!(!home
+            .join(crate::acp::codex_model_catalog::CATALOG_REL)
+            .exists());
+        assert!(!home
+            .join(crate::acp::codex_model_catalog::SOURCE_REL)
+            .exists());
+    }
+
     #[test]
     fn apply_codex_sandbox_config_removes_keys_and_empty_section() {
         let base = "approval_policy = \"never\"\nsandbox_mode = \"danger-full-access\"\n\n\
@@ -15078,6 +14946,7 @@ base_url = \"https://example.test/v1\"
         assert_eq!(settings.custom_context_window, Some(262144));
         assert_eq!(settings.auto_compact_threshold_percent, Some(90));
     }
+
     #[test]
     fn parse_grok_settings_untracks_default_without_model_block() {
         // `[models].default` naming a stock model (no `[model.*]` block) is not a
@@ -15086,30 +14955,6 @@ base_url = \"https://example.test/v1\"
         let s = parse_grok_settings(toml);
         assert!(s.custom_model_id.is_none());
         assert!(s.custom_base_url.is_none());
-    }
-
-    #[test]
-    fn parse_grok_settings_uses_native_permission_modes_and_migrates_legacy_values() {
-        let native = parse_grok_settings("[ui]\npermission_mode = \"acceptEdits\"\n");
-        assert_eq!(native.permission_mode.as_deref(), Some("acceptEdits"));
-
-        let approve = parse_grok_settings("[ui]\npermission_mode = \"always-approve\"\n");
-        assert_eq!(
-            approve.permission_mode.as_deref(),
-            Some("bypassPermissions")
-        );
-
-        let ask = parse_grok_settings("[ui]\npermission_mode = \"ask\"\n");
-        assert_eq!(ask.permission_mode.as_deref(), Some("default"));
-    }
-
-    #[test]
-    fn parse_grok_settings_ignores_stock_default_without_model_block() {
-        let settings = parse_grok_settings(
-            "[model.foo]\nbase_url = \"x\"\n\n[models]\ndefault = \"grok-4.5\"\n",
-        );
-        assert!(settings.custom_model_id.is_none());
-        assert!(settings.custom_base_url.is_none());
     }
 
     #[test]
@@ -15137,6 +14982,7 @@ base_url = \"https://example.test/v1\"
         assert_eq!(settings.custom_context_window, Some(131072));
         assert_eq!(settings.auto_compact_threshold_percent, Some(80));
     }
+
     #[test]
     fn apply_grok_custom_model_empty_base_url_omits_key() {
         // "Leave empty ⇒ official endpoint": no `base_url` key is written.
@@ -15157,6 +15003,7 @@ base_url = \"https://example.test/v1\"
         assert_eq!(back.custom_model_id.as_deref(), Some("foo"));
         assert!(back.custom_base_url.is_none());
     }
+
     #[test]
     fn apply_grok_custom_model_non_positive_context_window_omitted() {
         let merged = apply_grok_structured_config(
@@ -15171,6 +15018,7 @@ base_url = \"https://example.test/v1\"
         assert!(!merged.contains("context_window"));
         assert!(parse_grok_settings(&merged).custom_context_window.is_none());
     }
+
     #[test]
     fn apply_grok_custom_model_rename_moves_block() {
         let base = "[model.old]\nmodel = \"old\"\nbase_url = \"https://old/v1\"\n\n\
@@ -15192,6 +15040,7 @@ base_url = \"https://example.test/v1\"
         assert_eq!(back.custom_model_id.as_deref(), Some("new"));
         assert_eq!(back.custom_base_url.as_deref(), Some("https://new/v1"));
     }
+
     #[test]
     fn apply_grok_custom_model_update_preserves_unmanaged_block_keys() {
         // Editing a managed block keeps keys houhub doesn't own (e.g. temperature).
@@ -15211,6 +15060,7 @@ base_url = \"https://example.test/v1\"
         let back = parse_grok_settings(&merged);
         assert_eq!(back.custom_base_url.as_deref(), Some("https://new/v1"));
     }
+
     #[test]
     fn apply_grok_custom_model_clear_removes_managed_block_and_default() {
         let base = "[model.foo]\nmodel = \"foo\"\nbase_url = \"https://x/v1\"\n\n\
@@ -15220,6 +15070,7 @@ base_url = \"https://example.test/v1\"
         let back = parse_grok_settings(&merged);
         assert!(back.custom_model_id.is_none());
     }
+
     #[test]
     fn apply_grok_custom_model_clear_leaves_handset_stock_default() {
         // Clearing the (empty) custom form must NOT delete a hand-set stock
@@ -15227,73 +15078,6 @@ base_url = \"https://example.test/v1\"
         let base = "[models]\ndefault = \"grok-4.5\"\n";
         let merged = apply_grok_structured_config(base, &GrokStructuredConfig::default()).unwrap();
         assert!(merged.contains("default = \"grok-4.5\""));
-    }
-
-    #[test]
-    fn apply_grok_custom_model_omits_empty_or_non_positive_values() {
-        let merged = apply_grok_structured_config(
-            "",
-            &GrokStructuredConfig {
-                custom_model_id: Some("foo".into()),
-                custom_base_url: Some("   ".into()),
-                custom_context_window: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert!(!merged.contains("base_url"));
-        assert!(!merged.contains("context_window"));
-        let settings = parse_grok_settings(&merged);
-        assert_eq!(settings.custom_model_id.as_deref(), Some("foo"));
-        assert!(settings.custom_base_url.is_none());
-        assert!(settings.custom_context_window.is_none());
-    }
-
-    #[test]
-    fn apply_grok_custom_model_rename_preserves_unmanaged_keys_until_rename() {
-        let base =
-            "[model.foo]\nmodel = \"foo\"\ntemperature = 0.7\nbase_url = \"https://old/v1\"\n\n\
-                    [models]\ndefault = \"foo\"\n";
-        let updated = apply_grok_structured_config(
-            base,
-            &GrokStructuredConfig {
-                custom_model_id: Some("foo".into()),
-                custom_base_url: Some("https://new/v1".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert!(updated.contains("temperature"));
-
-        let renamed = apply_grok_structured_config(
-            &updated,
-            &GrokStructuredConfig {
-                custom_model_id: Some("new".into()),
-                custom_base_url: Some("https://new/v1".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert!(!renamed.contains("[model.foo]"));
-        assert_eq!(
-            parse_grok_settings(&renamed).custom_model_id.as_deref(),
-            Some("new")
-        );
-    }
-
-    #[test]
-    fn apply_grok_custom_model_clear_keeps_stock_default() {
-        let managed = "[model.foo]\nmodel = \"foo\"\nbase_url = \"https://x/v1\"\n\n\
-                       [models]\ndefault = \"foo\"\n";
-        let cleared =
-            apply_grok_structured_config(managed, &GrokStructuredConfig::default()).unwrap();
-        assert!(!cleared.contains("[model."));
-        assert!(parse_grok_settings(&cleared).custom_model_id.is_none());
-
-        let stock = "[models]\ndefault = \"grok-4.5\"\n";
-        let unchanged =
-            apply_grok_structured_config(stock, &GrokStructuredConfig::default()).unwrap();
-        assert!(unchanged.contains("default = \"grok-4.5\""));
     }
 
     #[test]
@@ -15320,6 +15104,7 @@ base_url = \"https://example.test/v1\"
             .auto_compact_threshold_percent
             .is_none());
     }
+
     #[test]
     fn grok_config_permission_mode_maps_to_launch_flag() {
         // Legacy always-approve → real bypassPermissions, passed as the flag.
@@ -15337,24 +15122,6 @@ base_url = \"https://example.test/v1\"
         assert!(grok_config_permission_mode("[ui]\npermission_mode = \"default\"\n").is_none());
         assert!(grok_config_permission_mode("[ui]\npermission_mode = \"ask\"\n").is_none());
         // Unset / malformed / unknown ⇒ no flag (preserve the ability to prompt).
-        assert!(grok_config_permission_mode("").is_none());
-        assert!(grok_config_permission_mode("== not toml ==").is_none());
-        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"bogus\"\n").is_none());
-    }
-
-    #[test]
-    fn grok_permission_mode_maps_to_launch_flag() {
-        assert_eq!(
-            grok_config_permission_mode("[ui]\npermission_mode = \"always-approve\"\n").as_deref(),
-            Some("bypassPermissions")
-        );
-        assert_eq!(
-            grok_config_permission_mode("[ui]\npermission_mode = \"acceptEdits\"\n").as_deref(),
-            Some("acceptEdits")
-        );
-        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"default\"\n").is_none());
-        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"ask\"\n").is_none());
-        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"bogus\"\n").is_none());
         assert!(grok_config_permission_mode("").is_none());
         assert!(grok_config_permission_mode("== not toml ==").is_none());
         assert!(grok_config_permission_mode("[ui]\npermission_mode = \"bogus\"\n").is_none());
@@ -15961,6 +15728,427 @@ base_url = \"https://example.test/v1\"
         assert_eq!(models[0]["thinkingLevelMap"]["xhigh"], "xhigh");
     }
 
+    /// A model that advertises max must retain its map through the Rust write path;
+    /// unsupported names must still be discarded before pi reads models.json.
+    #[test]
+    fn pi_custom_model_persists_max_without_unknown_levels() {
+        let mut entry = serde_json::Map::new();
+        apply_pi_custom_model(
+            &mut entry,
+            "reasoning-model",
+            Some(&pi_reasoning_spec(
+                true,
+                &[("minimal", Some("minimal")), ("max", Some("max")), ("ultra", Some("ultra"))],
+            )),
+        );
+
+        let models = pi_models_of(&entry);
+        let map = models[0]["thinkingLevelMap"].as_object().unwrap();
+        assert_eq!(map["minimal"], "minimal");
+        assert_eq!(map["max"], "max");
+        assert!(!map.contains_key("ultra"));
+    }
+
+    #[test]
+    fn pi_rpc_projection_keeps_only_capabilities_and_rejects_wrong_responses() {
+        let line = r#"{"id":"houhub-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"openai","id":"gpt-5.6-sol","reasoning":true,"thinkingLevelMap":{"max":"max"},"baseUrl":"https://secret.example","apiKey":"secret"}]}}"#;
+        let models = parse_pi_model_capabilities(line).unwrap().unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].thinking_level_map["max"], Some("max".into()));
+        let projected = serde_json::to_string(&models).unwrap();
+        assert!(!projected.contains("secret"));
+        // Someone else's line: keep reading.
+        assert!(parse_pi_model_capabilities(&line.replace("houhub-models", "other")).is_none());
+        // Our answer, refusing or unreadable: stop, and say it failed.
+        assert_eq!(
+            parse_pi_model_capabilities(&line.replace(r#""success":true"#, r#""success":false"#)),
+            Some(Err(()))
+        );
+        assert_eq!(
+            parse_pi_model_capabilities(&line.replace(r#""models":["#, r#""other":["#)),
+            Some(Err(()))
+        );
+    }
+
+    #[tokio::test]
+    async fn pi_db_read_error_does_not_select_native_profile() {
+        // No migrations: the Pi settings SELECT fails instead of returning None.
+        // A failed lookup must not select the process-global Pi profile, where
+        // native settings and API keys would otherwise be written.
+        let db = AppDatabase {
+            conn: sea_orm::Database::connect("sqlite::memory:").await.unwrap(),
+        };
+        let lookup_failed = |error: AcpError| {
+            let message = error.to_string();
+            assert!(
+                message.contains("Cannot read Pi agent settings"),
+                "failed for another reason: {message}"
+            );
+        };
+        lookup_failed(pi_settings_dir_from_db(&db).await.unwrap_err());
+        lookup_failed(load_pi_config_for_db(&db).await.unwrap_err());
+        let update = PiConfigUpdate {
+            provider: "test-provider".into(),
+            model: "test-model".into(),
+            models: None,
+            thinking_level: None,
+            api_key: Some("must-not-reach-native-auth".into()),
+            custom_base_url: None,
+            custom_api: None,
+            model_reasoning: None,
+        };
+        lookup_failed(
+            acp_update_pi_config_core(update, &db, &EventEmitter::Noop)
+                .await
+                .unwrap_err(),
+        );
+        lookup_failed(acp_pi_list_trust_entries_core(&db).await.unwrap_err());
+        lookup_failed(
+            acp_pi_set_project_trust_core(&db, "/tmp/pi-db-error".into(), Some(true))
+                .await
+                .unwrap_err(),
+        );
+        lookup_failed(
+            acp_pi_project_trust_state_core(&db, "/tmp/pi-db-error".into())
+                .await
+                .unwrap_err(),
+        );
+    }
+
+    #[test]
+    fn pi_settings_rejects_relative_agent_directory_and_rpc_paths() {
+        assert!(pi_settings_dir_checked(PathBuf::from("./agent")).is_err());
+        assert!(pi_settings_dir_checked(home_dir_or_default().join("agent")).is_ok());
+        let mut env = BTreeMap::new();
+        env.insert("PI_ACP_PI_COMMAND".into(), "./pi-test.sh".into());
+        assert!(!pi_runtime_paths_are_stable(&env));
+        env.insert("PI_ACP_PI_COMMAND".into(), "pi".into());
+        env.insert("PI_CODING_AGENT_DIR".into(), "./agent".into());
+        assert!(!pi_runtime_paths_are_stable(&env));
+        env.insert("PI_CODING_AGENT_DIR".into(), "~/agent".into());
+        assert!(pi_runtime_paths_are_stable(&env));
+    }
+
+    #[test]
+    fn pi_agent_dir_expands_tilde_override_like_the_pi_runtime() {
+        let mut env = BTreeMap::new();
+        env.insert("PI_CODING_AGENT_DIR".to_string(), "~/custom-pi".to_string());
+        assert_eq!(
+            pi_agent_dir_for_env(&env),
+            pi_child_home(&env).join("custom-pi")
+        );
+        // pi's `normalizePath` takes the value verbatim: a padded value is a
+        // different (here: relative) directory, not the trimmed one.
+        env.insert(
+            "PI_CODING_AGENT_DIR".to_string(),
+            " ~/custom-pi".to_string(),
+        );
+        assert_eq!(pi_agent_dir_for_env(&env), PathBuf::from(" ~/custom-pi"));
+    }
+
+    /// `~` is the CHILD's home — a launch that relocates `HOME` relocates pi's
+    /// profile with it. A key the launch leaves alone is inherited from houhub,
+    /// while a blank one is removed from the child, so pi falls back to its
+    /// default instead of inheriting anything.
+    #[cfg(unix)]
+    #[test]
+    fn pi_agent_dir_follows_the_child_env() {
+        let home = tempfile::tempdir().unwrap();
+        let inherited = || Some(std::ffi::OsString::from("/houhub/own/pi-agent"));
+        let mut env = BTreeMap::new();
+        env.insert(
+            "HOME".to_string(),
+            home.path().to_string_lossy().into_owned(),
+        );
+        assert_eq!(
+            pi_agent_dir_for_child(&env, inherited()),
+            PathBuf::from("/houhub/own/pi-agent")
+        );
+
+        env.insert("PI_CODING_AGENT_DIR".to_string(), "~/isolated".to_string());
+        assert_eq!(
+            pi_agent_dir_for_child(&env, inherited()),
+            home.path().join("isolated")
+        );
+
+        env.insert("PI_CODING_AGENT_DIR".to_string(), String::new());
+        assert_eq!(
+            pi_agent_dir_for_child(&env, inherited()),
+            home.path().join(".pi").join("agent")
+        );
+
+        // A relative HOME is taken verbatim too, so pi's default profile is
+        // relative to its cwd — the workspace — and the gate must look there.
+        env.insert("HOME".to_string(), "home-in-repo".to_string());
+        assert_eq!(
+            pi_agent_dir_for_child(&env, inherited()),
+            PathBuf::from("home-in-repo").join(".pi").join("agent")
+        );
+        let workspace = home.path().join("ws");
+        assert_eq!(
+            pi_agent_dir_in_workspace(&env, &workspace),
+            workspace.join("home-in-repo").join(".pi").join("agent")
+        );
+        assert!(pi_settings_dir_checked(pi_agent_dir_for_env(&env)).is_err());
+    }
+
+    /// Node keeps whatever home variable the child has — inherited empty
+    /// included, from which pi derives a `.pi/agent` relative to its cwd — and
+    /// asks the OS only when the launch removed it or there never was one.
+    #[test]
+    fn pi_child_home_is_whatever_home_the_child_has() {
+        use std::ffi::OsString;
+        let untouched = BTreeMap::new();
+        assert_eq!(
+            pi_child_home_from(&untouched, Some(OsString::new())),
+            PathBuf::new()
+        );
+        assert_eq!(
+            pi_child_home_from(&untouched, Some(OsString::from("inherited-home"))),
+            PathBuf::from("inherited-home")
+        );
+        let account = account_home_dir().unwrap_or_else(home_dir_or_default);
+        assert_eq!(pi_child_home_from(&untouched, None), account);
+        let removed = BTreeMap::from([(CHILD_HOME_KEY.to_string(), String::new())]);
+        assert_eq!(
+            pi_child_home_from(&removed, Some(OsString::from("houhub-home"))),
+            account
+        );
+    }
+
+    /// A relative `PATH` entry lands under the child's cwd; a Windows
+    /// drive-relative one follows a per-drive directory nothing here can name,
+    /// so it is dropped rather than guessed.
+    #[test]
+    fn path_entries_are_anchored_where_the_child_looks() {
+        let cwd = if cfg!(windows) {
+            PathBuf::from("C:\\ws")
+        } else {
+            PathBuf::from("/ws")
+        };
+        let absolute = if cfg!(windows) {
+            PathBuf::from("D:\\tools")
+        } else {
+            PathBuf::from("/usr/bin")
+        };
+        assert_eq!(anchor_path_entry(&absolute, &cwd), Some(absolute.clone()));
+        assert_eq!(
+            anchor_path_entry(Path::new("bin"), &cwd),
+            Some(cwd.join("bin"))
+        );
+        assert_eq!(anchor_path_entry(Path::new(""), &cwd), Some(cwd.join("")));
+        #[cfg(windows)]
+        {
+            assert_eq!(anchor_path_entry(Path::new("C:tools"), &cwd), None);
+            assert_eq!(
+                anchor_path_entry(Path::new("\\tools"), &cwd),
+                Some(PathBuf::from("C:\\tools"))
+            );
+        }
+    }
+
+    /// Env names are case-insensitive on Windows only: there a lowercase key is
+    /// the variable pi reads; elsewhere it is a different variable.
+    #[test]
+    fn launch_env_names_follow_the_platform_case_rules() {
+        let env = BTreeMap::from([("pi_coding_agent_dir".to_string(), "somewhere".to_string())]);
+        let found = launch_env_value(&env, "PI_CODING_AGENT_DIR");
+        if cfg!(windows) {
+            assert_eq!(found, Some("somewhere"));
+        } else {
+            assert_eq!(found, None);
+        }
+    }
+
+    /// A relative agent dir lives inside the workspace pi runs in, so the
+    /// repository itself can ship the `trust.json` pi reads there. The gate must
+    /// read that same file; one under houhub's own cwd would miss the grant.
+    #[test]
+    fn pi_launch_gate_reads_a_relative_agent_dir_inside_the_workspace() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ws = tmp.path().join("ws");
+        fs::create_dir_all(ws.join(".pi").join("extensions")).unwrap();
+        let shipped = ws.join(".pi-agent");
+        fs::create_dir_all(&shipped).unwrap();
+        let mut grant = serde_json::Map::new();
+        grant.insert(canonical_key(&ws), serde_json::Value::Bool(true));
+        write_json_object_pretty(&shipped.join("trust.json"), &grant).unwrap();
+
+        let env = BTreeMap::from([("PI_CODING_AGENT_DIR".to_string(), ".pi-agent".to_string())]);
+        let blocked = temp_env::with_var(
+            "HOUHUB_HOME",
+            Some(tmp.path().join("houhub-home").to_string_lossy().to_string()),
+            || pi_project_trust_launch_block(&ws, &env),
+        );
+        assert!(
+            blocked.is_some(),
+            "a grant shipped inside the workspace must stop the launch"
+        );
+    }
+
+    #[test]
+    fn pi_config_projection_reads_selected_agent_directory() {
+        let default = tempfile::tempdir().unwrap();
+        let custom = tempfile::tempdir().unwrap();
+        fs::write(default.path().join("settings.json"), r#"{"defaultModel":"wrong"}"#).unwrap();
+        fs::write(custom.path().join("settings.json"), r#"{"defaultModel":"right","defaultThinkingLevel":"max"}"#).unwrap();
+        let loaded = load_pi_config_at(custom.path());
+        assert_eq!(loaded.default_model.as_deref(), Some("right"));
+        assert_eq!(loaded.default_thinking_level.as_deref(), Some("max"));
+    }
+
+    /// How long a test waits on a fake pi that is expected to answer. The query
+    /// returns the moment pi replies, so this only bounds a real hang — while a
+    /// fake that answers in milliseconds can still take seconds to start on a
+    /// loaded CI runner (Windows `cmd.exe` above all), and a tight bound turns
+    /// that stall into a spurious `TimedOut`.
+    const PI_ANSWER_DEADLINE: Duration = Duration::from_secs(30);
+
+    #[cfg(unix)]
+    fn fake_pi(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join(name);
+        fs::write(&script, format!("#!/bin/sh\n{body}")).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pi_rpc_uses_configured_executable_and_agent_dir_offline() {
+        let temp = tempfile::tempdir().unwrap();
+        let command_dir = temp.path().join("Pi runtime with spaces");
+        fs::create_dir(&command_dir).unwrap();
+        let script = fake_pi(
+            &command_dir,
+            "pi",
+            r#"read request
+case "$request $*" in
+  *houhub-models*--offline*--no-session*--no-extensions*)
+    if [ -n "$PI_CODING_AGENT_DIR" ]; then
+      printf '%s\n' '{"id":"houhub-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"openai","id":"via-override","reasoning":true,"thinkingLevelMap":{"max":"max"}}]}}'
+    fi
+    ;;
+esac
+"#,
+        );
+        let mut env = BTreeMap::new();
+        env.insert("PI_ACP_PI_COMMAND".into(), script.to_string_lossy().into_owned());
+        env.insert("PI_CODING_AGENT_DIR".into(), temp.path().to_string_lossy().into_owned());
+        let catalog = query_pi_model_catalog(&env, PI_ANSWER_DEADLINE).await;
+        assert_eq!(catalog.status, PiCatalogStatus::Ok);
+        assert_eq!(catalog.models.len(), 1);
+        assert_eq!(catalog.models[0].id, "via-override");
+    }
+
+    /// The panel words its hint from the status, so each way of not getting an
+    /// answer has to be told apart from "pi answered and does not list it".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pi_catalog_says_why_pi_gave_no_answer() {
+        let temp = tempfile::tempdir().unwrap();
+        let status_for = |command: String, deadline: Duration| {
+            let env = BTreeMap::from([
+                ("PI_ACP_PI_COMMAND".to_string(), command),
+                (
+                    "PI_CODING_AGENT_DIR".to_string(),
+                    temp.path().to_string_lossy().into_owned(),
+                ),
+            ]);
+            async move { query_pi_model_catalog(&env, deadline).await.status }
+        };
+
+        assert_eq!(
+            status_for("./pi-test.sh".into(), PI_ANSWER_DEADLINE).await,
+            PiCatalogStatus::RelativePath
+        );
+        assert_eq!(
+            status_for(
+                "/nonexistent/definitely-not-pi-xyz".into(),
+                PI_ANSWER_DEADLINE
+            )
+            .await,
+            PiCatalogStatus::NotFound
+        );
+        let refusing = fake_pi(
+            temp.path(),
+            "refusing-pi",
+            r#"read request
+printf '%s\n' '{"id":"houhub-models","type":"response","command":"get_available_models","success":false,"error":"boom"}'
+"#,
+        );
+        assert_eq!(
+            status_for(refusing.to_string_lossy().into_owned(), PI_ANSWER_DEADLINE).await,
+            PiCatalogStatus::Failed
+        );
+        let silent = fake_pi(temp.path(), "silent-pi", "read request\n");
+        assert_eq!(
+            status_for(silent.to_string_lossy().into_owned(), PI_ANSWER_DEADLINE).await,
+            PiCatalogStatus::Failed
+        );
+        let slow = fake_pi(temp.path(), "slow-pi", "sleep 30\n");
+        assert_eq!(
+            status_for(
+                slow.to_string_lossy().into_owned(),
+                Duration::from_millis(500)
+            )
+            .await,
+            PiCatalogStatus::TimedOut
+        );
+    }
+
+    /// A relative `PATH` entry must not resolve inside the shared temp dir,
+    /// where anyone can put a `pi` — the query runs in a private, empty one.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pi_catalog_never_runs_a_pi_planted_in_the_shared_temp_dir() {
+        let entry = format!("houhub-planted-{}", uuid::Uuid::new_v4());
+        let planted_dir = std::env::temp_dir().join(&entry);
+        fs::create_dir(&planted_dir).unwrap();
+        fake_pi(
+            &planted_dir,
+            "pi",
+            r#"read request
+printf '%s\n' '{"id":"houhub-models","type":"response","command":"get_available_models","success":true,"data":{"models":[]}}'
+"#,
+        );
+        let agent_dir = tempfile::tempdir().unwrap();
+        let env = BTreeMap::from([
+            ("PATH".to_string(), entry),
+            (
+                "PI_CODING_AGENT_DIR".to_string(),
+                agent_dir.path().to_string_lossy().into_owned(),
+            ),
+        ]);
+        let status = query_pi_model_catalog(&env, Duration::from_secs(2))
+            .await
+            .status;
+        fs::remove_dir_all(&planted_dir).unwrap();
+        assert_eq!(status, PiCatalogStatus::NotFound);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn pi_rpc_launches_npm_cmd_from_path_with_spaces() {
+        let temp = tempfile::tempdir().unwrap();
+        let command_dir = temp.path().join("Pi runtime with spaces");
+        fs::create_dir(&command_dir).unwrap();
+        let script = command_dir.join("pi.cmd");
+        fs::write(
+            &script,
+            r#"@echo off
+set /p request=
+echo {"id":"houhub-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"openai","id":"windows","reasoning":true,"thinkingLevelMap":{"max":"max"}}]}}
+"#.replace('\n', "\r\n"),
+        ).unwrap();
+        let mut env = BTreeMap::new();
+        env.insert("PI_ACP_PI_COMMAND".into(), script.to_string_lossy().into_owned());
+        let catalog = query_pi_model_catalog(&env, PI_ANSWER_DEADLINE).await;
+        assert_eq!(catalog.status, PiCatalogStatus::Ok);
+        assert_eq!(catalog.models.len(), 1);
+        assert_eq!(catalog.models[0].id, "windows");
+    }
+
     /// The older writer skipped an already-listed model entirely, so a declaration
     /// could never reach one. Upserting must still leave every field the form has
     /// no opinion about — including a renamed `name` — exactly as the user left it.
@@ -16040,7 +16228,7 @@ base_url = \"https://example.test/v1\"
         assert!(models[0].get("thinkingLevelMap").is_none());
     }
 
-    /// pi-acp rejects a level name outside pi's fixed six with `invalidParams`, so
+    /// pi-acp rejects a level name outside pi's fixed seven with `invalidParams`, so
     /// one must never reach disk.
     #[test]
     fn pi_custom_model_filters_levels_pi_does_not_know() {
@@ -16157,7 +16345,7 @@ base_url = \"https://example.test/v1\"
             )
             .unwrap();
 
-            let cfg = load_pi_config_core_at(tmp.path());
+            let cfg = load_pi_config_at(tmp.path());
 
             assert_eq!(cfg.default_provider.as_deref(), Some("gs"));
             assert_eq!(cfg.default_thinking_level.as_deref(), Some("high"));
@@ -16263,6 +16451,7 @@ base_url = \"https://example.test/v1\"
             );
         });
     }
+
     #[test]
     fn opencode_paths_follow_xdg_when_set() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -16284,91 +16473,6 @@ base_url = \"https://example.test/v1\"
                     data.join("opencode").join("auth.json")
                 );
             },
-        );
-    }
-
-    #[test]
-    fn pi_config_update_uses_explicit_runtime_agent_dir() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let pi_home = tmp.path().join("custom-pi-agent");
-        let runtime_env = BTreeMap::from([(
-            "PI_CODING_AGENT_DIR".to_string(),
-            pi_home.display().to_string(),
-        )]);
-
-        update_pi_config_files_at(
-            PiConfigUpdate {
-                provider: "houhub-provider-7".to_string(),
-                model: "gpt-5.6-terra".to_string(),
-                models: Some(vec!["gpt-5.6-terra".to_string()]),
-                thinking_level: Some("max".to_string()),
-                api_key: Some("sk-test".to_string()),
-                custom_base_url: Some("https://gateway.example/v1".to_string()),
-                custom_api: Some("openai-completions".to_string()),
-                model_reasoning: None,
-            },
-            &pi_agent_dir_for_env(&runtime_env),
-        )
-        .expect("write custom pi config");
-
-        let settings: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(pi_home.join("settings.json")).expect("read settings"),
-        )
-        .expect("settings json");
-        assert_eq!(settings["defaultProvider"], "houhub-provider-7");
-        assert_eq!(settings["defaultThinkingLevel"], "max");
-        assert!(pi_home.join("auth.json").is_file());
-        assert!(pi_home.join("models.json").is_file());
-    }
-
-    #[test]
-    fn resolve_pi_provider_model_ignores_structured_provider_bundle() {
-        let provider = crate::db::entities::model_provider::Model {
-            id: 7,
-            name: "Houflow Gateway".to_string(),
-            api_url: "https://api.houshanai.com/v1".to_string(),
-            api_key: "sk-test".to_string(),
-            agent_types_json: r#"["pi"]"#.to_string(),
-            agent_type: "pi".to_string(),
-            model: Some(r#"{"main":"gpt-5.5"}"#.to_string()),
-            models_json: r#"["gpt-5","gpt-5-mini"]"#.to_string(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
-
-        let runtime_env = BTreeMap::new();
-        let model = resolve_pi_provider_model(&provider, &runtime_env).expect("resolve model");
-        assert_eq!(model, "gpt-5");
-    }
-
-    #[test]
-    fn resolve_provider_default_model_rejects_stale_or_structured_values() {
-        let mut provider = crate::db::entities::model_provider::Model {
-            id: 8,
-            name: "Houflow Gateway".to_string(),
-            api_url: "https://api.houshanai.com/v1".to_string(),
-            api_key: "sk-test".to_string(),
-            agent_types_json: r#"["grok"]"#.to_string(),
-            agent_type: "grok".to_string(),
-            model: Some(r#"{"main":"grok-stale"}"#.to_string()),
-            models_json: r#"["grok-4.5","grok-4.5-fast"]"#.to_string(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
-
-        assert_eq!(
-            resolve_provider_default_model(&provider).as_deref(),
-            Some("grok-4.5")
-        );
-        provider.model = Some("grok-4.5-fast".to_string());
-        assert_eq!(
-            resolve_provider_default_model(&provider).as_deref(),
-            Some("grok-4.5-fast")
-        );
-        provider.model = Some("grok-missing".to_string());
-        assert_eq!(
-            resolve_provider_default_model(&provider).as_deref(),
-            Some("grok-4.5")
         );
     }
 
@@ -16417,85 +16521,6 @@ wire_api = "chat"
             Some("gpt-5-codex")
         );
         assert!(codex_config_projection_from_toml("model_provider = ").is_empty());
-    }
-
-    #[test]
-    fn ensure_codex_home_env_sets_default_only_for_codex() {
-        // `ensure_codex_home_env` takes its default from `codex_home_dir`, which
-        // re-reads the process-wide `CODEX_HOME` on every call. Every other test
-        // that touches that variable pins it through `temp_env`, so reading it
-        // bare here could land inside a neighbour's scope and observe that
-        // neighbour's throwaway home — the same parallel-test hazard the
-        // fingerprint tests below call out. Pinning it through `temp_env` takes
-        // the one SERIAL_TEST mutex, which is what actually serializes the two
-        // reads in this test against everyone else.
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let home = tmp.path().join("codex-home");
-        temp_env::with_var("CODEX_HOME", Some(home.as_os_str()), || {
-            let mut codex_env = BTreeMap::new();
-            ensure_codex_home_env(AgentType::Codex, &mut codex_env);
-            let expected_home = codex_home_dir().display().to_string();
-            assert_eq!(
-                codex_env.get("CODEX_HOME").map(String::as_str),
-                Some(expected_home.as_str())
-            );
-
-            codex_env.insert(
-                "CODEX_HOME".to_string(),
-                "C:\\Custom\\CodexHome".to_string(),
-            );
-            ensure_codex_home_env(AgentType::Codex, &mut codex_env);
-            assert_eq!(
-                codex_env.get("CODEX_HOME").map(String::as_str),
-                Some("C:\\Custom\\CodexHome")
-            );
-
-            let mut claude_env = BTreeMap::new();
-            ensure_codex_home_env(AgentType::ClaudeCode, &mut claude_env);
-            assert!(!claude_env.contains_key("CODEX_HOME"));
-        });
-    }
-
-    #[test]
-    fn ensure_codex_home_env_creates_default_home() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let home = tmp.path().join("codex-home");
-
-        temp_env::with_var("CODEX_HOME", Some(home.as_os_str()), || {
-            let mut codex_env = BTreeMap::new();
-            ensure_codex_home_env(AgentType::Codex, &mut codex_env);
-
-            assert!(home.is_dir(), "CODEX_HOME should be created before launch");
-            assert_eq!(
-                codex_env.get("CODEX_HOME").map(String::as_str),
-                Some(home.to_string_lossy().as_ref())
-            );
-        });
-    }
-
-    #[test]
-    fn blank_codex_native_config_inputs_are_noop() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let home = tmp.path().join("codex-home");
-        fs::create_dir_all(&home).expect("create codex home");
-        let auth_path = home.join("auth.json");
-        let config_path = home.join("config.toml");
-        fs::write(&auth_path, "{\n  \"tokens\": {}\n}\n").expect("write auth");
-        fs::write(&config_path, "model = \"gpt-5\"\n").expect("write config");
-
-        temp_env::with_var("CODEX_HOME", Some(home.as_os_str()), || {
-            persist_codex_native_config_files(Some(" \n\t"), Some("\n"))
-                .expect("blank inputs should not be parsed or written");
-        });
-
-        assert_eq!(
-            fs::read_to_string(auth_path).expect("read auth"),
-            "{\n  \"tokens\": {}\n}\n"
-        );
-        assert_eq!(
-            fs::read_to_string(config_path).expect("read config"),
-            "model = \"gpt-5\"\n"
-        );
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
@@ -16820,6 +16845,29 @@ wire_api = "chat"
             bare.get("ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION"),
             Some(&None)
         );
+    }
+
+    #[test]
+    fn parse_provider_model_emits_claude_default_fable_model() {
+        // `fable` is a provider-owned pin like the other model fields: a value
+        // sets ANTHROPIC_DEFAULT_FABLE_MODEL (trimmed), and an omitted one is an
+        // authoritative clear, so the previous provider's Fable pin cannot
+        // survive a bind or a provider edit.
+        let out = parse_provider_model(
+            AgentType::ClaudeCode,
+            Some(r#"{"opus":"gw/opus","fable":" gw/fable "}"#),
+        );
+        assert_eq!(
+            out.get("ANTHROPIC_DEFAULT_FABLE_MODEL"),
+            Some(&Some("gw/fable".to_string()))
+        );
+        assert_eq!(
+            out.get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            Some(&Some("gw/opus".to_string()))
+        );
+
+        let bare = parse_provider_model(AgentType::ClaudeCode, Some(r#"{"main":"x"}"#));
+        assert_eq!(bare.get("ANTHROPIC_DEFAULT_FABLE_MODEL"), Some(&None));
     }
 
     #[test]
@@ -17325,6 +17373,7 @@ wire_api = "chat"
         );
         assert_eq!(v.pointer("/permissions/deny"), Some(&serde_json::json!([])));
     }
+
     #[tokio::test]
     async fn qoder_probe_env_materializes_the_token() {
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
@@ -17689,89 +17738,18 @@ wire_api = "chat"
         assert!(build_npm_install_spec("cline@3.0.9", Some("latest")).is_err());
     }
 
-    // The pinned default is byte-identical to what `build_npm_install_spec`
-    // produced before the channel existed, with no fallback attempt.
+    // hermes-agent's postinstall bootstraps its runtime, and it is the only
+    // package houhub force-enables lifecycle scripts for. The spec, not the
+    // agent type, is what `npm_package_requires_scripts` keys off, so a custom
+    // version spec must still name the package, or the install leaves a shim
+    // that only fails later, at connect, with "runtime is not ready". The spec's
+    // own version is also the recorded fallback when detection comes up empty.
     #[test]
-    fn npm_install_attempts_defaults_to_the_pinned_spec() {
-        assert_eq!(
-            npm_install_attempts("@google/gemini-cli@0.44.1", None, false).unwrap(),
-            ("@google/gemini-cli@0.44.1".to_string(), None)
-        );
-        assert_eq!(
-            npm_install_attempts("@google/gemini-cli@0.44.1", Some("  "), false).unwrap(),
-            ("@google/gemini-cli@0.44.1".to_string(), None)
-        );
-    }
-
-    // The latest channel tries the `latest` dist-tag first and keeps the
-    // registry pin as the fallback, so a failed latest install degrades to the
-    // reviewed version instead of no install at all.
-    #[test]
-    fn npm_install_attempts_maps_latest_channel_onto_the_dist_tag() {
-        assert_eq!(
-            npm_install_attempts("@google/gemini-cli@0.44.1", None, true).unwrap(),
-            (
-                "@google/gemini-cli@latest".to_string(),
-                Some("@google/gemini-cli@0.44.1".to_string())
-            )
-        );
-        // A blank override is the same as none.
-        assert_eq!(
-            npm_install_attempts("cline@3.0.9", Some(" "), true).unwrap(),
-            ("cline@latest".to_string(), Some("cline@3.0.9".to_string()))
-        );
-    }
-
-    // An explicit custom version wins on either channel and never falls back:
-    // the user asked for that exact version, and quietly installing another
-    // would relabel their choice.
-    #[test]
-    fn npm_install_attempts_lets_an_explicit_override_win() {
-        assert_eq!(
-            npm_install_attempts("cline@3.0.9", Some("2.0.0"), true).unwrap(),
-            ("cline@2.0.0".to_string(), None)
-        );
-        assert!(npm_install_attempts("cline@3.0.9", Some("nightly"), true).is_err());
-    }
-
-    // The latest channel introduces a NEW SPEC SHAPE (`<name>@latest`), and the
-    // spec — not the agent type — is what every downstream step keys off.
-    // `npm_package_requires_scripts` is the one that bites: hermes-agent's
-    // postinstall bootstraps its runtime, and it is the only package HouHub
-    // force-enables lifecycle scripts for. A spec shape that hid the package
-    // name from it would install a shim that only fails later, at connect,
-    // with "runtime is not ready". Both attempts must be recognized, since
-    // either one can be the spec that actually lands.
-    #[test]
-    fn the_latest_spec_still_names_the_package_downstream_readers_key_off() {
-        let (latest, pinned) = npm_install_attempts("hermes-agent@0.21.4", None, true).unwrap();
-        assert_eq!(latest, "hermes-agent@latest");
-        assert!(npm_package_requires_scripts(&latest));
-        assert!(npm_package_requires_scripts(&pinned.unwrap()));
-        // And the `@latest` tag is never mistaken for a version number, so a
-        // successful latest install falls through to the real post-install
-        // probe instead of recording "latest" as the installed version.
-        assert_eq!(version_from_package_spec(&latest), None);
-    }
-
-    // Only the exact (trimmed) sentinel opts into the latest channel; absence
-    // and every other value stay on the pin, matching the frontend reader.
-    #[test]
-    fn adapter_channel_reads_only_the_exact_latest_sentinel() {
-        let env = |value: Option<&str>| {
-            let mut map = BTreeMap::new();
-            map.insert("XAI_API_KEY".to_string(), "abc".to_string());
-            if let Some(value) = value {
-                map.insert(ADAPTER_CHANNEL_ENV.to_string(), value.to_string());
-            }
-            map
-        };
-        assert!(!adapter_channel_is_latest(&env(None)));
-        assert!(adapter_channel_is_latest(&env(Some("latest"))));
-        assert!(adapter_channel_is_latest(&env(Some(" latest "))));
-        assert!(!adapter_channel_is_latest(&env(Some("pinned"))));
-        assert!(!adapter_channel_is_latest(&env(Some("Latest"))));
-        assert!(!adapter_channel_is_latest(&env(Some(""))));
+    fn hermes_custom_version_spec_keeps_lifecycle_scripts_and_records_its_version() {
+        let spec = build_npm_install_spec("hermes-agent@0.21.5", Some("0.22.0")).unwrap();
+        assert_eq!(spec, "hermes-agent@0.22.0");
+        assert!(npm_package_requires_scripts(&spec));
+        assert_eq!(version_from_package_spec(&spec).as_deref(), Some("0.22.0"));
     }
 
     #[test]
@@ -19351,7 +19329,7 @@ wire_api = "chat"
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
                     argv.get(pkg_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.21.4")
+                    Some("hermes-agent@0.21.5")
                 );
                 assert_eq!(argv.get(pkg_idx + 2).map(String::as_str), Some("hermes"));
             } else {
@@ -19371,6 +19349,7 @@ wire_api = "chat"
             }
         }
     }
+
     #[test]
     fn kimi_parse_provider_model_uses_kimi_model_name() {
         let out = parse_provider_model(AgentType::KimiCode, Some("kimi-for-coding"));
@@ -19379,102 +19358,6 @@ wire_api = "chat"
             Some(&Some("kimi-for-coding".to_string()))
         );
         assert!(!out.contains_key("OPENAI_MODEL"));
-    }
-
-    #[test]
-    fn non_codex_provider_model_does_not_override_agent_model() {
-        let gemini = parse_provider_model(AgentType::Gemini, Some("gateway-default"));
-        assert_eq!(
-            gemini
-                .get("GEMINI_MODEL")
-                .and_then(|value| value.as_deref()),
-            Some("gateway-default")
-        );
-        let kimi = parse_provider_model(AgentType::KimiCode, Some("gateway-default"));
-        assert_eq!(
-            kimi.get("KIMI_MODEL_NAME")
-                .and_then(|value| value.as_deref()),
-            Some("gateway-default")
-        );
-        assert!(
-            parse_provider_model(AgentType::Pi, Some("gateway-default")).is_empty(),
-            "Pi must keep its model in its own config"
-        );
-    }
-
-    #[test]
-    fn codex_catalog_projection_is_scoped_to_codex_specific_data() {
-        let codex_only = &[AgentType::Codex];
-        let shared = &[AgentType::Codex, AgentType::ClaudeCode];
-        // A codex-only provider with a plain slug stays a single legacy custom.
-        assert_eq!(
-            codex_catalog_source(codex_only, Some("gpt-5.5"), &[]).as_deref(),
-            Some("gpt-5.5")
-        );
-        // A shared provider's plain `model` belongs to another agent (Claude
-        // stores a JSON object there) and must NOT be handed to codex as a
-        // model name.
-        assert_eq!(
-            codex_catalog_source(shared, Some("gateway-default"), &[]),
-            None
-        );
-        // A structured catalog is authoritative for both shapes.
-        let structured = r#"{"models":[],"default":null}"#;
-        assert_eq!(
-            codex_catalog_source(shared, Some(structured), &[]).as_deref(),
-            Some(structured)
-        );
-        assert_eq!(
-            codex_catalog_source(codex_only, Some(structured), &[]).as_deref(),
-            Some(structured)
-        );
-    }
-
-    /// The bug this closes: a provider configured with a fetched model list
-    /// (the multi-agent gateway shape) gave codex nothing, so the composer
-    /// offered only codex's bundled official models.
-    #[test]
-    fn shared_provider_fetched_models_become_the_codex_catalog() {
-        let shared = &[AgentType::Codex, AgentType::ClaudeCode];
-        let models = vec![
-            "deepseek-flash".to_string(),
-            "gpt-5.5".to_string(),
-            "deepseek-flash".to_string(),
-            "  ".to_string(),
-        ];
-        let raw = codex_catalog_source(shared, Some("deepseek-flash"), &models)
-            .expect("a fetched list must produce a catalog");
-        let config = crate::acp::codex_model_catalog::parse_model_config(Some(&raw));
-        let slugs: Vec<&str> = config.customs.iter().map(|c| c.slug.as_str()).collect();
-        assert_eq!(slugs, vec!["deepseek-flash", "gpt-5.5"], "trimmed + deduped");
-        assert_eq!(config.default.as_deref(), Some("deepseek-flash"));
-        // Every derived entry is a third-party-gateway entry, so it carries the
-        // compatibility bundle rather than GPT's code-mode/multi-agent dialect.
-        for entry in &config.customs {
-            for (key, value) in crate::acp::codex_model_catalog::gateway_compat_overrides() {
-                assert_eq!(entry.overrides.get(key), Some(&value), "{key}");
-            }
-        }
-        // The env projection follows the catalog's own default, so `OPENAI_MODEL`
-        // can never name a model the generated catalog does not list.
-        let env = parse_provider_model(AgentType::Codex, Some(&raw));
-        assert_eq!(
-            env.get("OPENAI_MODEL").and_then(|v| v.as_deref()),
-            Some("deepseek-flash")
-        );
-    }
-
-    /// A provider whose `model` names something outside its fetched list must
-    /// still yield a usable default — codex would otherwise point its root
-    /// `model` at a slug its catalog does not contain.
-    #[test]
-    fn shared_provider_catalog_default_falls_back_to_the_first_model() {
-        let shared = &[AgentType::Codex, AgentType::ClaudeCode];
-        let models = vec!["deepseek-flash".to_string(), "kimi-k2".to_string()];
-        let raw = codex_catalog_source(shared, Some("claude-sonnet-5"), &models)
-            .expect("catalog");
-        let config = crate::acp::codex_model_catalog::parse_model_config(Some(&raw));
-        assert_eq!(config.default.as_deref(), Some("deepseek-flash"));
     }
 
     #[test]
@@ -19712,6 +19595,7 @@ model = "kimi-for-coding"
         };
         assert!(build_kimi_managed_spec(&no_model).is_err());
     }
+
     /// A minimal valid api-key update; reasoning fields are filled per test.
     fn kimi_reasoning_update(
         reasoning_enabled: Option<bool>,
@@ -19736,6 +19620,7 @@ model = "kimi-for-coding"
             default_effort: default_effort.map(str::to_string),
         }
     }
+
     #[test]
     fn kimi_reasoning_off_writes_no_capability_keys() {
         // With reasoning off the model block must stay byte-identical to the
@@ -19758,6 +19643,7 @@ model = "kimi-for-coding"
         assert!(model.get("support_efforts").is_none());
         assert!(model.get("default_effort").is_none());
     }
+
     #[test]
     fn kimi_reasoning_on_declares_thinking_plus_the_permissive_modalities() {
         // `thinking` alone would REVOKE image/video input, because kimi only
@@ -19796,6 +19682,7 @@ model = "kimi-for-coding"
             "default_effort must reach config.toml"
         );
     }
+
     #[test]
     fn kimi_reasoning_off_clears_keys_a_previous_save_wrote() {
         // Turning reasoning back off must REMOVE the keys, not just stop
@@ -19827,6 +19714,7 @@ model = "kimi-for-coding"
         assert_eq!(model["model"].as_str(), Some("kimi-k2"));
         assert!(model.get("max_context_size").is_some());
     }
+
     #[test]
     fn kimi_reasoning_always_thinking_swaps_the_capability() {
         let spec = build_kimi_managed_spec(&kimi_reasoning_update(
@@ -19839,6 +19727,7 @@ model = "kimi-for-coding"
         assert!(spec.capabilities.contains(&"always_thinking".to_string()));
         assert!(!spec.capabilities.contains(&"thinking".to_string()));
     }
+
     #[test]
     fn kimi_reasoning_normalizes_efforts_and_drops_an_unlisted_default() {
         let spec = build_kimi_managed_spec(&kimi_reasoning_update(
@@ -19858,6 +19747,7 @@ model = "kimi-for-coding"
         assert_eq!(spec.support_efforts, vec!["low", "high"]);
         assert!(spec.default_effort.is_none());
     }
+
     #[test]
     fn kimi_reasoning_rejects_a_newline_in_an_effort() {
         let err = build_kimi_managed_spec(&kimi_reasoning_update(
@@ -19868,6 +19758,7 @@ model = "kimi-for-coding"
         ));
         assert!(err.is_err());
     }
+
     #[test]
     fn kimi_project_managed_config_round_trips_reasoning_metadata() {
         let value: toml::Value = r#"
@@ -19904,6 +19795,7 @@ default_effort = "high"
             Some("high")
         );
     }
+
     #[test]
     fn kimi_project_managed_config_omits_reasoning_keys_when_absent() {
         // The shape the panel wrote before this feature — the projection must
@@ -20064,7 +19956,7 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.21.4", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.21.5", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
@@ -20076,7 +19968,7 @@ model = "gpt"
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.21.4",
+            "hermes-agent@0.21.5",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));
@@ -20760,4 +20652,1254 @@ model = "gpt"
             Some("cline-pass")
         );
     }
+
+    /// A fake OpenAI-compatible provider: `/chat/completions` answers with
+    /// `status` and `body`. Returns the bound port.
+    async fn spawn_fake_provider(
+        status: u16,
+        body: serde_json::Value,
+    ) -> (u16, Arc<std::sync::Mutex<Option<serde_json::Value>>>) {
+        let seen: Arc<std::sync::Mutex<Option<serde_json::Value>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let seen_for_route = Arc::clone(&seen);
+        let app = axum::Router::new().route(
+            "/v1/chat/completions",
+            axum::routing::post(move |axum::Json(payload): axum::Json<serde_json::Value>| {
+                let seen = Arc::clone(&seen_for_route);
+                async move {
+                    *seen.lock().unwrap() = Some(payload);
+                    (
+                        axum::http::StatusCode::from_u16(status).unwrap(),
+                        axum::Json(body),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (port, seen)
+    }
+
+    #[tokio::test]
+    async fn provider_test_reports_the_assistant_reply() {
+        let (port, seen) = spawn_fake_provider(
+            200,
+            serde_json::json!({
+                "choices": [{ "message": { "role": "assistant", "content": "Hello there!" } }]
+            }),
+        )
+        .await;
+
+        let outcome = acp_test_model_provider_core(
+            &format!("http://127.0.0.1:{port}/v1"),
+            "sk-test",
+            "deepseek-chat",
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.success);
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.preview.as_deref(), Some("Hello there!"));
+        // The probe has to be a real completion request, not a `/models` call:
+        // only the former proves the endpoint accepts this model.
+        let payload = seen.lock().unwrap().clone().unwrap();
+        assert_eq!(payload["model"], "deepseek-chat");
+        assert_eq!(payload["stream"], false);
+    }
+
+    #[tokio::test]
+    async fn provider_test_surfaces_the_provider_error_message() {
+        let (port, _seen) = spawn_fake_provider(
+            401,
+            serde_json::json!({ "error": { "message": "invalid api key" } }),
+        )
+        .await;
+
+        let outcome = acp_test_model_provider_core(
+            &format!("http://127.0.0.1:{port}/v1"),
+            "sk-bad",
+            "deepseek-chat",
+        )
+        .await
+        .unwrap();
+
+        assert!(!outcome.success);
+        assert_eq!(
+            outcome.error.as_deref(),
+            Some("401 Unauthorized: invalid api key")
+        );
+        assert!(outcome.preview.is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_test_accepts_a_full_chat_completions_url() {
+        let (port, _seen) = spawn_fake_provider(
+            200,
+            serde_json::json!({ "choices": [{ "message": { "content": "hi" } }] }),
+        )
+        .await;
+
+        // A pasted full endpoint must not end up as `/chat/completions/chat/completions`.
+        let outcome = acp_test_model_provider_core(
+            &format!("http://127.0.0.1:{port}/v1/chat/completions"),
+            "sk-test",
+            "deepseek-chat",
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.success);
+    }
+
+    #[tokio::test]
+    async fn provider_test_requires_a_key_and_a_model() {
+        assert!(
+            acp_test_model_provider_core("https://example.com/v1", "", "m")
+                .await
+                .is_err()
+        );
+        assert!(
+            acp_test_model_provider_core("https://example.com/v1", "k", "  ")
+                .await
+                .is_err()
+        );
+        assert!(acp_test_model_provider_core("   ", "k", "m").await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn system_probed_version_reads_a_system_cli() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = fake_version_script(dir.path(), "fake-agent", "fake-agent version 1.2.3");
+        let version = system_probed_version(AgentType::Custom("probe-e2e-test"), &bin, None).await;
+        assert_eq!(version.as_deref(), Some("1.2.3"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failing_declared_probe_falls_back_to_cli_version() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = fake_version_script(dir.path(), "fallback-agent", "fallback-agent/3.2.1");
+        let version =
+            system_probed_version_with(Some("houhub-missing-probe-e2e --version"), &bin, None)
+                .await;
+        assert_eq!(version.as_deref(), Some("3.2.1"));
+    }
+
+    #[test]
+    fn parse_grok_settings_uses_native_permission_modes_and_migrates_legacy_values() {
+        let native = parse_grok_settings("[ui]\npermission_mode = \"acceptEdits\"\n");
+        assert_eq!(native.permission_mode.as_deref(), Some("acceptEdits"));
+
+        let approve = parse_grok_settings("[ui]\npermission_mode = \"always-approve\"\n");
+        assert_eq!(
+            approve.permission_mode.as_deref(),
+            Some("bypassPermissions")
+        );
+
+        let ask = parse_grok_settings("[ui]\npermission_mode = \"ask\"\n");
+        assert_eq!(ask.permission_mode.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn parse_grok_settings_ignores_stock_default_without_model_block() {
+        let settings = parse_grok_settings(
+            "[model.foo]\nbase_url = \"x\"\n\n[models]\ndefault = \"grok-4.5\"\n",
+        );
+        assert!(settings.custom_model_id.is_none());
+        assert!(settings.custom_base_url.is_none());
+    }
+
+    #[test]
+    fn apply_grok_custom_model_omits_empty_or_non_positive_values() {
+        let merged = apply_grok_structured_config(
+            "",
+            &GrokStructuredConfig {
+                custom_model_id: Some("foo".into()),
+                custom_base_url: Some("   ".into()),
+                custom_context_window: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!merged.contains("base_url"));
+        assert!(!merged.contains("context_window"));
+        let settings = parse_grok_settings(&merged);
+        assert_eq!(settings.custom_model_id.as_deref(), Some("foo"));
+        assert!(settings.custom_base_url.is_none());
+        assert!(settings.custom_context_window.is_none());
+    }
+
+    #[test]
+    fn apply_grok_custom_model_rename_preserves_unmanaged_keys_until_rename() {
+        let base =
+            "[model.foo]\nmodel = \"foo\"\ntemperature = 0.7\nbase_url = \"https://old/v1\"\n\n\
+                    [models]\ndefault = \"foo\"\n";
+        let updated = apply_grok_structured_config(
+            base,
+            &GrokStructuredConfig {
+                custom_model_id: Some("foo".into()),
+                custom_base_url: Some("https://new/v1".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(updated.contains("temperature"));
+
+        let renamed = apply_grok_structured_config(
+            &updated,
+            &GrokStructuredConfig {
+                custom_model_id: Some("new".into()),
+                custom_base_url: Some("https://new/v1".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!renamed.contains("[model.foo]"));
+        assert_eq!(
+            parse_grok_settings(&renamed).custom_model_id.as_deref(),
+            Some("new")
+        );
+    }
+
+    #[test]
+    fn apply_grok_custom_model_clear_keeps_stock_default() {
+        let managed = "[model.foo]\nmodel = \"foo\"\nbase_url = \"https://x/v1\"\n\n\
+                       [models]\ndefault = \"foo\"\n";
+        let cleared =
+            apply_grok_structured_config(managed, &GrokStructuredConfig::default()).unwrap();
+        assert!(!cleared.contains("[model."));
+        assert!(parse_grok_settings(&cleared).custom_model_id.is_none());
+
+        let stock = "[models]\ndefault = \"grok-4.5\"\n";
+        let unchanged =
+            apply_grok_structured_config(stock, &GrokStructuredConfig::default()).unwrap();
+        assert!(unchanged.contains("default = \"grok-4.5\""));
+    }
+
+    #[test]
+    fn grok_permission_mode_maps_to_launch_flag() {
+        assert_eq!(
+            grok_config_permission_mode("[ui]\npermission_mode = \"always-approve\"\n").as_deref(),
+            Some("bypassPermissions")
+        );
+        assert_eq!(
+            grok_config_permission_mode("[ui]\npermission_mode = \"acceptEdits\"\n").as_deref(),
+            Some("acceptEdits")
+        );
+        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"default\"\n").is_none());
+        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"ask\"\n").is_none());
+        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"bogus\"\n").is_none());
+        assert!(grok_config_permission_mode("").is_none());
+        assert!(grok_config_permission_mode("== not toml ==").is_none());
+        assert!(grok_config_permission_mode("[ui]\npermission_mode = \"bogus\"\n").is_none());
+    }
+
+    #[test]
+    fn pi_config_update_uses_explicit_runtime_agent_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pi_home = tmp.path().join("custom-pi-agent");
+        let runtime_env = BTreeMap::from([(
+            "PI_CODING_AGENT_DIR".to_string(),
+            pi_home.display().to_string(),
+        )]);
+
+        update_pi_config_files_at(
+            PiConfigUpdate {
+                provider: "houhub-provider-7".to_string(),
+                model: "gpt-5.6-terra".to_string(),
+                models: Some(vec!["gpt-5.6-terra".to_string()]),
+                thinking_level: Some("max".to_string()),
+                api_key: Some("sk-test".to_string()),
+                custom_base_url: Some("https://gateway.example/v1".to_string()),
+                custom_api: Some("openai-completions".to_string()),
+                model_reasoning: None,
+            },
+            &pi_agent_dir_for_env(&runtime_env),
+        )
+        .expect("write custom pi config");
+
+        let settings: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(pi_home.join("settings.json")).expect("read settings"),
+        )
+        .expect("settings json");
+        assert_eq!(settings["defaultProvider"], "houhub-provider-7");
+        assert_eq!(settings["defaultThinkingLevel"], "max");
+        assert!(pi_home.join("auth.json").is_file());
+        assert!(pi_home.join("models.json").is_file());
+    }
+
+    #[test]
+    fn resolve_pi_provider_model_ignores_structured_provider_bundle() {
+        let provider = crate::db::entities::model_provider::Model {
+            id: 7,
+            name: "Houflow Gateway".to_string(),
+            api_url: "https://api.houshanai.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            agent_types_json: r#"["pi"]"#.to_string(),
+            agent_type: "pi".to_string(),
+            model: Some(r#"{"main":"gpt-5.5"}"#.to_string()),
+            models_json: r#"["gpt-5","gpt-5-mini"]"#.to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let runtime_env = BTreeMap::new();
+        let model = resolve_pi_provider_model(&provider, &runtime_env).expect("resolve model");
+        assert_eq!(model, "gpt-5");
+    }
+
+    #[test]
+    fn resolve_provider_default_model_rejects_stale_or_structured_values() {
+        let mut provider = crate::db::entities::model_provider::Model {
+            id: 8,
+            name: "Houflow Gateway".to_string(),
+            api_url: "https://api.houshanai.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            agent_types_json: r#"["grok"]"#.to_string(),
+            agent_type: "grok".to_string(),
+            model: Some(r#"{"main":"grok-stale"}"#.to_string()),
+            models_json: r#"["grok-4.5","grok-4.5-fast"]"#.to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        assert_eq!(
+            resolve_provider_default_model(&provider).as_deref(),
+            Some("grok-4.5")
+        );
+        provider.model = Some("grok-4.5-fast".to_string());
+        assert_eq!(
+            resolve_provider_default_model(&provider).as_deref(),
+            Some("grok-4.5-fast")
+        );
+        provider.model = Some("grok-missing".to_string());
+        assert_eq!(
+            resolve_provider_default_model(&provider).as_deref(),
+            Some("grok-4.5")
+        );
+    }
+
+    #[test]
+    fn ensure_codex_home_env_sets_default_only_for_codex() {
+        // `ensure_codex_home_env` takes its default from `codex_home_dir`, which
+        // re-reads the process-wide `CODEX_HOME` on every call. Every other test
+        // that touches that variable pins it through `temp_env`, so reading it
+        // bare here could land inside a neighbour's scope and observe that
+        // neighbour's throwaway home — the same parallel-test hazard the
+        // fingerprint tests below call out. Pinning it through `temp_env` takes
+        // the one SERIAL_TEST mutex, which is what actually serializes the two
+        // reads in this test against everyone else.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path().join("codex-home");
+        temp_env::with_var("CODEX_HOME", Some(home.as_os_str()), || {
+            let mut codex_env = BTreeMap::new();
+            ensure_codex_home_env(AgentType::Codex, &mut codex_env);
+            let expected_home = codex_home_dir().display().to_string();
+            assert_eq!(
+                codex_env.get("CODEX_HOME").map(String::as_str),
+                Some(expected_home.as_str())
+            );
+
+            codex_env.insert(
+                "CODEX_HOME".to_string(),
+                "C:\\Custom\\CodexHome".to_string(),
+            );
+            ensure_codex_home_env(AgentType::Codex, &mut codex_env);
+            assert_eq!(
+                codex_env.get("CODEX_HOME").map(String::as_str),
+                Some("C:\\Custom\\CodexHome")
+            );
+
+            let mut claude_env = BTreeMap::new();
+            ensure_codex_home_env(AgentType::ClaudeCode, &mut claude_env);
+            assert!(!claude_env.contains_key("CODEX_HOME"));
+        });
+    }
+
+    #[test]
+    fn ensure_codex_home_env_creates_default_home() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path().join("codex-home");
+
+        temp_env::with_var("CODEX_HOME", Some(home.as_os_str()), || {
+            let mut codex_env = BTreeMap::new();
+            ensure_codex_home_env(AgentType::Codex, &mut codex_env);
+
+            assert!(home.is_dir(), "CODEX_HOME should be created before launch");
+            assert_eq!(
+                codex_env.get("CODEX_HOME").map(String::as_str),
+                Some(home.to_string_lossy().as_ref())
+            );
+        });
+    }
+
+    #[test]
+    fn blank_codex_native_config_inputs_are_noop() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path().join("codex-home");
+        fs::create_dir_all(&home).expect("create codex home");
+        let auth_path = home.join("auth.json");
+        let config_path = home.join("config.toml");
+        fs::write(&auth_path, "{\n  \"tokens\": {}\n}\n").expect("write auth");
+        fs::write(&config_path, "model = \"gpt-5\"\n").expect("write config");
+
+        temp_env::with_var("CODEX_HOME", Some(home.as_os_str()), || {
+            persist_codex_native_config_files(Some(" \n\t"), Some("\n"))
+                .expect("blank inputs should not be parsed or written");
+        });
+
+        assert_eq!(
+            fs::read_to_string(auth_path).expect("read auth"),
+            "{\n  \"tokens\": {}\n}\n"
+        );
+        assert_eq!(
+            fs::read_to_string(config_path).expect("read config"),
+            "model = \"gpt-5\"\n"
+        );
+    }
+
+    #[test]
+    fn non_codex_provider_model_does_not_override_agent_model() {
+        let gemini = parse_provider_model(AgentType::Gemini, Some("gateway-default"));
+        assert_eq!(
+            gemini
+                .get("GEMINI_MODEL")
+                .and_then(|value| value.as_deref()),
+            Some("gateway-default")
+        );
+        let kimi = parse_provider_model(AgentType::KimiCode, Some("gateway-default"));
+        assert_eq!(
+            kimi.get("KIMI_MODEL_NAME")
+                .and_then(|value| value.as_deref()),
+            Some("gateway-default")
+        );
+        assert!(
+            parse_provider_model(AgentType::Pi, Some("gateway-default")).is_empty(),
+            "Pi must keep its model in its own config"
+        );
+    }
+
+    #[test]
+    fn codex_catalog_projection_is_scoped_to_codex_specific_data() {
+        let codex_only = &[AgentType::Codex];
+        let shared = &[AgentType::Codex, AgentType::ClaudeCode];
+        // A codex-only provider with a plain slug stays a single legacy custom.
+        assert_eq!(
+            codex_catalog_source(codex_only, Some("gpt-5.5"), &[]).as_deref(),
+            Some("gpt-5.5")
+        );
+        // A shared provider's plain `model` belongs to another agent (Claude
+        // stores a JSON object there) and must NOT be handed to codex as a
+        // model name.
+        assert_eq!(
+            codex_catalog_source(shared, Some("gateway-default"), &[]),
+            None
+        );
+        // A structured catalog is authoritative for both shapes.
+        let structured = r#"{"models":[],"default":null}"#;
+        assert_eq!(
+            codex_catalog_source(shared, Some(structured), &[]).as_deref(),
+            Some(structured)
+        );
+        assert_eq!(
+            codex_catalog_source(codex_only, Some(structured), &[]).as_deref(),
+            Some(structured)
+        );
+    }
+
+    /// The bug this closes: a provider configured with a fetched model list
+    /// (the multi-agent gateway shape) gave codex nothing, so the composer
+    /// offered only codex's bundled official models.
+    #[test]
+    fn shared_provider_fetched_models_become_the_codex_catalog() {
+        let shared = &[AgentType::Codex, AgentType::ClaudeCode];
+        let models = vec![
+            "deepseek-flash".to_string(),
+            "gpt-5.5".to_string(),
+            "deepseek-flash".to_string(),
+            "  ".to_string(),
+        ];
+        let raw = codex_catalog_source(shared, Some("deepseek-flash"), &models)
+            .expect("a fetched list must produce a catalog");
+        let config = crate::acp::codex_model_catalog::parse_model_config(Some(&raw));
+        let slugs: Vec<&str> = config.customs.iter().map(|c| c.slug.as_str()).collect();
+        assert_eq!(slugs, vec!["deepseek-flash", "gpt-5.5"], "trimmed + deduped");
+        assert_eq!(config.default.as_deref(), Some("deepseek-flash"));
+        // Every derived entry is a third-party-gateway entry, so it carries the
+        // compatibility bundle rather than GPT's code-mode/multi-agent dialect.
+        for entry in &config.customs {
+            for (key, value) in crate::acp::codex_model_catalog::gateway_compat_overrides() {
+                assert_eq!(entry.overrides.get(key), Some(&value), "{key}");
+            }
+        }
+        // The env projection follows the catalog's own default, so `OPENAI_MODEL`
+        // can never name a model the generated catalog does not list.
+        let env = parse_provider_model(AgentType::Codex, Some(&raw));
+        assert_eq!(
+            env.get("OPENAI_MODEL").and_then(|v| v.as_deref()),
+            Some("deepseek-flash")
+        );
+    }
+
+    /// A provider whose `model` names something outside its fetched list must
+    /// still yield a usable default — codex would otherwise point its root
+    /// `model` at a slug its catalog does not contain.
+    #[test]
+    fn shared_provider_catalog_default_falls_back_to_the_first_model() {
+        let shared = &[AgentType::Codex, AgentType::ClaudeCode];
+        let models = vec!["deepseek-flash".to_string(), "kimi-k2".to_string()];
+        let raw = codex_catalog_source(shared, Some("claude-sonnet-5"), &models)
+            .expect("catalog");
+        let config = crate::acp::codex_model_catalog::parse_model_config(Some(&raw));
+        assert_eq!(config.default.as_deref(), Some("deepseek-flash"));
+    }
+}
+
+/// Backend-only markers carried in the per-agent runtime env. They let the
+/// connection layer keep Pi's model selector scoped to the model provider
+/// selected in HouHub, while the native Pi process still receives its normal
+/// provider/model configuration.
+pub(crate) const PI_BOUND_PROVIDER_ENV: &str = "HOUHUB_PI_BOUND_PROVIDER";
+
+pub(crate) const PI_BOUND_MODEL_ENV: &str = "HOUHUB_PI_BOUND_MODEL";
+
+pub(crate) async fn npx_agent_launchable(agent_type: AgentType) -> bool {
+    match registry::get_agent_meta(agent_type).distribution {
+        registry::AgentDistribution::Npx { cmd, .. } => is_cmd_available(cmd).await,
+        _ => false,
+    }
+}
+
+pub(crate) async fn npm_command_bin_dir(cmd: &str) -> Option<PathBuf> {
+    resolve_npx_command(cmd)
+        .await
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
+pub(crate) fn node_command_bin_dir() -> Option<PathBuf> {
+    which::which("node")
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
+pub(crate) fn default_codex_home_dir_for_launch() -> PathBuf {
+    home_dir_or_default().join(".codex")
+}
+
+fn ensure_codex_home_env(agent_type: AgentType, runtime_env: &mut BTreeMap<String, String>) {
+    if agent_type != AgentType::Codex {
+        return;
+    }
+    if runtime_env
+        .get("CODEX_HOME")
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return;
+    }
+    let codex_home = codex_home_dir();
+    if let Err(err) = fs::create_dir_all(&codex_home) {
+        tracing::warn!("[ACP][Codex] failed to create CODEX_HOME {codex_home:?}: {err}");
+    }
+    runtime_env.insert("CODEX_HOME".to_string(), codex_home.display().to_string());
+}
+
+/// Outcome of a model-provider connection test: a one-shot chat completion
+/// against the provider's endpoint with the configured key and model.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelProviderTestOutcome {
+    pub success: bool,
+    pub latency_ms: u64,
+    /// Provider-reported or transport error when `success` is false.
+    pub error: Option<String>,
+    /// First `PREVIEW_CHARS` of the assistant reply when `success` is true.
+    pub preview: Option<String>,
+}
+
+/// Characters of the reply echoed back to the settings dialog. Enough to tell a
+/// real completion from a truncated or garbled one, short enough that a verbose
+/// model cannot balloon the IPC frame.
+const MODEL_PROVIDER_TEST_PREVIEW_CHARS: usize = 200;
+
+/// Probe a model provider's endpoint with a real chat completion.
+///
+/// The renderer cannot do this itself: the desktop webview loads from
+/// `tauri://localhost`, so a cross-origin POST to a provider API is both
+/// blocked by CORS (no provider sends `Access-Control-Allow-Origin` for that
+/// origin) and, in server mode, would expose the user's key to the page. Every
+/// other outbound call in the app therefore goes through Rust — the settings
+/// panel's own "fetch models" button does too. This mirrors
+/// `acp_fetch_kimi_models_core`: same 20s ceiling, same Bearer auth.
+///
+/// `/chat/completions` is appended unless the URL already names it, so both a
+/// bare `https://host/v1` base and a pasted full endpoint work.
+pub(crate) async fn acp_test_model_provider_core(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+) -> Result<ModelProviderTestOutcome, AcpError> {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err(AcpError::protocol(
+            "base URL is required to test a provider",
+        ));
+    }
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err(AcpError::protocol("API key is required to test a provider"));
+    }
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(AcpError::protocol("a model is required to test a provider"));
+    }
+    let url = if base.ends_with("/chat/completions") {
+        base.to_string()
+    } else {
+        format!("{base}/chat/completions")
+    };
+
+    let started = std::time::Instant::now();
+    let response = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(key)
+        .json(&serde_json::json!({
+            "model": model,
+            "messages": [{ "role": "user", "content": "Hi, say hello in one sentence." }],
+            "max_tokens": 64,
+            "stream": false,
+        }))
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|e| AcpError::protocol(format!("provider test request failed: {e}")))?;
+
+    let latency_ms = started.elapsed().as_millis() as u64;
+    let status = response.status();
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| AcpError::protocol(format!("provider test returned invalid JSON: {e}")))?;
+
+    if !status.is_success() {
+        // Providers disagree on where the message lives; take the first one
+        // that reads as text rather than guessing at one shape.
+        let message = body
+            .get("error")
+            .and_then(|error| {
+                error
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| error.as_str())
+            })
+            .or_else(|| body.get("message").and_then(serde_json::Value::as_str))
+            .unwrap_or("request rejected");
+        return Ok(ModelProviderTestOutcome {
+            success: false,
+            latency_ms,
+            error: Some(format!("{status}: {message}")),
+            preview: None,
+        });
+    }
+
+    let content = body
+        .get("choices")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| {
+            choice
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| choice.get("text").and_then(serde_json::Value::as_str))
+        })
+        .unwrap_or_default();
+
+    Ok(ModelProviderTestOutcome {
+        success: true,
+        latency_ms,
+        error: None,
+        preview: Some(
+            content
+                .chars()
+                .take(MODEL_PROVIDER_TEST_PREVIEW_CHARS)
+                .collect(),
+        ),
+    })
+}
+
+fn pi_settings_json_path_for_dir(dir: &Path) -> PathBuf {
+    dir.join("settings.json")
+}
+
+fn pi_auth_json_path_for_dir(dir: &Path) -> PathBuf {
+    dir.join("auth.json")
+}
+
+fn pi_models_json_path_for_dir(dir: &Path) -> PathBuf {
+    dir.join("models.json")
+}
+
+fn validate_pi_config_update(update: &PiConfigUpdate) -> Result<(), AcpError> {
+    if update.provider.trim().is_empty() {
+        return Err(AcpError::protocol("pi provider is required"));
+    }
+    if update.model.trim().is_empty() {
+        return Err(AcpError::protocol("pi model is required"));
+    }
+    if let Some(key) = update
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if key.contains('\n') || key.contains('\r') {
+            return Err(AcpError::protocol(
+                "pi API key must not contain line breaks",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Write Pi's native config files under an explicit agent directory. Keeping
+/// this operation path-parameterized is important for BYO Pi installations:
+/// the settings page, provider binding, and launch fingerprint must all target
+/// the same `PI_CODING_AGENT_DIR` rather than silently mixing directories.
+pub(crate) fn update_pi_config_files_at(
+    update: PiConfigUpdate,
+    dir: &Path,
+) -> Result<(), AcpError> {
+    validate_pi_config_update(&update)?;
+
+    let provider = update.provider.trim();
+    let model = update.model.trim();
+    let thinking_level = update
+        .thinking_level
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let api_key = update
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let settings_path = pi_settings_json_path_for_dir(dir);
+    let mut settings = read_json_object_or_empty(&settings_path);
+    settings.insert(
+        "defaultProvider".to_string(),
+        serde_json::Value::String(provider.to_string()),
+    );
+    settings.insert(
+        "defaultModel".to_string(),
+        serde_json::Value::String(model.to_string()),
+    );
+    if let Some(level) = thinking_level {
+        settings.insert(
+            "defaultThinkingLevel".to_string(),
+            serde_json::Value::String(level.to_string()),
+        );
+    }
+    write_json_object_pretty(&settings_path, &settings)?;
+
+    if let Some(key) = api_key {
+        let auth_path = pi_auth_json_path_for_dir(dir);
+        let mut auth = read_json_object_or_empty(&auth_path);
+        let mut entry = serde_json::Map::new();
+        entry.insert(
+            "type".to_string(),
+            serde_json::Value::String("api_key".to_string()),
+        );
+        entry.insert(
+            "key".to_string(),
+            serde_json::Value::String(key.to_string()),
+        );
+        auth.insert(provider.to_string(), serde_json::Value::Object(entry));
+        write_json_object_pretty(&auth_path, &auth)?;
+    }
+
+    let custom_base_url = update
+        .custom_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(base_url) = custom_base_url {
+        let custom_api = update
+            .custom_api
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("openai-completions");
+        let models_path = pi_models_json_path_for_dir(dir);
+        let mut models_doc = read_json_object_or_empty(&models_path);
+        let mut providers = match models_doc.remove("providers") {
+            Some(serde_json::Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        let mut entry = match providers.remove(provider) {
+            Some(serde_json::Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        entry.insert(
+            "baseUrl".to_string(),
+            serde_json::Value::String(base_url.to_string()),
+        );
+        entry.insert(
+            "api".to_string(),
+            serde_json::Value::String(custom_api.to_string()),
+        );
+
+        let mut model_ids = update
+            .models
+            .unwrap_or_default()
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        if !model_ids.iter().any(|value| value == model) {
+            model_ids.push(model.to_string());
+        }
+        model_ids.sort();
+        model_ids.dedup();
+        for model_id in model_ids {
+            let reasoning = (model_id == model)
+                .then_some(update.model_reasoning.as_ref())
+                .flatten();
+            apply_pi_custom_model(&mut entry, &model_id, reasoning);
+        }
+
+        providers.insert(provider.to_string(), serde_json::Value::Object(entry));
+        models_doc.insert(
+            "providers".to_string(),
+            serde_json::Value::Object(providers),
+        );
+        write_json_object_pretty(&models_path, &models_doc)?;
+    }
+
+    Ok(())
+}
+
+fn parse_provider_models_json(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn provider_model_is_structured_bundle(raw: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .is_some_and(|value| value.is_object() || value.is_array())
+}
+
+fn resolve_provider_default_model(
+    provider: &crate::db::entities::model_provider::Model,
+) -> Option<String> {
+    let models = parse_provider_models_json(&provider.models_json);
+    provider
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty() && !provider_model_is_structured_bundle(model))
+        .filter(|model| models.is_empty() || models.iter().any(|item| item == model))
+        .map(str::to_string)
+        .or_else(|| models.first().cloned())
+}
+
+fn pi_provider_id(provider: &crate::db::entities::model_provider::Model) -> String {
+    if provider.name.trim().eq_ignore_ascii_case("Houflow Gateway") {
+        "houflow".to_string()
+    } else {
+        format!("houhub-provider-{}", provider.id)
+    }
+}
+
+fn resolve_pi_provider_model(
+    provider: &crate::db::entities::model_provider::Model,
+    runtime_env: &BTreeMap<String, String>,
+) -> Result<String, AcpError> {
+    let models = parse_provider_models_json(&provider.models_json);
+    let env_model = runtime_env
+        .get("OPENAI_MODEL")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty());
+    if let Some(model) = env_model {
+        if models.is_empty() || models.iter().any(|item| item == model) {
+            return Ok(model.to_string());
+        }
+    }
+
+    let provider_model = provider
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty() && !provider_model_is_structured_bundle(model));
+    if let Some(model) = provider_model {
+        if models.is_empty() || models.iter().any(|item| item == model) {
+            return Ok(model.to_string());
+        }
+    }
+
+    models.first().cloned().ok_or_else(|| {
+        AcpError::protocol(format!(
+            "Pi model provider {} has no available models",
+            provider.id
+        ))
+    })
+}
+
+async fn sync_pi_model_provider_config(
+    setting: Option<&crate::db::entities::agent_setting::Model>,
+    runtime_env: &mut BTreeMap<String, String>,
+    conn: &sea_orm::DatabaseConnection,
+) -> Result<(), AcpError> {
+    let provider_id = match setting.and_then(|s| s.model_provider_id) {
+        Some(id) => id,
+        None => return Ok(()),
+    };
+    let provider = model_provider_service::get_by_id(conn, provider_id)
+        .await
+        .map_err(|err| AcpError::protocol(err.to_string()))?
+        .ok_or_else(|| AcpError::protocol(format!("model provider not found: {provider_id}")))?;
+    let provider_key = pi_provider_id(&provider);
+    let model = resolve_pi_provider_model(&provider, runtime_env)?;
+    if !provider.api_url.trim().is_empty() {
+        runtime_env.insert("OPENAI_BASE_URL".to_string(), provider.api_url.clone());
+    }
+    if !provider.api_key.trim().is_empty() {
+        runtime_env.insert("OPENAI_API_KEY".to_string(), provider.api_key.clone());
+    }
+    runtime_env.insert("OPENAI_MODEL".to_string(), model.clone());
+    runtime_env.insert(PI_BOUND_PROVIDER_ENV.to_string(), provider_key.clone());
+    runtime_env.insert(PI_BOUND_MODEL_ENV.to_string(), model.clone());
+    let pi_dir = pi_agent_dir_for_env(runtime_env);
+    update_pi_config_files_at(
+        PiConfigUpdate {
+            provider: provider_key,
+            model,
+            models: Some(parse_provider_models_json(&provider.models_json)),
+            thinking_level: None,
+            api_key: Some(provider.api_key),
+            custom_base_url: Some(provider.api_url),
+            custom_api: Some("openai-completions".to_string()),
+            model_reasoning: None,
+        },
+        &pi_dir,
+    )
+}
+
+fn has_codex_model_config(raw: Option<&str>) -> bool {
+    let config = crate::acp::codex_model_catalog::parse_model_config(raw);
+    crate::acp::codex_model_catalog::default_slug_for_env(&config).is_some()
+        || !config.excluded_officials.is_empty()
+}
+
+fn is_structured_codex_model_config(raw: Option<&str>) -> bool {
+    raw.and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .and_then(|value| value.as_object().cloned())
+        .is_some_and(|object| {
+            ["customs", "models", "excludedOfficials", "default"]
+                .iter()
+                .any(|key| object.contains_key(*key))
+        })
+}
+
+/// The compact codex catalog source a provider binding should apply, or `None`
+/// when codex should keep its own model table.
+///
+/// Three shapes, in priority order:
+///
+///   1. A **structured** catalog in `model` (the codex-only editor's authority,
+///      and the shape the Houflow gateway sync writes) is used verbatim.
+///   2. Otherwise a **multi-agent** provider that advertises codex AND has a
+///      fetched model list gets a catalog **derived** from that list. This is
+///      what makes a shared gateway usable by codex at all: its `model` column
+///      is already spoken for by another agent (Claude stores a JSON object
+///      there), so the models the user fetched live only in `models_json` — and
+///      without them codex falls back to its bundled official list, which has
+///      nothing the gateway actually serves.
+///   3. Otherwise a codex-only provider's plain `model` string stays a single
+///      custom entry (legacy rows), and everything else yields `None`.
+///
+/// A codex-only provider is deliberately left to case (3): the structured
+/// editor owns its list, and deriving over a plain slug there would shadow the
+/// real official entry with a compatibility-flattened duplicate.
+///
+/// The returned string is exactly what `write_catalog_files` consumes and what
+/// the settings panel round-trips, so the panel and the generated catalog can
+/// never disagree about which models exist.
+fn codex_catalog_source(
+    agent_types: &[AgentType],
+    raw: Option<&str>,
+    models: &[String],
+) -> Option<String> {
+    let trimmed = raw.map(str::trim).filter(|value| !value.is_empty());
+    if let Some(value) = trimmed.filter(|value| is_structured_codex_model_config(Some(value))) {
+        return Some(value.to_string());
+    }
+    let codex_only = agent_types.len() == 1 && agent_types.contains(&AgentType::Codex);
+    if !codex_only && !models.is_empty() && agent_types.contains(&AgentType::Codex) {
+        let config = crate::acp::codex_model_catalog::catalog_from_provider_models(
+            models, trimmed,
+        );
+        return serde_json::to_string(&config).ok();
+    }
+    if codex_only {
+        return trimmed.map(str::to_owned);
+    }
+    None
+}
+
+/// Same env/provider sync as `acp_update_agent_env_and_refresh`, but leaves the
+/// user's enabled/disabled choice untouched. Used by managed gateway sync,
+/// which should bind credentials without re-enabling agents the user disabled.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn acp_update_agent_env_preserving_enabled_and_refresh(
+    agent_type: AgentType,
+    env: BTreeMap<String, String>,
+    model_provider_id: Option<i32>,
+    db: &AppDatabase,
+    manager: &ConnectionManager,
+    data_dir: &Path,
+    emitter: &EventEmitter,
+) -> Result<usize, AcpError> {
+    acp_update_agent_env_core_with_enabled_update(
+        agent_type,
+        None,
+        env,
+        model_provider_id,
+        db,
+        emitter,
+    )
+    .await?;
+    Ok(refresh_config_staleness(
+        manager,
+        db,
+        data_dir,
+        &[agent_type],
+        ConfigStaleKind::AgentConfig,
+    )
+    .await)
+}
+
+fn provider_agent_types_for_binding(
+    provider: &crate::db::entities::model_provider::Model,
+    provider_id: i32,
+) -> Result<Vec<AgentType>, AcpError> {
+    let mut raw_types = serde_json::from_str::<Vec<String>>(&provider.agent_types_json)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    if raw_types.is_empty() {
+        let fallback = provider.agent_type.trim();
+        if !fallback.is_empty() {
+            raw_types.push(fallback.to_string());
+        }
+    }
+
+    let mut agent_types = Vec::new();
+    for raw in raw_types {
+        let agent_type: AgentType = serde_json::from_value(serde_json::Value::String(raw.clone()))
+            .map_err(|_| {
+                AcpError::protocol(format!(
+                    "model provider {provider_id} has invalid agent_type: {raw}"
+                ))
+            })?;
+        if !agent_types.contains(&agent_type) {
+            agent_types.push(agent_type);
+        }
+    }
+    if agent_types.is_empty() {
+        return Err(AcpError::protocol(format!(
+            "model provider {provider_id} has no valid agent_type"
+        )));
+    }
+    Ok(agent_types)
+}
+
+async fn acp_update_agent_env_core_with_enabled_update(
+    agent_type: AgentType,
+    enabled: Option<bool>,
+    env: BTreeMap<String, String>,
+    model_provider_id: Option<i32>,
+    db: &AppDatabase,
+    emitter: &EventEmitter,
+) -> Result<(), AcpError> {
+    let default = agent_setting_service::AgentDefaultInput {
+        agent_type,
+        registry_id: registry::registry_id_for(agent_type).to_string(),
+        default_sort_order: i32::MAX / 2,
+    };
+
+    agent_setting_service::ensure_defaults(&db.conn, &[default])
+        .await
+        .map_err(|e| AcpError::protocol(e.to_string()))?;
+
+    // If a provider is selected, URL/key come from the provider. Only Claude
+    // treats provider.model as authoritative runtime model data; other agents
+    // keep their model in their own engine-specific config.
+    let mut merged_env = env;
+    if agent_type == AgentType::Pi {
+        // The settings panel sends the previous env map back when changing a
+        // binding. Remove HouHub's internal selector markers first so clearing
+        // the provider cannot leave a stale selector scope behind.
+        merged_env.remove(PI_BOUND_PROVIDER_ENV);
+        merged_env.remove(PI_BOUND_MODEL_ENV);
+    }
+    let mut codex_bound_model: Option<Option<String>> = None;
+    let mut codex_action = CodexModelAction::NoOp;
+    // When a Claude provider is bound, capture the inputs to also rewrite the
+    // on-disk config.env below. Claude's model fields live in config.env, which
+    // the runtime overlays OVER db env_json (see `build_runtime_env_from_setting`),
+    // so clearing a key from db env alone is not enough — a stale value left in
+    // `~/.claude/settings.json` (e.g. ANTHROPIC_CUSTOM_MODEL_OPTION) would win at
+    // launch. Binding must therefore be authoritative on disk too, matching the
+    // provider-edit cascade.
+    let mut claude_local_cascade: Option<(String, String, BTreeMap<String, Option<String>>)> = None;
+    let mut pi_config_update: Option<PiConfigUpdate> = None;
+    if let Some(pid) = model_provider_id {
+        let provider = crate::db::service::model_provider_service::get_by_id(&db.conn, pid)
+            .await
+            .map_err(|e| AcpError::protocol(e.to_string()))?
+            .ok_or_else(|| AcpError::protocol(format!("model provider not found: {pid}")))?;
+
+        // Reject cross-type binding unless the provider explicitly supports
+        // the current agent through agent_types_json. HouFlow-managed gateway
+        // providers are intentionally multi-agent, while older providers may
+        // only have the legacy single agent_type column populated.
+        let provider_agent_types = provider_agent_types_for_binding(&provider, pid)?;
+        if !provider_agent_types.contains(&agent_type) {
+            let supported = provider_agent_types
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(AcpError::protocol(format!(
+                "model provider {pid} is for {supported}, cannot be bound to {agent_type}"
+            )));
+        }
+
+        // A multi-agent provider keeps its fetched models in `models_json` (its
+        // `model` column belongs to whichever agent owns it), so the catalog
+        // codex binds to has to be derived from that list. Without this, binding
+        // codex to a gateway left it on its own bundled official models and none
+        // of the gateway's models were selectable in the composer.
+        let codex_catalog_source = codex_catalog_source(
+            &provider_agent_types,
+            provider.model.as_deref(),
+            &parse_provider_models_json(&provider.models_json),
+        );
+        let codex_catalog_enabled = codex_catalog_source.is_some();
+        let model_env = if agent_type == AgentType::Codex {
+            match codex_catalog_source.as_deref() {
+                Some(source) => parse_provider_model(agent_type, Some(source)),
+                None => BTreeMap::new(),
+            }
+        } else {
+            parse_provider_model(agent_type, provider.model.as_deref())
+        };
+        for (k, v) in &model_env {
+            match v {
+                Some(value) => {
+                    merged_env.insert(k.clone(), value.clone());
+                }
+                None => {
+                    merged_env.remove(k);
+                }
+            }
+        }
+        if agent_type == AgentType::Codex && codex_catalog_enabled {
+            codex_bound_model = Some(codex_catalog_source.clone());
+        }
+        if agent_type == AgentType::Codex {
+            codex_action = provider_codex_model_action(agent_type, provider.model.as_deref());
+        }
+        // Gemini's analogous config.env gap is pre-existing and out of scope
+        // here. Only Claude needs the local-config cascade on bind.
+        if agent_type == AgentType::ClaudeCode {
+            claude_local_cascade = Some((
+                provider.api_url.clone(),
+                provider.api_key.clone(),
+                model_env,
+            ));
+        }
+        if agent_type == AgentType::Pi {
+            let model = resolve_pi_provider_model(&provider, &merged_env)?;
+            merged_env.insert("OPENAI_MODEL".to_string(), model.clone());
+            let provider_key = pi_provider_id(&provider);
+            merged_env.insert(PI_BOUND_PROVIDER_ENV.to_string(), provider_key.clone());
+            merged_env.insert(PI_BOUND_MODEL_ENV.to_string(), model.clone());
+            pi_config_update = Some(PiConfigUpdate {
+                provider: provider_key,
+                model,
+                models: Some(parse_provider_models_json(&provider.models_json)),
+                thinking_level: None,
+                api_key: Some(provider.api_key.clone()),
+                custom_base_url: Some(provider.api_url.clone()),
+                custom_api: Some("openai-completions".to_string()),
+                model_reasoning: None,
+            });
+        }
+    }
+
+    let patch = agent_setting_service::AgentSettingsUpdate {
+        enabled,
+        env_json: serialize_env_map(&merged_env)?,
+        model_provider_id,
+    };
+    agent_setting_service::update(&db.conn, agent_type, patch)
+        .await
+        .map_err(|e| AcpError::protocol(e.to_string()))?;
+
+    // Authoritatively rewrite the local config.env so a stale model key (e.g. the
+    // custom model option) cannot survive a bind/rebind via any save path. `None`
+    // entries become JSON-null and are removed by `merge_json_values`.
+    if let Some((api_url, api_key, model_env)) = claude_local_cascade {
+        if let Err(e) = cascade_update_agent_config(
+            agent_type,
+            &api_url,
+            &api_key,
+            &model_env,
+            &CodexModelAction::NoOp,
+            None,
+        ) {
+            eprintln!(
+                "[acp_update_agent_env] cascade_update_agent_config({agent_type}) failed: {e}"
+            );
+        }
+    }
+    if let Some(update) = pi_config_update {
+        let pi_dir = pi_agent_dir_for_env(&merged_env);
+        update_pi_config_files_at(update, &pi_dir)?;
+    }
+    if let Some(model) = codex_bound_model {
+        apply_codex_catalog_and_model(model.as_deref())?;
+    } else if let Err(e) = apply_codex_root_model_action(&codex_action) {
+        tracing::error!("[acp_update_agent_env] apply_codex_root_model_action failed: {e}");
+    }
+
+    emit_acp_agents_updated(emitter, "env_updated", Some(agent_type));
+    Ok(())
+}
+
+/// Probe a model provider endpoint with a real chat completion. Desktop
+/// command; the web handler calls `acp_test_model_provider_core` directly.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_test_model_provider(
+    base_url: String,
+    api_key: String,
+    model: String,
+) -> Result<ModelProviderTestOutcome, AcpError> {
+    acp_test_model_provider_core(&base_url, &api_key, &model).await
 }

@@ -1,52 +1,101 @@
-// The ACP connection driver (`acp::connection`) wraps the large
-// `run_connection` future in a `block_on(async move { ... })` frame. Its type
-// layout exceeds rustc's default query depth; this only affects compilation.
+// The ACP connection driver (`acp::connection`) wraps the enormous
+// `run_connection` future in a `block_on(async move { … })` frame whose type
+// layout nests deep enough to blow rustc's default query depth of 128 (it
+// overflowed by ~130 when computing the async block's layout). This is a
+// compile-time type-recursion knob, unrelated to any runtime limit — bump it
+// so the giant future's layout resolves. See the big-stack thread in
+// `acp/connection.rs` for the sibling *runtime* mitigation of the same frame.
 #![recursion_limit = "256"]
+// The unoptimized lib test binary trips the same harmless macOS
+// "__eh_frame section too large" linker warning as the `houhub` binary; see the
+// note at the top of `main.rs`.
+#![cfg_attr(debug_assertions, allow(linker_messages))]
 
 pub mod acp;
+
 pub mod acp_transcript;
+
 pub use acp::{
     idle_sweep_task, idle_timeout_from_env, lifecycle_subscriber_task, SWEEP_INTERVAL_SECS,
 };
+
 pub use acp::scratch_dir::scratch_sweep_task;
+
 pub use network::proxy::init_proxy_from_db;
+
 mod app_error;
+
+#[cfg(all(feature = "tauri-runtime", target_os = "macos"))]
+mod app_menu;
+
 pub mod app_state;
+
 pub mod automation;
+
 pub mod backgrounds;
+
 /// Built-in browser. Only its wire types and its grant rules compile in server
 /// mode — see `browser/mod.rs` for why those two, and only those two.
 pub mod browser;
+
 pub mod chat_channel;
+
 pub mod commands;
+
 pub mod db;
+
 pub mod deep_link;
+
 pub mod folder_links;
+
 pub mod forge;
+
 pub mod git_credential;
+
 pub mod git_repo;
+
 pub mod intern;
+
 pub mod keyring_store;
+
 pub mod logging;
+
 pub mod models;
+
 mod network;
+
 pub mod office_watch;
+
 pub mod parsers;
+
 pub mod paths;
+
 pub mod pet_sessions;
+
 pub mod pet_state_mapper;
+
 pub mod pets;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod preferences;
+
 pub mod process;
+
 pub mod supervise;
+
 mod terminal;
+
 pub mod turn_timings;
+
 pub mod update;
+
 pub mod web;
-pub mod workspace_state;
-pub mod workspace_transfer;
+
 pub mod work_task;
+
+pub mod workspace_state;
+
+pub mod workspace_transfer;
 
 /// Sweep stale ACP binary cache trash created by the rename-aside fallback in
 /// `acp::binary_cache::clear_agent_cache`. Safe to call any time; intended to
@@ -75,7 +124,9 @@ mod tauri_app {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use crate::acp::manager::ConnectionManager;
+
     use crate::chat_channel::manager::ChatChannelManager;
+
     use crate::commands::{
         acp as acp_commands, app_update as app_update_commands,
         automation as automation_commands, background as background_commands, backup,
@@ -88,19 +139,24 @@ mod tauri_app {
         custom_skills as custom_skills_commands,
         deepseek_settings as deepseek_settings_commands, delegation as delegation_commands,
         experts as experts_commands, feedback as feedback_commands, file_io, folder_commands,
-        folder_links, forge as forge_commands, folders, houflow as houflow_commands, logging as logging_commands, mcp as mcp_commands, open_in,
-        model_provider as model_provider_commands, notification,
-        office_tools as office_tools_commands, pet as pet_commands, project_boot,
+        folder_links, office_tools as office_tools_commands, open_in,
+        folders, houflow as houflow_commands, logging as logging_commands, mcp as mcp_commands,
+        model_provider as model_provider_commands, notification, pet as pet_commands, project_boot,
         question as question_commands, quick_messages as quick_messages_commands,
-        remote_proxy as remote_proxy_commands, remote_workspace as remote_workspace_commands,
-        science as science_commands, session_info as session_info_commands, system_settings,
-        terminal as terminal_commands, token_usage as token_usage_commands,
-        version_control, windows, work_task as work_task_commands,
+        remote_proxy as remote_proxy_commands,
+        remote_workspace as remote_workspace_commands, science as science_commands,
+        session_info as session_info_commands,
+        system_settings, terminal as terminal_commands,
+        token_usage as token_usage_commands,
+        forge as forge_commands, version_control, windows, work_task as work_task_commands,
         workbench as workbench_commands,
         workspace_state as workspace_state_commands,
     };
+
     use crate::terminal::manager::TerminalManager;
+
     use crate::{db, git_credential, network, paths, process, web};
+
     use tauri::Manager;
 
     static APP_QUITTING: AtomicBool = AtomicBool::new(false);
@@ -253,13 +309,7 @@ mod tauri_app {
         });
     }
 
-    /// On Windows, opt-out users can disable WebView2 hardware acceleration to
-    /// work around AMD/Intel GPU driver bugs that produce a black-screen
-    /// webview. The flag is stored in a tiny sidecar file at
-    /// `~/.houhub/preferences.json` so it can be read **before** the Tauri
-    /// builder, plugins, or tokio runtime start — once a tokio worker is alive,
-    /// `std::env::set_var` would race with concurrent `getenv` calls from
-    /// libraries like reqwest/rustls that read `HTTP_PROXY` etc.
+    /// Chromium command line WebView2 appends to its own when launching.
     #[cfg(target_os = "windows")]
     const WEBVIEW2_ARGS_ENV: &str = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
 
@@ -462,6 +512,11 @@ mod tauri_app {
         process::ensure_user_npm_prefix_in_path();
 
         let builder = tauri::Builder::default();
+
+        // The default menu minus its ⌘W "Close Window", which closed the
+        // workspace whenever ⌘W was pressed inside a page (see `app_menu`).
+        #[cfg(target_os = "macos")]
+        let builder = builder.menu(crate::app_menu::build);
 
         // Must be the first plugin: it short-circuits second launches by
         // signalling the running instance and exiting before any other
@@ -1254,6 +1309,11 @@ mod tauri_app {
             .on_menu_event(|app, event| {
                 let id = event.id().as_ref().to_string();
 
+                #[cfg(target_os = "macos")]
+                if crate::app_menu::handle_event(app, &id) {
+                    return;
+                }
+
                 // Tray menu items act in Rust directly: showing the
                 // workspace and quitting are both pure runtime concerns
                 // with no UI state to coordinate.
@@ -1532,6 +1592,10 @@ mod tauri_app {
                 folder_links::rename_folder_link,
                 folder_links::repair_folder_link,
                 folder_links::remove_folder_link,
+                canvas_commands::canvas_list_boards,
+                canvas_commands::canvas_create_board,
+                canvas_commands::canvas_update_board,
+                canvas_commands::canvas_delete_board,
                 canvas_commands::canvas_list_nodes,
                 canvas_commands::canvas_create_node,
                 canvas_commands::canvas_group_into_region,
@@ -1765,6 +1829,7 @@ mod tauri_app {
                 acp_commands::acp_download_agent_binary,
                 acp_commands::acp_install_uv_tool,
                 acp_commands::acp_detect_agent_local_version,
+                acp_commands::acp_fetch_agent_latest_release,
                 acp_commands::acp_prepare_npx_agent,
                 acp_commands::acp_uninstall_agent,
                 acp_commands::acp_update_agent_preferences,
@@ -1778,6 +1843,7 @@ mod tauri_app {
                 deepseek_settings_commands::acp_update_deepseek_model_catalog,
                 acp_commands::acp_update_pi_config,
                 acp_commands::acp_load_pi_config,
+                acp_commands::acp_list_pi_model_capabilities,
                 acp_commands::acp_validate_pi_command,
                 acp_commands::acp_sync_antigravity_settings,
                 acp_commands::acp_antigravity_login_start,
@@ -2076,7 +2142,18 @@ mod tauri_app {
                 _ => {}
             });
     }
+
+    /// On Windows, opt-out users can disable WebView2 hardware acceleration to
+    /// work around AMD/Intel GPU driver bugs that produce a black-screen
+    /// webview. The flag is stored in a tiny sidecar file at
+    /// `~/.houhub/preferences.json` so it can be read **before** the Tauri
+    /// builder, plugins, or tokio runtime start — once a tokio worker is alive,
+    /// `std::env::set_var` would race with concurrent `getenv` calls from
+    /// libraries like reqwest/rustls that read `HTTP_PROXY` etc.
+    #[cfg(target_os = "windows")]
+    const WEBVIEW2_ARGS_ENV: &str = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
 }
 
 #[cfg(feature = "tauri-runtime")]
 pub use tauri_app::run;
+

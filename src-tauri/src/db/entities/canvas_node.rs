@@ -1,4 +1,5 @@
 use sea_orm::entity::prelude::*;
+
 use serde::{Deserialize, Serialize};
 
 /// What a canvas node is bound to. The four binding kinds mirror the product
@@ -65,6 +66,10 @@ impl CanvasNodeKind {
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
+    /// The canvas (`canvas_board.id`) this node sits on. Fixed at creation —
+    /// no write path moves a node between boards — which is what lets a client
+    /// scope a global event stream to its own board by this field alone.
+    pub board_id: i32,
     pub kind: CanvasNodeKind,
     pub folder_id: Option<i32>,
     /// kind=group only: the sidebar folder group this region mirrors.

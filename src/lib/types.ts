@@ -1,4 +1,4 @@
-/** The fifteen agents houhub ships hand-written support for. */
+/** The fifteen agents HouHub ships hand-written support for. */
 export type BuiltinAgentType =
   | "claude_code"
   | "codex"
@@ -744,6 +744,10 @@ export type CanvasNodeKind =
  *  soft references — a binding whose target is gone renders as unresolved. */
 export interface CanvasNode {
   id: number
+  /** The canvas (`CanvasBoard.id`) this node sits on. Fixed for the node's
+   *  life — which is what lets a client scope the global event stream to the
+   *  one board it shows. */
+  board_id: number
   kind: CanvasNodeKind
   folder_id: number | null
   /** kind=group: the sidebar folder group this region mirrors. */
@@ -775,9 +779,13 @@ export interface CanvasNode {
   updated_at: string
 }
 
-/** Response of `canvas_list_nodes`: the full node set plus the revision it was
- *  read at (single read transaction server-side). Seeds `lastRevision`. */
+/** Response of `canvas_list_nodes`: one board's full node set plus the
+ *  revision it was read at (single read transaction server-side). Seeds
+ *  `lastRevision`. The revision is workspace-global, not per board. */
 export interface CanvasSnapshot {
+  /** The board `nodes` belongs to — echoed so an answer that arrives after the
+   *  client switched boards can be recognised as someone else's. */
+  board_id: number
   nodes: CanvasNode[]
   revision: number
 }
@@ -825,6 +833,49 @@ export type CanvasChange =
     }
 
 export const CANVAS_CHANGED_EVENT = "canvas://changed"
+
+/** One canvas on the canvas list. Mirrors the Rust `CanvasBoard`. `name` is
+ *  null until the user names it (render a localized "Untitled canvas"). */
+export interface CanvasBoard {
+  id: number
+  name: string | null
+  description: string | null
+  /** Theme-preset color name (FolderThemeColor vocabulary), or null. */
+  color: string | null
+  created_at: string
+  /** Last change to the board OR anything on it — node writes stamp it too,
+   *  which is what the list is ordered by. */
+  updated_at: string
+}
+
+/** One node's footprint on a board's list card. */
+export interface CanvasBoardPreviewRect {
+  kind: CanvasNodeKind
+  x: number
+  y: number
+  width: number
+  height: number
+  color: string | null
+}
+
+/** Row of `canvas_list_boards`: the board plus what its card shows about the
+ *  nodes on it. Mirrors the Rust `CanvasBoardSummary`. */
+export interface CanvasBoardSummary {
+  board: CanvasBoard
+  node_count: number
+  /** Terminal cards on the board — shells a board delete would stop. */
+  terminal_count: number
+  /** Largest-first footprints, capped server-side (a thumbnail, not a render). */
+  preview: CanvasBoardPreviewRect[]
+}
+
+/** Payload of the `canvas-board://changed` side-channel: a board was created
+ *  or edited (full row), or deleted. Mirrors the Rust `CanvasBoardChange`. */
+export type CanvasBoardChange =
+  | { kind: "upsert"; board: CanvasBoard }
+  | { kind: "deleted"; id: number }
+
+export const CANVAS_BOARD_CHANGED_EVENT = "canvas-board://changed"
 
 export interface DbConversationDetail {
   summary: DbConversationSummary
@@ -982,7 +1033,7 @@ export const MODEL_PROVIDER_AGENT_TYPES: BuiltinAgentType[] = [
 
 /**
  * How a Hermes provider's credentials are supplied:
- * - `apiKey`: houhub writes the key to `~/.hermes/.env`.
+ * - `apiKey`: HouHub writes the key to `~/.hermes/.env`.
  * - `oauth`: set through the terminal `--setup` flow (no API-key field).
  * - `aws`: resolved from the AWS SDK credential chain (no API-key field).
  */
@@ -1006,7 +1057,7 @@ export interface HermesProviderOption {
 }
 
 export const HERMES_PROVIDERS: HermesProviderOption[] = [
-  // API-key providers — houhub writes the key var to ~/.hermes/.env.
+  // API-key providers — HouHub writes the key var to ~/.hermes/.env.
   {
     id: "openrouter",
     label: "OpenRouter",
@@ -2022,7 +2073,7 @@ export interface ForgeRemote {
   provider: ForgeProviderId
   /** Whether `provider` is KNOWN rather than assumed — an account configured
    *  for the host, or a hostname naming one of the two forges. `false` is a
-   *  remote that parsed perfectly well but lives somewhere houhub cannot read
+   *  remote that parsed perfectly well but lives somewhere HouHub cannot read
    *  (Bitbucket, Gitee, a Gitea): the panel says only GitHub and GitLab are
    *  supported rather than spending a call that fails as a raw API error. */
   supported: boolean
@@ -2214,7 +2265,7 @@ export interface WorkTaskFolderSettings {
   auto_compact_percent: number
   /** The command sent to compact, verbatim (e.g. `/compact`). Null/blank
    *  resolves per agent: what the live session advertises, else a built-in
-   *  default for the agents houhub knows first-hand. */
+   *  default for the agents HouHub knows first-hand. */
   compact_command?: string | null
   /** Extra instructions appended after the built-in prompt of a launch stage.
    *  Keys are the engine's stage ids (`work` | `retry` | `return` | `merge`)
@@ -2643,7 +2694,7 @@ export type AcpEvent =
   | {
       // JetBrains AIR typed session failure upsert
       // (`_meta.jetbrains.air.sessionFailure`, claude-agent-acp 0.67+/
-      // codex-acp 1.2+; published because houhub advertises the client
+      // codex-acp 1.2+; published because HouHub advertises the client
       // capability). Wire carries UPSERTS ONLY — the reducer applies the same
       // monotonic id+revision merge as the backend snapshot store, and infers
       // resolution (warnings settle at turn boundaries; errors stay active).
@@ -2652,7 +2703,7 @@ export type AcpEvent =
     }
   /**
    * One ACP Session Notice (claude-agent-acp 0.81+/codex-acp 1.13+; published
-   * because houhub advertises `clientCapabilities.session.notices`).
+   * because HouHub advertises `clientCapabilities.session.notices`).
    *
    * NOT a record — no id, no revision, no history position, and never replayed
    * (the backend drops these on the replay seam). Every emission is a distinct
@@ -2665,7 +2716,18 @@ export type AcpEvent =
       notice: SessionNotice
     }
   /**
-   * A JetBrains AIR async-task delta (claude + codex — see `AsyncTaskDelta`).
+   * Plugins Claude Code could not load (CLI 2.1.283+, see `PluginLoadFailure`).
+   * The backend reads them off the raw SDK stream's `system/init` frames and
+   * forwards a set once per connection, again only when it changes. NOT
+   * replayed and not kept in the snapshot — like a notice, it is an event.
+   */
+  | {
+      type: "plugin_load_failures"
+      failures: PluginLoadFailure[]
+    }
+  /**
+   * A JetBrains AIR async-task delta (claude + codex, and Grok workflows
+   * translated to the same shape — see `AsyncTaskDelta`).
    * PARTIAL by design: the reducer merges it into the connection's task table
    * by the same rule the backend snapshot applies, and only a `spawned` delta
    * may create a row.
@@ -3005,7 +3067,7 @@ export interface SessionLastError {
 /**
  * One JetBrains AIR typed session failure record (mirror of Rust
  * `SessionFailureRecord`; claude-agent-acp 0.67+/codex-acp 1.2+, published
- * only because houhub advertises `clientCapabilities._meta.jetbrains.air`).
+ * only because HouHub advertises `clientCapabilities._meta.jetbrains.air`).
  *
  * The wire carries UPSERTS ONLY: a record is revised in place through
  * `id`+`revision` (per-id, from 1), and adapters never publish resolution —
@@ -3037,6 +3099,23 @@ export interface SessionNotice {
    *  verbatim, exactly as `SessionFailureRecord.title` already is. */
   title: string
   description?: string | null
+}
+
+/**
+ * One entry of Claude Code's `system/init.plugin_errors` (CLI 2.1.283+): a
+ * plugin that did not load, or loaded without one of its components.
+ */
+export interface PluginLoadFailure {
+  /** `name@marketplace`, or the positional `inline[N]` / `synced[N]` tag of a
+   *  directory entry that failed before it had a name. */
+  plugin: string
+  /** The CLI's category, from an open set (`path-not-found`, `generic-error`,
+   *  `manifest-validation-error`, `dependency-unsatisfied`, …). */
+  kind: string
+  /** CLI-authored English, shown verbatim. */
+  message: string
+  /** The entry's path, for a directory entry that did not load at all. */
+  path?: string | null
 }
 
 export interface SessionFailureRecord {
@@ -3078,15 +3157,16 @@ export interface AsyncTaskUsage {
 /**
  * One JetBrains AIR async task (mirror of Rust `AsyncTaskRecord`;
  * claude-agent-acp 0.73+ and codex-acp 1.10+, published only because HouHub
- * advertises the `asyncTasks` AIR capability).
+ * advertises the `asyncTasks` AIR capability — plus Grok's background
+ * workflows, which the backend translates from Grok's own `workflow_updated`).
  *
  * The agent's NON-AGENT background work: Claude's background shells, workflows
- * and monitors; codex's background terminals. Sub-agents are excluded by the
- * adapters themselves. This is the MERGED row, not a wire frame — the adapter
- * announces a task once and then revises it with partial deltas
- * (`AsyncTaskDelta`), and the reducer applies the same merge as the backend's
- * `SessionState::apply_event` so a client hydrating from the snapshot and one
- * that saw every delta agree.
+ * and monitors; codex's background terminals; Grok's workflows. Sub-agents are
+ * excluded by the adapters themselves. This is the MERGED row, not a wire
+ * frame — the adapter announces a task once and then revises it with partial
+ * deltas (`AsyncTaskDelta`), and the reducer applies the same merge as the
+ * backend's `SessionState::apply_event` so a client hydrating from the snapshot
+ * and one that saw every delta agree.
  *
  * codex fills in far less than claude: no `description`, `usage` or
  * `output_file_path`, and `task_id` simply EQUALS `tool_call_id` for a
@@ -3096,7 +3176,8 @@ export interface AsyncTaskUsage {
 export interface AsyncTaskRecord {
   task_id: string
   /** Adapter-authored label — claude: the workflow name, else the description;
-   *  codex: the launching tool call's title, else the raw command. */
+   *  codex: the launching tool call's title, else the raw command; Grok: the
+   *  workflow name. */
   name: string
   /** Already friendly: `shell` | `workflow` | `monitor` | `task`, or an
    *  unmapped future value rendered as itself. NOT the SDK's raw type.
@@ -3107,7 +3188,8 @@ export interface AsyncTaskRecord {
    *  either way and does not read this today; `false` marks work already drawn
    *  as an ordinary tool call (a background `Bash` is). */
   show_in_transcript: boolean
-  /** Whether `_session/async_task/stop` is offered for this task. */
+  /** Whether `_session/async_task/stop` is offered for this task. Always
+   *  `false` for Grok, which has no such request. */
   can_stop: boolean
   /** `running` | `paused` | `completed` | `failed` | `stopped`. Anything
    *  outside the terminal three is treated as still live. */
@@ -3119,6 +3201,12 @@ export interface AsyncTaskRecord {
   output_file_path?: string | null
   /** The tool call this task belongs to, when it has one. */
   tool_call_id?: string | null
+  /** The phase a multi-step task is in (a Grok workflow's current phase).
+   *  Empty = none right now. */
+  phase?: string | null
+  /** The child agent the task is running right now (a Grok workflow's current
+   *  agent). Empty = none right now. */
+  current_agent?: string | null
 }
 
 /**
@@ -3129,9 +3217,10 @@ export interface AsyncTaskRecord {
  */
 export interface AsyncTaskDelta {
   task_id: string
-  /** True only for `async_task_spawned`, the only frame carrying a task's
-   *  identity. A delta naming an unknown task is dropped rather than creating a
-   *  nameless placeholder row. */
+  /** True only for a frame carrying a task's identity: AIR's
+   *  `async_task_spawned`, and every Grok workflow frame (each restates the
+   *  whole run). A delta naming an unknown task is dropped rather than
+   *  creating a nameless placeholder row. */
   spawned: boolean
   name?: string | null
   task_type?: string | null
@@ -3144,6 +3233,10 @@ export interface AsyncTaskDelta {
   usage?: AsyncTaskUsage | null
   output_file_path?: string | null
   tool_call_id?: string | null
+  /** Grok restates its whole workflow on every frame, so an EMPTY string here
+   *  means "none any more" — absent still means unchanged. */
+  phase?: string | null
+  current_agent?: string | null
 }
 
 export interface LiveSessionSnapshot {
@@ -3264,7 +3357,7 @@ export interface AcpAgentInfo {
   available: boolean
   distribution_type: string
   /**
-   * Whether houhub's entry for this agent is a third-party ACP *adapter*
+   * Whether HouHub's entry for this agent is a third-party ACP *adapter*
    * wrapping a vendor CLI of a different name (Claude Code → claude-agent-acp,
    * Codex → codex-acp). Surfaces without a preflight result use it to say "the
    * ACP adapter isn't installed" rather than "the agent isn't" — the single
@@ -3285,7 +3378,7 @@ export interface AcpAgentInfo {
    * The RESOLVED `HOUHUB_ACP_HOST_TOOLS` verdict: whether the next launch hands
    * the `fs/*` + `terminal/*` channels — and, with them, houhub-mcp's delegation
    * tools — back to the agent. Resolved by the same Rust function the launch
-   * uses, so it covers BOTH the per-agent `env` above and houhub's own process
+   * uses, so it covers BOTH the per-agent `env` above and HouHub's own process
    * env; reading `env` here would miss the second.
    */
   host_tools_agent_mode: boolean
@@ -3364,7 +3457,7 @@ export interface CodexGranularApproval {
 }
 
 /** [sandbox_workspace_write]. Every field defaults to false/empty upstream, so
- * houhub writes only the non-default ones. */
+ * HouHub writes only the non-default ones. */
 export interface CodexWorkspaceWrite {
   /** Extra writable folders. MUST be absolute: codex does not reject a
    * relative entry, it resolves it against CODEX_HOME (so "rel/dir" silently
@@ -3467,7 +3560,7 @@ export interface CursorAuthStatus {
   email: string | null
   membership: string | null
   error: string | null
-  /** Absolute path to the cursor-agent binary houhub would launch; the panel
+  /** Absolute path to the cursor-agent binary HouHub would launch; the panel
    * builds a copy-pasteable `"<binary_path>" login` command from it (the
    * managed binary isn't on PATH). Null when not installed. */
   binary_path?: string | null
@@ -3507,13 +3600,20 @@ export interface QoderAuthStatus {
   /** Account tier, e.g. `personal_standard`. */
   user_type: string | null
   /** Version the probed binary reports — the one that would actually launch,
-   * not necessarily the version houhub's registry pins. */
+   * not necessarily the version HouHub's registry pins. */
   version: string | null
   allow_byok: boolean | null
   error: string | null
-  /** Absolute path to the qoder binary houhub would launch; the panel builds a
+  /** Absolute path to the qoder binary HouHub would launch; the panel builds a
    * copy-pasteable `"<binary_path>" login` command from it. */
   binary_path?: string | null
+}
+
+// The newest upstream release of an agent, newer than HouHub's pinned version,
+// returned by acp_fetch_agent_latest_release. Unreviewed by HouHub; `version` is
+// already in the form Custom install accepts.
+export interface AgentLatestRelease {
+  version: string
 }
 
 // Lightweight agent status returned by acp_get_agent_status
@@ -3592,7 +3692,7 @@ export interface AgentSkillContent {
 
 /**
  * Built-in expert skills, sourced from obra/superpowers and bundled into
- * the houhub binary. Experts live in a central store at `~/.houhub/skills/`
+ * the HouHub binary. Experts live in a central store at `~/.houhub/skills/`
  * and are linked into agent skill directories on demand.
  */
 export interface ExpertMetadata {
@@ -3687,7 +3787,7 @@ export interface CustomImportResult {
 
 /**
  * Built-in scientific-research skills, curated from
- * K-Dense-AI/scientific-agent-skills and bundled into the houhub binary. They
+ * K-Dense-AI/scientific-agent-skills and bundled into the HouHub binary. They
  * share the central store (`~/.houhub/skills/`) and link primitives with
  * experts; link statuses reuse `ExpertInstallStatus`/`LinkOp`/`LinkOpResult`
  * (the `expertId` field carries the science skill id).
@@ -3808,7 +3908,7 @@ export interface SystemAutostartSettings {
 /**
  * What the main window's close button does.
  *
- * `ask` is the shipped default and exists for discoverability: houhub has always
+ * `ask` is the shipped default and exists for discoverability: HouHub has always
  * hidden to tray, and a user who believes the app exited never goes looking for
  * a preference. The first close offers the choice, then pins itself to one of
  * the other two.
@@ -4473,13 +4573,13 @@ export interface CheckItem {
 }
 
 /**
- * Structured explainer data for agents whose houhub entry is a third-party ACP
+ * Structured explainer data for agents whose HouHub entry is a third-party ACP
  * adapter rather than the vendor's own CLI (Claude Code, Codex). The backend
  * ships only facts — the wording lives in i18n, the same way buildVersionCheck
  * owns the version card's copy.
  */
 export interface AdapterInfo {
-  /** npm spec houhub installs, e.g. "@agentclientprotocol/codex-acp@1.3.0". */
+  /** npm spec HouHub installs, e.g. "@agentclientprotocol/codex-acp@1.3.0". */
   adapter_package: string
   /** Command the launch gate resolves, e.g. "codex-acp". */
   adapter_cmd: string
@@ -4488,7 +4588,7 @@ export interface AdapterInfo {
   native_cmd: string
   /** Display name for the vendor CLI, e.g. "Codex CLI". */
   native_label: string
-  /** Where the user's own vendor CLI was found. houhub never launches it. */
+  /** Where the user's own vendor CLI was found. HouHub never launches it. */
   native_path: string | null
   /** Config dir both read, so installing the adapter needs no second login. */
   shared_config_dir: string
@@ -4672,7 +4772,8 @@ export interface ModelProviderInfo {
   agent_type: AgentType
   /**
    * Model value, interpretation depends on agent_type:
-   * - claude_code: JSON string of {main, reasoning, haiku, sonnet, opus}
+   * - claude_code: JSON string of {main, reasoning, haiku, sonnet, opus,
+   *   fable} plus the custom model option trio
    * - codex / gemini / others: plain model name string
    */
   model: string | null
@@ -4697,6 +4798,7 @@ export interface ClaudeProviderModel {
   haiku?: string
   sonnet?: string
   opus?: string
+  fable?: string
   /** ANTHROPIC_CUSTOM_MODEL_OPTION — id of a custom entry appended to the
    *  in-session /model picker (e.g. a model the gateway serves). */
   customOption?: string
@@ -4720,6 +4822,7 @@ export function parseClaudeProviderModel(
       "haiku",
       "sonnet",
       "opus",
+      "fable",
       "customOption",
       "customOptionName",
       "customOptionDescription",
@@ -4743,6 +4846,7 @@ export function serializeClaudeProviderModel(
   if (obj.haiku?.trim()) cleaned.haiku = obj.haiku.trim()
   if (obj.sonnet?.trim()) cleaned.sonnet = obj.sonnet.trim()
   if (obj.opus?.trim()) cleaned.opus = obj.opus.trim()
+  if (obj.fable?.trim()) cleaned.fable = obj.fable.trim()
   if (obj.customOption?.trim()) cleaned.customOption = obj.customOption.trim()
   if (obj.customOptionName?.trim())
     cleaned.customOptionName = obj.customOptionName.trim()

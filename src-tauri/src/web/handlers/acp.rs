@@ -1,22 +1,34 @@
 use crate::acp::temp_reclaim as houhub_temp_reclaim;
+
 use std::collections::BTreeMap;
+
 use std::sync::Arc;
 
 use axum::{extract::Extension, Json};
+
 use serde::Deserialize;
 
 use crate::acp::error::AcpError;
+
 use crate::acp::opencode_plugins::PluginCheckSummary;
+
 use crate::acp::preflight::PreflightResult;
+
 use crate::acp::types::{
     AcpAgentInfo, AcpAgentStatus, AgentDiagnosticsReport, AgentSkillContent, AgentSkillLayout,
     AgentSkillScope, AgentSkillsListResult, ConnectionInfo, ForkResultInfo,
 };
+
 use crate::app_error::{AppCommandError, AppErrorCode};
+
 use crate::app_state::AppState;
+
 use crate::commands::acp as acp_commands;
+
 use crate::commands::custom_agents as custom_agent_commands;
+
 use crate::commands::deepseek_settings as deepseek_settings_commands;
+
 use crate::models::agent::AgentType;
 
 #[derive(Deserialize)]
@@ -898,24 +910,6 @@ pub async fn acp_fetch_kimi_models(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AcpTestModelProviderParams {
-    pub base_url: String,
-    pub api_key: String,
-    pub model: String,
-}
-
-pub async fn acp_test_model_provider(
-    Json(params): Json<AcpTestModelProviderParams>,
-) -> Result<Json<acp_commands::ModelProviderTestOutcome>, AppCommandError> {
-    let outcome =
-        acp_commands::acp_test_model_provider_core(&params.base_url, &params.api_key, &params.model)
-            .await
-            .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(outcome))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AcpUpdatePiConfigParams {
     pub provider: String,
     pub model: String,
@@ -960,10 +954,18 @@ pub async fn acp_update_pi_config(
 pub async fn acp_load_pi_config(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<acp_commands::PiConfigProjection>, AppCommandError> {
-    acp_commands::load_pi_config_core_for_db(&state.db)
+    let config = acp_commands::load_pi_config_for_db(&state.db)
         .await
-        .map(Json)
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(config))
+}
+
+pub async fn acp_list_pi_model_capabilities(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<acp_commands::PiModelCatalog>, AppCommandError> {
+    Ok(Json(
+        acp_commands::list_pi_model_catalog_core(&state.db, &state.data_dir).await,
+    ))
 }
 
 pub async fn acp_load_deepseek_model_catalog(
@@ -1183,6 +1185,15 @@ pub async fn acp_detect_agent_local_version(
         acp_commands::acp_detect_agent_local_version_core(params.agent_type, &db.conn, &emitter)
             .await
             .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+pub async fn acp_fetch_agent_latest_release(
+    Json(params): Json<AgentTypeParams>,
+) -> Result<Json<Option<crate::acp::latest_release::AgentLatestRelease>>, AppCommandError> {
+    let result = acp_commands::acp_fetch_agent_latest_release_core(params.agent_type)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
 }
 
@@ -1526,4 +1537,22 @@ mod tests {
         assert!(text.contains(r#"{"agentType":"antigravity"}"#));
         assert!(!text.contains("codex"));
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpTestModelProviderParams {
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+}
+
+pub async fn acp_test_model_provider(
+    Json(params): Json<AcpTestModelProviderParams>,
+) -> Result<Json<acp_commands::ModelProviderTestOutcome>, AppCommandError> {
+    let outcome =
+        acp_commands::acp_test_model_provider_core(&params.base_url, &params.api_key, &params.model)
+            .await
+            .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(outcome))
 }

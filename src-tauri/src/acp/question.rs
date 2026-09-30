@@ -1,4 +1,3 @@
-
 //! Interactive multiple-choice question ("ask the user") domain types.
 //!
 //! Mid-turn an agent can ask the user one or more multiple-choice questions and
@@ -28,27 +27,37 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
+
+use chrono::{DateTime, Utc};
+
 use agent_client_protocol::schema::v1::{
     CreateElicitationRequest, CreateElicitationResponse, ElicitationAcceptAction,
     ElicitationAction, ElicitationContentValue, ElicitationMode, ElicitationPropertySchema,
     ElicitationScope, MultiSelectItems, StringPropertySchema,
 };
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use serde::{Deserialize, Serialize};
+
 use serde_json::Value;
+
 use std::collections::BTreeMap;
+
 use tokio::sync::{oneshot, RwLock};
 
 /// Max questions per `ask_user_question` call. Matches Claude Code's
 /// `AskUserQuestion` contract; the JSON schema advertises the same `maxItems`.
 pub const MAX_QUESTIONS: usize = 4;
+
 /// Min / max selectable options per question. Fewer than two options is not a
 /// meaningful choice; more than four overwhelms the card. Matches Claude Code.
 pub const MIN_OPTIONS: usize = 2;
+
 pub const MAX_OPTIONS: usize = 4;
+
 /// Max characters for a question's short `header` chip.
 pub const MAX_HEADER_CHARS: usize = 12;
+
 /// Per-field sanity bound (characters) for every agent/user-supplied free-text
 /// field: the question text, each option label + description, and the free-text
 /// "Other" answer. The full text rides in the broadcast event, the snapshot, and
@@ -1114,6 +1123,7 @@ fn codex_form_shape(raw: &Value, peer: ElicitationPeer) -> Option<CodexUserInput
 /// Every failure lands on "keep the option". If upstream rewords the copy the
 /// filter simply stops firing and the redundant choice reappears.
 const CODEX_SYNTHETIC_OTHER_LABEL: &str = "None of the above";
+
 const CODEX_SYNTHETIC_OTHER_DESCRIPTION: &str = "Provide a different answer in the note field.";
 
 /// True when this property is an `isOther` codex question, i.e. the only place
@@ -1167,14 +1177,24 @@ fn is_codex_synthetic_other_choice(raw: &Value, id: &str, label: &str, value: &s
 /// marker means houhub keeps collapsing the companion into the card's built-in
 /// "Other" input no matter which adapter produced the form.
 ///
+/// claude-agent-acp 0.82.0 moved the marker to
+/// `_meta.jetbrains.air.customAnswer` (same value) and sends the old key to no
+/// client, so both spellings are read.
+///
 /// Like [`is_secret_property`], this reads the raw JSON: the typed schema
 /// property structs carry no `_meta`.
 fn is_custom_answer_property(raw: &Value, id: &str) -> bool {
-    raw.get("requestedSchema")
+    let Some(meta) = raw
+        .get("requestedSchema")
         .and_then(|s| s.get("properties"))
         .and_then(|p| p.get(id))
         .and_then(|prop| prop.get("_meta"))
-        .and_then(|m| m.get("_askUserQuestionCustomAnswer"))
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    meta.get("_askUserQuestionCustomAnswer")
+        .or_else(|| crate::acp::air_contract::air_meta_value(Some(meta), "customAnswer"))
         .and_then(|c| c.get("isCustomAnswer"))
         .and_then(Value::as_bool)
         .unwrap_or(false)

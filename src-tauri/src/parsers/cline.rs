@@ -1,7 +1,9 @@
 use std::fs;
+
 use std::path::PathBuf;
 
 use chrono::{DateTime, TimeZone, Utc};
+
 use serde::Deserialize;
 
 use crate::models::{
@@ -107,6 +109,29 @@ struct SessionMessage {
     model_info: Option<SessionModelInfo>,
     #[serde(default)]
     metrics: Option<SessionMetrics>,
+    /// Kept untyped: only `displayOnly` is read, and a shape change in any
+    /// other key must not fail the whole file — `read_messages_as` turns a
+    /// parse error into an empty transcript.
+    #[serde(default)]
+    metadata: serde_json::Value,
+}
+
+impl SessionMessage {
+    /// cline 3.0.65+ records a FAILED run as an extra `role:"assistant"`
+    /// message whose text is the error (`"API key expired."`), flagged
+    /// `metadata: {displayOnly: true, displayRole: "error"}`. It is not part of
+    /// the model conversation — cline keeps it out of agent state, compaction
+    /// and its own ACP history replay ("do not present display-only failures as
+    /// assistant responses"), and a live ACP turn reports the failure as an
+    /// error, never as a message. Rendering it would put the error in the
+    /// model's mouth on every reopen, the same trap as the `<synthetic>` /
+    /// `isApiErrorMessage` records `parsers::claude` and `parsers::qoder` skip.
+    fn is_display_only(&self) -> bool {
+        self.metadata
+            .get("displayOnly")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -358,6 +383,9 @@ impl ClineParser {
         };
 
         for msg in &messages.messages {
+            if msg.is_display_only() {
+                continue;
+            }
             let timestamp = match msg.ts.filter(|ts| *ts > 0).map(ts_to_datetime) {
                 Some(ts) => {
                     last_ts = ts;
@@ -868,11 +896,17 @@ fn collect_text_parts(content: &serde_json::Value) -> Vec<String> {
 
 /// Markers Cline wraps around the parts of a user message.
 const ENV_OPEN: &str = "<environment_details>";
+
 const ENV_CLOSE: &str = "</environment_details>";
+
 const TASK_OPEN: &str = "<task>";
+
 const TASK_CLOSE: &str = "</task>";
+
 const FEEDBACK_OPEN: &str = "<feedback>";
+
 const FEEDBACK_CLOSE: &str = "</feedback>";
+
 const TASK_PROGRESS_MARKER: &str = "# task_progress RECOMMENDED";
 
 /// Check if text looks like a Cline tool result: `[tool_name ...] Result:`
@@ -1054,7 +1088,9 @@ fn tool_result_output(content: Option<&serde_json::Value>) -> Option<String> {
 /// `<task>` and the `task_progress` block below belong to the pre-3.x prompt
 /// format and are gone from 3.x entirely — these three are what replaced them.
 const USER_INPUT_TAG: &str = "user_input";
+
 const USER_COMMAND_TAG: &str = "user_command";
+
 const MODE_NOTICE_TAG: &str = "mode_notice";
 
 /// Replace every `<tag …>inner</tag>` with `inner` (or drop the block whole
@@ -1502,6 +1538,69 @@ mod tests {
             other => panic!("expected exactly one tool result, got {other:?}"),
         }
         assert_eq!(texts(&detail.turns[2].blocks), vec!["thanks"]);
+    }
+
+    /// cline 3.0.65 writes a failed run into the transcript as an assistant
+    /// message carrying the error text. The record below is verbatim from a
+    /// 3.0.65 run against an endpoint that answers 400 — houhub must not show
+    /// it as the model's reply, and skipping it must not swallow the retry and
+    /// the real answer that follow.
+    #[test]
+    fn a_display_only_error_is_not_painted_as_the_reply() {
+        let tmp = tempfile::tempdir().unwrap();
+        let messages = json!({
+            "version": 1,
+            "updated_at": "2026-09-29T00:09:24.543Z",
+            "agent": "lead",
+            "messages": [
+                {
+                    "id": "365bf00f-90b7-4c09-a8cc-be9daf5a360d",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "<user_input mode=\"act\">say hi</user_input>"}],
+                    "ts": 1_790_640_564_466_i64
+                },
+                {
+                    "id": "error_29541852-24fa-4a23-aed6-1f09502a5ff2",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "probe: model does not exist"}],
+                    "ts": 1_790_640_564_541_i64,
+                    "metadata": {"displayOnly": true, "displayRole": "error"},
+                    "modelInfo": {"id": "probe-model", "provider": "openai-compatible"}
+                },
+                {
+                    "id": "msg_3",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "<user_input mode=\"act\">try again</user_input>"}],
+                    "ts": 1_790_640_600_000_i64
+                },
+                {
+                    "id": "msg_4",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hi!"}],
+                    "ts": 1_790_640_601_000_i64,
+                    "modelInfo": {"id": "deepseek-v4-flash", "provider": "deepseek"},
+                    "metadata": {"displayOnly": false}
+                }
+            ]
+        });
+        write_session(tmp.path(), "s1", manifest("s1"), messages);
+
+        let parser = ClineParser::with_base_dir(tmp.path().to_path_buf());
+        let detail = parser.get_conversation("s1").expect("detail");
+
+        let turns: Vec<_> = detail
+            .turns
+            .iter()
+            .map(|t| (format!("{:?}", t.role), texts(&t.blocks)))
+            .collect();
+        assert_eq!(
+            turns,
+            vec![
+                ("User".to_string(), vec!["say hi"]),
+                ("User".to_string(), vec!["try again"]),
+                ("Assistant".to_string(), vec!["Hi!"]),
+            ]
+        );
     }
 
     /// A user message with no wrapper and no tool result is the shape a future

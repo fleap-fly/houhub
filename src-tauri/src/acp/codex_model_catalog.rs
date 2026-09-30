@@ -25,9 +25,11 @@
 //! authoritative enum sets before they can reach the file.
 
 use std::collections::HashSet;
+
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+
 use serde_json::{Map, Value};
 
 use crate::app_error::{AppCommandError, AppErrorCode};
@@ -40,6 +42,7 @@ const BUNDLED_SNAPSHOT: &str = include_str!("../../resources/codex/bundled-catal
 
 /// File name (relative to `CODEX_HOME`) of the generated catalog codex reads.
 pub const CATALOG_REL: &str = "Houhub-model-catalog.json";
+
 /// File name (relative to `CODEX_HOME`) of the compact source list we round-trip
 /// back into the editor when no DB provider owns the list (api-key mode).
 pub const SOURCE_REL: &str = "Houhub-model-catalog.source.json";
@@ -70,7 +73,7 @@ struct EnumSpec {
 
 // Authoritative value sets + nullability, extracted from the codex binary itself
 // by feeding it candidate catalogs and reading the full `unknown variant …,
-// expected …` / `invalid type: null, expected …` errors (re-probed on 0.156.1,
+// expected …` / `invalid type: null, expected …` errors (re-probed on 0.159.2,
 // unchanged since 0.147 — treat these as version-specific and re-probe when
 // codex moves).
 fn enum_spec_for(key: &str) -> Option<EnumSpec> {
@@ -123,6 +126,20 @@ fn enum_spec_for(key: &str) -> Option<EnumSpec> {
 /// (`"priority"` on GPT-6 Sol and Luna), is an optional string rather than an
 /// enum — an unknown tier name parses and only a non-string is refused — so
 /// it needs no entry in either list.
+///
+/// 0.158.0 (codex-acp 2.0.0 moves `@openai/codex` ^0.156.1 → ^0.158.0) adds no
+/// `ModelInfo` field at all; it deletes the hidden `gpt-5.4` stub outright
+/// (10 slugs). Re-probed against the 0.158.0 binary: `"yes"` and `null` in a
+/// boolean still take the catalog down, and so does an unknown `shell_type`.
+///
+/// 0.159.x (codex-acp 2.0.1 moves `@openai/codex` ^0.158.0 → ^0.159.1) adds
+/// GPT-6.1 Sol (11 slugs) and still no `ModelInfo` field: no key is new to the
+/// catalog, and every existing entry keeps its previous key set (GPT-6.1 Sol
+/// sets the optional `multi_agent_reasoning_effort` and omits
+/// `default_service_tier`, which GPT-6 Sol does the other way round). Re-probed
+/// against the 0.159.2 binary: each field below rejects both `"yes"` and `null`
+/// (bar the ignored `supports_parallel_tool_calls`), no boolean-typed key sits
+/// outside this list, and every enum set above is unchanged.
 const BOOL_FIELDS: &[&str] = &[
     "use_responses_lite",
     "supported_in_api",
@@ -139,13 +156,6 @@ const BOOL_FIELDS: &[&str] = &[
     "node_repl_disabled",
     "supports_reasoning_effort_updates",
 ];
-
-/// The OpenAI-compatible bundle a derived gateway model carries, as key/value
-/// pairs. Exposed so the provider-binding tests can assert a derived catalog is
-/// actually flattened without duplicating the list.
-pub fn gateway_compat_overrides() -> Vec<(&'static str, Value)> {
-    GATEWAY_COMPAT_OVERRIDES.to_vec()
-}
 
 /// Whether a custom `overrides` entry is safe to write. A single value codex
 /// can't parse rejects the entire catalog, so:
@@ -234,15 +244,40 @@ pub struct CatalogInjection {
 }
 
 /// Parse the compiled-in offline snapshot into its `models` array (opaque
-/// `Value`s). Only used as a fallback when the runtime catalog is unavailable.
+/// `Value`s), in codex's picker order (see [`sort_by_priority`]). Only used as
+/// a fallback when the runtime catalog is unavailable.
 pub fn bundled_snapshot_models() -> Vec<Value> {
-    serde_json::from_str::<Value>(BUNDLED_SNAPSHOT)
+    let mut models = serde_json::from_str::<Value>(BUNDLED_SNAPSHOT)
         .ok()
         .as_ref()
         .and_then(|v| v.get("models"))
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default()
+        .unwrap_or_default();
+    sort_by_priority(&mut models);
+    models
+}
+
+/// A catalog entry's `priority`: codex's picker position, ascending. An entry
+/// without one sorts last.
+fn priority_of(model: &Value) -> i64 {
+    model
+        .get("priority")
+        .and_then(Value::as_i64)
+        .unwrap_or(i64::MAX)
+}
+
+/// Put a catalog in the order codex itself presents it: ascending `priority`,
+/// ties kept in catalog order (codex's `build_available_models` does a stable
+/// `sort_by_key` on the same field, then marks the first visible entry the
+/// default).
+///
+/// `codex debug models --bundled` prints entries in FILE order, and since
+/// codex 0.159.1 that is no longer priority order: GPT-6.1 Sol was inserted
+/// second, at priority 1, behind GPT-6 Astra's 2. Anything that reads "the
+/// first entry" as "codex's first choice" has to sort first.
+pub fn sort_by_priority(models: &mut [Value]) {
+    models.sort_by_key(priority_of);
 }
 
 /// The safest default clone base: the highest-priority (lowest `priority`)
@@ -251,11 +286,7 @@ pub fn bundled_snapshot_models() -> Vec<Value> {
 pub fn fallback_base_slug(snapshot: &[Value]) -> Option<String> {
     snapshot
         .iter()
-        .min_by_key(|m| {
-            m.get("priority")
-                .and_then(Value::as_i64)
-                .unwrap_or(i64::MAX)
-        })
+        .min_by_key(|m| priority_of(m))
         .and_then(|m| m.get("slug").and_then(Value::as_str))
         .map(str::to_owned)
 }
@@ -276,9 +307,11 @@ fn is_listable(model: &Value) -> bool {
 /// user's custom entries. Custom entries clone their `base` snapshot ModelInfo
 /// (falling back to the highest-priority entry when `base` is unknown), apply
 /// **sanitized** overrides, and are forced `visibility:"list"` +
-/// `supported_in_api:true`. Priority is renumbered by final order (customs
-/// first) so the picker ordering is deterministic without colliding official
-/// priorities.
+/// `supported_in_api:true`. Priority is renumbered by final order — customs
+/// first, then the officials in codex's own priority order, whatever order the
+/// snapshot arrived in — so the picker ordering is deterministic without
+/// colliding official priorities, and the officials keep the order (and the
+/// default) codex would give them without the takeover.
 pub fn expand_to_catalog(config: &CodexModelConfig, snapshot: &[Value]) -> Value {
     let excluded: HashSet<&str> = config
         .excluded_officials
@@ -328,7 +361,14 @@ pub fn expand_to_catalog(config: &CodexModelConfig, snapshot: &[Value]) -> Value
     // flipping it to `hide` while keeping it around as a migration stub (its
     // `upgrade` block) or for internal use (`codex-auto-review`), and dropping
     // those breaks codex rather than tidying the picker.
-    for m in snapshot {
+    //
+    // Walked in priority order, not snapshot order: the renumbering below turns
+    // position into priority, so a snapshot in file order (see
+    // `sort_by_priority`) would otherwise hand GPT-6 Astra the slot — and the
+    // default — codex gives GPT-6.1 Sol.
+    let mut officials: Vec<&Value> = snapshot.iter().collect();
+    officials.sort_by_key(|m| priority_of(m));
+    for m in officials {
         if let Some(slug) = slug_of(m) {
             if excluded.contains(slug) && is_listable(m) {
                 continue;
@@ -348,8 +388,9 @@ pub fn expand_to_catalog(config: &CodexModelConfig, snapshot: &[Value]) -> Value
 }
 
 /// The default model slug written as codex's root `model`: the explicit
-/// `default` when it names a listed model, else the first custom, else the first
-/// non-excluded listable official, else `None`.
+/// `default` when it names a listed model, else the first custom, else the
+/// non-excluded listable official codex itself ranks first (lowest `priority`),
+/// else `None`.
 pub fn default_slug(config: &CodexModelConfig, snapshot: &[Value]) -> Option<String> {
     let excluded: HashSet<&str> = config
         .excluded_officials
@@ -370,9 +411,11 @@ pub fn default_slug(config: &CodexModelConfig, snapshot: &[Value]) -> Option<Str
     if let Some(c) = config.customs.first() {
         return Some(c.slug.clone());
     }
+    // `min_by_key` keeps the first of equal keys, matching codex's stable sort.
     snapshot
         .iter()
-        .find(|m| slug_of(m).map(|s| !excluded.contains(s)).unwrap_or(false) && is_listable(m))
+        .filter(|m| slug_of(m).map(|s| !excluded.contains(s)).unwrap_or(false) && is_listable(m))
+        .min_by_key(|m| priority_of(m))
         .and_then(|m| slug_of(m).map(str::to_owned))
 }
 
@@ -412,87 +455,6 @@ pub fn default_slug_for_env(config: &CodexModelConfig) -> Option<String> {
         .default
         .clone()
         .or_else(|| config.customs.first().map(|c| c.slug.clone()))
-}
-
-/// The compatibility bundle that makes a cloned GPT entry speak plain OpenAI
-/// Responses — the same keys the editor's "OpenAI-compatible" preset writes
-/// (see `CODEX_COMPAT_OVERRIDES` on the TS side). Kept here so a gateway-derived
-/// catalog (see [`catalog_from_provider_models`]) can be built without the
-/// frontend: a third-party endpoint implements only the public API, so every
-/// model derived from one has to be flattened.
-const GATEWAY_COMPAT_OVERRIDES: &[(&str, Value)] = &[
-    ("tool_mode", Value::Null),
-    ("multi_agent_version", Value::Null),
-    ("use_responses_lite", Value::Bool(false)),
-    ("apply_patch_tool_type", Value::Null),
-    ("supports_image_detail_original", Value::Bool(false)),
-];
-
-/// Build a compact codex model config out of a **model-provider's** fetched
-/// model list, for a provider that is not codex-only.
-///
-/// Codex is the one agent whose provider binding is a whole catalog rather than
-/// a single model name: `model_catalog_json` replaces codex's entire model
-/// table, so a gateway's models only become selectable in the composer once
-/// they exist as catalog entries. A codex-only provider carries that catalog
-/// itself (in `provider.model`, as a structured `CodexModelConfig`). A
-/// **multi-agent** provider cannot: its `model` column is already spoken for by
-/// whichever agent owns it (Claude stores a JSON object there), and its fetched
-/// list lives in `models_json`. Binding codex to such a provider therefore
-/// derives the catalog from that list, so the models the user fetched in the
-/// provider dialog are exactly what codex offers.
-///
-/// Every derived entry carries [`GATEWAY_COMPAT_OVERRIDES`], because a
-/// third-party gateway only implements the public OpenAI API, and takes its own
-/// slug as `base` — the same shape the legacy single-slug path uses, and the one
-/// [`expand_to_catalog`] resolves to the highest-priority official when the slug
-/// is not itself an official (which a gateway model never is). Deriving `base`
-/// from the live snapshot here instead would make the value the settings panel
-/// round-trips disagree with the value the backend generates.
-/// `default` is `preferred` when it names a fetched model (so the provider's own
-/// default keeps winning), else the first entry — and it is always one of the
-/// derived slugs, so `default_slug` can never point codex's root `model` at
-/// something the generated catalog does not list.
-pub fn catalog_from_provider_models(
-    models: &[String],
-    preferred: Option<&str>,
-) -> CodexModelConfig {
-    let mut seen = HashSet::new();
-    let slugs: Vec<String> = models
-        .iter()
-        .map(|m| m.trim())
-        .filter(|m| !m.is_empty())
-        .map(str::to_owned)
-        .filter(|m| seen.insert(m.clone()))
-        .collect();
-    if slugs.is_empty() {
-        return CodexModelConfig::default();
-    }
-    let overrides = Map::from_iter(
-        GATEWAY_COMPAT_OVERRIDES
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), v.clone())),
-    );
-    let customs = slugs
-        .iter()
-        .map(|slug| CodexCustomEntry {
-            slug: slug.clone(),
-            display_name: None,
-            context_window: None,
-            base: slug.clone(),
-            overrides: overrides.clone(),
-        })
-        .collect();
-    let default = preferred
-        .map(str::trim)
-        .filter(|p| slugs.iter().any(|s| s == p))
-        .map(str::to_owned)
-        .or_else(|| slugs.first().cloned());
-    CodexModelConfig {
-        customs,
-        excluded_officials: Vec::new(),
-        default,
-    }
 }
 
 /// Map one legacy `{slug,base,…}` entry (or the old `CodexModelEntry` shape)
@@ -739,74 +701,20 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// A gateway's fetched models become real, listable catalog entries — this
-    /// is what puts them in codex's picker (and the composer's model selector)
-    /// instead of leaving codex on its own bundled official list.
-    #[test]
-    fn provider_models_expand_into_listable_catalog_entries() {
-        let models = vec![
-            "deepseek-flash".to_string(),
-            "deepseek-flash".to_string(),
-            "  ".to_string(),
-            "kimi-k2".to_string(),
-        ];
-        let config = catalog_from_provider_models(&models, Some("kimi-k2"));
-        assert_eq!(config.default.as_deref(), Some("kimi-k2"));
-        let cat = expand_to_catalog(&config, &snap());
-        let out = slugs(&cat);
-        // Customs first, then every official (the table is a whole replace).
-        assert_eq!(out[0], "deepseek-flash");
-        assert_eq!(out[1], "kimi-k2");
-        assert!(out.contains(&"gpt-6-astra".to_string()));
-        for slug in ["deepseek-flash", "kimi-k2"] {
-            let entry = find(&cat, slug).expect("present");
-            assert_eq!(entry.get("visibility").unwrap(), "list");
-            assert_eq!(entry.get("supported_in_api").unwrap(), &Value::Bool(true));
-            // Flattened to plain OpenAI Responses: a third-party gateway cannot
-            // serve GPT's code-mode/multi-agent dialect.
-            assert!(entry.get("tool_mode").unwrap().is_null());
-            assert!(entry.get("multi_agent_version").unwrap().is_null());
-            assert_eq!(entry.get("use_responses_lite").unwrap(), &Value::Bool(false));
-        }
-        // An empty list means "codex keeps its own table".
-        assert!(catalog_from_provider_models(&[], None).customs.is_empty());
-        assert!(catalog_from_provider_models(&["  ".to_string()], None)
-            .customs
-            .is_empty());
-    }
-
-    /// The default must always name a derived slug; otherwise codex's root
-    /// `model` would point at something the generated catalog does not list.
-    #[test]
-    fn provider_models_default_falls_back_to_the_first_model() {
-        let models = vec!["deepseek-flash".to_string(), "kimi-k2".to_string()];
-        assert_eq!(
-            catalog_from_provider_models(&models, Some("not-in-the-list"))
-                .default
-                .as_deref(),
-            Some("deepseek-flash")
-        );
-        assert_eq!(
-            catalog_from_provider_models(&models, None).default.as_deref(),
-            Some("deepseek-flash")
-        );
-        // The derived default survives `default_slug_for_env` unchanged, so the
-        // provider bind writes the same value the catalog was built around.
-        let config = catalog_from_provider_models(&models, Some("kimi-k2"));
-        assert_eq!(default_slug_for_env(&config).as_deref(), Some("kimi-k2"));
-    }
-
     #[test]
     fn bundled_snapshot_matches_launched_codex_shape() {
         let models = snap();
         assert_eq!(
             models.len(),
             11,
-            "snapshot should carry codex 0.156.1's catalog"
+            "snapshot should carry codex 0.159.2's catalog"
         );
+        // 0.158.0 deleted gpt-5.4 outright (it had shipped hidden, as a
+        // retirement stub) rather than hiding it any further.
+        assert!(models.iter().all(|m| slug_of(m) != Some("gpt-5.4")));
         assert!(models.iter().any(|m| slug_of(m) == Some("gpt-6-astra")));
-        // 0.156.1 adds GPT-6 Sol and Luna, both listed.
-        for added in ["gpt-6-sol", "gpt-6-luna"] {
+        // 0.156.1 adds GPT-6 Sol and Luna, 0.159.1 GPT-6.1 Sol; all listed.
+        for added in ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"] {
             let m = models
                 .iter()
                 .find(|m| slug_of(m) == Some(added))
@@ -853,7 +761,64 @@ mod tests {
                 "codex dropped {gone} — regenerate the snapshot"
             );
         }
-        assert_eq!(fallback_base_slug(&models).as_deref(), Some("gpt-6-astra"));
+        // 0.159.1 made GPT-6.1 Sol codex's default (priority 1), and the loader
+        // hands the catalog out in that order.
+        assert_eq!(fallback_base_slug(&models).as_deref(), Some("gpt-6.1-sol"));
+        assert_eq!(slug_of(&models[0]), Some("gpt-6.1-sol"));
+    }
+
+    /// The snapshot file is `codex debug models --bundled` verbatim, so it is in
+    /// FILE order, and 0.159.1 stopped keeping that in priority order. Anything
+    /// that turns position into rank must see codex's order instead — or the
+    /// generated catalog puts GPT-6 Astra where codex puts GPT-6.1 Sol, and
+    /// makes it the default.
+    #[test]
+    fn readers_rank_by_priority_not_snapshot_order() {
+        let raw: Vec<Value> = serde_json::from_str::<Value>(BUNDLED_SNAPSHOT)
+            .expect("snapshot parses")["models"]
+            .as_array()
+            .expect("models array")
+            .clone();
+        // The precondition this test exists for: GPT-6 Astra (priority 2) is
+        // listed ahead of GPT-6.1 Sol (priority 1) in the file itself.
+        assert_eq!(slug_of(&raw[0]), Some("gpt-6-astra"));
+        assert_eq!(slug_of(&raw[1]), Some("gpt-6.1-sol"));
+        assert!(priority_of(&raw[1]) < priority_of(&raw[0]));
+
+        // The loader sorts.
+        let loaded: Vec<i64> = snap().iter().map(priority_of).collect();
+        assert!(loaded.windows(2).all(|w| w[0] <= w[1]), "{loaded:?}");
+
+        // Handed the raw file order, expansion still lists the officials in
+        // codex's order: 6.1 Sol, then 6 Astra, then the rest.
+        let removal = excluding(&["gpt-5.5"]);
+        let cat = expand_to_catalog(&removal, &raw);
+        let out = slugs(&cat);
+        assert_eq!(out[..3], ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol"]);
+        // …and renumbering keeps it that way, so codex marks 6.1 Sol default.
+        let min = cat["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .min_by_key(|m| priority_of(m))
+            .unwrap();
+        assert_eq!(slug_of(min), Some("gpt-6.1-sol"));
+        // The root `model` houhub writes for that config agrees.
+        assert_eq!(default_slug(&removal, &raw).as_deref(), Some("gpt-6.1-sol"));
+
+        // A custom still leads, ahead of every official.
+        let with_custom = CodexModelConfig {
+            customs: vec![CodexCustomEntry {
+                slug: "gw/x".into(),
+                display_name: None,
+                context_window: None,
+                base: "gpt-5.6-sol".into(),
+                overrides: Map::new(),
+            }],
+            ..Default::default()
+        };
+        let out = slugs(&expand_to_catalog(&with_custom, &raw));
+        assert_eq!(out[..3], ["gw/x", "gpt-6.1-sol", "gpt-6-astra"]);
     }
 
     #[test]
@@ -920,18 +885,24 @@ mod tests {
     #[test]
     fn expand_keeps_hidden_officials_even_when_excluded() {
         let s = snap();
-        // gpt-5.4 and the two daybreak builds ship hidden; codex-auto-review
-        // always is.
-        for slug in ["gpt-5.4", "gpt-daybreak-blue-latest", "codex-auto-review"] {
+        // The two daybreak builds ship hidden; codex-auto-review always is.
+        for slug in [
+            "gpt-daybreak-blue-latest",
+            "gpt-daybreak-red-latest",
+            "codex-auto-review",
+        ] {
             let hidden = s
                 .iter()
                 .find(|m| slug_of(m) == Some(slug))
                 .expect("in snapshot");
             assert_eq!(hidden.get("visibility").unwrap(), "hide", "{slug}");
         }
-        let cat = expand_to_catalog(&excluding(&["gpt-5.4", "gpt-daybreak-blue-latest"]), &s);
+        let cat = expand_to_catalog(
+            &excluding(&["gpt-daybreak-red-latest", "gpt-daybreak-blue-latest"]),
+            &s,
+        );
         let out = slugs(&cat);
-        assert!(out.iter().any(|x| x == "gpt-5.4"));
+        assert!(out.iter().any(|x| x == "gpt-daybreak-red-latest"));
         assert!(out.iter().any(|x| x == "gpt-daybreak-blue-latest"));
         assert_eq!(out.len(), s.len(), "nothing dropped");
     }
@@ -1171,9 +1142,10 @@ mod tests {
             ..cfg.clone()
         };
         assert_eq!(default_slug(&cfg2, &s).as_deref(), Some("mine"));
-        // No custom, no default → first listable official (not hidden).
+        // No custom, no default → codex's own first listable official (not
+        // hidden): GPT-6.1 Sol since 0.159.1.
         let cfg3 = CodexModelConfig::default();
-        assert_eq!(default_slug(&cfg3, &s).as_deref(), Some("gpt-6-astra"));
+        assert_eq!(default_slug(&cfg3, &s).as_deref(), Some("gpt-6.1-sol"));
     }
 
     #[test]
@@ -1270,7 +1242,7 @@ mod tests {
         assert!(find(&cat, "gpt-5.2").is_none());
         // …while hidden ones survive: they were never inferred-excluded, and
         // expansion would keep them regardless (they back codex internals).
-        assert!(find(&cat, "gpt-5.4").is_some());
+        assert!(find(&cat, "gpt-daybreak-blue-latest").is_some());
         assert!(find(&cat, "codex-auto-review").is_some());
     }
 
@@ -1310,5 +1282,150 @@ mod tests {
         assert!(!dir.join(CATALOG_REL).exists());
         assert!(!dir.join(SOURCE_REL).exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A gateway's fetched models become real, listable catalog entries — this
+    /// is what puts them in codex's picker (and the composer's model selector)
+    /// instead of leaving codex on its own bundled official list.
+    #[test]
+    fn provider_models_expand_into_listable_catalog_entries() {
+        let models = vec![
+            "deepseek-flash".to_string(),
+            "deepseek-flash".to_string(),
+            "  ".to_string(),
+            "kimi-k2".to_string(),
+        ];
+        let config = catalog_from_provider_models(&models, Some("kimi-k2"));
+        assert_eq!(config.default.as_deref(), Some("kimi-k2"));
+        let cat = expand_to_catalog(&config, &snap());
+        let out = slugs(&cat);
+        // Customs first, then every official (the table is a whole replace).
+        assert_eq!(out[0], "deepseek-flash");
+        assert_eq!(out[1], "kimi-k2");
+        assert!(out.contains(&"gpt-6-astra".to_string()));
+        for slug in ["deepseek-flash", "kimi-k2"] {
+            let entry = find(&cat, slug).expect("present");
+            assert_eq!(entry.get("visibility").unwrap(), "list");
+            assert_eq!(entry.get("supported_in_api").unwrap(), &Value::Bool(true));
+            // Flattened to plain OpenAI Responses: a third-party gateway cannot
+            // serve GPT's code-mode/multi-agent dialect.
+            assert!(entry.get("tool_mode").unwrap().is_null());
+            assert!(entry.get("multi_agent_version").unwrap().is_null());
+            assert_eq!(entry.get("use_responses_lite").unwrap(), &Value::Bool(false));
+        }
+        // An empty list means "codex keeps its own table".
+        assert!(catalog_from_provider_models(&[], None).customs.is_empty());
+        assert!(catalog_from_provider_models(&["  ".to_string()], None)
+            .customs
+            .is_empty());
+    }
+
+    /// The default must always name a derived slug; otherwise codex's root
+    /// `model` would point at something the generated catalog does not list.
+    #[test]
+    fn provider_models_default_falls_back_to_the_first_model() {
+        let models = vec!["deepseek-flash".to_string(), "kimi-k2".to_string()];
+        assert_eq!(
+            catalog_from_provider_models(&models, Some("not-in-the-list"))
+                .default
+                .as_deref(),
+            Some("deepseek-flash")
+        );
+        assert_eq!(
+            catalog_from_provider_models(&models, None).default.as_deref(),
+            Some("deepseek-flash")
+        );
+        // The derived default survives `default_slug_for_env` unchanged, so the
+        // provider bind writes the same value the catalog was built around.
+        let config = catalog_from_provider_models(&models, Some("kimi-k2"));
+        assert_eq!(default_slug_for_env(&config).as_deref(), Some("kimi-k2"));
+    }
+}
+
+/// The OpenAI-compatible bundle a derived gateway model carries, as key/value
+/// pairs. Exposed so the provider-binding tests can assert a derived catalog is
+/// actually flattened without duplicating the list.
+pub fn gateway_compat_overrides() -> Vec<(&'static str, Value)> {
+    GATEWAY_COMPAT_OVERRIDES.to_vec()
+}
+
+/// The compatibility bundle that makes a cloned GPT entry speak plain OpenAI
+/// Responses — the same keys the editor's "OpenAI-compatible" preset writes
+/// (see `CODEX_COMPAT_OVERRIDES` on the TS side). Kept here so a gateway-derived
+/// catalog (see [`catalog_from_provider_models`]) can be built without the
+/// frontend: a third-party endpoint implements only the public API, so every
+/// model derived from one has to be flattened.
+const GATEWAY_COMPAT_OVERRIDES: &[(&str, Value)] = &[
+    ("tool_mode", Value::Null),
+    ("multi_agent_version", Value::Null),
+    ("use_responses_lite", Value::Bool(false)),
+    ("apply_patch_tool_type", Value::Null),
+    ("supports_image_detail_original", Value::Bool(false)),
+];
+
+/// Build a compact codex model config out of a **model-provider's** fetched
+/// model list, for a provider that is not codex-only.
+///
+/// Codex is the one agent whose provider binding is a whole catalog rather than
+/// a single model name: `model_catalog_json` replaces codex's entire model
+/// table, so a gateway's models only become selectable in the composer once
+/// they exist as catalog entries. A codex-only provider carries that catalog
+/// itself (in `provider.model`, as a structured `CodexModelConfig`). A
+/// **multi-agent** provider cannot: its `model` column is already spoken for by
+/// whichever agent owns it (Claude stores a JSON object there), and its fetched
+/// list lives in `models_json`. Binding codex to such a provider therefore
+/// derives the catalog from that list, so the models the user fetched in the
+/// provider dialog are exactly what codex offers.
+///
+/// Every derived entry carries [`GATEWAY_COMPAT_OVERRIDES`], because a
+/// third-party gateway only implements the public OpenAI API, and takes its own
+/// slug as `base` — the same shape the legacy single-slug path uses, and the one
+/// [`expand_to_catalog`] resolves to the highest-priority official when the slug
+/// is not itself an official (which a gateway model never is). Deriving `base`
+/// from the live snapshot here instead would make the value the settings panel
+/// round-trips disagree with the value the backend generates.
+/// `default` is `preferred` when it names a fetched model (so the provider's own
+/// default keeps winning), else the first entry — and it is always one of the
+/// derived slugs, so `default_slug` can never point codex's root `model` at
+/// something the generated catalog does not list.
+pub fn catalog_from_provider_models(
+    models: &[String],
+    preferred: Option<&str>,
+) -> CodexModelConfig {
+    let mut seen = HashSet::new();
+    let slugs: Vec<String> = models
+        .iter()
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty())
+        .map(str::to_owned)
+        .filter(|m| seen.insert(m.clone()))
+        .collect();
+    if slugs.is_empty() {
+        return CodexModelConfig::default();
+    }
+    let overrides = Map::from_iter(
+        GATEWAY_COMPAT_OVERRIDES
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), v.clone())),
+    );
+    let customs = slugs
+        .iter()
+        .map(|slug| CodexCustomEntry {
+            slug: slug.clone(),
+            display_name: None,
+            context_window: None,
+            base: slug.clone(),
+            overrides: overrides.clone(),
+        })
+        .collect();
+    let default = preferred
+        .map(str::trim)
+        .filter(|p| slugs.iter().any(|s| s == p))
+        .map(str::to_owned)
+        .or_else(|| slugs.first().cloned());
+    CodexModelConfig {
+        customs,
+        excluded_officials: Vec::new(),
+        default,
     }
 }
