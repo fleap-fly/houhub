@@ -84,17 +84,21 @@ fn only_houhub_is_a_binary_target_tauri_build_bundles() {
 
 /// The release workflow gives `tauri build` no features of its own: one named
 /// there would bring the binary target that requires it into the bundle.
+///
+/// HouHub drives the Tauri CLI directly (`pnpm tauri build …`) instead of
+/// `tauri-action`, so the build commands are read from the workflow's `run`
+/// steps rather than from an action's `args:`.
 #[test]
 fn the_release_build_names_no_features() {
     let workflow =
         std::fs::read_to_string(root().join("../.github/workflows/release.yml")).unwrap();
-    let mut tauri_args = 0;
+    let mut builds = 0;
     for line in workflow.lines() {
         let line = line.trim_start();
-        if let Some(args) = line.strip_prefix("args:") {
-            tauri_args += 1;
+        if let Some(args) = line.strip_prefix("pnpm tauri build") {
+            builds += 1;
             assert!(!args.contains("--features"), "{line}");
         }
     }
-    assert!(tauri_args >= 1, "the tauri-action steps pass their args");
+    assert!(builds >= 1, "the release workflow builds the desktop bundle");
 }
