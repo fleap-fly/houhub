@@ -806,7 +806,7 @@ mod tests {
         for houhub in [
             app(100, None, None),
             app(200, Some("com.houflow.houhub"), None),
-            app(200, Some("APP.HOUHUB"), None),
+            app(200, Some("COM.HOUFLOW.HOUHUB"), None),
             app(300, None, Some("/Applications/houhub.app")),
             app(
                 300,
