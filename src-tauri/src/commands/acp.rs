@@ -7198,11 +7198,6 @@ pub(crate) fn load_pi_config_at(pi_dir: &Path) -> PiConfigProjection {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn load_pi_config_core() -> PiConfigProjection {
-    load_pi_config_at(&pi_agent_dir())
-}
-
 pub(crate) async fn load_pi_config_for_db(db: &AppDatabase) -> Result<PiConfigProjection, AcpError> {
     Ok(load_pi_config_at(&pi_settings_dir_from_db(db).await?))
 }
