@@ -43,8 +43,11 @@
 //! (which fails on an existing name).
 
 use std::collections::HashSet;
+
 use std::path::{Path, PathBuf};
+
 use std::sync::{Mutex, OnceLock};
+
 use std::time::Duration;
 
 /// Directory under the temp root that houhub owns outright. Every sweep is
@@ -78,6 +81,7 @@ const ROOT_ENV: &str = "HOUHUB_ACP_TMP_ROOT";
 /// `libc`, and a second copy would be a number nothing verifies.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) const SUN_PATH_CAP: usize = 108;
+
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 pub(crate) const SUN_PATH_CAP: usize = 104;
 
@@ -261,6 +265,8 @@ pub fn scratch_root() -> PathBuf {
 /// houhub itself changes its mind about where the short root lives. Sweeping
 /// only today's answer would strand yesterday's directories exactly the way
 /// this module's own docs warn about.
+// Windows has no short root, so the list of candidates is one long there.
+#[cfg_attr(windows, allow(clippy::single_element_loop))]
 fn sweep_roots() -> Vec<PathBuf> {
     let mut roots = vec![scratch_root()];
     for candidate in [

@@ -20,13 +20,17 @@
 //! `AppState` and every test constructor.
 
 use std::path::{Path, PathBuf};
+
 use std::sync::{Arc, OnceLock};
+
 use std::time::Duration;
 
 use tokio::sync::Mutex;
+
 use tokio::task::JoinHandle;
 
 use super::listener::DelegationListener;
+
 use super::transport::client_ping;
 
 /// How long a liveness probe may take before the socket is called dead. The
@@ -497,6 +501,7 @@ mod tests {
             Arc::new(Stub),
             Arc::new(Stub),
             Arc::new(Stub),
+            Arc::new(crate::acp::computer_tools::NoComputerDesktop),
         );
         DelegationService::new(listener, socket_path)
     }

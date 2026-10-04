@@ -1,20 +1,28 @@
 use std::collections::HashMap;
+
 #[cfg(target_os = "macos")]
 use std::sync::atomic::AtomicU32;
+
 #[cfg(target_os = "macos")]
 use std::sync::atomic::AtomicU64;
+
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering as AtomicOrdering};
+
 use std::sync::Mutex;
 
 use sea_orm::DatabaseConnection;
+
 use tauri::{
     window::{Effect, EffectState, EffectsBuilder},
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
 use crate::app_error::AppCommandError;
+
 use crate::db::service::app_metadata_service;
+
 use crate::db::AppDatabase;
+
 use crate::models::FolderDetail;
 
 /// Base traffic-light position (logical px) at 100 % zoom, tuned for the
@@ -22,8 +30,10 @@ use crate::models::FolderDetail;
 /// (commit / merge / push / stash / settings / …).
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHT_X: f64 = 12.0;
+
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHT_Y: f64 = 17.0;
+
 /// The workspace windows (local `main` + remote workspace) render the taller
 /// h-10 (40px) `FolderTitleBar` that hosts the relocated conversation + file
 /// tab strips, so their traffic lights sit ~4px lower to stay vertically
@@ -87,7 +97,9 @@ const APPEARANCE_MODE_DB_KEY: &str = "appearance_mode";
 static CACHED_APPEARANCE_MODE: AtomicU8 = AtomicU8::new(0);
 
 const MODE_SYSTEM: u8 = 0;
+
 const MODE_DARK: u8 = 1;
+
 const MODE_LIGHT: u8 = 2;
 
 fn mode_from_str(s: &str) -> u8 {
@@ -378,6 +390,7 @@ fn resolve_settings_route(section: Option<&str>) -> &'static str {
         Some("office-tools") => "settings/office-tools",
         Some("collaboration") => "settings/collaboration",
         Some("browser") => "settings/browser",
+        Some("computer-use") => "settings/computer-use",
         Some("version-control") => "settings/version-control",
         Some("shortcuts") => "settings/shortcuts",
         Some("system") => "settings/system",
@@ -895,6 +908,10 @@ fn show_and_focus_window(app: &AppHandle, label: &str) {
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
+    // A `main` hidden to the tray is back, so the next launch reopens it too.
+    // Not left to the focus event: `set_focus` is skipped where the app is not
+    // allowed to take focus, and the window is open all the same.
+    crate::commands::workspace_windows::note_shown(app, label);
 }
 
 pub fn restore_windows_after_settings(
@@ -1290,12 +1307,16 @@ pub async fn open_project_boot_window(
 // ─── Desktop pet window ─────────────────────────────────────────────────
 
 const PET_WINDOW_LABEL: &str = "pet";
+
 const PET_HOVER_ENTER_EVENT: &str = "pet://hover-enter";
+
 const PET_HOVER_LEAVE_EVENT: &str = "pet://hover-leave";
+
 /// Single-frame logical pixel dimensions, locked to the Codex sprite-sheet
 /// contract. The window is sized as one frame × user scale, with no extra
 /// chrome — DPR handling lives inside the webview.
 const PET_BASE_WIDTH: f64 = 192.0;
+
 const PET_BASE_HEIGHT: f64 = 208.0;
 
 /// Process-global "cursor is currently inside the pet window" flag, owned by
@@ -1533,15 +1554,19 @@ pub async fn pet_window_record_position(
 // the pet toggles it; clicking away (blur) dismisses it.
 
 pub const PET_PANEL_LABEL: &str = "pet-panel";
+
 const PET_PANEL_WIDTH: f64 = 300.0;
+
 /// First-frame window height (logical px). The panel reports its real content
 /// height via `resize_pet_panel` right after it mounts, so this is only the
 /// open-time size — tuned to the rendered empty-state card (header + "no active
 /// sessions" message + padding). Keeping it at the common (empty) height means
 /// the common path opens already-correct, with no resize flash.
 const PET_PANEL_DEFAULT_HEIGHT: f64 = 132.0;
+
 /// Floor for `resize_pet_panel`'s clamp — never collapse below a usable header.
 const PET_PANEL_MIN_HEIGHT: f64 = 80.0;
+
 const PET_PANEL_GAP: f64 = 8.0;
 
 /// Guards the toggle-vs-blur race. When the panel auto-closes on blur because
@@ -1550,6 +1575,7 @@ const PET_PANEL_GAP: f64 = 8.0;
 /// panel. The blur handler stamps the close instant here and `toggle_pet_panel`
 /// skips the reopen while the stamp is fresh.
 static PET_PANEL_BLUR_CLOSED_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
 const PET_PANEL_REOPEN_SUPPRESS_MS: u128 = 300;
 
 /// Close the panel on blur (click-away dismiss) and record the time so a
@@ -1823,9 +1849,13 @@ pub async fn focus_conversation(
 
 /// Stable id namespace for pet menu items.
 pub const PET_MENU_ID_PREFIX: &str = "pet:";
+
 pub const PET_MENU_ID_OPEN_MANAGER: &str = "pet:open_manager";
+
 pub const PET_MENU_ID_CLOSE: &str = "pet:close";
+
 pub const PET_MENU_SCALE_PREFIX: &str = "pet:scale:";
+
 /// Selectable scale steps. Display label is locale-independent (just digits +
 /// "×"), so we don't translate it. The id `suffix` survives a round-trip
 /// through the OS menu and back into our event dispatcher.
@@ -2012,8 +2042,11 @@ fn load_macos_tray_template_icon() -> Result<tauri::image::Image<'static>, Strin
 /// Stable id namespace for tray menu items. Routed through the app-wide
 /// `on_menu_event` handler in `lib.rs`.
 pub const TRAY_MENU_ID_PREFIX: &str = "tray:";
+
 pub const TRAY_MENU_ID_SHOW: &str = "tray:show";
+
 pub const TRAY_MENU_ID_QUIT: &str = "tray:quit";
+
 pub const TRAY_ICON_ID: &str = "houhub-tray";
 
 /// True after `install_tray_icon` returns `Ok`. The hide-on-close path
@@ -2707,6 +2740,7 @@ mod settings_route_tests {
     /// the fallback below it is Appearance, so a caller wanting the General
     /// page must be able to name it and land there. `collaboration` is where
     /// the houhub-mcp tool switches live in full, and it is what the status-bar
+    /// houhub-mcp popover links to; `computer-use` is what the Computer use
     /// popover links to.
     #[test]
     fn every_named_settings_section_resolves_to_its_own_route() {
@@ -2721,6 +2755,7 @@ mod settings_route_tests {
             "office-tools",
             "collaboration",
             "browser",
+            "computer-use",
             "version-control",
             "shortcuts",
             "system",

@@ -347,7 +347,9 @@ jobs:
         run: |
           set -euo pipefail
           CARGO_TARGET_DIR=target/sidecar node src-tauri/scripts/prepare-sidecars.mjs --target "${TARGET}"
-          test -s "src-tauri/binaries/houhub-mcp-${TARGET}.exe"
+          for bin in houhub-mcp houhub-computer-helper; do
+            test -s "src-tauri/binaries/${bin}-${TARGET}.exe"
+          done
 
       - name: Compile Windows app
         shell: bash
@@ -357,7 +359,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          test -s "src-tauri/binaries/houhub-mcp-${TARGET}.exe"
+          for bin in houhub-mcp houhub-computer-helper; do
+            test -s "src-tauri/binaries/${bin}-${TARGET}.exe"
+          done
           pnpm tauri build --target "${TARGET}" --no-bundle --config tauri.ci.conf.json
 
       - name: Build Windows bundle
@@ -367,7 +371,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          test -s "src-tauri/binaries/houhub-mcp-${TARGET}.exe"
+          for bin in houhub-mcp houhub-computer-helper; do
+            test -s "src-tauri/binaries/${bin}-${TARGET}.exe"
+          done
           pnpm tauri build --target "${TARGET}" --bundles nsis --config tauri.ci.conf.json
 
       - name: Collect Windows artifacts

@@ -8,10 +8,13 @@
 use std::sync::Arc;
 
 use axum::{extract::Extension, Json};
+
 use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
+
 use crate::app_state::AppState;
+
 use crate::commands::mcp_service::{
     houhub_mcp_service_status_core, set_houhub_mcp_tool_group_core, start_houhub_mcp_service_core,
     HouHubMcpServiceStatus, HouHubMcpStatusSources, HouHubMcpToolGroupTargets,
@@ -29,6 +32,7 @@ pub async fn get_houhub_mcp_service_status(
             session_info: &state.session_info_config,
             browser: &state.browser_tools_config,
             authoring: &state.chat_authoring_config,
+            computer: &state.computer_tools_config,
         })
         .await,
     ))
@@ -58,6 +62,7 @@ pub async fn set_houhub_mcp_tool_group(
             session_info: &state.session_info_config,
             browser: &state.browser_tools_config,
             authoring: &state.chat_authoring_config,
+            computer: &state.computer_tools_config,
         },
         &state.emitter,
         &params.key,

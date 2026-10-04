@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": ["binaries/houhub-mcp"],
+    "macOS": {
+      "files": {
+        "Helpers/houhub-computer-helper.app": "binaries/houhub-computer-helper.app"
+      }
+    }
+  }
+}

@@ -98,7 +98,7 @@ pub struct SessionNotice {
 /// that loaded without one of its components.
 ///
 /// claude-agent-acp gives these no ACP surface — it only writes them to its
-/// stderr — so houhub reads them off the raw SDK stream it already subscribes to
+/// stderr — so HouHub reads them off the raw SDK stream it already subscribes to
 /// (`emitRawSDKMessages`). Field for field the CLI's entry, except that its
 /// `type` is `kind` here, the key the frontend reads.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -511,7 +511,7 @@ pub enum AcpEvent {
     /// one that was requested.
     ///
     /// `session/set_config_option` is advisory: the agent answers with the option
-    /// list it actually adopted, and houhub renders that verbatim — so a refused or
+    /// list it actually adopted, and HouHub renders that verbatim — so a refused or
     /// downgraded pick reads in the composer as the selector springing back for no
     /// reason. pi does this for a model that never declared `reasoning` (its whole
     /// thinking vocabulary collapses to `off`); grok does it for a model switch
@@ -566,10 +566,10 @@ pub enum AcpEvent {
         /// When present, the frontend renders a localized message keyed on
         /// this code; otherwise it falls back to `message`.
         code: Option<String>,
-        /// Out-of-band diagnostic evidence for errors houhub *inferred* rather
+        /// Out-of-band diagnostic evidence for errors HouHub *inferred* rather
         /// than received — currently the `turn_failed_empty*` family, where the
         /// agent reported success and the wire carried no error at all. Holds
-        /// the turn's agent stderr tail and a summary of updates houhub failed
+        /// the turn's agent stderr tail and a summary of updates HouHub failed
         /// to parse.
         ///
         /// **Already redacted and length-bounded at the source**
@@ -674,20 +674,23 @@ pub enum AcpEvent {
     ///
     /// Reaches HouHub from the two adapters `build_client_capabilities`
     /// advertises `asyncTasks` to: claude-agent-acp (0.73+) and codex-acp
-    /// (1.10+) — and from Grok, whose background workflows houhub translates
+    /// (1.10+) — and from Grok, whose background workflows HouHub translates
     /// into the same deltas without advertising anything to it.
     AsyncTask { delta: AsyncTaskDelta },
     /// `session/load` failed in a way HouHub cannot paper over — the agent has
-    /// no record of this `session_id`, the session/process died, or it is
-    /// archived. Emitted instead of silently falling back to `session/new`, so
-    /// the frontend can surface the failure with reload / new-conversation
-    /// actions.
+    /// no record of this `session_id`, the session/process died, it is
+    /// archived, or another client holds it open. Emitted instead of silently
+    /// falling back to `session/new`, so the frontend can surface the failure
+    /// with reload / new-conversation actions.
     SessionLoadFailed {
         session_id: String,
         message: String,
         /// Stable machine-readable identifier: `"resource_not_found"` for
-        /// JSON-RPC -32002, or `"session_unavailable"` / `"session_archived"`
-        /// matched on the wire message. See `classify_session_load_failure`.
+        /// JSON-RPC -32002, `"session_busy"` for codex-acp's typed
+        /// `data.reason: "thread_active_writer"` (2.1.0+; matched on the wire
+        /// message before that), or `"session_unavailable"` /
+        /// `"session_archived"` matched on the wire message. See
+        /// `classify_session_load_error`.
         code: String,
     },
     /// Available slash commands updated
@@ -827,8 +830,26 @@ pub enum AcpEvent {
     SessionConfigStale { stale: bool, kind: ConfigStaleKind },
 }
 
-/// One transcript-accounted background task settlement carried on
-/// [`AcpEvent::BackgroundActivity`].
+/// One background task settled by a `<task-notification>` transcript record,
+/// carried on [`AcpEvent::BackgroundActivity`]. `task_id` is the launch ack's
+/// `agentId` (async sub-agent) or `backgroundTaskId` (background shell);
+/// `status` is the notification's `<status>` passed through verbatim
+/// (`"completed"` on success). The same task id may settle more than once —
+/// a completed sub-agent can be resumed via `SendMessage` and re-notify.
+///
+/// `tool_use_id` and `result` come from the same `<task-notification>` record's
+/// `<tool-use-id>`/`<result>` tags. They let the frontend flip the LAUNCH card
+/// (`AgentToolCallPart`) from "running in background" to its terminal state
+/// entirely in-memory — rewriting the launching tool call's own
+/// `[[houhub-background-task]]` marker — WITHOUT a `refetchDetail`. That refetch
+/// path used to be the only card-flip trigger, but it re-parses the still-open
+/// transcript mid-`#870`-hold and both double-renders the held turn and races
+/// the file's own last write.
+/// `tool_use_id` is the launching `tool_use`/`tool_result` block's id (Claude's
+/// SDK-level `toolu_…`), NOT `task_id`. A background shell's notification names
+/// its `Bash` call too, whose card has no marker to flip, so the frontend leaves
+/// it alone; `None` when the notification names no call (an MCP call moved to
+/// the background).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackgroundSettledInfo {
     pub task_id: String,
@@ -878,7 +899,7 @@ pub enum UserMessageBlock {
 /// prompt back to somebody:
 ///
 /// * the live broadcast, [`user_blocks_from_prompt`] → [`UserMessageBlock`];
-/// * the ACP-native history parser, `parsers::acp_native`, reading houhub's own
+/// * the ACP-native history parser, `parsers::acp_native`, reading HouHub's own
 ///   transcript back off disk;
 /// * the grok history parser, `parsers::grok`, reading grok's `updates.jsonl`.
 ///
@@ -1153,7 +1174,7 @@ fn escape_link_destination(uri: &str) -> String {
 /// [`project_user_prompt_block`] instead of re-deriving the rule.
 ///
 /// The inverse of `connection::map_prompt_blocks`, and deliberately lenient —
-/// it reads bytes written by older builds of houhub and by other agents' stores:
+/// it reads bytes written by older builds of HouHub and by other agents' stores:
 ///
 /// * `mimeType` **and** legacy snake_case `mime_type`;
 /// * an embedded resource's uri/mime/body nested under `resource` (where ACP
@@ -1184,7 +1205,7 @@ pub fn prompt_block_from_wire(item: &serde_json::Value) -> Option<PromptInputBlo
         Some("image") => Some(PromptInputBlock::Image {
             data: string(item, "data")?,
             // ACP requires `mimeType`; a record MISSING it is old enough that
-            // png was the only thing houhub ever pasted. A record that carries
+            // png was the only thing HouHub ever pasted. A record that carries
             // an empty one keeps it, which is what the typed reader sees.
             mime_type: mime(item).unwrap_or_else(|| "image/png".to_string()),
             uri: string(item, "uri"),
@@ -1296,21 +1317,21 @@ pub struct SessionModeStateInfo {
     pub available_modes: Vec<SessionModeInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfigSelectOptionInfo {
     pub value: String,
     pub name: String,
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfigSelectGroupInfo {
     pub group: String,
     pub name: String,
     pub options: Vec<SessionConfigSelectOptionInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfigSelectInfo {
     pub current_value: String,
     pub options: Vec<SessionConfigSelectOptionInfo>,
@@ -1319,19 +1340,19 @@ pub struct SessionConfigSelectInfo {
 
 /// An on/off toggle config option (ACP's boolean `SessionConfigOption`). Cline
 /// 3.0.50+ ships one as `auto_approve` ("Auto-approve tools").
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfigBooleanInfo {
     pub current_value: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionConfigKindInfo {
     Select(SessionConfigSelectInfo),
     Boolean(SessionConfigBooleanInfo),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfigOptionInfo {
     pub id: String,
     pub name: String,
@@ -1339,7 +1360,7 @@ pub struct SessionConfigOptionInfo {
     pub category: Option<String>,
     pub kind: SessionConfigKindInfo,
     /// The value the AGENT recommends for this option, when it named one —
-    /// JetBrains AIR's `recommendedValue` (codex-acp 1.11.0+, gated on houhub
+    /// JetBrains AIR's `recommendedValue` (codex-acp 1.11.0+, gated on HouHub
     /// advertising the capability; see `build_client_capabilities`). It is a
     /// hint, never an instruction: `current_value` still decides what is
     /// selected, and a recommendation that matches nothing in the option list
@@ -1369,6 +1390,21 @@ pub struct GrokModelSpec {
     /// The model's context window (`totalContextTokens`) — Grok's own number.
     /// `None` means the live ring falls back to the catalog/id heuristic.
     pub context_window: Option<u64>,
+}
+
+/// Grok's model catalog as its `_x.ai/models/update` broadcast states it: the
+/// list a session's model picker should offer, plus each model's spec.
+/// Backend-internal — NOT serialized onto the wire.
+#[derive(Debug, Clone)]
+pub struct GrokModelCatalog {
+    /// The picker's model rows in catalog order — `value` is the model id and
+    /// `name` its display name. No description: the rows a handshake's
+    /// `x.ai/sessionConfig` yields carry none, and the picker must read the
+    /// same whichever of the two built it.
+    pub models: Vec<SessionConfigSelectOptionInfo>,
+    /// Per-model specs, parsed exactly as a handshake's `models` are. Each
+    /// `default` here is the bare catalog default, not a session's own effort.
+    pub specs: std::collections::HashMap<String, GrokModelSpec>,
 }
 
 /// Read-only snapshot of the modes + config_options an agent advertises
@@ -1452,7 +1488,7 @@ pub struct AcpAgentInfo {
     pub description: String,
     pub available: bool,
     pub distribution_type: String,
-    /// Whether houhub's entry for this agent is a third-party ACP *adapter*
+    /// Whether HouHub's entry for this agent is a third-party ACP *adapter*
     /// wrapping a vendor CLI of a different name (Claude Code, Codex — see
     /// `registry::acp_adapter_relation`). Lets the surfaces that have no
     /// preflight result (composer block banner, settings header badge) say
@@ -1474,7 +1510,7 @@ pub struct AcpAgentInfo {
     ///
     /// Resolved by [`crate::acp::host_tools_policy::HostToolsPolicy::from_env`],
     /// the same function the launch uses, so it accounts for BOTH layers: the
-    /// per-agent `env_json` above and houhub's own process env. Reading `env`
+    /// per-agent `env_json` above and HouHub's own process env. Reading `env`
     /// frontend-side would see only the first, and an operator who exported the
     /// knob process-wide would get no warning at all while every agent silently
     /// lost delegation.
@@ -1598,13 +1634,13 @@ pub struct CodexGranularApproval {
 
 /// `[sandbox_workspace_write]` — only consulted when the effective sandbox mode
 /// is `workspace-write`. Every field defaults to false/empty upstream, so an
-/// absent key and an explicit `false` are equivalent; houhub writes only the
+/// absent key and an explicit `false` are equivalent; HouHub writes only the
 /// non-default ones to keep the file tidy.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CodexWorkspaceWrite {
     /// Extra writable folders beyond cwd. Upstream these are `AbsolutePathBuf`,
     /// but a RELATIVE entry is not rejected — codex resolves it against
-    /// `CODEX_HOME` (verified: `"rel/dir"` became `~/.codex/rel/dir`). houhub
+    /// `CODEX_HOME` (verified: `"rel/dir"` became `~/.codex/rel/dir`). HouHub
     /// therefore refuses to write relative entries rather than let a user
     /// silently grant write access inside `~/.codex`.
     pub writable_roots: Vec<String>,

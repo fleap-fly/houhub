@@ -23,13 +23,19 @@
 //! off — the cost is one loopback connect per address printed.
 
 use std::collections::VecDeque;
+
 use std::net::{TcpStream, ToSocketAddrs};
+
 use std::sync::atomic::{AtomicUsize, Ordering};
+
 use std::sync::{Mutex, OnceLock};
+
 use std::time::Duration;
 
 use super::service_url::{ServiceCandidate, ServiceScanner};
+
 use super::types::{DetectedService, ServiceSource, SERVICE_DETECTED_EVENT};
+
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 /// How long one connection attempt waits. Loopback either answers at once or
@@ -63,7 +69,7 @@ struct ProbeSlot;
 impl ProbeSlot {
     fn take() -> Option<Self> {
         IN_FLIGHT_PROBES
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |held| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |held| {
                 (held < MAX_IN_FLIGHT_PROBES).then_some(held + 1)
             })
             .ok()

@@ -8,20 +8,23 @@ use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{
     BlobResourceContents, CancelNotification, ClientCapabilities, ClientSessionCapabilities,
-    CompactionCapabilities, ContentBlock, ContentChunk, CreateTerminalRequest,
-    CreateTerminalResponse, ElicitationCapabilities, ElicitationFormCapabilities, EmbeddedResource,
-    EmbeddedResourceResource, FileSystemCapabilities, ImageContent, InitializeRequest,
-    KillTerminalRequest, KillTerminalResponse, LoadSessionRequest, NewSessionRequest,
-    NewSessionResponse, NoticeCapabilities, PermissionOptionKind, Plan, PlanEntryPriority,
-    PlanEntryStatus, PromptRequest, ReadTextFileRequest, ReadTextFileResponse,
+    CloseSessionRequest, CompactionCapabilities, ContentBlock, ContentChunk,
+    CreateTerminalRequest, CreateTerminalResponse, ElicitationCapabilities,
+    ElicitationFormCapabilities, EmbeddedResource, EmbeddedResourceResource,
+    FileSystemCapabilities, ImageContent, InitializeRequest,
+    KillTerminalRequest,
+    KillTerminalResponse, LoadSessionRequest, NewSessionRequest,
+    NewSessionResponse, NoticeCapabilities, PermissionOptionKind, Plan, PlanEntryPriority, PlanEntryStatus,
+    PromptRequest, ReadTextFileRequest, ReadTextFileResponse,
     ReleaseTerminalRequest, ReleaseTerminalResponse, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, ResourceLink, ResumeSessionRequest,
     ResumeSessionResponse, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
     SessionConfigOptionCategory, SessionConfigOptionValue, SessionConfigSelectGroup,
     SessionConfigSelectOption, SessionConfigSelectOptions, SessionId, SessionModeState,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    StopReason, TerminalExitStatus, TerminalOutputRequest, TerminalOutputResponse, TextContent,
-    TextResourceContents, ToolCallContent, ToolCallLocation, ToolKind, WaitForTerminalExitRequest,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionModeRequest, StopReason, TerminalExitStatus,
+    TerminalOutputRequest, TerminalOutputResponse, TextContent, TextResourceContents,
+    ToolCallContent, ToolCallLocation, ToolKind, WaitForTerminalExitRequest,
     WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 
@@ -74,11 +77,11 @@ use crate::acp::terminal_runtime::{
 
 use crate::acp::types::{
     AcpEvent, AsyncTaskDelta, AsyncTaskUsage, AvailableCommandInfo, ConnectionInfo,
-    ConnectionStatus, GrokModelSpec, PermissionOptionInfo, PlanEntryInfo, PluginLoadFailure,
-    PromptCapabilitiesInfo, PromptInputBlock, SessionConfigBooleanInfo, SessionConfigKindInfo,
-    SessionConfigOptionInfo, SessionConfigSelectGroupInfo, SessionConfigSelectInfo,
-    SessionConfigSelectOptionInfo, SessionFailureRecord, SessionModeInfo, SessionModeStateInfo,
-    SessionNotice, ToolCallImageInfo, UserMessageBlock,
+    ConnectionStatus, GrokModelCatalog, GrokModelSpec, PermissionOptionInfo, PlanEntryInfo,
+    PluginLoadFailure, PromptCapabilitiesInfo, PromptInputBlock, SessionConfigBooleanInfo,
+    SessionConfigKindInfo, SessionConfigOptionInfo, SessionConfigSelectGroupInfo,
+    SessionConfigSelectInfo, SessionConfigSelectOptionInfo, SessionFailureRecord, SessionModeInfo,
+    SessionModeStateInfo, SessionNotice, ToolCallImageInfo, UserMessageBlock,
 };
 
 use crate::logging::throttle::LeadingEdgeThrottle;
@@ -89,7 +92,9 @@ use crate::network::proxy;
 
 use crate::parsers::COMPACTION_SUMMARY_META_KEY;
 
-use crate::web::event_bridge::{emit_with_state, emit_with_state_gated, EventEmitter};
+use crate::web::event_bridge::{
+    emit_with_state, emit_with_state_built, emit_with_state_gated, EventEmitter,
+};
 
 /// Injected into the agent process only when the user has opted in — see
 /// [`force_command_color_enabled`] for why it is not a default.
@@ -114,15 +119,15 @@ use crate::web::event_bridge::{emit_with_state, emit_with_state_gated, EventEmit
 ///   toggle used to do nothing for the build command most people run first.
 /// - `TERM` — not a color flag, a precondition for the others. BSD `ls` resolves
 ///   its palette through `tgetent(getenv("TERM"))` and stays monochrome when
-///   TERM names nothing, which is the normal case for a houhub launched from
+///   TERM names nothing, which is the normal case for a HouHub launched from
 ///   Finder rather than from a shell. `supports-color` reads it too, and answers
 ///   256 colors for a `-256color` suffix where `FORCE_COLOR=1` alone caps at 16.
 ///
 /// `TERM` is the one entry here that OVERRIDES an inherited value rather than
 /// filling in a missing one (`merge_agent_env` lists what a launch sets;
 /// everything else is inherited). That is deliberate: the agent's stdout is a
-/// pipe to houhub and never a terminal, so an inherited `TERM` describes the
-/// shell that happened to start houhub — `screen-256color` under tmux, nothing
+/// pipe to HouHub and never a terminal, so an inherited `TERM` describes the
+/// shell that happened to start HouHub — `screen-256color` under tmux, nothing
 /// at all under Finder — not anything the agent is attached to. Pinning one
 /// known-good entry is what makes the toggle behave the same in a packaged app
 /// as in `pnpm tauri dev`. A per-agent env row still outranks all four.
@@ -148,14 +153,14 @@ static FORCE_COMMAND_COLOR: AtomicBool = AtomicBool::new(false);
 /// environment.
 ///
 /// **Off by default**, which is a behavior change: launches used to force
-/// `CLICOLOR_FORCE` unconditionally. The feature it buys is real — houhub
+/// `CLICOLOR_FORCE` unconditionally. The feature it buys is real — HouHub
 /// preserves ANSI through tool-call output streaming ([`trim_partial_ansi_tail`])
 /// so the transcript's `<Terminal>` card renders command output in color — but
 /// the cost was paid by everything else in the process tree.
 ///
-/// houhub cannot scope the force to the output it renders. Agents like Claude
+/// HouHub cannot scope the force to the output it renders. Agents like Claude
 /// Code run their bash tool IN-PROCESS, so the commands whose color shows up in
-/// the card are not spawned by houhub at all; the only reachable lever is the
+/// the card are not spawned by HouHub at all; the only reachable lever is the
 /// agent's own environment, which every descendant inherits. So the same
 /// variables that color the terminal card also color the output the agent pipes
 /// into `jq` — and neither force flag can be vetoed downstream: `CLICOLOR_FORCE`
@@ -252,7 +257,7 @@ fn merge_agent_env_with_color(
     // a style choice. A self-extracting agent binary resolves its unpack
     // location from `TMP` before `TEMP` (Windows `GetTempPathW`), so leaving a
     // per-agent `env_json` `TMP` in place would send a 1.17 GB extraction
-    // wherever that points while houhub cheerfully deleted an empty scratch
+    // wherever that points while HouHub cheerfully deleted an empty scratch
     // directory and reported the leak fixed. Users who want the churn on
     // another volume set `HOUHUB_ACP_TMP_ROOT`; users who want the old
     // pass-through wholesale set `HOUHUB_ACP_TMP_ISOLATION=0`.
@@ -342,7 +347,7 @@ const ANTIGRAVITY_AUTH_METHOD_ENV: &str = "AGY_AUTH_METHOD";
 
 /// The four `auth.type` values Antigravity's ACP server accepts, canonical
 /// spellings only. `vertex-ai` is the pre-rebrand alias for `agent-platform`;
-/// the server still accepts it, but houhub never writes it.
+/// the server still accepts it, but HouHub never writes it.
 const ANTIGRAVITY_AUTH_METHODS: &[&str] = &[
     "oauth-personal",
     "oauth-business",
@@ -420,7 +425,7 @@ fn antigravity_env_vars_for_method(method: &str) -> &'static [&'static str] {
 /// contradict it.
 ///
 /// Legacy rows with no recorded method — and any unrecognized value — are left
-/// completely untouched, so nothing changes for a config houhub does not
+/// completely untouched, so nothing changes for a config HouHub does not
 /// understand.
 fn apply_antigravity_env_policy(
     merged: &mut Vec<(String, String)>,
@@ -452,20 +457,20 @@ fn apply_antigravity_env_policy(
 ///
 /// This is load-bearing, not a convenience: `session/new` fails outright with
 /// `-32000 Authentication required` when that file declares no `auth.type`
-/// (environment-based selection was removed upstream), and houhub does not
+/// (environment-based selection was removed upstream), and HouHub does not
 /// implement the ACP `authenticate` request that would otherwise set it. With
 /// the file in place the server runs its own browser OAuth loopback flow inside
 /// `session/new`, so writing it is what makes the agent usable at all.
 ///
 /// Deliberately a READ-MODIFY-WRITE merge of only three keys. The file is the
 /// user's (the server parses it as Hjson and documents it as user-provided), so
-/// unknown keys and any hand-written `gcp` block survive a houhub write.
+/// unknown keys and any hand-written `gcp` block survive a HouHub write.
 ///
 /// FAILS CLOSED, exactly like the server's own `settings_writer`: "a file that
 /// cannot be parsed is left alone, since rewriting it would delete content we
 /// could not read." A missing file means "create"; a read error, a parse error
-/// or a non-object root all mean "give up". The one place houhub is stricter is
-/// the dialect — the server parses Hjson (comments, trailing commas) and houhub
+/// or a non-object root all mean "give up". The one place HouHub is stricter is
+/// the dialect — the server parses Hjson (comments, trailing commas) and HouHub
 /// only strict JSON, so a hand-commented file lands in the give-up branch
 /// rather than being flattened. The warning names the file so the user can set
 /// `auth.type` there themselves; the panel shows that same path.
@@ -799,12 +804,12 @@ pub fn is_antigravity_auth_method(method_id: &str) -> bool {
     ANTIGRAVITY_AUTH_METHODS.contains(&method_id)
 }
 
-/// What houhub can say about the method the ACP server will authenticate with.
+/// What HouHub can say about the method the ACP server will authenticate with.
 ///
 /// Three states, and [`Unreadable`](Self::Unreadable) is emphatically not a
-/// flavor of [`Absent`](Self::Absent). The server parses Hjson and houhub only
-/// strict JSON, so a file houhub cannot read is one the SERVER can — it names a
-/// method, houhub just cannot see which. Collapsing the two would let a caller
+/// flavor of [`Absent`](Self::Absent). The server parses Hjson and HouHub only
+/// strict JSON, so a file HouHub cannot read is one the SERVER can — it names a
+/// method, HouHub just cannot see which. Collapsing the two would let a caller
 /// treat "I have no idea" as "there is nothing there", which for the sign-out
 /// means aiming `logout` at a flavor with nothing to clear and reporting the
 /// `{}` it answers as a success.
@@ -815,7 +820,7 @@ pub enum AntigravityAuthType {
     /// No file, or a file that names no method. The server has nothing to
     /// infer from either, and falls back to its own defaults.
     Absent,
-    /// houhub could not read or parse it. The server still can.
+    /// HouHub could not read or parse it. The server still can.
     Unreadable,
 }
 
@@ -854,7 +859,7 @@ pub fn antigravity_effective_auth_type(
         .unwrap_or(AntigravityAuthType::Absent)
 }
 
-/// The pre-rebrand `vertex-ai` spelling resolved to the id houhub uses.
+/// The pre-rebrand `vertex-ai` spelling resolved to the id HouHub uses.
 fn canonical_antigravity_auth_method(method: &str) -> &str {
     match method {
         "vertex-ai" => "agent-platform",
@@ -877,7 +882,7 @@ pub fn antigravity_acp_dir_for_runtime_env(
 /// Read `settings.json` for editing.
 ///
 /// `Ok(None)` means "no file, safe to create". `Err` means "do not touch it" —
-/// unreadable, not JSON houhub can parse, or not a JSON object.
+/// unreadable, not JSON HouHub can parse, or not a JSON object.
 fn read_antigravity_settings(path: &Path) -> Result<Option<serde_json::Value>, String> {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
@@ -920,7 +925,7 @@ fn write_antigravity_settings(
 /// Merge the panel's choice into a parsed `settings.json`.
 ///
 /// `Ok(None)` means the file already says exactly this, so the caller can skip
-/// the write. `Err` means a block houhub would have to edit is not the shape it
+/// the write. `Err` means a block HouHub would have to edit is not the shape it
 /// expects — the same fail-closed rule the read side applies to the whole
 /// document, and the same one the server's own `settings_writer` applies here
 /// ("not editing %r because `auth` is not an object"). Replacing a non-object
@@ -1246,11 +1251,11 @@ pub enum ConnectionCommand {
 /// by the outer `.map_err(...)` in `run_connection`.
 const INIT_TIMEOUT_SENTINEL: &str = "__houhub_init_timeout__";
 
-/// Sentinel appended to a `session/new` failure when houhub had just forwarded
+/// Sentinel appended to a `session/new` failure when HouHub had just forwarded
 /// MCP servers to a *custom* agent, so the outer `.map_err(...)` can raise
 /// `AcpError::McpRejectedByAgent` and point the user at the `supports_mcp`
 /// switch. Same trick as [`INIT_TIMEOUT_SENTINEL`] — the inner future is typed
-/// to `agent_client_protocol::Error`, which has nowhere to carry a houhub error kind.
+/// to `agent_client_protocol::Error`, which has nowhere to carry a HouHub error kind.
 const MCP_SUSPECT_SENTINEL: &str = "__houhub_mcp_suspect__";
 
 /// Sentinel appended to a `session/new` failure the agent answered with ACP's
@@ -1305,13 +1310,13 @@ fn tag_new_session_failure(
     tag_mcp_suspect(err, agent_type, mcp_servers)
 }
 
-/// Mark a `session/new` failure as possibly caused by the MCP servers houhub put
+/// Mark a `session/new` failure as possibly caused by the MCP servers HouHub put
 /// on the wire.
 ///
 /// Restricted to custom agents on purpose. A built-in's `supports_mcp` is a
 /// repository constant already verified against the real agent, so blaming MCP
 /// there would send the user chasing a switch that isn't wrong (and that they
-/// cannot flip). A custom agent's is a user declaration about a binary houhub
+/// cannot flip). A custom agent's is a user declaration about a binary HouHub
 /// knows nothing about — the case this hint is for. An empty list rules MCP out
 /// entirely, since then nothing was forwarded to reject.
 fn tag_mcp_suspect(
@@ -1506,7 +1511,7 @@ fn pi_runtime_outdated_message() -> String {
     )
 }
 
-/// Transcript directory for an agent that houhub must record itself, or `None`
+/// Transcript directory for an agent that HouHub must record itself, or `None`
 /// for agents with their own store parser.
 ///
 /// Only custom ACP agents are recorded: every built-in has a dedicated parser
@@ -1528,7 +1533,7 @@ fn record_transcript_header(agent_type: AgentType, session_id: &str, cwd: &str) 
 /// [`record_transcript_header`] for a session that carries an existing
 /// conversation forward.
 ///
-/// `continues_from` is set when `session/load` failed and houhub opened a fresh
+/// `continues_from` is set when `session/load` failed and HouHub opened a fresh
 /// agent session for the same conversation: the earlier turns stay where they
 /// are and this header links back to them, so the reader still sees one
 /// history. See [`crate::acp_transcript::TranscriptHeader::continues_from`].
@@ -1829,7 +1834,7 @@ async fn build_agent(
                 if let Some(message) = pi_launch_preflight(&launch_env, cwd) {
                     return Err(AcpError::SdkNotInstalled(message));
                 }
-                // NOTE: houhub deliberately does NOT touch pi's `trust.json` here.
+                // NOTE: HouHub deliberately does NOT touch pi's `trust.json` here.
                 // It used to mark this workspace trusted on every launch, which
                 // made pi load the repo's own `.pi/*` — including `.pi/extensions`,
                 // JS/TS modules whose top level executes at pi startup with the
@@ -2067,7 +2072,7 @@ async fn build_agent(
             }
             let mut merged_env =
                 sanitize_agent_env(agent_type, merge_agent_env(env, runtime_env, scratch));
-            // houhub launches the binary by absolute path, so this is not about
+            // HouHub launches the binary by absolute path, so this is not about
             // finding it — it is about the agent finding ITSELF. An agent that
             // re-execs its own CLI for a subtask looks it up on PATH, and a
             // desktop launch never inherits the shell rc line the vendor's
@@ -2377,13 +2382,13 @@ pub async fn spawn_agent_connection(
     // agent's state. Uses the same `launch_cwd` the process and ACP session get.
     let fs_policy = FsAccessPolicy::from_env(&launch_cwd, agent_type, &runtime_env);
 
-    // Whether houhub hosts the `fs/*` + `terminal/*` channels at all, or hands
+    // Whether HouHub hosts the `fs/*` + `terminal/*` channels at all, or hands
     // them back to the agent so the agent's OWN sandbox covers them (#436).
     // Resolved here for the same reason as `fs_policy`: it reads the full
     // per-agent `runtime_env`, which does not survive into `run_connection`.
     let host_tools = HostToolsPolicy::from_env(&runtime_env);
 
-    // Forward only the houhub git credential helper keys into the terminal
+    // Forward only the HouHub git credential helper keys into the terminal
     // runtime — not the agent's API tokens or model provider credentials.
     // This makes `git fetch`/`git push` issued through the ACP
     // `terminal/create` tool authenticate via the same helper path the
@@ -3112,7 +3117,7 @@ async fn withdraw_permission(
 /// Retire a permission card the moment the agent takes its request back.
 ///
 /// The ACP runtime marks a parked request cancelled when the agent sends
-/// `$/cancel_request` for it, and the two adapters houhub follows most closely
+/// `$/cancel_request` for it, and the two adapters HouHub follows most closely
 /// both do: claude-agent-acp (0.81) wires each tool call's abort signal into its
 /// `session/request_permission`, so a stopped sub-agent or an interrupted tool
 /// withdraws its approval; codex-acp (1.13) wires its prompt's signal into every
@@ -3296,7 +3301,7 @@ fn map_session_config_select_group(
 /// `_meta.jetbrains.air` envelope.
 ///
 /// Envelope validation mirrors [`air_session_failure`] (integer `version >= 1`,
-/// the same check the adapters run on houhub's own advertisement), so a
+/// the same check the adapters run on HouHub's own advertisement), so a
 /// future-incompatible envelope yields `None` rather than a half-understood
 /// hint. The payload must be a non-blank string: codex-acp only ever writes a
 /// model id or a reasoning-effort id there, and anything else is not something
@@ -3393,8 +3398,8 @@ fn map_session_config_options(
 /// [`SessionState::env_pinned_config_option_ids`]).
 ///
 /// Only cline has one today: its `provider` selector is hard-refused whenever
-/// `CLINE_PROVIDER` is exported, which houhub does for every bring-your-own
-/// provider. The check is on the variable houhub actually ships, not on the
+/// `CLINE_PROVIDER` is exported, which HouHub does for every bring-your-own
+/// provider. The check is on the variable HouHub actually ships, not on the
 /// configured provider id, because the pin is what the agent tests.
 fn env_pinned_config_option_ids(
     agent_type: AgentType,
@@ -3479,7 +3484,7 @@ async fn emit_selectors_ready(state: &Arc<RwLock<SessionState>>, emitter: &Event
 }
 
 /// The conventional id of a model selector. ACP reserves none — `category:
-/// "model"` is the spec-level signal — but every agent houhub drives spells the
+/// "model"` is the spec-level signal — but every agent HouHub drives spells the
 /// id this way, and the frontend's `isModelConfigOption` accepts either.
 const MODEL_CONFIG_OPTION_ID: &str = "model";
 
@@ -3684,8 +3689,185 @@ fn set_grok_effort_selector_for_model(
     }
 }
 
+/// `_x.ai/models/update` — Grok's model catalog broadcast. Connection-level: it
+/// carries NO `sessionId` (see [`GrokModelCatalogBroadcasts`]).
+const GROK_MODELS_UPDATE_METHOD: &str = "_x.ai/models/update";
+
+/// Read a `_x.ai/models/update` broadcast. As grok 1.0.40 sends it (captured
+/// live):
+///
+///   {"currentModelId": "grok-4.7",
+///    "availableModels": [{"modelId", "name", "description",
+///                         "_meta": {"totalContextTokens", "agentType",
+///                                   "supportsReasoningEffort", "reasoningEffort",
+///                                   "reasoningEfforts": [{"id", "value", "label",
+///                                                         "description",
+///                                                         "default"}]}}]}
+///
+/// — the entry shape of a handshake's `models`, custom `[model.<id>]` endpoints
+/// included. `None` when it names no usable model (`availableModels` missing,
+/// malformed or empty, or no entry with a model id), so a bad frame can never
+/// wipe the picker. `currentModelId` is deliberately not read; see
+/// [`fold_grok_catalog_into_picker`].
+fn parse_grok_model_catalog(params: &serde_json::Value) -> Option<GrokModelCatalog> {
+    let entries = params.get("availableModels")?.as_array()?;
+    let mut models: Vec<SessionConfigSelectOptionInfo> = Vec::new();
+    for entry in entries {
+        let Some(model_id) = entry
+            .get("modelId")
+            .and_then(|v| v.as_str())
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        if models.iter().any(|row| row.value == model_id) {
+            continue;
+        }
+        let name = entry
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(model_id);
+        models.push(SessionConfigSelectOptionInfo {
+            value: model_id.to_string(),
+            name: name.to_string(),
+            description: None,
+        });
+    }
+    if models.is_empty() {
+        return None;
+    }
+    Some(GrokModelCatalog {
+        models,
+        specs: parse_grok_model_specs(Some(params)),
+    })
+}
+
+/// Fold a catalog broadcast's specs into the session's.
+///
+/// What a model OFFERS — its efforts, whether it takes one, its window — comes
+/// from the broadcast: it is the newer catalog, and the only source for a model
+/// the handshake did not know. A `default` the session already had for a model
+/// is kept, though: a handshake's per-model `reasoningEffort` folds in the
+/// session's own effort (`default_reasoning_effort` included — a live 1.0.40
+/// handshake said `xhigh` where the broadcast after it said `high`), while the
+/// broadcast's is the bare catalog default. Models the broadcast no longer
+/// lists keep their spec: the session may still be running on one.
+fn fold_grok_catalog_specs(
+    specs: &mut HashMap<String, GrokModelSpec>,
+    catalog: &HashMap<String, GrokModelSpec>,
+) {
+    for (model_id, fresh) in catalog {
+        let default = specs
+            .get(model_id)
+            .and_then(|known| known.default.clone())
+            .or_else(|| fresh.default.clone());
+        specs.insert(
+            model_id.clone(),
+            GrokModelSpec {
+                default,
+                ..fresh.clone()
+            },
+        );
+    }
+}
+
+/// Fold a catalog broadcast into a Grok picker: the model rows become the
+/// catalog's, and nothing the session chose moves.
+///
+/// * The checkmark stays on the model the picker shows, and nothing here sends
+///   `session/set_model`. The broadcast's `currentModelId` is grok's
+///   process-wide pick, not a switch of this session; grok's own pager does not
+///   move its selection on it either. A session whose model the catalog no
+///   longer lists is still running on it, so its row is kept, first, rather
+///   than dropped — the pager keeps it displayed too.
+/// * The effort selector is rebuilt from the current model's refreshed spec but
+///   keeps the value it shows — the user's pick, or the session's own effort —
+///   even if the refreshed list no longer offers it, the way
+///   [`build_grok_effort_option`] keeps an out-of-list default. The catalog's
+///   default only fills in where there was no effort selector to keep a value
+///   from. A model with no spec keeps its effort selector as it is.
+///
+/// A list with no model selector is left alone: a broadcast refreshes a
+/// picker, it never invents one.
+fn fold_grok_catalog_into_picker(
+    opts: &mut Vec<SessionConfigOptionInfo>,
+    catalog: &GrokModelCatalog,
+    specs: &HashMap<String, GrokModelSpec>,
+) {
+    let Some(model) = opts
+        .iter_mut()
+        .filter(|o| o.id == GROK_MODEL_OPTION_ID)
+        .find_map(|o| match &mut o.kind {
+            SessionConfigKindInfo::Select(sel) => Some(sel),
+            SessionConfigKindInfo::Boolean(_) => None,
+        })
+    else {
+        return;
+    };
+    let current = model.current_value.clone();
+    let mut rows = catalog.models.clone();
+    if !rows.iter().any(|row| row.value == current) {
+        rows.insert(
+            0,
+            kept_select_row(&model.options, &current, || current.clone(), None),
+        );
+    }
+    model.options = rows;
+
+    if !specs.contains_key(&current) {
+        return;
+    }
+    let kept_effort = opts
+        .iter()
+        .filter(|o| o.id == GROK_EFFORT_OPTION_ID)
+        .find_map(|o| match &o.kind {
+            SessionConfigKindInfo::Select(sel) => Some((
+                sel.current_value.clone(),
+                kept_select_row(
+                    &sel.options,
+                    &sel.current_value,
+                    || grok_effort_label(&sel.current_value).to_string(),
+                    grok_effort_description(&sel.current_value),
+                ),
+            )),
+            SessionConfigKindInfo::Boolean(_) => None,
+        });
+    opts.retain(|o| o.id != GROK_EFFORT_OPTION_ID);
+    let Some(mut effort) = build_grok_effort_option(&current, specs) else {
+        return;
+    };
+    if let (Some((value, row)), SessionConfigKindInfo::Select(sel)) =
+        (kept_effort, &mut effort.kind)
+    {
+        if !sel.options.iter().any(|o| o.value == value) {
+            sel.options.insert(0, row);
+        }
+        sel.current_value = value;
+    }
+    opts.push(effort);
+}
+
+/// The row `value` already has in `rows`, or a fresh one named by `name` — for
+/// a value a refreshed list no longer offers but the picker still shows.
+fn kept_select_row(
+    rows: &[SessionConfigSelectOptionInfo],
+    value: &str,
+    name: impl FnOnce() -> String,
+    description: Option<&str>,
+) -> SessionConfigSelectOptionInfo {
+    rows.iter()
+        .find(|row| row.value == value)
+        .cloned()
+        .unwrap_or_else(|| SessionConfigSelectOptionInfo {
+            value: value.to_string(),
+            name: name(),
+            description: description.map(str::to_string),
+        })
+}
+
 /// Grok does not emit the standard ACP `config_options` / `modes` channels that
-/// houhub's generic composer-selector pipeline reads (which is why the composer
+/// HouHub's generic composer-selector pipeline reads (which is why the composer
 /// showed no selectors for Grok). Instead it ships its selectors in a
 /// non-standard `_meta["x.ai/sessionConfig"].options` list — a flat array of
 /// `{id, category, label, description?, selected}` covering both model choices
@@ -3800,18 +3982,33 @@ fn synthesize_grok_config_options(
     }
 }
 
-/// Emit an already-mapped `SessionConfigOptionInfo` list (used by the Grok path,
-/// which synthesizes `Info` directly rather than mapping schema `SessionConfigOption`s).
-async fn emit_session_config_options_info(
+/// Emit the picker a Grok session establishment built (grok's selectors are
+/// synthesized as `Info` directly rather than mapped from schema
+/// `SessionConfigOption`s), folded with the model catalog broadcast that came in
+/// while it was being built, if one did.
+///
+/// The broadcast can land anywhere in an establishment — after the handshake
+/// answered but before this emit, for one, when applying the saved preferences
+/// awaits `session/set_model` — and the handshake may predate the catalog it
+/// brings, so it waits in `SessionState::grok_catalog_broadcast`. It is taken
+/// under the emit's own lock, so a broadcast either lands before (and is folded
+/// in here) or after (and [`GrokModelCatalogBroadcasts`] folds it into this
+/// picker), never in between.
+async fn emit_grok_established_picker(
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
-    config_options: Vec<SessionConfigOptionInfo>,
+    mut opts: Vec<SessionConfigOptionInfo>,
 ) {
-    emit_with_state(
-        state,
-        emitter,
-        AcpEvent::SessionConfigOptions { config_options },
-    )
+    emit_with_state_built(state, emitter, move |s| {
+        if let Some(catalog) = s.grok_catalog_broadcast.take() {
+            let specs = s.grok_model_specs.get_or_insert_with(HashMap::new);
+            fold_grok_catalog_specs(specs, &catalog.specs);
+            fold_grok_catalog_into_picker(&mut opts, &catalog, specs);
+        }
+        Some(AcpEvent::SessionConfigOptions {
+            config_options: opts,
+        })
+    })
     .await;
 }
 
@@ -4141,27 +4338,33 @@ async fn set_grok_config_option(
     };
     match set_grok_model(cx, session_id, model_id, effort).await {
         Ok(()) => {
-            let (current, specs) = {
-                let g = state.read().await;
-                (g.config_options.clone(), g.grok_model_specs.clone())
-            };
-            if let Some(mut opts) = current {
-                if let Some(o) = opts.iter_mut().find(|o| o.id == config_id) {
-                    if let SessionConfigKindInfo::Select(sel) = &mut o.kind {
-                        sel.current_value = value_id.clone();
-                    }
+            // Built under the emit's own lock, from the picker as it is now: a
+            // model catalog broadcast refreshes it from the connection's
+            // dispatch task, and re-emitting a list read before that would
+            // undo the refresh (see `GrokModelCatalogBroadcasts`).
+            emit_with_state_built(state, emitter, |s| {
+                let mut opts = s.config_options.clone()?;
+                if let Some(SessionConfigKindInfo::Select(sel)) = opts
+                    .iter_mut()
+                    .find(|o| o.id == config_id)
+                    .map(|o| &mut o.kind)
+                {
+                    sel.current_value = value_id.clone();
                 }
                 // A MODEL switch must re-point the effort selector at the new
                 // model — grok never re-sends per-model effort data on
                 // set_model. An EFFORT change leaves the list shape alone; no
                 // specs ⇒ leave as-is (flat-fallback session).
                 if config_id == GROK_MODEL_OPTION_ID {
-                    if let Some(specs) = &specs {
+                    if let Some(specs) = &s.grok_model_specs {
                         set_grok_effort_selector_for_model(&mut opts, &value_id, specs);
                     }
                 }
-                emit_session_config_options_info(state, emitter, opts).await;
-            }
+                Some(AcpEvent::SessionConfigOptions {
+                    config_options: opts,
+                })
+            })
+            .await;
             Ok(())
         }
         Err(e) if is_grok_incompatible_agent_switch(&e) => {
@@ -4181,15 +4384,16 @@ async fn emit_grok_incompatible_agent_switch(
     state: &Arc<RwLock<SessionState>>,
     emitter: &EventEmitter,
 ) {
-    // Clone the options out of the read guard into a local BEFORE emitting: the
-    // `emit_*` helpers re-acquire this same state's WRITE lock, and an `if let`
-    // scrutinee keeps its temporary (the read guard) alive across the whole body
-    // in Rust 2021 — so reading inline would deadlock. `current_value` is
-    // unchanged because the switch never took effect.
-    let current = state.read().await.config_options.clone();
-    if let Some(opts) = current {
-        emit_session_config_options_info(state, emitter, opts).await;
-    }
+    // Re-emit the options as they stand, read under the emit's own write lock:
+    // a separate read first would race a model catalog broadcast refreshing the
+    // picker in between, and re-emit the list from before it. `current_value`
+    // is unchanged because the switch never took effect.
+    emit_with_state_built(state, emitter, |s| {
+        s.config_options
+            .clone()
+            .map(|config_options| AcpEvent::SessionConfigOptions { config_options })
+    })
+    .await;
     emit_with_state(
         state,
         emitter,
@@ -4234,8 +4438,8 @@ async fn apply_and_emit_session_config_options(
         if let Some(mut opts) = synthesize_grok_config_options(grok_meta, &specs) {
             // Cache the per-model effort map so a later model switch can rebuild
             // the effort selector for the target model (grok ships it only at
-            // session birth). `None` when empty keeps the switch path on the
-            // flat-fallback branch.
+            // session birth, and on a catalog broadcast). `None` when empty
+            // keeps the switch path on the flat-fallback branch.
             state.write().await.grok_model_specs = (!specs.is_empty()).then(|| specs.clone());
             let session_id = session.session_id().clone();
             apply_grok_preferred_options(
@@ -4246,7 +4450,7 @@ async fn apply_and_emit_session_config_options(
                 &specs,
             )
             .await;
-            emit_session_config_options_info(state, emitter, opts).await;
+            emit_grok_established_picker(state, emitter, opts).await;
             return;
         }
         // No x.ai/sessionConfig (unexpected): fall through to the standard path,
@@ -4333,7 +4537,7 @@ async fn apply_and_emit_session_config_options(
 /// advertises `image: false`, accepts a native `image` block anyway, and answers
 /// correctly about the pixels — while the same bytes as a resource blob make the
 /// model invent an answer. The advertisement has simply been wrong for as long
-/// as houhub has supported grok, across every version tested, so this is
+/// as HouHub has supported grok, across every version tested, so this is
 /// deliberately NOT version-gated (and stays correct if grok ever starts
 /// advertising the truth: `image` is already true then). Deliberately no pinned
 /// version named here either — `registry.rs` moves on its own schedule, and a
@@ -4405,7 +4609,7 @@ fn claude_raw_sdk_session_meta(
     Some(meta)
 }
 
-/// The client capabilities houhub advertises on Initialize, with per-agent
+/// The client capabilities HouHub advertises on Initialize, with per-agent
 /// gates. Extracted for testability — each gate is a documented product
 /// decision:
 ///
@@ -4423,7 +4627,7 @@ fn claude_raw_sdk_session_meta(
 ///   tool-call approvals and MCP-server forms included — so the handler must
 ///   cover every shape (`classify_elicitation`). URL elicitation is
 ///   deliberately NOT advertised: codex-acp then falls back to
-///   `session/request_permission`, which houhub already handles. Scoped to
+///   `session/request_permission`, which HouHub already handles. Scoped to
 ///   Codex to keep the blast radius off other agents (e.g. Claude's native
 ///   AskUserQuestion, which would otherwise un-gate and duplicate the
 ///   houhub-mcp ask tool).
@@ -4431,7 +4635,7 @@ fn claude_raw_sdk_session_meta(
 ///   claude-agent-acp ≥0.63's subagent transcript forwarding (#881, SDK
 ///   `forwardSubagentText`). Subagent text/thought chunks then stream with
 ///   update-level `_meta.claudeCode.parentToolUseId` instead of being
-///   filtered; houhub routes them into the live Agent capsule (see
+///   filtered; HouHub routes them into the live Agent capsule (see
 ///   `claude_chunk_parent_tool_use_id`). The adapter checks strictly
 ///   `=== true`, and a pre-0.63 binary ignores the unknown key, so this is
 ///   inert everywhere it isn't understood.
@@ -4472,7 +4676,7 @@ fn build_client_capabilities(
         client_capabilities = client_capabilities
             .elicitation(ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()));
     }
-    // Client `_meta` extensions, per agent. `jetbrains.air` opts houhub into
+    // Client `_meta` extensions, per agent. `jetbrains.air` opts HouHub into
     // JetBrains AIR typed session-failure records (claude-agent-acp 0.67+,
     // codex-acp 1.2+) — both adapters gate publication on EXACTLY this
     // advertisement (integer version >= 1 and "sessionFailure" in the
@@ -4582,7 +4786,7 @@ fn build_client_capabilities(
     // practice every prompt — the turn's completion now waits on the checkpoint
     // read, up to 2s, including on turns that changed no file at all.
     //
-    // The report exists for clients with no filesystem watcher; houhub is not
+    // The report exists for clients with no filesystem watcher; HouHub is not
     // one. Nothing else in either release depends on it, and both adapters no-op
     // without the advertisement, so staying out costs us nothing.
     //
@@ -4633,9 +4837,9 @@ fn build_client_capabilities(
     // itself "Temporary typed surface … replaced by SDK exports when the draft
     // ships". Revisit when the draft lands and the announcement carries enough
     // to rebuild the capsule — a parent tool-use id, or the child tool calls
-    // arriving with one houhub has seen.
+    // arriving with one HouHub has seen.
     //
-    // "recommendedValue" is the last AIR capability, and houhub takes it from
+    // "recommendedValue" is the last AIR capability, and HouHub takes it from
     // BOTH speakers — claude-agent-acp 0.76.0 and codex-acp 1.11.0 each
     // implement it, so the "advertise nothing an agent hasn't built" rule is
     // satisfied on both sides. With it, `session/new`'s `model` and
@@ -4654,12 +4858,12 @@ fn build_client_capabilities(
     //
     // * codex marks the model it calls `isDefault` and the CURRENT model's
     //   `defaultReasoningEffort`, so the effort recommendation re-derives on a
-    //   model switch. That matters most where houhub's own persisted per-agent
+    //   model switch. That matters most where HouHub's own persisted per-agent
     //   preference pins an option: a user who once pinned
     //   `reasoning_effort: max` otherwise has no signal that the model they
     //   just switched to defaults somewhere else.
     // * claude additionally DROPS the ambiguous `default` row from both
-    //   selectors, and houhub wants that row gone more than it wants the
+    //   selectors, and HouHub wants that row gone more than it wants the
     //   marker: `current_model_id_from_opts` reads the model selector's
     //   `current_value`, and that string is what `record_turn_end` stamps on
     //   every journaled turn — on the `default` row it is the literal
@@ -4671,7 +4875,7 @@ fn build_client_capabilities(
     // entry (a) for the 1.11.0 wire trace.
     //
     // ⚠️ From claude-agent-acp 0.82.0 / codex-acp 2.0.0 this object does more
-    // than name capabilities: its mere PRESENCE makes houhub an "AIR client",
+    // than name capabilities: its mere PRESENCE makes HouHub an "AIR client",
     // and both adapters then send AIR's own tool-call contract (each `_meta`
     // key once, keys moved under `_meta.jetbrains.air`, edit text only in the
     // diff, read/search results withheld). Everything that makes that wire
@@ -4708,7 +4912,7 @@ fn build_client_capabilities(
     }
     // codex-acp 1.13.0 (#528): with `terminal_output_delta` advertised, a
     // command's completion frame stops repeating its whole aggregated output
-    // as `rawOutput`. houhub already takes that output from the deltas it
+    // as `rawOutput`. HouHub already takes that output from the deltas it
     // streams (the `hosted_terminal_*` bridge, for EVERY command — codex
     // forwards `outputDelta` for search/listFiles/read too), so the repeat was
     // parsed only to be thrown away. The key it streams under does not change:
@@ -4721,14 +4925,14 @@ fn build_client_capabilities(
     // unaffected — its text already arrived through the bridge. One that
     // printed nothing now completes as a bare status, and the only reader
     // that cared is grep's "No matches": rg exits 1 when nothing matched, so
-    // that arrives as a silent `failed`. `isCodexGrepNoMatchResult` (frontend
+    // that arrives as a silent `failed`. `isGrepNoMatchResult` (frontend
     // adapter) reads that shape — live `failed`, grep, no output at all — as
     // "no matches", since a real rg failure prints a diagnostic that streams
     // in like any other output.
     //
     // claude-agent-acp 0.81.0 honours the same key (#1150), but there it is the
     // gate for claude's whole terminal `_meta` presentation, which moves shell
-    // output off `content` onto a channel houhub does not bridge for claude
+    // output off `content` onto a channel HouHub does not bridge for claude
     // (see `hosted_terminal_output_key`) — so it stays codex-only.
     if agent_type == AgentType::Codex {
         meta.insert(
@@ -4756,7 +4960,7 @@ fn build_client_capabilities(
     // "object"`; codex's `clientSupportsCompaction`: `session.compaction !=
     // null`), which is exactly what the empty capability structs serialize to.
     //
-    // ⚠️ Both members REPLACE a surface houhub already consumes, so neither may
+    // ⚠️ Both members REPLACE a surface HouHub already consumes, so neither may
     // be advertised without its consumer:
     // * `notices` outranks the AIR advisory lane (claude publishes its model
     //   fallback advisory only `if (!supportsNotices &&
@@ -4783,7 +4987,7 @@ fn build_client_capabilities(
         );
     }
     // Two more client capabilities are deliberately NOT advertised, because each
-    // would change a surface houhub reads today with nothing ready to take it
+    // would change a surface HouHub reads today with nothing ready to take it
     // over:
     // * `session.configOptions.boolean`. Both adapters answer it by turning
     //   their "Fast mode" option from an On/Off `select` into a `boolean`. The
@@ -4921,16 +5125,16 @@ fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
     // it still reaches them.)
     //
     // DeepSeek is deliberately NOT in this set: deepseek-acp reads no MCP file
-    // at all, so `$DSH_HOME/mcp.json` (houhub's own store) reaches it ONLY
+    // at all, so `$DSH_HOME/mcp.json` (HouHub's own store) reaches it ONLY
     // through the wire — skipping it would silently drop every user server.
     //
     // Qoder joins the skip set: the CLI reads `mcpServers` out of its own
     // `~/.qoder/settings.json` (gemini-schema settings file) at startup, which
-    // houhub's MCP settings UI manages directly — forwarding the same servers
+    // HouHub's MCP settings UI manages directly — forwarding the same servers
     // over the wire would double-mount them.
     //
     // Antigravity joins it too, for the same reason with one nuance: its ACP
-    // server reads `<GEMINI_HOME>/config/mcp_config.json` (which houhub's MCP
+    // server reads `<GEMINI_HOME>/config/mcp_config.json` (which HouHub's MCP
     // settings UI manages) and MERGES it with the wire list BY NAME, wire
     // winning — so forwarding would not actually double-mount. It is skipped
     // anyway because defining one server through two channels is noise, and
@@ -5055,6 +5259,11 @@ pub struct DelegationInjection {
     /// already running — see
     /// [`crate::acp::browser_tools::BrowserToolsRuntimeConfig`].
     pub browser: crate::acp::browser_tools::BrowserToolsRuntimeConfig,
+    /// Hot-swappable computer-use settings. Read here to decide whether to
+    /// advertise the `computer` group, and re-read at call time by the access
+    /// impl, like the browser's — see
+    /// [`crate::acp::computer_tools::ComputerToolsRuntimeConfig`].
+    pub computer: crate::acp::computer_tools::ComputerToolsRuntimeConfig,
     /// Question registry handle for the teardown cascade. The `run_connection`
     /// cleanup guard calls `cancel_questions_by_parent` through this so a pending
     /// `ask_user_question` is reclaimed synchronously on disconnect, mirroring
@@ -5173,6 +5382,15 @@ struct CompanionFeatureFlags {
     /// flag so that turning it on or off does not disturb the rest of the
     /// group, and so that the group being on never implies it.
     browser_eval: bool,
+    /// The read-only `computer_*` tools, gated by the computer-use setting AND
+    /// by there being a desktop at all — the windows are the user's screen,
+    /// which server mode does not have.
+    computer: bool,
+    /// `computer_launch_app` / `computer_set_window_frame`, on the person's
+    /// own switch on top of `computer`.
+    computer_launch: bool,
+    /// `computer_clipboard_read` / `computer_clipboard_write`, the same.
+    computer_clipboard: bool,
 }
 
 fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
@@ -5206,6 +5424,16 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     // config that reads as if it granted something.
     if flags.browser && flags.browser_eval {
         features.push("browser_eval");
+    }
+    if flags.computer {
+        features.push("computer");
+    }
+    // Only ever alongside `computer`, as `browser_eval` with `browser`.
+    if flags.computer && flags.computer_launch {
+        features.push("computer_launch");
+    }
+    if flags.computer && flags.computer_clipboard {
+        features.push("computer_clipboard");
     }
     if features.is_empty() {
         return None;
@@ -5262,12 +5490,12 @@ where
     let feedback_enabled = injection.feedback.is_enabled().await;
     let authoring = injection.authoring.snapshot().await;
     // Delegation is a THIRD door into the same room as `fs/*` and `terminal/*`:
-    // `delegate_to_agent` has houhub spawn a second agent — in houhub's process
+    // `delegate_to_agent` has HouHub spawn a second agent — in HouHub's process
     // tree, under ITS own (by default `Default`) policy — and hand its output
     // back. A sandboxed agent that cannot read `.env` itself would just ask a
     // sibling to read it. That defeats the boundary this switch advertises, for
     // the same reason withholding only one of fs/terminal would, so `agent`
-    // withholds this group too. The other groups stay: they surface houhub's own
+    // withholds this group too. The other groups stay: they surface HouHub's own
     // state (feedback, ask, session info, task reporting), not arbitrary file
     // or command execution on the user's machine.
     let delegation_configured = injection.broker.config_snapshot().await.enabled;
@@ -5312,6 +5540,15 @@ where
         // agent would find out by being told "no tabs" forever.
         browser: cfg!(feature = "tauri-runtime") && injection.browser.is_enabled().await,
         browser_eval: cfg!(feature = "tauri-runtime") && injection.browser.is_eval_enabled().await,
+        // Only where this process serves computer use: the desktop app, and
+        // houhub-server where the person who runs it has let it share the
+        // screen it runs on (`HOUHUB_COMPUTER_USE`). Elsewhere there are no
+        // windows to offer.
+        computer: injection.computer.is_served() && injection.computer.is_enabled().await,
+        computer_launch: injection.computer.is_served()
+            && injection.computer.is_launch_enabled().await,
+        computer_clipboard: injection.computer.is_served()
+            && injection.computer.is_clipboard_enabled().await,
     };
     // `None` (no feature enabled) short-circuits BEFORE the binary lookup, the
     // token registration and the server append: there is no companion to launch,
@@ -5567,9 +5804,9 @@ async fn run_connection(
         fs_policy.describe(),
         host_tools.describe()
     );
-    // `strict` reads as a containment boundary and is not one while houhub also
+    // `strict` reads as a containment boundary and is not one while HouHub also
     // advertises `terminal`: an agent refused a read just `cat`s the file
-    // through the shell houhub runs for it (empirically what grok does). Say so
+    // through the shell HouHub runs for it (empirically what grok does). Say so
     // rather than letting the knob's name do the promising.
     if fs_policy.confines_reads() && host_tools.hosts_channels() {
         tracing::warn!(
@@ -5628,6 +5865,13 @@ async fn run_connection(
         // First in the chain on purpose: it has to claim a null-`sessionId`
         // message before the runtime can park it for retry. See the type docs.
         .with_handler(ClaimNullSessionIds)
+        // Grok's model catalog broadcast names no session, so no session
+        // router ever claims it. See the type docs.
+        .with_handler(GrokModelCatalogBroadcasts {
+            agent_type,
+            state: Arc::clone(&state),
+            emitter: emitter.clone(),
+        })
         .on_receive_request(
             {
                 let emitter_inner = emitter_clone.clone();
@@ -5642,7 +5886,7 @@ async fn run_connection(
                 async move |req: RequestPermissionRequest,
                             responder: Responder<RequestPermissionResponse>,
                             cx: ConnectionTo<Agent>| {
-                    // An approval gating houhub's OWN ask tool is a dialog asking
+                    // An approval gating HouHub's OWN ask tool is a dialog asking
                     // permission to show a dialog; allow it so the user sees only
                     // the interactive question card (see
                     // `houhub_ask_auto_allow_option`).
@@ -6032,9 +6276,17 @@ async fn run_connection(
                 .session_capabilities
                 .resume
                 .is_some();
+            let supports_close = init_resp
+                .agent_capabilities
+                .session_capabilities
+                .close
+                .is_some();
             tracing::info!(
-                "[ACP] Agent capabilities: load_session={}, fork={}, resume={}",
-                init_resp.agent_capabilities.load_session, supports_fork, supports_resume
+                "[ACP] Agent capabilities: load_session={}, fork={}, resume={}, close={}",
+                init_resp.agent_capabilities.load_session,
+                supports_fork,
+                supports_resume,
+                supports_close
             );
 
             // Native live-feedback is enabled only when the adapter advertises
@@ -6293,6 +6545,7 @@ async fn run_connection(
                                 &cwd,
                                 &cwd_string,
                                 supports_resume,
+                                supports_close,
                                 &mcp_servers,
                                 &prompt_ledger,
                                 delegation_injection.as_ref(),
@@ -6354,9 +6607,9 @@ async fn run_connection(
                         // but forward AvailableCommandsUpdate to the frontend.
                         //
                         // For a custom agent with no transcript yet — a session
-                        // created outside houhub, or one whose recording was
+                        // created outside HouHub, or one whose recording was
                         // lost — this replay is the ONLY source of its history,
-                        // so capture it instead of discarding it. When houhub
+                        // so capture it instead of discarding it. When HouHub
                         // already recorded the session live, the replay is a
                         // duplicate and stays drained.
                         let hydrate_from_replay = transcript_dir_for(agent_type).is_some_and(|dir| {
@@ -6395,7 +6648,7 @@ async fn run_connection(
                             // edge may never have been recorded. Drop rather
                             // than seed the live strip with zombie rows —
                             // but drop HERE, so it isn't counted as an
-                            // update houhub failed to read. Grok persists its
+                            // update HouHub failed to read. Grok persists its
                             // workflow frames too, so they replay the same way.
                             if air_async_task_delta(&dispatch).is_some()
                                 || grok_workflow_task_delta(&dispatch, agent_type).is_some()
@@ -6542,6 +6795,7 @@ async fn run_connection(
                             &cwd,
                             &cwd_string,
                             supports_resume,
+                            supports_close,
                             &mcp_servers,
                             &prompt_ledger,
                             delegation_injection.as_ref(),
@@ -6563,7 +6817,7 @@ async fn run_connection(
                         // keeps the session/new fallback below.
                         //
                         // Custom agents are the exception: their history is
-                        // houhub's own transcript, not the agent's store, so
+                        // HouHub's own transcript, not the agent's store, so
                         // "the agent forgot this session" costs nothing the
                         // user can see. Many custom agents keep sessions in
                         // memory only, which would make the banner appear on
@@ -6579,7 +6833,7 @@ async fn run_connection(
                             return Err(tagged);
                         }
                         let err_str = e.to_string();
-                        let forgotten_session = classify_session_load_failure(e.code, &err_str);
+                        let forgotten_session = classify_session_load_error(&e);
                         let recovers_locally =
                             recovers_load_failure_locally(agent_type, forgotten_session);
                         if let Some(code) = forgotten_session.filter(|_| !recovers_locally) {
@@ -6625,7 +6879,7 @@ async fn run_connection(
                         if err_str.contains("Authentication required") {
                             return Ok(());
                         }
-                        // An agent that simply forgot a session houhub recorded
+                        // An agent that simply forgot a session HouHub recorded
                         // itself is the expected steady state after a restart,
                         // not an incident — an error toast on every reopen
                         // would be pure noise.
@@ -6670,7 +6924,7 @@ async fn run_connection(
                         let mut session = AgentSession::attach(&cx, new_resp)?;
                         // Same conversation, new agent session: link the fresh
                         // transcript to the one the failed load was for, so the
-                        // turns houhub already recorded keep rendering.
+                        // turns HouHub already recorded keep rendering.
                         record_transcript_header_continuing(
                             agent_type,
                             &fallback_sid,
@@ -6734,6 +6988,7 @@ async fn run_connection(
                             &cwd,
                             &cwd_string,
                             supports_resume,
+                            supports_close,
                             &mcp_servers,
                             &prompt_ledger,
                             delegation_injection.as_ref(),
@@ -6818,6 +7073,7 @@ async fn run_connection(
                     &cwd,
                     &cwd_string,
                     supports_resume,
+                    supports_close,
                     &mcp_servers,
                     &prompt_ledger,
                     delegation_injection.as_ref(),
@@ -6830,7 +7086,7 @@ async fn run_connection(
         .map_err(connection_failure)
 }
 
-/// The houhub error a failed connection ends with: the sentinel an inner step
+/// The HouHub error a failed connection ends with: the sentinel an inner step
 /// tagged the ACP error with picks the kind (and never reaches the user);
 /// anything untagged is a protocol error.
 fn connection_failure(err: agent_client_protocol::Error) -> AcpError {
@@ -6875,7 +7131,7 @@ struct GrokExitPlanModeRequest(serde_json::Value);
 
 /// Every codex `elicitation/create` request — `request_user_input` (Plan
 /// mode), generic MCP-server forms, MCP tool-call approvals, message-only
-/// confirms — arrives here once houhub advertises `elicitation.form`. Like the
+/// confirms — arrives here once HouHub advertises `elicitation.form`. Like the
 /// grok bridge, this takes the raw params object and replies with a raw JSON
 /// value (the serialized `CreateElicitationResponse`): the form schemas codex
 /// sends carry `_meta` markers (`codex.isSecret`, …) that `question.rs` reads
@@ -6992,7 +7248,7 @@ async fn handle_grok_ask_user_question(
 }
 
 /// The option id that silently allows a `session/request_permission` which is
-/// only gating houhub's OWN `ask_user_question` companion tool, or `None` to
+/// only gating HouHub's OWN `ask_user_question` companion tool, or `None` to
 /// leave the request on the ordinary approval-card path.
 ///
 /// An agent whose permission mode consults the user before every MCP tool call
@@ -7009,7 +7265,7 @@ async fn handle_grok_ask_user_question(
 /// `_meta.permission.title` it pairs with (claude-agent-acp 0.73+ / codex-acp
 /// 1.7+, the same block [`hoist_request_permission_meta`] forwards to the card).
 /// The ACP `toolCall.name` field would be the exact answer but is UNSTABLE and
-/// dropped by the schema crate houhub pins, so it is not available here.
+/// dropped by the schema crate HouHub pins, so it is not available here.
 ///
 /// Only an `allow_once` option is ever selected. An `allow_always` writes a
 /// durable permission rule into the user's own agent settings — a decision that
@@ -7032,7 +7288,7 @@ fn houhub_ask_auto_allow_option(req: &RequestPermissionRequest) -> Option<String
         .map(|opt| opt.option_id.to_string())
 }
 
-/// Answer a permission request that is merely gating houhub's own ask tool, so
+/// Answer a permission request that is merely gating HouHub's own ask tool, so
 /// the interactive question card is the only thing the user ever sees.
 ///
 /// `Err(responder)` hands the request back for the ordinary permission path —
@@ -7549,7 +7805,7 @@ async fn handle_elicitation_request(
     }
     let raw = req.0;
     // Who is on the other end, from the CONNECTION rather than from the frame.
-    // This handler is registered for every agent and houhub advertises
+    // This handler is registered for every agent and HouHub advertises
     // `elicitation.form` to DeepSeek as well as Codex, so the parser must be
     // told the peer's identity instead of inferring it from `_meta.codex` —
     // `_meta` is an open namespace and another speaker (or an MCP server behind
@@ -7870,9 +8126,9 @@ fn respond_terminal_request<T: agent_client_protocol::JsonRpcResponse>(
 
 /// Refuse a channel this launch never advertised
 /// ([`HostToolsPolicy::Agent`], #436). Withholding the capability is a
-/// DECLARATION; a non-conforming agent can still call the method, and if houhub
+/// DECLARATION; a non-conforming agent can still call the method, and if HouHub
 /// then served it the whole switch would be a suggestion — the operation would
-/// land back in houhub's process, outside the agent's sandbox, which is exactly
+/// land back in HouHub's process, outside the agent's sandbox, which is exactly
 /// the bug. `method_not_found` is the honest wire answer: as far as this
 /// connection is concerned the method does not exist, which is what the agent
 /// was told on Initialize.
@@ -8009,11 +8265,11 @@ fn config_option_rejection(
 
 /// Encode a selector value for `session/set_config_option`.
 ///
-/// houhub keeps config values as opaque `String`s end to end (Tauri command, web
+/// HouHub keeps config values as opaque `String`s end to end (Tauri command, web
 /// handler, and the per-agent preference store all use `Record<string, string>`
 /// semantics), so the boolean round-trip is `"true"` ⇄ `true` and happens only
 /// here. A `select` value stays a bare `{"value": "…"}`, byte-for-byte what
-/// houhub sent before boolean options existed — every non-cline agent's wire
+/// HouHub sent before boolean options existed — every non-cline agent's wire
 /// traffic is unchanged.
 fn encode_config_option_value(is_boolean: bool, value: &str) -> SessionConfigOptionValue {
     if is_boolean {
@@ -8027,7 +8283,7 @@ fn encode_config_option_value(is_boolean: bool, value: &str) -> SessionConfigOpt
 /// preference at connect can skip the round-trip. Reads the same `"true"` ⇄
 /// `true` encoding [`encode_config_option_value`] writes; an option kind this
 /// build cannot interpret is treated as "does not match" so the agent, not
-/// houhub, decides.
+/// HouHub, decides.
 fn config_option_already_holds(option: &SessionConfigOption, value: &str) -> bool {
     match &option.kind {
         SessionConfigKind::Select(s) => s.current_value.to_string() == value,
@@ -8040,7 +8296,7 @@ fn config_option_already_holds(option: &SessionConfigOption, value: &str) -> boo
 /// replaying a saved preference for it at connect is a guaranteed error.
 ///
 /// This exists because a saved preference outlives the value it names.
-/// claude-agent-acp 0.76.0 is the case that forced it: once houhub advertises
+/// claude-agent-acp 0.76.0 is the case that forced it: once HouHub advertises
 /// the AIR `recommendedValue` capability, the adapter REMOVES the `default` row
 /// from the model and effort selectors, and a user who had picked it keeps
 /// re-sending `"default"` on every connect forever — the option they would have
@@ -8049,7 +8305,7 @@ fn config_option_already_holds(option: &SessionConfigOption, value: &str) -> boo
 ///
 /// Decided from the agent's own answer, never from an agent id or a pinned
 /// version. That distinction is load-bearing: the registry pin only governs
-/// what houhub INSTALLS, while `resolve_npx_command` launches whatever
+/// what HouHub INSTALLS, while `resolve_npx_command` launches whatever
 /// `claude-agent-acp` is on PATH — so "this is the built-in Claude Code agent"
 /// says nothing about which release is actually running, and pruning on that
 /// assumption would silently discard a still-valid pick on an older adapter.
@@ -8103,13 +8359,17 @@ fn config_option_rejects_value(option: &SessionConfigOption, value: &str) -> boo
 /// no longer offers, so every connect would silently land on the account's
 /// default model instead. The adapter would have resolved the old spelling
 /// itself (its `resolveModelPreference` maps `opus[1m]` onto the `opus` row),
-/// but houhub's screen runs first.
+/// but HouHub's screen runs first.
 ///
 /// Healed here, off the agent's answer, rather than rewritten in the saved
-/// preferences, because only the answer says which spelling is current: a
-/// gateway account (`ANTHROPIC_BASE_URL`) on 2.1.284 still lists `opus[1m]`
-/// and no plain `opus` row at all (measured), so rewriting the stored value
-/// would break it.
+/// preferences, because only the answer says which spelling is current — and
+/// it moves with the CLI the user runs. A gateway account (`ANTHROPIC_BASE_URL`)
+/// on 2.1.284 still lists `opus[1m]` next to `sonnet` and `sonnet[1m]`, with no
+/// plain `opus` row at all; on 2.1.285+ (claude-agent-acp 0.85.0), which gives a
+/// gateway session the 1M window of the models that have one, the same gateway
+/// lists only `opus`, `sonnet`, Fable and `haiku` (both measured), so a saved
+/// `sonnet[1m]` heals too. Rewriting the stored value would break whichever
+/// side the user is not on today.
 ///
 /// Deliberately narrow:
 ///
@@ -8119,7 +8379,7 @@ fn config_option_rejects_value(option: &SessionConfigOption, value: &str) -> boo
 ///   the twin is listed, so it inherits that function's refusals (a non-select
 ///   or an empty list proves nothing) and a pick the agent still offers is
 ///   never touched: where `sonnet` and `sonnet[1m]` are both listed, as on the
-///   gateway above, `sonnet[1m]` replays as it is.
+///   2.1.284 gateway above, `sonnet[1m]` replays as it is.
 /// * Only the direction the rename took; a saved plain pick is never moved
 ///   onto a `[1m]` row.
 ///
@@ -8430,7 +8690,7 @@ async fn apply_preferred_session_options(
         }
         // Encode against what the agent advertised for this id. An id the agent
         // never advertised falls back to the select form — the same value shape
-        // houhub has always sent (see the note above on unadvertised "mode").
+        // HouHub has always sent (see the note above on unadvertised "mode").
         let is_boolean =
             advertised.is_some_and(|o| matches!(o.kind, SessionConfigKind::Boolean(_)));
         let value = encode_config_option_value(is_boolean, value_id);
@@ -8863,6 +9123,11 @@ fn track_terminal_tool_calls(
     }
 }
 
+/// The body of the `[terminal exited: …]` line every terminal-backed tool call
+/// ends with. The frontend reads that line back: a search that matched nothing
+/// ends `[terminal exited: exit code: 1]`, and `isGrepNoMatchCommandResult`
+/// (`src/lib/grep-no-match.ts`) matches it verbatim, so rewording it here needs
+/// the same change there.
 fn format_terminal_exit_status(exit_status: &TerminalExitStatus) -> String {
     let mut parts = Vec::new();
     if let Some(code) = exit_status.exit_code {
@@ -9149,7 +9414,7 @@ fn is_image_mime(mime: &str) -> bool {
 ///   model can just read the source — measurably better than a drop.
 ///
 /// So decodable images are promoted (queued drafts and work-task prompts
-/// composed before houhub advertised `image:true` still carry the old shape),
+/// composed before HouHub advertised `image:true` still carry the old shape),
 /// and undecodable ones are demoted back — the composer only sees the single
 /// `image` capability bit and cannot make this call per mime.
 fn normalize_grok_image_blocks(blocks: Vec<PromptInputBlock>) -> Vec<PromptInputBlock> {
@@ -9318,6 +9583,9 @@ async fn handle_fork_or_exit(
     // server list: together they are everything `build_resume_session_request`
     // needs to make the forked session real on the agent.
     supports_resume: bool,
+    // `session_capabilities.close` from initialize: whether the session the
+    // fork leaves can be released on the agent (see `close_forked_parent`).
+    supports_close: bool,
     mcp_servers: &[McpServer],
     // Threaded through from run_connection: the connection-scoped prompt
     // ledger (the forked session's loop keeps fingerprinting into the SAME
@@ -9387,11 +9655,12 @@ async fn handle_fork_or_exit(
 
     // Reply protocol-level result to manager.fork_session, which will combine
     // it with the freshly-created sibling row id to produce the wire ForkResultInfo.
+    let original_session_id = fork_info.original_session_id;
     let _ = fork_info
         .reply
         .send(Ok(crate::acp::types::ForkProtocolResult {
             forked_session_id: new_sid.clone(),
-            original_session_id: fork_info.original_session_id,
+            original_session_id: original_session_id.clone(),
         }));
 
     // Make the forked session REAL on the agent before anything prompts on it.
@@ -9443,6 +9712,35 @@ async fn handle_fork_or_exit(
     } else {
         None
     };
+
+    // Release the session the fork left. HouHub stopped routing it when the
+    // caller dropped its `AgentSession`, and the sibling row
+    // `persist_fork_outcome` keeps for its history re-opens it on a connection
+    // of its own. Left open on the agent, it is not free:
+    //
+    //   * codex holds a thread's writer lock for as long as an app-server has
+    //     the thread loaded, and `session/fork` unsubscribes only the CHILD.
+    //     An open parent stays loaded for the life of this connection, and
+    //     opening the sibling row fails with `session_busy`. Closing is
+    //     `thread/unsubscribe`, which is also what codex's own TUI does to the
+    //     thread it forks from. The app-server then unloads the thread, and
+    //     with it the lock, once it has gone `thread_unload_delay_secs` (60 by
+    //     default) without a subscriber or a running turn.
+    //   * claude-agent-acp runs each session in a CLI process of its own, so
+    //     an open parent is one more process per fork, still able to start a
+    //     turn by itself (a background task finishing does) where nothing
+    //     shows it.
+    //
+    // This is the agent-side half of what the caller just did to the parent's
+    // houhub-hosted terminals (`release_all_for_session`). It goes out after the
+    // resume step, whether that resumed the child, failed, or was skipped for
+    // an agent without resume, so making the child usable never overlaps the
+    // parent's teardown. It is not awaited: a slow close (deepseek-acp waits
+    // for the session's MCP servers to exit) must not hold up the child's
+    // first prompt.
+    if supports_close {
+        close_forked_parent(&cx, &original_session_id, &new_sid);
+    }
 
     // Prefer the resume response: it describes the session as the agent holds it
     // right now, and for claude it is the ONLY source of modes/config options.
@@ -9545,12 +9843,51 @@ async fn handle_fork_or_exit(
         cwd,
         cwd_string,
         supports_resume,
+        supports_close,
         mcp_servers,
         prompt_ledger,
         delegation_injection,
         stderr_tail,
     ))
     .await
+}
+
+/// Send `session/close` for `parent`, the session a fork just left, without
+/// waiting for the answer (see the call in [`handle_fork_or_exit`]).
+///
+/// The request runs on a task the connection owns, so it ends with the
+/// connection. Its outcome is only logged: HouHub routes nothing to `parent` any
+/// more, and a close that fails leaves the agent where it was before HouHub sent
+/// one.
+///
+/// Skipped when the fork answered with the parent's own id, since closing it
+/// would close the session about to be attached.
+fn close_forked_parent(cx: &ConnectionTo<Agent>, parent: &str, child: &str) {
+    if parent == child {
+        return;
+    }
+    let request = CloseSessionRequest::new(SessionId::new(parent.to_string()));
+    let request_cx = cx.clone();
+    let closed = parent.to_string();
+    let close = async move {
+        match request_cx
+            .send_request_to(Agent, request)
+            .block_task()
+            .await
+        {
+            Ok(_) => tracing::info!("[ACP] Closed session {closed}, left by a fork"),
+            Err(e) => tracing::warn!(
+                "[ACP] session/close for session {closed}, left by a fork, failed: {e}"
+            ),
+        }
+        // Never an error: a spawned task that fails takes the connection down.
+        Ok(())
+    };
+    if let Err(e) = cx.spawn(close) {
+        // Only when the connection is already going down, which ends the
+        // session on the agent anyway.
+        tracing::debug!("[ACP] not closing session {parent}, left by a fork: {e}");
+    }
 }
 
 /// Main conversation command loop: wait for frontend commands and process them.
@@ -9611,16 +9948,32 @@ fn classify_session_load_failure(
     if message.contains("is archived") {
         return Some("session_archived");
     }
-    // codex holds a per-thread writer lock, and `session/fork` releases only the
-    // CHILD's (`threadUnsubscribe({threadId: response.thread.id})` in codex-acp
-    // 1.8.0) — the parent stays open in the forking process. Opening the sibling
-    // row HouHub creates to keep the pre-fork history therefore lands here with
-    // "thread <id> already has an active writer".
+    // codex holds a per-thread writer lock for as long as an app-server has the
+    // thread loaded. Two holders reach this arm:
+    //  * another Codex client — the Codex app, the CLI or an IDE extension —
+    //    with the same session open (its lock can outlive the closed tab until
+    //    that process unloads the thread);
+    //  * HouHub itself, for about a minute after a fork: `session/fork`
+    //    releases only the CHILD's lock (`threadUnsubscribe({threadId:
+    //    response.thread.id})`, unchanged since codex-acp 1.8.0), so the
+    //    sibling row HouHub creates to keep the pre-fork history hits the lock
+    //    until the forking connection lets the parent go. It closes the parent
+    //    right after the step that resumes the child (`close_forked_parent`),
+    //    and the app-server unloads it `thread_unload_delay_secs` later (60 by
+    //    default).
+    // codex-acp ≤2.0.x passes codex's raw "thread <id> already has an active
+    // writer" through as a -32603 `data.details`; 2.1.0 (#564) answers -32600
+    // with `data.reason: "thread_active_writer"`, which
+    // [`classify_session_load_error`] reads before this text — and keeps the
+    // raw text in `details`, so this match still holds for both.
     //
     // Nothing is lost and nothing is broken: the session is busy, not gone. That
     // is why it must never fall through to `session/new` — doing so rebinds that
     // row to a fresh empty session and destroys the only pointer to the history
-    // it exists to preserve. Closing the forked session frees the lock.
+    // it exists to preserve. Releasing the other holder frees the lock, and the
+    // banner's Reload then opens the session (verified live on both versions:
+    // a load answered while another adapter process held the thread succeeds
+    // once that process exits).
     if message.contains("already has an active writer") {
         return Some("session_busy");
     }
@@ -9628,6 +9981,30 @@ fn classify_session_load_failure(
         return Some("session_unavailable");
     }
     None
+}
+
+/// [`classify_session_load_failure`] for the error itself: the structured
+/// signals in `data` first, then the code and the rendered message.
+///
+/// codex-acp 2.1.0 (#564) answers a `session/load` / `session/resume` of a
+/// thread another app-server holds with
+/// `{code: -32600, message: "Invalid request: This Codex session is in use by
+/// another Codex client …", data: {reason: "thread_active_writer", threadId,
+/// details: "<codex's raw message>"}}`, and documents `reason` as the stable
+/// way to recognise it "without parsing the message". `details` is codex's
+/// own wording, which has no such promise, so the message match in
+/// [`classify_session_load_failure`] stays only as the fallback for older
+/// adapters (≤2.0.x send `details` alone, under -32603).
+fn classify_session_load_error(e: &agent_client_protocol::Error) -> Option<&'static str> {
+    let reason = e
+        .data
+        .as_ref()
+        .and_then(|data| data.get("reason"))
+        .and_then(serde_json::Value::as_str);
+    if reason == Some("thread_active_writer") {
+        return Some("session_busy");
+    }
+    classify_session_load_failure(e.code, &e.to_string())
 }
 
 /// Wire-message markers for "the session behind this request no longer exists"
@@ -9655,7 +10032,7 @@ const SESSION_GONE_MARKERS: &[&str] = &["process exited", "session has ended", "
 /// prompt just works.
 ///
 /// Turn-scoped is the DEFAULT, because an agent that answered at all is an
-/// agent that is still there. Every ACP agent houhub drives rejects some prompts
+/// agent that is still there. Every ACP agent HouHub drives rejects some prompts
 /// it is perfectly healthy to keep talking to: qwen-code answers -32603
 /// `Slash command not supported in ACP integration: …` for a `/mcp` its ACP
 /// surface doesn't implement (issue #797) and keeps the session in its map;
@@ -9665,7 +10042,7 @@ const SESSION_GONE_MARKERS: &[&str] = &["process exited", "session has ended", "
 /// out a full respawn for a turn that merely failed.
 ///
 /// Only three families stay terminal:
-///  - `ResourceNotFound` — the agent has no record of the session id houhub
+///  - `ResourceNotFound` — the agent has no record of the session id HouHub
 ///    just prompted on, so the handle this connection holds is void.
 ///  - [`SESSION_GONE_MARKERS`] — the agent answered to say its session or
 ///    process is gone. Keeping the connection would leave an entry whose every
@@ -9743,10 +10120,10 @@ async fn defer_to_connection_report(
     e
 }
 
-/// Whether houhub can absorb a "the agent forgot this session" load failure by
+/// Whether HouHub can absorb a "the agent forgot this session" load failure by
 /// itself, rather than stopping and asking the user to Reload or start over.
 ///
-/// It can exactly when houhub — not the agent — owns the conversation's history:
+/// It can exactly when HouHub — not the agent — owns the conversation's history:
 /// custom ACP agents, whose turns are recorded to
 /// [`crate::acp_transcript`]. There the failure costs nothing visible — the
 /// history still renders, and a fresh agent session (linked by
@@ -9913,7 +10290,7 @@ struct TurnOutputProbe {
     saw_agent_output: bool,
     saw_metadata_update: bool,
     /// `session/update`s whose params did not deserialize (schema drift) — the
-    /// output may well have been there; houhub could not read it.
+    /// output may well have been there; HouHub could not read it.
     dropped: u32,
     /// First drop's *already-redacted* summary. Redaction happens here, at
     /// capture time, so nothing downstream can hold plaintext — parser errors
@@ -10233,7 +10610,7 @@ async fn run_conversation_loop(
                         emit_with_state(&st, &h, event).await;
                     } else if let Some(completed) = grok_turn_completed(&dispatch, agent_type) {
                         // Grok's own end of a turn. Only the turn opened below
-                        // ends here; one houhub started ended on its response.
+                        // ends here; one HouHub started ended on its response.
                         if grok_turn_completed_ends(cb_state.grok_agent_turn.as_deref(), &completed) {
                             close_grok_agent_turn(
                                 &st,
@@ -10714,7 +11091,7 @@ async fn run_conversation_loop(
                             // Every other turn-scoped rejection reports the
                             // agent's OWN words, because they are the actionable
                             // part ("The command \"/mcp\" is not supported in
-                            // this mode.") and houhub has no vocabulary for them.
+                            // this mode.") and HouHub has no vocabulary for them.
                             let response = match prompt_result {
                                 Ok(response) => response,
                                 Err(e) if !prompt_rejection_is_terminal(&e) => {
@@ -10900,7 +11277,7 @@ async fn run_conversation_loop(
                             }
                             // ACP has no turn-end notification — the stop
                             // reason arrives here, in the prompt RESPONSE — so
-                            // houhub records it for the history parser. Unlike
+                            // HouHub records it for the history parser. Unlike
                             // streamed chunks this one is bound-awaited: a
                             // conversation reopened right after a turn must not
                             // miss its tail.
@@ -10933,6 +11310,27 @@ async fn run_conversation_loop(
                                 },
                             )
                             .await;
+                            // `TurnComplete` has just taken any
+                            // `ask_user_question` card off every client, so
+                            // decline a question still parked on this
+                            // connection: nothing can answer it now, and while
+                            // it holds the one-per-connection slot every later
+                            // ask is refused. Usually there is none — an agent
+                            // blocked in an ask cannot end its turn. Claude Code
+                            // 2.1.286 (claude-agent-acp 0.85.0) is what makes it
+                            // reachable: a foreground MCP call can move to the
+                            // background and keep running past the end of the
+                            // turn — after a steer (the Steer arm below declines
+                            // first), or after a timeout when the user's
+                            // environment sets `CLAUDE_AUTO_BACKGROUND_TASKS`.
+                            // Awaited inline, like the Cancel reclaim, so it is
+                            // scoped to the turn that just ended. Plan approvals
+                            // are not swept: each is a request the agent itself
+                            // blocks on, which no adapter moves to the
+                            // background.
+                            if let Some(inj) = delegation_injection {
+                                inj.questions.cancel_questions_by_parent(conn_id).await;
+                            }
                             // Cascade-cancel any pending delegations whenever
                             // the parent's turn ended for a reason other than
                             // clean `end_turn`. The `end_turn` path lets the
@@ -11097,6 +11495,26 @@ async fn run_conversation_loop(
                                     // commands, not session updates. A dead
                                     // receiver is fine — the reply is then
                                     // moot (teardown), nothing to unwind.
+                                    //
+                                    // A steer while an `ask_user_question` card
+                                    // is up answers it declined first. Through
+                                    // Claude Code 2.1.284 the steer interrupted
+                                    // the blocked MCP call; the CLI's
+                                    // `notifications/cancelled` made houhub-mcp
+                                    // abandon the ask and the card closed. From
+                                    // 2.1.286 (claude-agent-acp 0.85.0) the CLI
+                                    // moves the call to the background instead
+                                    // and nothing cancels it, so the card would
+                                    // stay up only until this turn ends (see
+                                    // the turn exit's reclaim) and every new ask
+                                    // until then would be refused, the slot
+                                    // still taken. Declining it here keeps the
+                                    // old meaning — redirecting the agent drops
+                                    // its question — and the agent reads the
+                                    // decline beside the steer.
+                                    if let Some(inj) = delegation_injection {
+                                        inj.questions.cancel_questions_by_parent(conn_id).await;
+                                    }
                                     let outcome = send_steer_request(&cx, &sid, &blocks).await;
                                     // A steered message still lands in the
                                     // agent's OWN transcript as a user record,
@@ -11468,6 +11886,12 @@ async fn run_conversation_loop(
                     cwd,
                     fork_point.as_ref().map(|p| &p.message_id)
                 );
+                // The fork's establishment starts here. A Grok catalog broadcast
+                // that landed before it is already on this session's picker, and
+                // the forked session's handshake is answered from the catalog it
+                // brought; only one landing from now on can be newer than that
+                // handshake (see `SessionState::grok_catalog_broadcast`).
+                state.write().await.grok_catalog_broadcast = None;
                 let result =
                     crate::acp::fork::fork_session(&cx, &sid, cwd, fork_point.as_ref()).await;
                 match result {
@@ -11701,13 +12125,13 @@ enum DiffBlockPayload {
     Patch(String),
 }
 
-/// Read one `Diff` block. `None` for a block that declares a patch houhub cannot
+/// Read one `Diff` block. `None` for a block that declares a patch HouHub cannot
 /// use: codex-acp 2.0.0's contract is that such a block's `oldText: null` /
 /// `newText: ""` are "compatibility placeholders … not file snapshots", and a
 /// receiver that rejects the patch "must show the change as unavailable" — not
 /// render the placeholders as an emptied file.
 ///
-/// houhub declares `diffPatch` to codex only (`build_client_capabilities`), and
+/// HouHub declares `diffPatch` to codex only (`build_client_capabilities`), and
 /// validates it the way the contract asks: `{version: 1, format: "git_patch",
 /// text}` with at least one `@@` hunk.
 fn diff_block_payload(diff: &agent_client_protocol::schema::v1::Diff) -> Option<DiffBlockPayload> {
@@ -11787,7 +12211,7 @@ fn combined_text_blocks(blocks: &[DiffBlockPayload]) -> Option<(Option<String>, 
 /// codex names both sides as the absolute path WITHOUT its leading slash under
 /// `a/` / `b/` (`a/workspace/src/app.ts`, Windows `a/C:/work/App.ts`), which the
 /// diff preview's `normalizePath` would turn into a relative path — and the
-/// preview's file link would then point nowhere. houhub's own diffs name the
+/// preview's file link would then point nowhere. HouHub's own diffs name the
 /// absolute path (`generateUnifiedDiff`: `--- a/${path}`), so the headers are
 /// rewritten to that: `+++` from the block's own `path` (the new side, a
 /// rename's target), `---` from the `rename from` line on a rename and from the
@@ -11928,7 +12352,7 @@ fn c_unquote(inner: &str) -> String {
 /// field only, and the file text of an edit lives in the `diff` content block:
 /// `rawInput` arrives as `{file_path}` alone (Edit loses `old_string` /
 /// `new_string`, Write its `content`), on the same frame as the diff. Every
-/// houhub edit card, the live line stats and the permission preview read the
+/// HouHub edit card, the live line stats and the permission preview read the
 /// INPUT, never the content blocks, so a live Edit would render as a bare path.
 /// The diff block holds exactly the model's strings (0.81.x sent the same
 /// `oldText`/`newText` beside the full input), so the input is rebuilt from it —
@@ -11976,7 +12400,7 @@ fn claude_complete_file_edit_input(
 /// Used on the self-hosted-terminal path only (see
 /// `hosted_terminal_meta_marks_shell`). A
 /// `ToolCallContent::Terminal` serializes to the bare `[Terminal: <id>]`
-/// placeholder, which is meaningful ONLY while houhub's own `TerminalRuntime`
+/// placeholder, which is meaningful ONLY while HouHub's own `TerminalRuntime`
 /// owns that terminal and `poll_tracked_terminal_tool_calls` streams the real
 /// output over it (`raw_output_chunks` then wins over `content` in the
 /// frontend store). These agents' terminals are agent-hosted, so nothing ever
@@ -12300,7 +12724,7 @@ const OPENCODE_META_KEY: &str = "opencode";
 /// REPLAY finished tool parts through the same `pendingToolCall` builder: a
 /// replayed frame is also `status: "pending"`, but it is built from the
 /// COMPLETED state, so its title is the display label and its input is fully
-/// populated. Requiring the empty input keeps the marker off those. (houhub
+/// populated. Requiring the empty input keeps the marker off those. (HouHub
 /// prefers `session/resume`, which replays nothing, so this is belt-and-braces.)
 /// A `pending` frame that did arrive with partial input simply goes unstamped —
 /// today's behavior, never a wrong name.
@@ -12345,11 +12769,11 @@ const CODEX_SEARCH_ACTION_META_KEY: &str = "houhub.codexSearchAction";
 /// Stamp codex's `search` command actions on their opening frame, so the
 /// frontend can tell them from every other agent's grep.
 ///
-/// It needs to because houhub advertises `_meta.terminal_output_delta`, and with
+/// It needs to because HouHub advertises `_meta.terminal_output_delta`, and with
 /// that capability codex-acp completes a command that printed nothing as a
 /// bare `failed` status — no `rawOutput` envelope, so no exit code (see
 /// `build_client_capabilities`). For a search that is almost always rg's exit
-/// 1, "no matches", and `isCodexGrepNoMatchResult` presents it that way — but a
+/// 1, "no matches", and `isGrepNoMatchResult` presents it that way — but a
 /// bare `failed` with no output is also what an interrupted grep from another
 /// adapter can look like, so the rule must know the call is codex's. Only the
 /// backend knows the agent at frame level, hence the marker.
@@ -12556,7 +12980,7 @@ fn pi_message_chunk_route(
         | "Automatic compaction finished; context was summarized to continue the session." => {
             PiChunkRoute::Drop
         }
-        // pi-acp's own prompt queue. houhub's turn gate normally makes this
+        // pi-acp's own prompt queue. HouHub's turn gate normally makes this
         // unreachable (`manager.rs` rejects a concurrent prompt), so all three
         // are handled defensively and together — one of them showing up alone
         // would be the odd one out.
@@ -12578,7 +13002,7 @@ fn pi_message_chunk_route(
 }
 
 /// Recover `(attempt, max, delay_ms)` from `Retrying (attempt 1/3, waiting 2s)...`
-/// — pi-acp's `formatAutoRetryMessage`, which is the only place houhub can reach
+/// — pi-acp's `formatAutoRetryMessage`, which is the only place HouHub can reach
 /// these numbers: pi sends them structured to pi-acp, which formats them into a
 /// sentence and forwards nothing else.
 ///
@@ -12624,7 +13048,7 @@ fn pi_is_queue_announcement(text: &str) -> bool {
 /// pi-acp builds a markdown banner (`buildStartupInfo`: pi's version, the
 /// project `AGENTS.md`, every discovered skill file, prompts, extensions, an
 /// update notice) and pushes it down the ORDINARY `agent_message_chunk` channel
-/// with no marker of any kind — so houhub rendered it as the assistant's opening
+/// with no marker of any kind — so HouHub rendered it as the assistant's opening
 /// words, before the user had said anything, complete with the absolute paths of
 /// every skill and extension on the machine.
 ///
@@ -12701,7 +13125,7 @@ async fn pi_take_startup_banner(
 /// `current_mode_update` the protocol has for it: `handleApprovalModeChanged`
 /// pushes an `agent_message_chunk` whose entire content is
 /// `[MODE_UPDATE] ${payload.mode}` (packages/cli/src/acp/acpSession.ts, 0.60.0).
-/// Rendered as-is that is a literal assistant bubble, and houhub's own mode
+/// Rendered as-is that is a literal assistant bubble, and HouHub's own mode
 /// selector never follows the switch the user just made in the agent.
 ///
 /// Two guards keep this from eating real prose:
@@ -12721,7 +13145,7 @@ async fn pi_take_startup_banner(
 /// Residual risk, accepted knowingly: gemini emits one chunk per model stream
 /// event with boundaries it chooses, so a reply that DISCUSSES the marker could
 /// in principle split so that one whole chunk is exactly `[MODE_UPDATE] yolo`.
-/// That would both swallow the line and desync houhub's mode selector (the event
+/// That would both swallow the line and desync HouHub's mode selector (the event
 /// is latched into `modes.current_mode_id`) until the next real switch. There
 /// is no signal on the wire that separates that chunk from a genuine one, and
 /// the alternative — rendering the literal on every real mode switch — is the
@@ -13006,7 +13430,7 @@ fn codebuddy_meta_marks_subagent(
 ///   {terminal_id, exit_code, signal}` on the final frame. No `content`, no
 ///   `rawOutput` — this `_meta` is the only channel carrying the output.
 ///
-/// **codex-acp** has the SAME shape and houhub never noticed, because unlike pi
+/// **codex-acp** has the SAME shape and HouHub never noticed, because unlike pi
 /// it also repeats the whole output as `rawOutput` at the end, so the card
 /// filled in — just not until the command had finished. `createTerminalCommandEvent`
 /// builds `content: [{type: "terminal", terminalId: item.id}]` +
@@ -13049,13 +13473,13 @@ fn hosted_terminal_meta_marks_shell(
 }
 
 /// The `_meta` key an adapter streams its self-hosted terminal output under,
-/// for the agents whose unnamespaced keys houhub is willing to read.
+/// for the agents whose unnamespaced keys HouHub is willing to read.
 ///
 /// The two spell it differently for a reason: pi predates the ACP delta
 /// convention and reuses `terminal_output`, while codex-acp picks between
 /// `terminal_output` and `terminal_output_delta` in `resolveTerminalOutputMode`
 /// and lands on the delta key unless the client asks for the other one —
-/// which houhub does not: it advertises the delta key itself, for the duplicate
+/// which HouHub does not: it advertises the delta key itself, for the duplicate
 /// `rawOutput` that drops (see `build_client_capabilities`). Both carry the
 /// same `{terminal_id, data}` payload with incremental `data`, so only the key
 /// differs.
@@ -13199,14 +13623,14 @@ fn pi_bash_input_from_title(title: Option<&str>) -> Option<String> {
 ///
 /// gemini-cli puts NO `rawInput` on the ACP wire at all: a call arrives as
 /// title + kind + locations + content and nothing else (`acpSession.ts`,
-/// 0.60.0). houhub classifies a live call by the SHAPE of its input, so with
+/// 0.60.0). HouHub classifies a live call by the SHAPE of its input, so with
 /// none of it every gemini tool lands on the generic card named after its own
 /// title — no Bash card, no file card, no diff header.
 ///
 /// This is a whitelist of exact title formats and NOT a match on `kind`,
 /// because `kind` cannot identify the tool: `search` covers glob, grep AND web
 /// search, and every MCP tool is hardcoded to `other` (`DiscoveredMCPTool`).
-/// Synthesizing off `kind` alone would actively mislabel calls — houhub reads a
+/// Synthesizing off `kind` alone would actively mislabel calls — HouHub reads a
 /// bare `pattern` as grep and a bare `query` as web search, so a guessed
 /// `{"pattern": title}` would turn every glob into a grep. Not synthesizing
 /// costs a generic card; guessing wrong invents a card that states something
@@ -13268,7 +13692,7 @@ fn gemini_synthesize_tool_input(
         // (read_many_files, read-mcp-resource, the shell-background and
         // tracker tools) reports ZERO, not several.
         //
-        // The line becomes `offset`, which is the key houhub's file card reads
+        // The line becomes `offset`, which is the key HouHub's file card reads
         // (`content-parts-renderer.tsx`, `FileToolInput`); `start_line` is not
         // in its vocabulary and would render nothing.
         ToolKind::Read if locations.len() == 1 => {
@@ -13304,7 +13728,7 @@ const CODEX_SUBAGENT_FALLBACK_NAME: &str = "subagent";
 /// thing codex-acp forwards is `subAgentActivity`, as a `tool_call(kind:other)`
 /// carrying `_meta.codex.subagent = {threadId, path, activity}`.
 ///
-/// houhub used to DROP every one of these, on the premise that the
+/// HouHub used to DROP every one of these, on the premise that the
 /// `collabAgentToolCall` capsule already showed the same thing. That premise
 /// died with the team-of-agents rewrite: codex raises no `collabAgentToolCall`
 /// for a spawn any more, so dropping this left a codex sub-agent completely
@@ -13320,7 +13744,7 @@ enum CodexSubagentActivity {
         input: String,
     },
     /// The child reached a terminal state (`completed` / `interrupted`). Carries
-    /// no card of its own — its `toolCallId` is a synthetic id houhub has never
+    /// no card of its own — its `toolCallId` is a synthetic id HouHub has never
     /// seen (`subagent-completed-<uuid>`), so rendering it would open a SECOND
     /// capsule with the same name and no way to tell it from the launch. It is
     /// forwarded onto the LAUNCH capsule instead, keyed by `threadId`.
@@ -13644,7 +14068,7 @@ fn hoist_request_permission_meta(
 /// the TOP-LEVEL `_meta.steering.supported` flag, a sibling of
 /// `agentCapabilities` (NOT `agentCapabilities._meta`, which belongs to other
 /// conventions such as the ACP runtime's symposium capability ext). Both claude-agent-acp
-/// (0.61+) and codex-acp (1.1.6+) advertise here; whether houhub actually
+/// (0.61+) and codex-acp (1.1.6+) advertise here; whether HouHub actually
 /// steers natively additionally requires the
 /// `registry::steering_prompt_required_min_version` policy plus the runtime
 /// version proof (see the synthesis in `run_connection`).
@@ -13759,7 +14183,7 @@ fn session_info_goal_value(
 /// The raw `sessionFailure` value out of a `_meta.jetbrains.air` envelope —
 /// present only when the envelope itself is well-formed (integer
 /// `version >= 1`, mirroring the advertisement check the adapters run on
-/// houhub's `clientCapabilities._meta.jetbrains.air`). A malformed or
+/// HouHub's `clientCapabilities._meta.jetbrains.air`). A malformed or
 /// future-incompatible envelope yields `None` and the carrier is treated as
 /// holding no failure. Records ride TWO carriers with this same envelope: the
 /// per-attempt upserts on `session_info_update._meta`, and a turn's terminal
@@ -14327,7 +14751,7 @@ struct CodeBuddyLiveState {
     /// Paired with `SessionState::agent_initiated_turn`, which keeps that
     /// turn's end off the prompt gate.
     grok_agent_turn: Option<String>,
-    /// The prompt id of every Grok turn this session has seen END — ones houhub
+    /// The prompt id of every Grok turn this session has seen END — ones HouHub
     /// started (read off their frames and responses), and agent-initiated ones
     /// it closed. Frames Grok still delivers for them afterwards must neither
     /// open a turn nor end one. Every one, not the latest: a prompt that
@@ -14376,7 +14800,7 @@ struct CodeBuddyLiveState {
     /// viewed files … the text of the result stays out"), so the completion
     /// arrives as a bare status and the card would show the path and nothing
     /// else — while the same call reloaded from the transcript shows the text.
-    /// houhub already subscribes to the raw SDK stream (`emitRawSDKMessages`),
+    /// HouHub already subscribes to the raw SDK stream (`emitRawSDKMessages`),
     /// and the adapter forwards each raw message BEFORE it reports it, so the
     /// result is here first. It only ever fills a completion that carries no
     /// result of its own (see the `ToolCallUpdate` arm), and the map is cleared
@@ -15053,7 +15477,7 @@ fn compaction_failure_error(event: &AcpEvent, agent_type: AgentType) -> Option<A
 /// `invalid type: null, expected a string` — and a handler `Err` brought the
 /// whole connection down, so the user saw `ACP protocol error: Invalid params:
 /// "invalid type: null, expected a string"` instead of a session (issue #794).
-/// The 2.x runtime logs a handler error instead of dying on it, and houhub's own
+/// The 2.x runtime logs a handler error instead of dying on it, and HouHub's own
 /// `AgentSession` router simply matches no session on a null id — but nothing
 /// would ever claim the frame either, so without this guard it would sit in the
 /// retry queue for the connection's lifetime and be replayed into every handler
@@ -15072,15 +15496,15 @@ fn compaction_failure_error(event: &AcpEvent, agent_type: AgentType) -> Option<A
 /// retry, and a parked message is replayed straight into the newly added
 /// dynamic handler without passing through this chain again.
 ///
-/// A null session id means "not about a session yet", and nothing houhub renders
+/// A null session id means "not about a session yet", and nothing HouHub renders
 /// rides on such a notification, so it is dropped. A REQUEST shaped this way is
 /// the same protocol violation, and it would be parked just the same — the
 /// runtime's `method_not_found` fallback only answers requests with no
 /// `sessionId` field at all — leaving the agent blocked on a reply that never
 /// comes. It is answered `invalid_params` instead, which is also the truth.
-/// Being first in the chain, the guard answers it before houhub's own request
+/// Being first in the chain, the guard answers it before HouHub's own request
 /// handlers see it: the typed ones would reject the null anyway, and no agent
-/// houhub drives sends a null to the raw-params bridges (grok's ask and plan
+/// HouHub drives sends a null to the raw-params bridges (grok's ask and plan
 /// exit, the elicitation bridge codex and DeepSeek use, cursor's extension
 /// methods — which carry no `sessionId` at all).
 struct ClaimNullSessionIds;
@@ -15135,6 +15559,103 @@ fn has_null_session_id(message: &UntypedMessage) -> bool {
         .is_some_and(serde_json::Value::is_null)
 }
 
+/// Claims Grok's model catalog broadcast, `_x.ai/models/update`, and folds it
+/// into the connection's model picker (issue #876).
+///
+/// Grok fetches its catalog after startup, and again when its login changes —
+/// after refreshing an expired token, for one — and announces every fetch on
+/// this method, typically several identical frames within milliseconds. A
+/// session established before the fetch landed was handed whatever catalog grok
+/// had then, which can be only its bundled models: loaded on an expired token,
+/// a session showed Grok 4.6 and 4.5 while the catalog that arrived 0.7s later
+/// also had both 4.7 models.
+///
+/// The broadcast names no session. The per-session router matches on
+/// `params.sessionId`, so it never claimed this frame, nothing else did either,
+/// and the runtime dropped it unhandled: the picker kept the handshake's list
+/// for the life of the connection. It has to be claimed here in the builder
+/// chain — a message without a `sessionId` is never parked for a router added
+/// later. A connection drives one grok process and the catalog is that
+/// process's, so the broadcast belongs to whatever session the connection holds
+/// or is establishing; for the latter it waits in
+/// `SessionState::grok_catalog_broadcast`.
+///
+/// Handled inline on the dispatch loop rather than spawned: in arrival order,
+/// each frame folds against the state the one before it left, which is what
+/// makes a repeat a no-op. It takes nothing but the session state's lock, which
+/// the permission handler on this same loop already takes inline
+/// (`handle_permission_request`).
+struct GrokModelCatalogBroadcasts {
+    agent_type: AgentType,
+    state: Arc<RwLock<SessionState>>,
+    emitter: EventEmitter,
+}
+
+impl<Counterpart: Role> HandleDispatchFrom<Counterpart> for GrokModelCatalogBroadcasts {
+    async fn handle_dispatch_from(
+        &mut self,
+        message: Dispatch,
+        _connection: ConnectionTo<Counterpart>,
+    ) -> Result<Handled<Dispatch>, agent_client_protocol::Error> {
+        match message {
+            Dispatch::Notification(notification)
+                if self.agent_type == AgentType::Grok
+                    && notification.method() == GROK_MODELS_UPDATE_METHOD =>
+            {
+                apply_grok_model_catalog(&self.state, &self.emitter, notification.params()).await;
+                Ok(Handled::Yes)
+            }
+            message => Ok(Handled::No {
+                message,
+                retry: false,
+            }),
+        }
+    }
+
+    fn describe_chain(&self) -> impl std::fmt::Debug {
+        "GrokModelCatalogBroadcasts"
+    }
+}
+
+/// Fold one `_x.ai/models/update` into the connection's state: always into the
+/// session's model specs and the establishment slot, and into the picker on
+/// screen if there is one — emitted only when that changed it, so a repeated
+/// broadcast is a no-op.
+async fn apply_grok_model_catalog(
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    params: &serde_json::Value,
+) {
+    let Some(catalog) = parse_grok_model_catalog(params) else {
+        tracing::debug!("[ACP][grok] model catalog broadcast lists no usable model; ignored");
+        return;
+    };
+    let models = catalog.models.len();
+    let refreshed = emit_with_state_built(state, emitter, move |s| {
+        let specs = s.grok_model_specs.get_or_insert_with(HashMap::new);
+        fold_grok_catalog_specs(specs, &catalog.specs);
+        let picker = s.config_options.as_ref().and_then(|shown| {
+            let mut next = shown.clone();
+            fold_grok_catalog_into_picker(&mut next, &catalog, specs);
+            (next != *shown).then_some(next)
+        });
+        s.grok_catalog_broadcast = Some(catalog);
+        picker.map(|config_options| AcpEvent::SessionConfigOptions { config_options })
+    })
+    .await;
+    if refreshed {
+        tracing::info!(
+            models,
+            "[ACP][grok] model catalog broadcast refreshed the model picker"
+        );
+    } else {
+        tracing::debug!(
+            models,
+            "[ACP][grok] model catalog broadcast left the model picker as it was"
+        );
+    }
+}
+
 /// `_auth/status_update` — the agent reporting which identity IT is logged in
 /// with. Introduced by codex-acp 1.9.0; claude-agent-acp 0.75.0 adopted the
 /// same method with its own vocabulary.
@@ -15162,8 +15683,8 @@ struct AuthStatusUpdateNotification {
 /// start of every user prompt, which fires an async `claude auth status --json`
 /// probe (5s timeout), so a push can land MID-TURN and a consumer must not
 /// assume the channel is quiet while a turn is open. Neither is gated on
-/// anything houhub advertises; the agent merely ANNOUNCES the channel with
-/// `agentCapabilities._meta.authStatus = {}`, and houhub registers this handler
+/// anything HouHub advertises; the agent merely ANNOUNCES the channel with
+/// `agentCapabilities._meta.authStatus = {}`, and HouHub registers this handler
 /// for every agent rather than per type, so a third adopter is already claimed.
 ///
 /// Both push only when the payload DIFFERS from the last one sent, so the
@@ -15181,7 +15702,7 @@ struct AuthStatusUpdateNotification {
 /// claim is now what keeps the payload's shape recorded against a real reader.
 ///
 /// Nothing consumes the payload yet, and that is a deliberate stop: the status
-/// describes the AGENT-owned login only (on codex, routing houhub itself
+/// describes the AGENT-owned login only (on codex, routing HouHub itself
 /// configured through `providers/set` is explicitly excluded upstream), and on
 /// both agents every failure it could warn about already arrives as an AIR
 /// `sessionFailure` carrying an actionable `login` — claude 0.74.0 additionally
@@ -15251,7 +15772,7 @@ fn is_known_ext_method(method: &str) -> bool {
 ///
 /// The tool is named by the call's own opening frame (`claudeCode.toolName`,
 /// kept in the `_meta` ledger), never guessed from the result: a result for a
-/// call houhub has not seen announced is not stashed. The text is taken the way
+/// call HouHub has not seen announced is not stashed. The text is taken the way
 /// the transcript parser takes it (`parsers::claude::extract_tool_result_text`),
 /// which is also the string claude-agent-acp 0.81.x put in `rawOutput`, so the
 /// live card and its reloaded twin read the same thing.
@@ -15368,7 +15889,7 @@ fn claude_plugin_failures_skipped_on_replay(dispatch: &Dispatch) -> bool {
 ///
 /// A notification no mapper claims is dropped, but not invisibly; a request is
 /// answered `method_not_found` rather than left hanging (see its arm). All
-/// lines are `debug!`: an agent is free to speak methods houhub doesn't
+/// lines are `debug!`: an agent is free to speak methods HouHub doesn't
 /// implement, and a per-message `warn!` on a chatty agent is how log storms
 /// start.
 async fn maybe_emit_ext_notification(
@@ -15380,7 +15901,7 @@ async fn maybe_emit_ext_notification(
 ) {
     let notification = match dispatch {
         Dispatch::Notification(notification) => notification,
-        // An agent calling a client method houhub doesn't implement. It only
+        // An agent calling a client method HouHub doesn't implement. It only
         // lands here because it names the session — the session router claims
         // every such message before the runtime's own fallback, which answers
         // `method_not_found` to an unhandled request that names none. Answer
@@ -15634,7 +16155,7 @@ fn grok_workflow_state(status: &str) -> String {
 #[derive(Debug, PartialEq, Eq)]
 struct GrokTurnCompleted {
     prompt_id: Option<String>,
-    /// Already in houhub's stop-reason vocabulary (see [`grok_stop_reason`]).
+    /// Already in HouHub's stop-reason vocabulary (see [`grok_stop_reason`]).
     stop_reason: &'static str,
 }
 
@@ -15698,9 +16219,9 @@ fn grok_frame_prompt_id(dispatch: &Dispatch) -> Option<&str> {
 /// same process — a prompt it queues itself, never a client `session/prompt`,
 /// so no response will ever end it. Only a main-thread chunk opens one
 /// (message or thought — that is the first thing a follow-up streams), and
-/// only one stamped with a prompt id houhub has not already seen END:
+/// only one stamped with a prompt id HouHub has not already seen END:
 ///
-/// * a turn houhub started leaves stragglers on the idle loop whenever the loop
+/// * a turn HouHub started leaves stragglers on the idle loop whenever the loop
 ///   picks its response before its last queued frames — those carry the id
 ///   of that turn (see [`note_grok_turn_prompt_id`]);
 /// * a turn Grok cancels flushes a chunk AFTER its own `turn_completed`, with
@@ -15726,7 +16247,7 @@ fn grok_agent_turn_opener(
 }
 
 /// Whether a Grok `turn_completed` ends the agent-initiated turn the idle loop
-/// has open. A turn houhub started already ended on its prompt response, so its
+/// has open. A turn HouHub started already ended on its prompt response, so its
 /// own `turn_completed` — which can reach the idle loop after that response —
 /// must end nothing a second time.
 fn grok_turn_completed_ends(open: Option<&str>, completed: &GrokTurnCompleted) -> bool {
@@ -15737,7 +16258,7 @@ fn grok_turn_completed_ends(open: Option<&str>, completed: &GrokTurnCompleted) -
     }
 }
 
-/// Remember the prompt id of the turn houhub is running, off any of its frames
+/// Remember the prompt id of the turn HouHub is running, off any of its frames
 /// that carries one, so the stragglers it leaves on the idle loop can't open a
 /// turn of their own (see [`grok_agent_turn_opener`]).
 fn note_grok_turn_prompt_id(dispatch: &Dispatch, ended: &mut HashSet<String>) {
@@ -15757,7 +16278,7 @@ fn remember_grok_ended_prompt(ended: &mut HashSet<String>, prompt_id: &str) {
 /// emitted: out of `Prompting` the frontend drops streamed content, and the
 /// transcript promotion that keeps a turn only runs on the way out of it.
 ///
-/// Skipped when a prompt houhub admitted is about to start — Grok queues that
+/// Skipped when a prompt HouHub admitted is about to start — Grok queues that
 /// prompt behind its own turn, so what it streams now lands in the admitted
 /// one instead (see `SessionState::begin_agent_initiated_turn`).
 async fn open_grok_agent_turn(
@@ -15832,7 +16353,7 @@ async fn close_grok_agent_turn(
 }
 
 /// Answer, declined, a question or plan approval an agent-initiated turn is
-/// parked on, once houhub has ended that turn early (Stop, or a prompt that has
+/// parked on, once HouHub has ended that turn early (Stop, or a prompt that has
 /// to run next). Both cards close with the turn, so nothing could ever answer
 /// them, and Grok would stay blocked — holding the one-per-connection slot
 /// every later ask needs, and, when a prompt is queued behind the turn, that
@@ -15892,7 +16413,7 @@ fn session_notice(dispatch: &Dispatch) -> Option<SessionNotice> {
 }
 
 /// Translate an ACP compaction frame into the `_meta.contextCompaction`
-/// synthetic tool call houhub already renders compaction from.
+/// synthetic tool call HouHub already renders compaction from.
 ///
 /// Same pre-dispatch seam and the same reason as [`session_notice`]. The
 /// TRANSLATION, rather than a new event, is the point: `<ContextCompactionCard>`
@@ -15971,8 +16492,13 @@ fn session_compaction_event(dispatch: &Dispatch) -> Option<AcpEvent> {
                 serde_json::Value::Bool(true),
             );
             // `error` is a sibling of `status` on the wire but a member of the
-            // card's payload, so fold it in where the card looks for it.
+            // card's payload, so fold it in where the card looks for it. A
+            // service error envelope is read down to its message first: codex
+            // forwards the raw JSON here even where it gives the failure
+            // banner the sentence (see `service_error`).
             if let Some(error) = air_task_str(update.get("error")) {
+                let error = crate::acp::service_error::readable_service_error_message(&error)
+                    .unwrap_or(error);
                 if let Some(payload) = meta
                     .get_mut("contextCompaction")
                     .and_then(serde_json::Value::as_object_mut)
@@ -16373,7 +16899,7 @@ async fn emit_conversation_update(
             );
             let meta = stamp_codex_search_action(agent_type, &tc.kind, hosted_shell, meta);
             // Later frames hand the frontend the MERGED `_meta`, which it takes
-            // whole — so houhub's own stamps must be part of the record, or the
+            // whole — so HouHub's own stamps must be part of the record, or the
             // first update carrying any `_meta` would wipe them.
             if let Some(meta) = meta.as_ref() {
                 cb_state
@@ -16959,7 +17485,7 @@ async fn emit_conversation_update(
             // `_meta.goal` for adapters advertising the goal extension
             // (claude-agent-acp 0.66+, codex-acp 1.2+ — which dropped the
             // legacy key), else the legacy `_meta.codex.goal`. Either way it
-            // maps onto houhub's canonical create_goal/update_goal synthetic
+            // maps onto HouHub's canonical create_goal/update_goal synthetic
             // tool call so the existing goal-card pipeline
             // (groupGoalRuns/GoalCard) renders it — byte-identical to the
             // history path (parsers/codex.rs). Agents publishing no goal meta
@@ -17024,7 +17550,7 @@ async fn emit_conversation_update(
                 state.write().await.goal_active = cb_state.codex_open_goal.is_some();
             }
             // JetBrains AIR typed session failure (claude-agent-acp 0.67+/
-            // codex-acp 1.2+): published only because houhub advertises
+            // codex-acp 1.2+): published only because HouHub advertises
             // `clientCapabilities._meta.jetbrains.air` (see
             // `build_client_capabilities`). Valid upserts are forwarded
             // verbatim — the monotonic id+revision merge runs identically in
@@ -17829,7 +18355,7 @@ mod tests {
         assert!(perms.lock().await.showing.is_none());
     }
 
-    /// An agent request houhub has no handler for still gets an answer. One
+    /// An agent request HouHub has no handler for still gets an answer. One
     /// that names the session is claimed by the session router — ahead of the
     /// runtime's own `method_not_found` fallback — so without an explicit reply
     /// the agent would block on it forever.
@@ -18145,7 +18671,7 @@ mod tests {
         ));
         // A terminal marker is not dropped — it is the only live signal that the
         // child stopped working, and it is routed onto the LAUNCH capsule (its
-        // own `toolCallId` is a synthetic `subagent-completed-<uuid>` houhub has
+        // own `toolCallId` is a synthetic `subagent-completed-<uuid>` HouHub has
         // never seen), keyed by the thread id.
         for kind in ["completed", "interrupted"] {
             let terminal = meta_map(serde_json::json!({
@@ -18902,7 +19428,7 @@ mod tests {
             // "recommendedValue" IS wanted too, and from BOTH
             // (claude-agent-acp 0.76.0, codex-acp 1.11.0): it names each
             // selector's recommended row, and on claude it additionally
-            // retires the ambiguous `default` row so the value houhub journals
+            // retires the ambiguous `default` row so the value HouHub journals
             // per turn is a real model id. Advertising a capability an agent
             // has NOT implemented is how a future meaning gets claimed by
             // accident — this one is safe only because both adapters now ship
@@ -18966,7 +19492,7 @@ mod tests {
 
     /// codex gets `terminal_output_delta` (its completion frames stop repeating
     /// the output the bridge already streamed); claude must NOT — there the
-    /// same key moves shell output onto a `_meta` channel houhub does not
+    /// same key moves shell output onto a `_meta` channel HouHub does not
     /// bridge. Neither may get the other spelling: it would move codex's shell
     /// output onto `terminal_output`, a key its bridge does not read.
     #[test]
@@ -19184,7 +19710,7 @@ mod tests {
         assert_eq!(at("1.11.1-preview.6"), Some(QuestionInDescription));
         assert_eq!(at("1.12.0-preview.1"), Some(QuestionInDescription));
 
-        // No `agentInfo`, or one houhub cannot parse: report nothing rather than
+        // No `agentInfo`, or one HouHub cannot parse: report nothing rather than
         // guess a generation. The elicitation parser then dates the form from
         // its own markers.
         assert_eq!(codex_user_input_shape(AgentType::Codex, None), None);
@@ -19490,7 +20016,7 @@ mod tests {
     #[test]
     fn houhub_ask_auto_allow_option_leaves_every_other_approval_on_the_card() {
         // Another server's ask tool: approving it is the user's call, not
-        // houhub's, even though the tool half of the name matches.
+        // HouHub's, even though the tool half of the name matches.
         for foreign in [
             "mcp__other-server__ask_user_question",
             "mcp__houhub-mcp__delegate_to_agent",
@@ -19669,10 +20195,11 @@ mod tests {
 
     /// After a codex fork, the sibling row HouHub creates to keep the pre-fork
     /// history points at the PARENT thread — whose writer the forking process
-    /// still holds, because `session/fork` only unsubscribes the child. Opening
-    /// it must stop with a banner, never fall through to `session/new`: that
-    /// rebinds the row to a fresh empty session and destroys the only pointer to
-    /// the history the row exists for. The lock clears when the fork is closed.
+    /// holds until codex unloads the thread, about a minute after HouHub closes
+    /// it, because `session/fork` only unsubscribes the child. Opening it in
+    /// that window must stop with a banner, never fall through to
+    /// `session/new`: that rebinds the row to a fresh empty session and
+    /// destroys the only pointer to the history the row exists for.
     #[test]
     fn classify_load_failure_names_a_session_another_client_holds() {
         let busy = "Internal error: {\n  \"details\": \"thread \
@@ -19697,6 +20224,97 @@ mod tests {
         // session to work around a lock that clears on its own.
         let custom = AgentType::custom("glm-acp-agent").expect("valid id");
         assert!(!recovers_load_failure_locally(custom, Some("session_busy")));
+    }
+
+    /// The same lock as above, as each codex-acp version reports it. Both bodies
+    /// were captured live: two adapter processes on one `CODEX_HOME`, the
+    /// second `session/load`ing (and `session/resume`ing — the identical error)
+    /// a thread the first still held. 2.1.0 (#564) types it; the verdict must
+    /// come from that type, because the raw text it still carries in `details`
+    /// is codex's wording and carries no stability promise.
+    #[test]
+    fn classify_load_error_reads_codex_thread_active_writer_reason() {
+        let error = |body: serde_json::Value| -> agent_client_protocol::Error {
+            serde_json::from_value(body).expect("an ACP error body")
+        };
+
+        let codex_2_1_0 = error(serde_json::json!({
+            "code": -32600,
+            "message": "Invalid request: This Codex session is in use by another Codex \
+                client (the Codex app, the CLI or an IDE extension). Close the session \
+                there or quit that client, then try again.",
+            "data": {
+                "reason": "thread_active_writer",
+                "threadId": "01a0f64d-42fe-7242-a005-bddc86d65de5",
+                "details": "thread 01a0f64d-42fe-7242-a005-bddc86d65de5 already has an active writer"
+            }
+        }));
+        assert_eq!(
+            classify_session_load_error(&codex_2_1_0),
+            Some("session_busy")
+        );
+
+        // The reason alone decides. Without it this body matches nothing: the
+        // code is a plain InvalidRequest and the reworded text names no marker.
+        let reworded = error(serde_json::json!({
+            "code": -32600,
+            "message": "Invalid request: session in use",
+            "data": {
+                "reason": "thread_active_writer",
+                "threadId": "t-1",
+                "details": "thread t-1 is locked by another process"
+            }
+        }));
+        assert_eq!(classify_session_load_error(&reworded), Some("session_busy"));
+
+        // ≤2.0.x: no reason, codex's raw text under -32603. The message
+        // fallback keeps naming it, so an older adapter resolved off PATH (or
+        // a custom pin) still gets the banner.
+        let codex_2_0_1 = error(serde_json::json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": {
+                "details": "thread 01a0f64b-57af-7252-9bcd-6dd5b5bb04c0 already has an active writer"
+            }
+        }));
+        assert_eq!(
+            classify_session_load_error(&codex_2_0_1),
+            Some("session_busy")
+        );
+
+        // Any other reason is not this one, and the rest of the ladder is
+        // untouched: the code still outranks the message, and an unclassified
+        // failure stays a `session/new` fallback.
+        let other_reason = error(serde_json::json!({
+            "code": -32600,
+            "message": "Invalid request",
+            "data": { "reason": "something_else" }
+        }));
+        assert_eq!(classify_session_load_error(&other_reason), None);
+        let not_found = error(serde_json::json!({
+            "code": -32002,
+            "message": "Resource not found",
+            "data": { "details": "process exited with code 1" }
+        }));
+        assert_eq!(
+            classify_session_load_error(&not_found),
+            Some("resource_not_found")
+        );
+        let archived = error(serde_json::json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": { "details": "session abc is archived. Run `codex unarchive abc` to restore it." }
+        }));
+        assert_eq!(
+            classify_session_load_error(&archived),
+            Some("session_archived")
+        );
+        let unclassified = error(serde_json::json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": { "details": "boom" }
+        }));
+        assert_eq!(classify_session_load_error(&unclassified), None);
     }
 
     #[test]
@@ -19731,7 +20349,7 @@ mod tests {
     #[test]
     fn agents_houhub_records_itself_absorb_a_forgotten_session() {
         // The reported case: a custom agent keeps sessions in memory, so every
-        // restart makes session/load fail with "Session not found". houhub has
+        // restart makes session/load fail with "Session not found". HouHub has
         // the turns in its own transcript, so it must recover silently instead
         // of blanking the conversation behind a load-failed banner.
         let custom = AgentType::custom("glm-acp-agent").expect("valid id");
@@ -19968,10 +20586,10 @@ mod tests {
         let path = dir.path().join("settings.json");
         assert!(matches!(read_antigravity_settings(&path), Ok(None)));
 
-        // Hjson: the server accepts comments and trailing commas, houhub's
+        // Hjson: the server accepts comments and trailing commas, HouHub's
         // parser does not — so this lands in the give-up branch instead of
         // being flattened into strict JSON with the comments (and anything
-        // else houhub misread) gone.
+        // else HouHub misread) gone.
         std::fs::write(
             &path,
             "{\n  // my key\n  \"auth\": { \"type\": \"gemini-api-key\" },\n}\n",
@@ -20021,7 +20639,7 @@ mod tests {
         );
 
         // The FILE wins over the row, which is the whole reason this exists:
-        // the two can disagree (a hand edit, a sync houhub was refused) and only
+        // the two can disagree (a hand edit, a sync HouHub was refused) and only
         // one of them is what the agent authenticates with.
         let mut disagreeing = antigravity_runtime("oauth-personal");
         disagreeing.extend(home());
@@ -20040,7 +20658,7 @@ mod tests {
         );
 
         // An `auth` block with no type, and a blank one, are both "no method" —
-        // still positive knowledge, because houhub read the file.
+        // still positive knowledge, because HouHub read the file.
         std::fs::write(&path, r#"{"auth":{"scopes":[]}}"#).unwrap();
         assert_eq!(
             antigravity_effective_auth_type(&home()),
@@ -20052,7 +20670,7 @@ mod tests {
             AntigravityAuthType::Absent
         );
 
-        // Hjson: the server reads it and houhub does not, so the method is
+        // Hjson: the server reads it and HouHub does not, so the method is
         // whatever that file says. NOT `Absent` — this is the distinction the
         // whole enum exists for. A caller that treated it as "nothing there"
         // would sign out of a `gemini-api-key` connection, clear nothing, and
@@ -20068,7 +20686,7 @@ mod tests {
         );
 
         // And a home that cannot be named at all is unknown for the same
-        // reason: there is a file somewhere, houhub just cannot say where.
+        // reason: there is a file somewhere, HouHub just cannot say where.
         // Platform-native key, as in the path tests below: `child_home_dir`
         // reads `USERPROFILE` on Windows (`expanduser` never consults `HOME`
         // there), so blanking `HOME` removes nothing, the fallback lands on the
@@ -20157,7 +20775,7 @@ mod tests {
     #[test]
     fn antigravity_settings_merge_preserves_foreign_keys_and_skips_no_op_writes() {
         // The file is the USER's: the server parses it as Hjson and documents
-        // it as user-provided, so a houhub write may only touch `auth.type` and
+        // it as user-provided, so a HouHub write may only touch `auth.type` and
         // the `gcp` block.
         let existing = serde_json::json!({
             "auth": { "type": "gemini-api-key" },
@@ -20219,7 +20837,7 @@ mod tests {
     fn antigravity_settings_merge_refuses_blocks_that_are_not_objects() {
         // The vendor's `_auth_block` logs "not editing %r because `auth` is not
         // an object" and gives up. Replacing that value with an object would
-        // delete whatever the user meant by it, so houhub refuses too.
+        // delete whatever the user meant by it, so HouHub refuses too.
         let odd_auth = serde_json::json!({ "auth": "managed-elsewhere", "keep": 1 });
         assert!(merge_antigravity_settings(
             Some(odd_auth),
@@ -20231,7 +20849,7 @@ mod tests {
 
         // Same for `gcp` — but ONLY when there is actually something to write
         // into it. With no project or location supplied, a strange `gcp` is
-        // none of houhub's business and must not block the `auth.type` update.
+        // none of HouHub's business and must not block the `auth.type` update.
         let odd_gcp = serde_json::json!({ "gcp": ["not", "an", "object"] });
         assert!(merge_antigravity_settings(
             Some(odd_gcp.clone()),
@@ -21094,7 +21712,7 @@ mod tests {
     }
 
     /// A bare `pi` is looked up on the PATH the launch hands the child, which
-    /// can differ from houhub's own (a per-agent override, the OfficeCLI prepend).
+    /// can differ from HouHub's own (a per-agent override, the OfficeCLI prepend).
     #[cfg(unix)]
     #[test]
     fn pi_preflight_searches_the_launch_path() {
@@ -21121,7 +21739,7 @@ mod tests {
     }
 
     /// A relative `PATH` entry is searched inside the workspace, where pi-acp's
-    /// spawn runs — never in houhub's own cwd.
+    /// spawn runs — never in HouHub's own cwd.
     #[cfg(unix)]
     #[test]
     fn pi_preflight_anchors_a_relative_path_entry_in_the_workspace() {
@@ -21136,7 +21754,7 @@ mod tests {
     }
 
     /// pi-acp spawns a relative command with the session's workspace as cwd, so
-    /// that is where it must exist — not in houhub's own cwd.
+    /// that is where it must exist — not in HouHub's own cwd.
     #[cfg(unix)]
     #[test]
     fn pi_preflight_resolves_a_relative_command_in_the_workspace() {
@@ -21207,7 +21825,7 @@ mod tests {
         assert!(!raw.contains(MCP_SUSPECT_SENTINEL), "{raw}");
         assert!(!raw.contains(AUTH_REQUIRED_SENTINEL), "{raw}");
 
-        // Both opens end as the same coded error, with houhub's own
+        // Both opens end as the same coded error, with HouHub's own
         // instructions in place of the wire text.
         let load_tagged = tag_pi_runtime_outdated(&load_failure, AgentType::Pi).unwrap();
         for err in [connection_failure(tagged), connection_failure(load_tagged)] {
@@ -21353,11 +21971,11 @@ mod tests {
                 .expect("caps serialize")
         };
 
-        // #436: the whole point. An agent told houhub hosts neither channel
+        // #436: the whole point. An agent told HouHub hosts neither channel
         // does its own reads and runs its own shell, so its OS sandbox — the
         // only control still working under `grok agent stdio` — covers them.
         // BOTH must go: leaving either advertised hands the agent a way back
-        // into houhub's unsandboxed process for the same file.
+        // into HouHub's unsandboxed process for the same file.
         //
         // `ClientCapabilities` serializes its unset fields as explicit `false`
         // rather than omitting them, so assert THAT shape — not absence. The
@@ -21401,10 +22019,10 @@ mod tests {
 
     #[test]
     fn a_withheld_channel_is_refused_as_method_not_found() {
-        // Every channel houhub stops advertising must also stop being SERVED.
+        // Every channel HouHub stops advertising must also stop being SERVED.
         // Advertisement is a declaration; an agent that calls the method anyway
         // (or a future adapter that ignores client capabilities) would otherwise
-        // land the operation back in houhub's unsandboxed process — the bug.
+        // land the operation back in HouHub's unsandboxed process — the bug.
         for method in [
             "fs/read_text_file",
             "fs/write_text_file",
@@ -21421,7 +22039,7 @@ mod tests {
             );
             let text = error.to_string();
             // The knob has to be named: a bare "Method not found" on a channel
-            // that worked yesterday reads as a houhub bug, not as a setting.
+            // that worked yesterday reads as a HouHub bug, not as a setting.
             assert!(text.contains(method), "{text}");
             assert!(text.contains(HOST_TOOLS_ENV), "{text}");
         }
@@ -21430,7 +22048,7 @@ mod tests {
     #[test]
     fn strict_fs_policy_is_only_a_boundary_once_the_terminal_is_withheld() {
         // Pins the condition behind the connect-time warning: `strict` gates
-        // reads, but that gate is walkable through a shell for as long as houhub
+        // reads, but that gate is walkable through a shell for as long as HouHub
         // serves one. The two knobs are orthogonal — this asserts the predicate
         // pair the warning keys off, so the warning can't silently stop firing.
         let strict = FsAccessPolicy::strict(Path::new("/workspace"));
@@ -23014,9 +23632,36 @@ mod tests {
         );
     }
 
+    /// The frame codex-acp 2.1.1 sent live (its id aside) when the
+    /// compaction's model request got an HTTP 400 whose body is a service
+    /// error envelope: the same turn's failure banner already read the
+    /// message, and the card reads it too.
+    #[test]
+    fn a_failed_compaction_reads_a_service_error_envelope_down_to_its_message() {
+        let event = session_compaction_event(&async_task_notif(serde_json::json!({
+            "sessionUpdate": "compaction_update",
+            "compactionId": "019d3c1e-2f0a-7a52-9b1e-6f2d1c9e8a10",
+            "status": "failed",
+            "error": "{\"type\": \"error\", \"status\": 400, \"error\": {\"type\": \"invalid_request_error\", \"message\": \"The 'fake-model' model is not supported when using Codex with a ChatGPT account.\"}}",
+        })))
+        .expect("compaction event");
+        let AcpEvent::ToolCallUpdate { meta, .. } = event else {
+            panic!("expected a ToolCallUpdate");
+        };
+        assert_eq!(
+            meta.as_ref()
+                .and_then(|m| m.get("contextCompaction"))
+                .and_then(|p| p.get("error"))
+                .and_then(|v| v.as_str()),
+            Some(
+                "The 'fake-model' model is not supported when using Codex with a ChatGPT account."
+            )
+        );
+    }
+
     /// The retained summary is the one thing the legacy presentation could
     /// never carry. It rides `raw_output` — the streamed chunks APPEND — and
-    /// every translated update claims that channel with the houhub marker the
+    /// every translated update claims that channel with the HouHub marker the
     /// card expands on, because a bare `raw_output` is exactly what a legacy
     /// call fills with its metadata object.
     #[test]
@@ -23119,7 +23764,7 @@ mod tests {
             AgentType::OpenCode,
             // A custom agent wrapping either adapter is deliberately NOT
             // advertised to: the id it resolves through is the user's, so
-            // houhub cannot know what binary is behind it.
+            // HouHub cannot know what binary is behind it.
             AgentType::Custom("my-agent"),
         ] {
             assert_eq!(
@@ -23717,7 +24362,7 @@ mod tests {
     }
 
     /// The read loop drops at most one update per notification, so an agent
-    /// speaking a protocol houhub can't decode used to put a WARN on the
+    /// speaking a protocol HouHub can't decode used to put a WARN on the
     /// per-streaming-chunk path — under the DEFAULT level, which is how a field
     /// report ended up writing 34GB in 8.8h (issue #427). The throttle collapses
     /// the burst; this pins the part that must survive it, the tally.
@@ -24096,7 +24741,7 @@ mod tests {
     /// user would sit on a dead session with no teardown to recover from.
     #[test]
     fn a_rejection_that_reports_a_dead_session_still_tears_the_connection_down() {
-        // The agent has no record of the id houhub just prompted on.
+        // The agent has no record of the id HouHub just prompted on.
         assert!(prompt_rejection_is_terminal(
             &agent_client_protocol::Error::resource_not_found(None)
         ));
@@ -24114,7 +24759,7 @@ mod tests {
         assert!(prompt_rejection_is_terminal(&dropped), "{dropped}");
     }
 
-    /// Plays an agent over the raw pipe: waits for houhub's first frame (the
+    /// Plays an agent over the raw pipe: waits for HouHub's first frame (the
     /// prompt), then dies with it unanswered — its output ends mid-prompt, the
     /// way it does when the process exits. Fires `exited` once the pipe is gone.
     fn agent_that_dies_on_the_prompt(
@@ -24374,7 +25019,7 @@ mod tests {
             None,
             // Version missing / below the floor / not an integer: the same
             // gate `air_session_failure` applies, mirroring what the adapters
-            // run on houhub's own advertisement.
+            // run on HouHub's own advertisement.
             Some(serde_json::json!({
                 "jetbrains": {"air": {"recommendedValue": "gpt-6-astra"}}
             })),
@@ -24554,7 +25199,7 @@ mod tests {
 
     // The reported cursor-agent failure: `session/new` answered -32000 with
     // `Please run 'agent login' first` — advice the user cannot take, since
-    // `agent` is not a command and houhub's managed `cursor-agent` is not on
+    // `agent` is not a command and HouHub's managed `cursor-agent` is not on
     // PATH. The typed code is the only place that reading is available, so it
     // has to be classified here and not from the wire text.
     #[test]
@@ -24833,7 +25478,7 @@ mod tests {
     // ── config-option verdicts ──────────────────────────────────────────────
     //
     // `session/set_config_option` is advisory: the agent answers with the option
-    // list it adopted, and houhub renders that verbatim — so a refused pick reads
+    // list it adopted, and HouHub renders that verbatim — so a refused pick reads
     // in the composer as the selector springing back for no reason. Only this
     // side can tell a request's answer from an unsolicited update, so the
     // comparison has to be exactly right here.
@@ -24968,7 +25613,7 @@ mod tests {
     }
 
     /// The claude model selector, as a live adapter advertises it with and
-    /// without houhub's AIR `recommendedValue` opt-in: 0.76.0+ removes the
+    /// without HouHub's AIR `recommendedValue` opt-in: 0.76.0+ removes the
     /// `default` row for a client that asks, every older build keeps it.
     fn claude_model_option(offers_default: bool) -> SessionConfigOption {
         let mut options = vec![serde_json::json!({"value": "opus[1m]", "name": "Opus 5"})];
@@ -24990,7 +25635,7 @@ mod tests {
 
     #[test]
     fn config_option_rejects_a_value_the_select_no_longer_offers() {
-        // The `default` pick a user saved before houhub advertised
+        // The `default` pick a user saved before HouHub advertised
         // `recommendedValue`. Replaying it can only error, and it would do so
         // on every connect for good: the row that would let the user overwrite
         // the preference is exactly the one that went away.
@@ -25001,7 +25646,7 @@ mod tests {
 
     #[test]
     fn config_option_keeps_a_value_an_older_adapter_still_offers() {
-        // The registry pin only governs what houhub INSTALLS —
+        // The registry pin only governs what HouHub INSTALLS —
         // `resolve_npx_command` launches whatever `claude-agent-acp` is on
         // PATH. So the same built-in agent id may be speaking to a pre-0.76
         // adapter, where `default` is still a real row and dropping the
@@ -25111,7 +25756,7 @@ mod tests {
     }
 
     /// The model selector claude-agent-acp 0.84.0 answers `session/new` with
-    /// once houhub advertises `recommendedValue` (no `default` row), in either
+    /// once HouHub advertises `recommendedValue` (no `default` row), in either
     /// Opus spelling its CLI builds: `opus[1m]` (measured live on a gateway
     /// account) or plain `opus` (the adapter's own live test, 0.83.0).
     fn claude_model_selector(opus_row: &str) -> SessionConfigOption {
@@ -25148,6 +25793,40 @@ mod tests {
             heal_retired_context_lane_pick(&renamed, "opus[1M]").as_deref(),
             Some("opus")
         );
+    }
+
+    /// The model selector claude-agent-acp 0.85.0 answers `session/new` with
+    /// through an `ANTHROPIC_BASE_URL` gateway, verbatim (measured live). Claude
+    /// Code 2.1.285 gives a gateway session the 1M window of the models that
+    /// have one, so BOTH `[1m]` rows the same gateway listed on 0.84.0 are gone
+    /// and the recommendation moved from `opus[1m]` to plain `opus`.
+    #[test]
+    fn a_gateway_on_claude_code_2_1_285_heals_both_retired_context_lanes() {
+        let gateway: SessionConfigOption = serde_json::from_value(serde_json::json!({
+            "id": "model",
+            "name": "Model",
+            "description": "AI model to use",
+            "category": "model",
+            "type": "select",
+            "currentValue": "opus",
+            "_meta": {"jetbrains": {"air": {"version": 1, "recommendedValue": "opus"}}},
+            "options": [
+                {"value": "opus", "name": "Opus 5.5", "description": "Opus 5.5 · Best for everyday, complex tasks · $4/$20 per Mtok"},
+                {"value": "claude-fable-5-1", "name": "Fable 5.1", "description": "Fable 5.1 · Most capable for your hardest and longest-running tasks · $10/$50 per Mtok"},
+                {"value": "sonnet", "name": "Sonnet 5.5", "description": "Sonnet 5.5 · Efficient for routine tasks · $2/$10 per Mtok"},
+                {"value": "haiku", "name": "Haiku 4.5", "description": "Haiku 4.5 · Fastest for quick answers · $1/$5 per Mtok"},
+            ],
+        }))
+        .expect("parses");
+        assert_eq!(
+            heal_retired_context_lane_pick(&gateway, "opus[1m]").as_deref(),
+            Some("opus")
+        );
+        assert_eq!(
+            heal_retired_context_lane_pick(&gateway, "sonnet[1m]").as_deref(),
+            Some("sonnet")
+        );
+        assert_eq!(heal_retired_context_lane_pick(&gateway, "sonnet"), None);
     }
 
     #[test]
@@ -25989,7 +26668,7 @@ mod tests {
     // ---- the AIR tool-call contract (claude 0.82.0 / codex 2.0.0) --------
     //
     // Every frame below is copied from the adapters' own scenario harnesses,
-    // re-run with houhub's exact `clientCapabilities` against the new pins.
+    // re-run with HouHub's exact `clientCapabilities` against the new pins.
 
     /// Drive `frames` (raw `session/update` payloads) through
     /// `emit_conversation_update` on one connection and return every emitted
@@ -26650,7 +27329,7 @@ mod tests {
         })
     }
 
-    /// codex has pi's #519 shape too: it names a terminal houhub never created,
+    /// codex has pi's #519 shape too: it names a terminal HouHub never created,
     /// so the `[Terminal: …]` placeholder can never be superseded from the
     /// terminal channel. Its own `rawInput` must survive untouched.
     #[tokio::test]
@@ -26679,7 +27358,7 @@ mod tests {
 
     /// The win: codex streams the command's output live over
     /// `_meta.terminal_output_delta` (its DEFAULT mode, no capability involved),
-    /// and houhub used to drop every one of those frames — the card sat on the
+    /// and HouHub used to drop every one of those frames — the card sat on the
     /// placeholder until the command ended.
     #[tokio::test]
     async fn codex_terminal_output_delta_streams_as_raw_output() {
@@ -26802,7 +27481,7 @@ mod tests {
 
     /// codex streams `item/commandExecution/outputDelta` for EVERY command it
     /// runs, search / listFiles / read included (`createCommandOutputDeltaEvent`
-    /// has no action filter). So a search that printed something reaches houhub as
+    /// has no action filter). So a search that printed something reaches HouHub as
     /// plain-text deltas while it runs — no `terminal_info` needed — and the card
     /// fills in live. Once a delta has spoken, the completion's aggregated
     /// `rawOutput` is the same text again, and must not be appended a second
@@ -27255,7 +27934,7 @@ mod tests {
 
     // ---- claude file-tool argument aliases (CLI 2.1.280, adapter 0.81.1) ----
 
-    /// A Write the model spelled with the text-editor names reaches houhub as
+    /// A Write the model spelled with the text-editor names reaches HouHub as
     /// raw `rawInput`; the card must still get `file_path` / `content`. Both
     /// frame kinds carry input — the opening `tool_call` and the refining
     /// `tool_call_update` the streamed `tool_use` produces — and the update
@@ -27729,7 +28408,7 @@ mod tests {
     /// title. Titles below are the tools' own `getDisplayTitle()` in 0.60.0.
     ///
     /// The negative half is the point of the whitelist: synthesizing the wrong
-    /// shape is worse than synthesizing nothing, because houhub classifies on
+    /// shape is worse than synthesizing nothing, because HouHub classifies on
     /// shape and would render a card that names the wrong tool.
     #[test]
     fn gemini_tool_input_is_synthesized_only_from_identifying_titles() {
@@ -27936,7 +28615,7 @@ mod tests {
     }
 
     /// The invariant that keeps the renderer and the empty-turn diagnosis in
-    /// agreement: a chunk houhub does not render must not count as the agent
+    /// agreement: a chunk HouHub does not render must not count as the agent
     /// having produced output, or a status-only turn ends blank AND successful.
     #[test]
     fn pi_status_chunks_do_not_count_as_agent_output() {
@@ -28607,7 +29286,7 @@ mod tests {
     /// `TEMP` (Windows `GetTempPathW`). If a per-agent `env_json` `TMP` were
     /// allowed to win — which it would under the ordinary `runtime_env`-last
     /// rule every other variable follows — the extraction would land wherever
-    /// that points while houhub deleted an empty scratch directory and reported
+    /// that points while HouHub deleted an empty scratch directory and reported
     /// the leak fixed. The whole fix is this one ordering, so it gets a test.
     #[test]
     fn scratch_dir_outranks_a_per_agent_temp_override() {
@@ -28629,7 +29308,7 @@ mod tests {
     }
 
     /// All three names, every time. Setting only `TMPDIR` would leave `TMP`
-    /// inherited from houhub's own environment, and `GetTempPathW` reads `TMP`
+    /// inherited from HouHub's own environment, and `GetTempPathW` reads `TMP`
     /// first.
     #[test]
     fn scratch_dir_sets_every_temp_variable_the_child_might_read() {
@@ -29347,7 +30026,7 @@ mod tests {
                 .collect()
         };
 
-        // The BYO case: houhub exports the provider, so cline refuses every
+        // The BYO case: HouHub exports the provider, so cline refuses every
         // choice the selector offers.
         assert_eq!(
             env_pinned_config_option_ids(
@@ -29487,6 +30166,7 @@ mod tests {
             sessions: crate::acp::session_info::SessionInfoRuntimeConfig::new(),
             authoring: crate::acp::chat_authoring::ChatAuthoringRuntimeConfig::new(),
             browser: crate::acp::browser_tools::BrowserToolsRuntimeConfig::new(),
+            computer: crate::acp::computer_tools::ComputerToolsRuntimeConfig::new(),
             questions: Arc::new(TestNoQuestions)
                 as Arc<dyn crate::acp::question::SessionQuestionAccess>,
             plan_approvals: Arc::new(TestNoPlanApprovals)
@@ -29603,7 +30283,7 @@ mod tests {
     #[test]
     fn host_tools_agent_also_withholds_the_delegation_group() {
         // `delegate_to_agent` is the third door into the room `fs/*` and
-        // `terminal/*` open: it has houhub spawn a SECOND agent, in houhub's
+        // `terminal/*` open: it has HouHub spawn a SECOND agent, in HouHub's
         // process tree under that agent's own policy, and relays its output
         // back. Without this gate a sandboxed agent that cannot read `.env`
         // itself just asks a sibling to read it, and the switch's promise is
@@ -29626,7 +30306,7 @@ mod tests {
         };
         assert_eq!(companion_features_arg(flags), None);
 
-        // But the groups that only surface houhub's OWN state keep working —
+        // But the groups that only surface HouHub's OWN state keep working —
         // they execute nothing on the user's machine, so withholding them
         // would cost function for no boundary.
         flags.ask = true;
@@ -29719,12 +30399,21 @@ mod tests {
                 taskboard: true,
                 browser: true,
                 browser_eval: true,
+                computer: true,
+                computer_launch: true,
+                computer_clipboard: true,
             }),
             Some(
-                "delegation,feedback,ask,sessions,tasks,automations,taskboard,browser,browser_eval"
+                "delegation,feedback,ask,sessions,tasks,automations,taskboard,browser,browser_eval,\
+                 computer,computer_launch,computer_clipboard"
                     .to_string()
             )
         );
+        assert_eq!(only(|f| f.computer_clipboard = true), None);
+        // Computer use alone still gets a companion.
+        assert_eq!(only(|f| f.computer = true), Some("computer".to_string()));
+        // Its launch switch never travels on its own.
+        assert_eq!(only(|f| f.computer_launch = true), None);
         // `browser_eval` never travels on its own: the companion requires both
         // tokens, and a lone one in an agent's MCP config would read as if it
         // granted something.
@@ -29740,7 +30429,7 @@ mod tests {
 
     // ── Boolean config options (cline 3.0.50 `auto_approve`) ──
 
-    /// The exact `configOptions` entry cline 3.0.50 ships. Before houhub's schema
+    /// The exact `configOptions` entry cline 3.0.50 ships. Before HouHub's schema
     /// could parse boolean options (then behind `unstable_boolean_config`,
     /// stable in the 1.x schema) this failed to deserialize with
     /// `unknown variant 'boolean', expected 'select'` — and because
@@ -29841,7 +30530,7 @@ mod tests {
     /// An option kind newer than this build must cost its own selector, never
     /// the whole response — a failed `session/new` parse would leave the agent
     /// unusable. The schema (1.9+) guarantees that on every channel options
-    /// arrive on (`configOptions` skips an undecodable entry), and houhub relies
+    /// arrive on (`configOptions` skips an undecodable entry), and HouHub relies
     /// on it rather than sanitizing the raw JSON first, as it once had to. This
     /// pins that guarantee through a schema bump: all five responses (new, load,
     /// resume, fork, set_config_option) and the `config_option_update` push must
@@ -29982,7 +30671,7 @@ mod tests {
         assert_eq!(ordered, vec!["llm", "effort"]);
 
         // Nothing model-shaped: the order is untouched, and an id the agent
-        // never advertised is still replayed (it is not houhub's call to drop).
+        // never advertised is still replayed (it is not HouHub's call to drop).
         let preferred = BTreeMap::from([
             ("a_thing".to_string(), "1".to_string()),
             ("z_thing".to_string(), "2".to_string()),
@@ -30212,6 +30901,9 @@ mod tests {
         later: Vec<GrokFrame>,
         /// When the client sends `session/cancel`.
         on_cancel: Vec<GrokFrame>,
+        /// When the client sends `session/fork`: sent while the request is
+        /// outstanding, before it is answered with an error.
+        on_fork: Vec<GrokFrame>,
         /// Whether the session supports `session/fork`.
         forks: bool,
     }
@@ -30228,7 +30920,7 @@ mod tests {
     }
 
     /// A `workflow_updated` snapshot as grok 1.0.41 sends it (trimmed to the
-    /// fields houhub reads plus a few it ignores).
+    /// fields HouHub reads plus a few it ignores).
     fn grok_workflow_update(
         revision: u64,
         status: &str,
@@ -30357,6 +31049,12 @@ mod tests {
         }
     }
 
+    /// `session/set_model` as the agent receives it, the raw params object.
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcRequest)]
+    #[request(method = "session/set_model", response = serde_json::Value)]
+    #[serde(transparent)]
+    struct TestSetModelRequest(serde_json::Value);
+
     /// `run_conversation_loop` for a Grok session, attached to a scripted agent.
     struct GrokLoop {
         state: Arc<RwLock<SessionState>>,
@@ -30365,6 +31063,8 @@ mod tests {
         events: tokio::sync::broadcast::Receiver<Arc<crate::acp::types::EventEnvelope>>,
         /// Every event the loop emitted so far, in order.
         seen: Vec<AcpEvent>,
+        /// Every `session/set_model` the agent received, in order.
+        set_models: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
         go: Arc<tokio::sync::Notify>,
         respond: Arc<tokio::sync::Notify>,
         after: Arc<tokio::sync::Notify>,
@@ -30374,7 +31074,9 @@ mod tests {
 
     impl GrokLoop {
         async fn start(script: GrokScript) -> Self {
-            use agent_client_protocol::schema::v1::PromptResponse;
+            use agent_client_protocol::schema::v1::{
+                ForkSessionRequest, ForkSessionResponse, PromptResponse,
+            };
 
             let supports_fork = script.forks;
             let script = Arc::new(script);
@@ -30385,9 +31087,12 @@ mod tests {
 
             let prompt_script = Arc::clone(&script);
             let cancel_script = Arc::clone(&script);
+            let fork_script = Arc::clone(&script);
             let agent_go = Arc::clone(&go);
             let agent_respond = Arc::clone(&respond);
             let agent_after = Arc::clone(&after);
+            let set_models = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let agent_set_models = Arc::clone(&set_models);
             let agent = tokio::spawn(async move {
                 let _ = Agent
                     .builder()
@@ -30396,6 +31101,15 @@ mod tests {
                                responder: Responder<NewSessionResponse>,
                                _cx: ConnectionTo<Client>| {
                             responder.respond(NewSessionResponse::new(SessionId::new("s1")))
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async move |req: TestSetModelRequest,
+                                    responder: Responder<serde_json::Value>,
+                                    _cx: ConnectionTo<Client>| {
+                            agent_set_models.lock().unwrap().push(req.0);
+                            responder.respond(serde_json::json!({}))
                         },
                         on_receive_request!(),
                     )
@@ -30432,6 +31146,18 @@ mod tests {
                         },
                         on_receive_notification!(),
                     )
+                    .on_receive_request(
+                        async move |_req: ForkSessionRequest,
+                                    responder: Responder<ForkSessionResponse>,
+                                    cx: ConnectionTo<Client>| {
+                            send_grok_frames(&cx, &fork_script.on_fork)?;
+                            responder.respond_with_error(
+                                agent_client_protocol::Error::internal_error()
+                                    .data("scripted fork failure"),
+                            )
+                        },
+                        on_receive_request!(),
+                    )
                     .connect_with(agent_end, async move |cx: ConnectionTo<Client>| {
                         agent_go.notified().await;
                         send_grok_frames(&cx, &script.later)?;
@@ -30450,6 +31176,7 @@ mod tests {
             let events = state.read().await.event_stream().subscribe();
             let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
             let loop_state = Arc::clone(&state);
+            let catalog_state = Arc::clone(&state);
             let asks = Arc::new(RecordingAsks::default());
             let injection = DelegationInjection {
                 questions: Arc::clone(&asks) as Arc<dyn crate::acp::question::SessionQuestionAccess>,
@@ -30462,6 +31189,13 @@ mod tests {
             let client = tokio::spawn(async move {
                 let _ = Client
                     .builder()
+                    // As `run_connection` registers it: the catalog broadcast
+                    // names no session, so no session router sees it.
+                    .with_handler(GrokModelCatalogBroadcasts {
+                        agent_type: AgentType::Grok,
+                        state: catalog_state,
+                        emitter: EventEmitter::Noop,
+                    })
                     .connect_with(client_end, async move |cx: ConnectionTo<Agent>| {
                         let raw = cx
                             .send_request_to(
@@ -30503,6 +31237,7 @@ mod tests {
                 cmd_tx,
                 events,
                 seen: Vec::new(),
+                set_models,
                 go,
                 respond,
                 after,
@@ -30655,6 +31390,7 @@ mod tests {
                 grok_barrier(),
             ],
             on_cancel: Vec::new(),
+            on_fork: Vec::new(),
             // Released once the test has seen the launch turn's own frames, so
             // they are read in-turn rather than racing the response.
             hold_response: true,
@@ -30783,8 +31519,9 @@ mod tests {
         drop(s);
         assert_eq!(
             grok.reclaimed_asks(),
-            (0, 0),
-            "a turn Grok ended itself is waiting on nothing"
+            (1, 0),
+            "only the launch prompt's turn end sweeps the questions; a turn Grok \
+             ended itself is waiting on nothing"
         );
         grok.shutdown().await;
     }
@@ -30981,6 +31718,1174 @@ mod tests {
             "refused as busy, not attempted"
         );
         grok.shutdown().await;
+    }
+
+    // ── Grok's model catalog broadcast, `_x.ai/models/update` (#876) ────────
+    //
+    // Shapes captured live off `grok agent stdio` (1.0.40): the broadcast is
+    // connection-level — NO `sessionId` — and grok repeats it within a few
+    // milliseconds. Its per-model `_meta.reasoningEffort` is the CATALOG
+    // default, while the same field in a handshake's `models` folds in the
+    // session's own effort.
+
+    /// One `availableModels[]` entry as grok 1.0.40 ships it.
+    fn grok_catalog_entry(id: &str, name: &str, effort_default: Option<&str>) -> serde_json::Value {
+        let mut meta = serde_json::json!({
+            "totalContextTokens": 256000,
+            "agentType": "grok-build-plan",
+            "supportsReasoningEffort": effort_default.is_some(),
+        });
+        if let Some(default) = effort_default {
+            meta["reasoningEffort"] = default.into();
+            meta["reasoningEfforts"] = serde_json::json!([
+                {"id": "xhigh", "value": "xhigh", "label": "Extra High", "description": "Maximum reasoning for the hardest tasks.", "default": false},
+                {"id": "high", "value": "high", "label": "High", "description": "Thorough reasoning and quality. Recommended.", "default": true},
+                {"id": "medium", "value": "medium", "label": "Medium", "description": "Strong quality with a faster turnaround.", "default": false},
+                {"id": "low", "value": "low", "label": "Low", "description": "Fastest responses. Best for simple tasks.", "default": false}
+            ]);
+        }
+        serde_json::json!({
+            "modelId": id,
+            "name": name,
+            "description": format!("{name} description"),
+            "_meta": meta,
+        })
+    }
+
+    /// The catalog the issue's session received once grok had refreshed it.
+    fn grok_remote_catalog() -> Vec<serde_json::Value> {
+        vec![
+            grok_catalog_entry("grok-4.7", "Grok 4.7", Some("high")),
+            grok_catalog_entry("grok-4.7-build-fast", "Grok 4.7 Build Fast", None),
+            grok_catalog_entry("grok-4.6", "Grok 4.6", Some("high")),
+            grok_catalog_entry("grok-4.5", "Grok 4.5", Some("high")),
+        ]
+    }
+
+    fn grok_models_update_frame(current: &str, models: Vec<serde_json::Value>) -> GrokFrame {
+        (
+            "_x.ai/models/update",
+            serde_json::json!({"currentModelId": current, "availableModels": models}),
+        )
+    }
+
+    /// What `session/new` / `session/load` answers while grok still has only
+    /// its bundled catalog — Grok 4.6 (checked) and Grok 4.5 — as
+    /// `(_meta, models)`.
+    fn grok_bundled_handshake() -> (
+        serde_json::Map<String, serde_json::Value>,
+        serde_json::Value,
+    ) {
+        let meta = serde_json::from_value(serde_json::json!({
+            "x.ai/sessionConfig": {"options": [
+                {"id": "grok-4.6", "category": "model", "label": "Grok 4.6", "selected": true},
+                {"id": "grok-4.5", "category": "model", "label": "Grok 4.5", "selected": false},
+                {"id": "xhigh", "category": "mode", "label": "Extra High", "selected": false},
+                {"id": "high", "category": "mode", "label": "High", "selected": true},
+                {"id": "medium", "category": "mode", "label": "Medium", "selected": false},
+                {"id": "low", "category": "mode", "label": "Low", "selected": false}
+            ]}
+        }))
+        .unwrap();
+        let models = serde_json::json!({
+            "currentModelId": "grok-4.6",
+            "availableModels": [
+                grok_catalog_entry("grok-4.6", "Grok 4.6", Some("high")),
+                grok_catalog_entry("grok-4.5", "Grok 4.5", Some("high")),
+            ],
+        });
+        (meta, models)
+    }
+
+    /// The picker the bundled handshake built, with the user's own effort pick
+    /// applied the way `set_grok_config_option` leaves it.
+    fn grok_handshake_picker(
+        effort: &str,
+    ) -> (Vec<SessionConfigOptionInfo>, HashMap<String, GrokModelSpec>) {
+        let (meta, models) = grok_bundled_handshake();
+        let specs = parse_grok_model_specs(Some(&models));
+        let mut opts = synthesize_grok_config_options(Some(&meta), &specs).expect("a picker");
+        let effort_selector = opts
+            .iter_mut()
+            .find(|o| o.id == GROK_EFFORT_OPTION_ID)
+            .expect("an effort selector");
+        let SessionConfigKindInfo::Select(sel) = &mut effort_selector.kind else {
+            panic!("effort is a select");
+        };
+        sel.current_value = effort.to_string();
+        (opts, specs)
+    }
+
+    fn select_values(option: &SessionConfigOptionInfo) -> Vec<String> {
+        expect_select(&option.kind)
+            .options
+            .iter()
+            .map(|o| o.value.clone())
+            .collect()
+    }
+
+    fn config_option_events(seen: &[AcpEvent]) -> Vec<Vec<SessionConfigOptionInfo>> {
+        seen.iter()
+            .filter_map(|e| match e {
+                AcpEvent::SessionConfigOptions { config_options } => Some(config_options.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The issue's sequence end to end, over the real runtime: the composer
+    /// was built from the bundled handshake, then the real catalog arrives on
+    /// the session-less `_x.ai/models/update`, three times. The model list is
+    /// replaced once; the checkmark stays on the model the composer shows (the
+    /// broadcast's `currentModelId` is no session switch), and so does the
+    /// effort the user picked (the catalog default is not the session's).
+    #[tokio::test]
+    async fn a_grok_catalog_broadcast_refreshes_the_model_picker() {
+        let update = grok_models_update_frame("grok-4.6", grok_remote_catalog());
+        let mut grok = GrokLoop::start(GrokScript {
+            later: vec![update.clone(), update.clone(), update, grok_barrier()],
+            ..GrokScript::default()
+        })
+        .await;
+        let (opts, specs) = grok_handshake_picker("medium");
+        {
+            let mut st = grok.state.write().await;
+            st.config_options = Some(opts);
+            st.grok_model_specs = Some(specs);
+        }
+        grok.release_later();
+        grok.until_barrier().await;
+
+        let pickers = config_option_events(&grok.seen);
+        assert_eq!(
+            pickers.len(),
+            1,
+            "three identical broadcasts refresh once: {pickers:#?}"
+        );
+        let picker = &pickers[0];
+        assert_eq!(picker[0].id, GROK_MODEL_OPTION_ID);
+        assert_eq!(
+            select_values(&picker[0]),
+            ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
+        );
+        assert_eq!(expect_select(&picker[0].kind).current_value, "grok-4.6");
+        assert_eq!(picker[1].id, GROK_EFFORT_OPTION_ID);
+        assert_eq!(expect_select(&picker[1].kind).current_value, "medium");
+        assert!(
+            grok.set_models.lock().unwrap().is_empty(),
+            "a catalog broadcast switches nothing on the agent"
+        );
+        // The refresh is the connection's state, not just an event.
+        assert_eq!(
+            grok.state.read().await.config_options.as_ref(),
+            Some(picker)
+        );
+        grok.shutdown().await;
+    }
+
+    /// The models the broadcast added are real choices: switching to one goes
+    /// out as a plain `session/set_model`, lands with that model's effort
+    /// selector — known only from the broadcast — and the switch's own re-emit
+    /// keeps the refreshed list.
+    #[tokio::test]
+    async fn switching_to_a_model_only_the_catalog_broadcast_listed_keeps_the_refreshed_picker() {
+        // grok-4.7's efforts differ from grok-4.6's, so the selector after the
+        // switch can only have come from grok-4.7's own spec.
+        let mut catalog = grok_remote_catalog();
+        catalog[0]["_meta"]["reasoningEffort"] = "low".into();
+        catalog[0]["_meta"]["reasoningEfforts"] = serde_json::json!([
+            {"id": "high", "label": "High", "description": "Thorough."},
+            {"id": "low", "label": "Low", "description": "Fast."}
+        ]);
+        let mut grok = GrokLoop::start(GrokScript {
+            later: vec![
+                grok_models_update_frame("grok-4.6", catalog),
+                grok_barrier(),
+            ],
+            ..GrokScript::default()
+        })
+        .await;
+        let (opts, specs) = grok_handshake_picker("medium");
+        {
+            let mut st = grok.state.write().await;
+            st.config_options = Some(opts);
+            st.grok_model_specs = Some(specs);
+        }
+        grok.release_later();
+        grok.until_barrier().await;
+
+        grok.send(ConnectionCommand::SetConfigOption {
+            config_id: GROK_MODEL_OPTION_ID.to_string(),
+            value_id: "grok-4.7".to_string(),
+        })
+        .await;
+        grok.until("the switch's re-emit", |e| {
+            matches!(e, AcpEvent::SessionConfigOptions { config_options }
+                if expect_select(&config_options[0].kind).current_value == "grok-4.7")
+        })
+        .await;
+
+        let pickers = config_option_events(&grok.seen);
+        let picker = pickers.last().expect("the switch re-emits");
+        assert_eq!(
+            select_values(&picker[0]),
+            ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
+        );
+        assert_eq!(picker[1].id, GROK_EFFORT_OPTION_ID);
+        assert_eq!(select_values(&picker[1]), ["high", "low"]);
+        assert_eq!(expect_select(&picker[1].kind).current_value, "low");
+        assert_eq!(
+            *grok.set_models.lock().unwrap(),
+            [serde_json::json!({"sessionId": "s1", "modelId": "grok-4.7"})]
+        );
+        grok.shutdown().await;
+    }
+
+    #[test]
+    fn a_grok_catalog_broadcast_reads_as_picker_rows_and_specs() {
+        let mut models = grok_remote_catalog();
+        // A repeated id keeps its first row; an entry without one is skipped;
+        // a blank name falls back to the id.
+        models.push(grok_catalog_entry("grok-4.7", "Grok 4.7 again", None));
+        models.push(serde_json::json!({"name": "no id"}));
+        models.push(serde_json::json!({"modelId": "byo-model", "name": " "}));
+        let catalog = parse_grok_model_catalog(&serde_json::json!({
+            "currentModelId": "grok-4.6",
+            "availableModels": models,
+        }))
+        .expect("a usable catalog");
+        let rows: Vec<(&str, &str)> = catalog
+            .models
+            .iter()
+            .map(|row| (row.value.as_str(), row.name.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("grok-4.7", "Grok 4.7"),
+                ("grok-4.7-build-fast", "Grok 4.7 Build Fast"),
+                ("grok-4.6", "Grok 4.6"),
+                ("grok-4.5", "Grok 4.5"),
+                ("byo-model", "byo-model"),
+            ]
+        );
+        // Rows read like the handshake's `x.ai/sessionConfig` ones: no
+        // description, though the broadcast carries one.
+        assert!(catalog.models.iter().all(|row| row.description.is_none()));
+        let g47 = &catalog.specs["grok-4.7-build-fast"];
+        assert!(!g47.supports);
+        assert_eq!(catalog.specs["grok-4.6"].default.as_deref(), Some("high"));
+        assert_eq!(catalog.specs["grok-4.6"].context_window, Some(256_000));
+    }
+
+    /// An empty or unusable list can never wipe the picker: nothing parses.
+    #[test]
+    fn a_grok_catalog_broadcast_without_a_usable_model_is_ignored() {
+        for params in [
+            serde_json::json!({}),
+            serde_json::json!({"currentModelId": "grok-4.6"}),
+            serde_json::json!({"availableModels": null}),
+            serde_json::json!({"availableModels": {"modelId": "grok-4.6"}}),
+            serde_json::json!({"availableModels": []}),
+            serde_json::json!({"availableModels": [{"name": "Grok 4.6"}, {"modelId": ""}, {"modelId": 7}]}),
+        ] {
+            assert!(parse_grok_model_catalog(&params).is_none(), "{params}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unusable_grok_catalog_broadcast_leaves_the_picker_alone() {
+        let (opts, specs) = grok_handshake_picker("medium");
+        let mut st = SessionState::new("c".into(), AgentType::Grok, None, "w".into(), None);
+        st.config_options = Some(opts.clone());
+        st.grok_model_specs = Some(specs);
+        let state = Arc::new(RwLock::new(st));
+
+        apply_grok_model_catalog(
+            &state,
+            &EventEmitter::Noop,
+            &serde_json::json!({"currentModelId": "grok-4.6", "availableModels": []}),
+        )
+        .await;
+
+        let st = state.read().await;
+        assert_eq!(st.config_options.as_ref(), Some(&opts));
+        assert!(st.grok_catalog_broadcast.is_none());
+        assert_eq!(st.event_seq, 0, "nothing emitted");
+    }
+
+    fn grok_catalog(models: Vec<serde_json::Value>) -> GrokModelCatalog {
+        parse_grok_model_catalog(&serde_json::json!({ "availableModels": models }))
+            .expect("a usable catalog")
+    }
+
+    /// A session whose model the catalog dropped is still running on it: the
+    /// row stays (first) and so does everything about its effort.
+    #[test]
+    fn a_grok_catalog_that_drops_the_session_model_keeps_it_on_the_picker() {
+        let (mut opts, mut specs) = grok_handshake_picker("medium");
+        let before_effort = opts[1].clone();
+        let catalog = grok_catalog(vec![grok_catalog_entry(
+            "grok-4.7",
+            "Grok 4.7",
+            Some("high"),
+        )]);
+        fold_grok_catalog_specs(&mut specs, &catalog.specs);
+        fold_grok_catalog_into_picker(&mut opts, &catalog, &specs);
+
+        assert_eq!(select_values(&opts[0]), ["grok-4.6", "grok-4.7"]);
+        let model = expect_select(&opts[0].kind);
+        assert_eq!(model.current_value, "grok-4.6");
+        assert_eq!(model.options[0].name, "Grok 4.6", "the row it had is kept");
+        assert_eq!(opts[1], before_effort);
+    }
+
+    #[test]
+    fn a_grok_catalog_refresh_keeps_the_session_effort_and_follows_the_model_capabilities() {
+        // The user's effort is kept even where the refreshed list drops it,
+        // shown with the row it had.
+        let (mut opts, mut specs) = grok_handshake_picker("medium");
+        let mut narrower = grok_catalog_entry("grok-4.6", "Grok 4.6", Some("high"));
+        narrower["_meta"]["reasoningEfforts"] = serde_json::json!([
+            {"id": "high", "label": "High", "description": "Thorough."},
+            {"id": "low", "label": "Low", "description": "Fast."}
+        ]);
+        let catalog = grok_catalog(vec![narrower]);
+        fold_grok_catalog_specs(&mut specs, &catalog.specs);
+        fold_grok_catalog_into_picker(&mut opts, &catalog, &specs);
+        assert_eq!(opts[1].id, GROK_EFFORT_OPTION_ID);
+        assert_eq!(select_values(&opts[1]), ["medium", "high", "low"]);
+        let effort = expect_select(&opts[1].kind);
+        assert_eq!(effort.current_value, "medium");
+        assert_eq!(
+            effort.options[0].description.as_deref(),
+            Some("Strong quality with a faster turnaround.")
+        );
+
+        // A model the catalog says takes no effort loses the selector.
+        let (mut opts, mut specs) = grok_handshake_picker("medium");
+        let catalog = grok_catalog(vec![grok_catalog_entry("grok-4.6", "Grok 4.6", None)]);
+        fold_grok_catalog_specs(&mut specs, &catalog.specs);
+        fold_grok_catalog_into_picker(&mut opts, &catalog, &specs);
+        assert_eq!(opts.len(), 1, "no effort selector: {opts:#?}");
+
+        // With no effort selector to keep a value from, the model's default
+        // fills in.
+        let (mut opts, mut specs) = grok_handshake_picker("medium");
+        opts.retain(|o| o.id != GROK_EFFORT_OPTION_ID);
+        let catalog = grok_catalog(grok_remote_catalog());
+        fold_grok_catalog_specs(&mut specs, &catalog.specs);
+        fold_grok_catalog_into_picker(&mut opts, &catalog, &specs);
+        assert_eq!(expect_select(&opts[1].kind).current_value, "high");
+    }
+
+    /// The catalog refreshes what each model offers, but a default the session
+    /// already had stays — the handshake's folds in the session's own effort.
+    #[test]
+    fn grok_catalog_specs_refresh_capabilities_and_keep_known_defaults() {
+        let mut specs = parse_grok_model_specs(Some(&serde_json::json!({
+            "availableModels": [
+                {"modelId": "grok-4.6", "_meta": {
+                    "totalContextTokens": 131072, "supportsReasoningEffort": true,
+                    "reasoningEffort": "xhigh",
+                    "reasoningEfforts": [{"id": "high"}, {"id": "low"}]
+                }},
+                {"modelId": "retired", "_meta": {"totalContextTokens": 8192}}
+            ]
+        })));
+        let catalog = grok_catalog(grok_remote_catalog());
+        fold_grok_catalog_specs(&mut specs, &catalog.specs);
+
+        let g46 = &specs["grok-4.6"];
+        assert_eq!(
+            g46.default.as_deref(),
+            Some("xhigh"),
+            "the session's own default stays"
+        );
+        assert_eq!(
+            g46.options.len(),
+            4,
+            "what it offers comes from the catalog"
+        );
+        assert_eq!(g46.context_window, Some(256_000));
+        assert_eq!(
+            specs["grok-4.7"].default.as_deref(),
+            Some("high"),
+            "a new model takes the catalog's"
+        );
+        assert!(!specs["grok-4.7-build-fast"].supports);
+        assert_eq!(
+            specs["retired"].context_window,
+            Some(8192),
+            "a dropped model keeps its spec"
+        );
+    }
+
+    #[test]
+    fn a_picker_without_a_model_selector_is_left_alone_by_a_grok_catalog() {
+        let (mut opts, mut specs) = grok_handshake_picker("medium");
+        opts.retain(|o| o.id != GROK_MODEL_OPTION_ID);
+        let before = opts.clone();
+        let catalog = grok_catalog(grok_remote_catalog());
+        fold_grok_catalog_specs(&mut specs, &catalog.specs);
+        fold_grok_catalog_into_picker(&mut opts, &catalog, &specs);
+        assert_eq!(opts, before);
+    }
+
+    /// A fork is a new establishment: a broadcast from before it is already on
+    /// the session's picker, and must not be folded into the forked session's
+    /// handshake, which grok answers from the catalog that broadcast brought.
+    /// One landing while `session/fork` is outstanding may be newer than that
+    /// handshake, so it must survive for the fork's picker.
+    #[tokio::test]
+    async fn a_fork_keeps_only_the_grok_catalog_broadcast_sent_during_it() {
+        let mut grok = GrokLoop::start(GrokScript {
+            later: vec![
+                grok_models_update_frame("grok-4.6", grok_remote_catalog()),
+                grok_barrier(),
+            ],
+            on_fork: vec![grok_models_update_frame(
+                "grok-4.8",
+                vec![grok_catalog_entry("grok-4.8", "Grok 4.8", Some("high"))],
+            )],
+            forks: true,
+            ..GrokScript::default()
+        })
+        .await;
+        grok.release_later();
+        grok.until_barrier().await;
+        assert!(grok.state.read().await.grok_catalog_broadcast.is_some());
+
+        let (reply, answer) = oneshot::channel();
+        grok.send(ConnectionCommand::Fork {
+            fork_point: None,
+            reply,
+        })
+        .await;
+        // The scripted fork fails, after grok broadcast its catalog mid-request.
+        let refused = answer.await.expect("the loop answers");
+        assert!(refused.is_err(), "the scripted fork fails");
+        let st = grok.state.read().await;
+        let kept: Vec<&str> = st
+            .grok_catalog_broadcast
+            .as_ref()
+            .expect("the broadcast sent during the fork survives")
+            .models
+            .iter()
+            .map(|row| row.value.as_str())
+            .collect();
+        assert_eq!(kept, ["grok-4.8"], "the one from before the fork is gone");
+        drop(st);
+        grok.shutdown().await;
+    }
+
+    /// `currentModelId` on the broadcast is grok's process-wide pick, not a
+    /// switch of this session: one naming another model moves neither the
+    /// checkmark nor the effort, and sends the agent nothing.
+    #[tokio::test]
+    async fn a_grok_catalog_broadcast_naming_another_current_model_moves_nothing() {
+        let mut grok = GrokLoop::start(GrokScript {
+            later: vec![
+                grok_models_update_frame("grok-4.7", grok_remote_catalog()),
+                grok_barrier(),
+            ],
+            ..GrokScript::default()
+        })
+        .await;
+        let (opts, specs) = grok_handshake_picker("medium");
+        {
+            let mut st = grok.state.write().await;
+            st.config_options = Some(opts);
+            st.grok_model_specs = Some(specs);
+        }
+        grok.release_later();
+        grok.until_barrier().await;
+
+        let pickers = config_option_events(&grok.seen);
+        assert_eq!(pickers.len(), 1, "the list still refreshes: {pickers:#?}");
+        let picker = &pickers[0];
+        assert_eq!(
+            select_values(&picker[0]),
+            ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
+        );
+        assert_eq!(expect_select(&picker[0].kind).current_value, "grok-4.6");
+        assert_eq!(expect_select(&picker[1].kind).current_value, "medium");
+        assert!(grok.set_models.lock().unwrap().is_empty());
+        grok.shutdown().await;
+    }
+
+    /// A broadcast that lands while a session is being established — before
+    /// the picker exists — is folded into the picker the establishment emits,
+    /// and taken, so a later establishment never re-applies it.
+    #[tokio::test]
+    async fn a_grok_catalog_broadcast_during_establishment_reaches_its_picker() {
+        let state = Arc::new(RwLock::new(SessionState::new(
+            "c".into(),
+            AgentType::Grok,
+            None,
+            "w".into(),
+            None,
+        )));
+        let update = grok_models_update_frame("grok-4.6", grok_remote_catalog());
+        apply_grok_model_catalog(&state, &EventEmitter::Noop, &update.1).await;
+        {
+            let st = state.read().await;
+            assert_eq!(st.event_seq, 0, "no picker yet, so nothing to emit");
+            assert!(st.grok_catalog_broadcast.is_some());
+        }
+
+        // The establishment caches the handshake's specs, then emits — with an
+        // effort that is not the catalog's default.
+        let (opts, specs) = grok_handshake_picker("medium");
+        state.write().await.grok_model_specs = Some(specs);
+        emit_grok_established_picker(&state, &EventEmitter::Noop, opts).await;
+
+        let st = state.read().await;
+        let picker = st.config_options.as_ref().expect("emitted");
+        assert_eq!(
+            select_values(&picker[0]),
+            ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
+        );
+        assert_eq!(expect_select(&picker[0].kind).current_value, "grok-4.6");
+        assert_eq!(expect_select(&picker[1].kind).current_value, "medium");
+        assert!(
+            st.grok_catalog_broadcast.is_none(),
+            "taken by the establishment"
+        );
+        assert!(
+            st.grok_model_specs
+                .as_ref()
+                .unwrap()
+                .contains_key("grok-4.7"),
+            "a later switch to a new model finds its spec"
+        );
+    }
+
+    /// `_session/steering` as the agent receives it, the raw params object.
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcRequest)]
+    #[request(method = "_session/steering", response = serde_json::Value)]
+    #[serde(transparent)]
+    struct TestSteeringRequest(serde_json::Value);
+
+    /// A claude connection's conversation loop behind an agent that holds each
+    /// prompt response until told to answer and accepts every steer — for the
+    /// places a question parked by HouHub's `ask_user_question` is swept.
+    struct AskSweepLoop {
+        state: Arc<RwLock<SessionState>>,
+        asks: Arc<RecordingAsks>,
+        cmd_tx: mpsc::Sender<ConnectionCommand>,
+        events: tokio::sync::broadcast::Receiver<Arc<crate::acp::types::EventEnvelope>>,
+        respond: Arc<tokio::sync::Notify>,
+        /// How many question sweeps had run when each steer reached the agent.
+        sweeps_at_steer: Arc<std::sync::Mutex<Vec<usize>>>,
+        client: tokio::task::JoinHandle<()>,
+        agent: tokio::task::JoinHandle<()>,
+    }
+
+    impl AskSweepLoop {
+        const CONN: &'static str = "conn-claude";
+
+        async fn start() -> Self {
+            use agent_client_protocol::schema::v1::PromptResponse;
+
+            let asks = Arc::new(RecordingAsks::default());
+            let respond = Arc::new(tokio::sync::Notify::new());
+            let sweeps_at_steer = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+
+            let agent_respond = Arc::clone(&respond);
+            let agent_asks = Arc::clone(&asks);
+            let agent_sweeps = Arc::clone(&sweeps_at_steer);
+            let agent = tokio::spawn(async move {
+                let _ = Agent
+                    .builder()
+                    .on_receive_request(
+                        async |_req: NewSessionRequest,
+                               responder: Responder<NewSessionResponse>,
+                               _cx: ConnectionTo<Client>| {
+                            responder.respond(NewSessionResponse::new(SessionId::new("s1")))
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async move |_req: PromptRequest,
+                                    responder: Responder<PromptResponse>,
+                                    _cx: ConnectionTo<Client>| {
+                            let respond = Arc::clone(&agent_respond);
+                            // Off the handler, so the held response doesn't hold
+                            // up the steer behind it.
+                            tokio::spawn(async move {
+                                respond.notified().await;
+                                responder.respond(PromptResponse::new(StopReason::EndTurn))
+                            });
+                            Ok(())
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async move |_req: TestSteeringRequest,
+                                    responder: Responder<serde_json::Value>,
+                                    _cx: ConnectionTo<Client>| {
+                            let swept = agent_asks.questions.lock().unwrap().len();
+                            agent_sweeps.lock().unwrap().push(swept);
+                            responder.respond(serde_json::json!({"outcome": "injected"}))
+                        },
+                        on_receive_request!(),
+                    )
+                    .connect_with(agent_end, async |_cx: ConnectionTo<Client>| {
+                        std::future::pending::<Result<(), agent_client_protocol::Error>>().await
+                    })
+                    .await;
+            });
+
+            let state = Arc::new(RwLock::new(SessionState::new(
+                Self::CONN.to_string(),
+                AgentType::ClaudeCode,
+                None,
+                "win".to_string(),
+                None,
+            )));
+            let events = state.read().await.event_stream().subscribe();
+            let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+            let loop_state = Arc::clone(&state);
+            let injection = DelegationInjection {
+                questions: Arc::clone(&asks)
+                    as Arc<dyn crate::acp::question::SessionQuestionAccess>,
+                plan_approvals: Arc::clone(&asks)
+                    as Arc<dyn crate::acp::plan_approval::SessionPlanApprovalAccess>,
+                ..test_delegation_injection(
+                    Arc::new(TestAllAgentsAvailable) as Arc<dyn AgentAvailabilityLookup>
+                )
+            };
+            let client = tokio::spawn(async move {
+                let _ = Client
+                    .builder()
+                    .connect_with(client_end, async move |cx: ConnectionTo<Agent>| {
+                        let raw = cx
+                            .send_request_to(
+                                Agent,
+                                UntypedMessage::new("session/new", NewSessionRequest::new("/tmp"))?,
+                            )
+                            .block_task()
+                            .await?;
+                        let response: NewSessionResponse = serde_json::from_value(raw)
+                            .map_err(agent_client_protocol::Error::into_internal_error)?;
+                        let mut session = AgentSession::attach(&cx, response)?;
+                        let perms = PendingPermissions::default();
+                        let ledger = background_watch::PromptLedger::shared();
+                        let stderr_tail = Arc::new(StderrTail::new());
+                        run_conversation_loop(
+                            &mut session,
+                            Self::CONN,
+                            &EventEmitter::Noop,
+                            &loop_state,
+                            AgentType::ClaudeCode,
+                            &perms,
+                            &mut cmd_rx,
+                            Arc::new(TerminalRuntime::with_base_env(BTreeMap::new())),
+                            "/tmp",
+                            false,
+                            &ledger,
+                            Some(&injection),
+                            &stderr_tail,
+                        )
+                        .await?;
+                        Ok(())
+                    })
+                    .await;
+            });
+
+            Self {
+                state,
+                asks,
+                cmd_tx,
+                events,
+                respond,
+                sweeps_at_steer,
+                client,
+                agent,
+            }
+        }
+
+        /// Admit a prompt the way `send_prompt_inner` does, hand it over, and
+        /// wait until its turn is open.
+        async fn open_turn(&mut self, text: &str) {
+            self.state.write().await.turn_in_flight = true;
+            self.cmd_tx
+                .send(ConnectionCommand::Prompt {
+                    blocks: vec![PromptInputBlock::Text { text: text.into() }],
+                    user_message: None,
+                })
+                .await
+                .expect("the loop is running");
+            self.until("the turn opening", |e| {
+                matches!(
+                    e,
+                    AcpEvent::StatusChanged {
+                        status: ConnectionStatus::Prompting
+                    }
+                )
+            })
+            .await;
+        }
+
+        async fn steer(&self, text: &str) -> Result<SteerOutcome, AcpError> {
+            let (reply, outcome) = oneshot::channel();
+            self.cmd_tx
+                .send(ConnectionCommand::Steer {
+                    blocks: vec![PromptInputBlock::Text { text: text.into() }],
+                    reply,
+                })
+                .await
+                .expect("the loop is running");
+            outcome.await.expect("the loop answers")
+        }
+
+        /// How many times this connection's parked questions were swept.
+        fn question_sweeps(&self) -> usize {
+            self.asks
+                .questions
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| *c == Self::CONN)
+                .count()
+        }
+
+        /// Wait — bounded — until `count` question sweeps have run. The turn
+        /// end's sweep follows `TurnComplete`, so seeing that event does not
+        /// yet mean the sweep ran.
+        async fn until_question_sweeps(&self, count: usize) {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            while self.question_sweeps() < count {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "timed out waiting for {count} question sweeps; saw {}",
+                    self.question_sweeps()
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }
+
+        async fn until(&mut self, what: &str, matches: impl Fn(&AcpEvent) -> bool) {
+            let deadline = std::time::Duration::from_secs(10);
+            loop {
+                let envelope = tokio::time::timeout(deadline, self.events.recv())
+                    .await
+                    .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+                    .expect("event stream");
+                if matches(&envelope.payload) {
+                    return;
+                }
+            }
+        }
+
+        async fn shutdown(self) {
+            let _ = self.cmd_tx.send(ConnectionCommand::Disconnect).await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.client).await;
+            self.agent.abort();
+        }
+    }
+
+    /// A steer sweeps the questions parked on its connection BEFORE the steer
+    /// goes out. Claude Code 2.1.286 (claude-agent-acp 0.85.0) moves the blocked
+    /// MCP call of an `ask_user_question` to the background when a steer lands,
+    /// where 2.1.284 interrupted it and so cancelled the ask; sweeping first
+    /// keeps redirecting the agent meaning "drop the question". What the sweep
+    /// does to a parked entry — decline it, close its card — is the manager's,
+    /// and tested there (`cancel_questions_by_parent_*`).
+    #[tokio::test]
+    async fn a_steer_sweeps_the_parked_questions_before_it_reaches_the_agent() {
+        let mut claude = AskSweepLoop::start().await;
+        claude.open_turn("ask me which database to use").await;
+
+        let outcome = claude.steer("never mind, keep SQLite").await;
+        assert!(matches!(outcome, Ok(SteerOutcome::Injected)), "{outcome:?}");
+        assert_eq!(
+            *claude.sweeps_at_steer.lock().unwrap(),
+            vec![1],
+            "the question was declined before the steer reached the agent"
+        );
+
+        // The turn's own end sweeps again; with nothing parked, a no-op.
+        claude.respond.notify_one();
+        claude.until_question_sweeps(2).await;
+        claude.shutdown().await;
+    }
+
+    /// A turn that ends sweeps a question still parked on its connection:
+    /// `TurnComplete` took the card off every client, so nothing could answer it,
+    /// and while it stayed parked every later ask on the connection would be
+    /// refused. Reachable since Claude Code 2.1.286, whose MCP calls can move to
+    /// the background and outlive their turn.
+    #[tokio::test]
+    async fn a_turn_end_sweeps_the_questions_parked_on_its_connection() {
+        let mut claude = AskSweepLoop::start().await;
+        claude.open_turn("hello").await;
+        assert_eq!(
+            claude.question_sweeps(),
+            0,
+            "nothing is swept while the turn runs"
+        );
+
+        claude.respond.notify_one();
+        claude
+            .until("the turn end", |e| {
+                matches!(e, AcpEvent::TurnComplete { .. })
+            })
+            .await;
+        claude.until_question_sweeps(1).await;
+        assert!(
+            claude.sweeps_at_steer.lock().unwrap().is_empty(),
+            "no steer was sent"
+        );
+        claude.shutdown().await;
+    }
+
+    /// How the agent behind [`ForkTransition`] answers `session/close`.
+    #[derive(Clone, Copy)]
+    enum CloseAnswer {
+        Closed,
+        Refused,
+        /// Never: the request stays open for the rest of the test.
+        Unanswered,
+    }
+
+    /// One fork, the way `run_connection` drives it: `run_conversation_loop`
+    /// on `parent` until the fork, then `handle_fork_or_exit` on to the
+    /// session the agent forks to. The agent records every `session/close`.
+    struct ForkTransition {
+        state: Arc<RwLock<SessionState>>,
+        cmd_tx: mpsc::Sender<ConnectionCommand>,
+        events: tokio::sync::broadcast::Receiver<Arc<crate::acp::types::EventEnvelope>>,
+        closes: Arc<std::sync::Mutex<Vec<String>>>,
+        close_seen: Arc<tokio::sync::Notify>,
+        /// The `Unanswered` closes' responders, kept alive so the requests
+        /// stay open.
+        _unanswered: Arc<
+            std::sync::Mutex<
+                Vec<Responder<agent_client_protocol::schema::v1::CloseSessionResponse>>,
+            >,
+        >,
+        client: tokio::task::JoinHandle<()>,
+        agent: tokio::task::JoinHandle<()>,
+    }
+
+    impl ForkTransition {
+        async fn start(fork_id: &'static str, supports_close: bool, answer: CloseAnswer) -> Self {
+            use agent_client_protocol::schema::v1::{
+                CloseSessionResponse, ForkSessionRequest, ForkSessionResponse, PromptResponse,
+            };
+
+            let closes = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let close_seen = Arc::new(tokio::sync::Notify::new());
+            let unanswered = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+            let agent_closes = Arc::clone(&closes);
+            let agent_close_seen = Arc::clone(&close_seen);
+            let agent_unanswered = Arc::clone(&unanswered);
+            let agent = tokio::spawn(async move {
+                let _ = Agent
+                    .builder()
+                    .on_receive_request(
+                        async |_req: NewSessionRequest,
+                               responder: Responder<NewSessionResponse>,
+                               _cx: ConnectionTo<Client>| {
+                            responder.respond(NewSessionResponse::new(SessionId::new("parent")))
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async move |_req: ForkSessionRequest,
+                                    responder: Responder<ForkSessionResponse>,
+                                    _cx: ConnectionTo<Client>| {
+                            responder.respond(ForkSessionResponse::new(SessionId::new(fork_id)))
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async |_req: ResumeSessionRequest,
+                               responder: Responder<ResumeSessionResponse>,
+                               _cx: ConnectionTo<Client>| {
+                            responder.respond(ResumeSessionResponse::new())
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async move |req: CloseSessionRequest,
+                                    responder: Responder<CloseSessionResponse>,
+                                    _cx: ConnectionTo<Client>| {
+                            agent_closes
+                                .lock()
+                                .unwrap()
+                                .push(req.session_id.0.to_string());
+                            agent_close_seen.notify_one();
+                            match answer {
+                                CloseAnswer::Closed => {
+                                    responder.respond(CloseSessionResponse::new())
+                                }
+                                CloseAnswer::Refused => responder.respond_with_error(
+                                    agent_client_protocol::util::internal_error("not closing"),
+                                ),
+                                CloseAnswer::Unanswered => {
+                                    agent_unanswered.lock().unwrap().push(responder);
+                                    Ok(())
+                                }
+                            }
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async |_req: PromptRequest,
+                               responder: Responder<PromptResponse>,
+                               _cx: ConnectionTo<Client>| {
+                            responder.respond(PromptResponse::new(StopReason::EndTurn))
+                        },
+                        on_receive_request!(),
+                    )
+                    .connect_with(agent_end, async |_cx: ConnectionTo<Client>| {
+                        std::future::pending::<Result<(), agent_client_protocol::Error>>().await
+                    })
+                    .await;
+            });
+
+            let state = Arc::new(RwLock::new(SessionState::new(
+                "conn-fork".to_string(),
+                AgentType::Codex,
+                None,
+                "win".to_string(),
+                None,
+            )));
+            let events = state.read().await.event_stream().subscribe();
+            let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+            let loop_state = Arc::clone(&state);
+            let client = tokio::spawn(async move {
+                let _ = Client
+                    .builder()
+                    .connect_with(client_end, async move |cx: ConnectionTo<Agent>| {
+                        let raw = cx
+                            .send_request_to(
+                                Agent,
+                                UntypedMessage::new("session/new", NewSessionRequest::new("/tmp"))?,
+                            )
+                            .block_task()
+                            .await?;
+                        let response: NewSessionResponse = serde_json::from_value(raw)
+                            .map_err(agent_client_protocol::Error::into_internal_error)?;
+                        let mut session = AgentSession::attach(&cx, response)?;
+                        let perms = PendingPermissions::default();
+                        let ledger = background_watch::PromptLedger::shared();
+                        let stderr_tail = Arc::new(StderrTail::new());
+                        let terminals = Arc::new(TerminalRuntime::with_base_env(BTreeMap::new()));
+                        let loop_result = run_conversation_loop(
+                            &mut session,
+                            "conn-fork",
+                            &EventEmitter::Noop,
+                            &loop_state,
+                            AgentType::Codex,
+                            &perms,
+                            &mut cmd_rx,
+                            Arc::clone(&terminals),
+                            "/tmp",
+                            true,
+                            &ledger,
+                            None,
+                            &stderr_tail,
+                        )
+                        .await;
+                        drop(session);
+                        handle_fork_or_exit(
+                            loop_result,
+                            "conn-fork",
+                            &EventEmitter::Noop,
+                            &loop_state,
+                            AgentType::Codex,
+                            &perms,
+                            &mut cmd_rx,
+                            terminals,
+                            Path::new("/tmp"),
+                            "/tmp",
+                            true,
+                            supports_close,
+                            &[],
+                            &ledger,
+                            None,
+                            &stderr_tail,
+                        )
+                        .await
+                    })
+                    .await;
+            });
+
+            Self {
+                state,
+                cmd_tx,
+                events,
+                closes,
+                close_seen,
+                _unanswered: unanswered,
+                client,
+                agent,
+            }
+        }
+
+        /// Fork the session the loop is on; returns the reply's `(forked,
+        /// original)` session ids.
+        async fn fork(&self) -> (String, String) {
+            let (reply, answer) = oneshot::channel();
+            self.cmd_tx
+                .send(ConnectionCommand::Fork {
+                    fork_point: None,
+                    reply,
+                })
+                .await
+                .expect("the loop is running");
+            let forked = answer
+                .await
+                .expect("the loop answers")
+                .expect("the fork succeeds");
+            (forked.forked_session_id, forked.original_session_id)
+        }
+
+        /// The first event that matches, waiting for it if need be.
+        async fn until(&mut self, what: &str, matches: impl Fn(&AcpEvent) -> bool) -> AcpEvent {
+            loop {
+                let envelope =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), self.events.recv())
+                        .await
+                        .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+                        .expect("event stream");
+                if matches(&envelope.payload) {
+                    return envelope.payload.clone();
+                }
+            }
+        }
+
+        /// Prompt the session the loop is on and wait out the turn; returns
+        /// the session it ran on and its stop reason. The agent answers every
+        /// prompt with `end_turn` and nothing else, which HouHub reports as
+        /// `empty` — what counts is that the answer arrives.
+        async fn prompt_to_end(&mut self) -> (String, String) {
+            self.state.write().await.turn_in_flight = true;
+            self.cmd_tx
+                .send(ConnectionCommand::Prompt {
+                    blocks: vec![PromptInputBlock::Text {
+                        text: "go on".into(),
+                    }],
+                    user_message: None,
+                })
+                .await
+                .expect("the loop is running");
+            match self
+                .until("the turn's end", |e| {
+                    matches!(e, AcpEvent::TurnComplete { .. })
+                })
+                .await
+            {
+                AcpEvent::TurnComplete {
+                    session_id,
+                    stop_reason,
+                    ..
+                } => (session_id, stop_reason),
+                _ => unreachable!(),
+            }
+        }
+
+        /// Wait until the agent has been asked to close a session.
+        async fn close_requested(&self) {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                self.close_seen.notified(),
+            )
+            .await
+            .expect("timed out waiting for a session/close");
+        }
+
+        /// End the loop, then the agent; returns every session the agent was
+        /// asked to close while the connection lasted.
+        async fn shutdown(self) -> Vec<String> {
+            let _ = self.cmd_tx.send(ConnectionCommand::Disconnect).await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.client).await;
+            self.agent.abort();
+            let closes = self.closes.lock().unwrap().clone();
+            closes
+        }
+    }
+
+    /// What [`ForkTransition::prompt_to_end`] returns for a turn the agent
+    /// answered on `session`.
+    fn answered(session: &str) -> (String, String) {
+        (session.to_string(), "empty".to_string())
+    }
+
+    /// The parent a fork leaves is closed on the agent — nothing else is: the
+    /// child the loop moves on to stays open and keeps working.
+    #[tokio::test]
+    async fn a_fork_closes_the_session_it_leaves() {
+        let mut fork = ForkTransition::start("child", true, CloseAnswer::Closed).await;
+        assert_eq!(
+            fork.fork().await,
+            ("child".to_string(), "parent".to_string())
+        );
+        fork.close_requested().await;
+        fork.until(
+            "the child's start",
+            |e| matches!(e, AcpEvent::SessionStarted { session_id } if session_id == "child"),
+        )
+        .await;
+        assert_eq!(fork.prompt_to_end().await, answered("child"));
+        assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
+    }
+
+    /// An agent that does not advertise `session/close` is never sent one.
+    #[tokio::test]
+    async fn a_fork_sends_no_close_the_agent_did_not_advertise() {
+        let mut fork = ForkTransition::start("child", false, CloseAnswer::Closed).await;
+        fork.fork().await;
+        fork.until(
+            "the child's start",
+            |e| matches!(e, AcpEvent::SessionStarted { session_id } if session_id == "child"),
+        )
+        .await;
+        assert_eq!(fork.prompt_to_end().await, answered("child"));
+        let closed = fork.shutdown().await;
+        assert!(closed.is_empty(), "closed {closed:?}");
+    }
+
+    /// A fork that answers with the parent's own id has not left it, so
+    /// nothing is closed — closing would close the session the loop goes on with.
+    #[tokio::test]
+    async fn a_fork_onto_the_same_session_closes_nothing() {
+        let mut fork = ForkTransition::start("parent", true, CloseAnswer::Closed).await;
+        assert_eq!(
+            fork.fork().await,
+            ("parent".to_string(), "parent".to_string())
+        );
+        assert_eq!(fork.prompt_to_end().await, answered("parent"));
+        let closed = fork.shutdown().await;
+        assert!(closed.is_empty(), "closed {closed:?}");
+    }
+
+    /// Nothing waits on the close: an agent that never answers it still runs
+    /// the child's first turn.
+    #[tokio::test]
+    async fn an_unanswered_close_does_not_hold_up_the_fork() {
+        let mut fork = ForkTransition::start("child", true, CloseAnswer::Unanswered).await;
+        fork.fork().await;
+        fork.close_requested().await;
+        assert_eq!(fork.prompt_to_end().await, answered("child"));
+        assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
+    }
+
+    /// The close is best-effort: an agent refusing it leaves the connection,
+    /// and the child on it, working.
+    #[tokio::test]
+    async fn a_refused_close_leaves_the_fork_working() {
+        let mut fork = ForkTransition::start("child", true, CloseAnswer::Refused).await;
+        fork.fork().await;
+        fork.close_requested().await;
+        assert_eq!(fork.prompt_to_end().await, answered("child"));
+        assert_eq!(fork.shutdown().await, vec!["parent".to_string()]);
     }
 
     #[test]

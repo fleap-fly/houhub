@@ -1,29 +1,47 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+
 use std::io::Write;
+
 use std::path::{Component, Path, PathBuf};
+
 use std::process::Stdio;
+
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
 use std::sync::{Arc, LazyLock, Mutex};
+
 use std::time::{Duration, Instant};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+
 use serde::Serialize;
+
 use tokio::sync::mpsc;
+
 use tokio::sync::mpsc::error::TrySendError;
 
 use crate::app_error::AppCommandError;
+
 use crate::commands::folders::{self, FileTreeNode};
+
 use crate::git_repo::is_git_repo;
+
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 pub const WORKSPACE_STATE_PROTOCOL_VERSION: u16 = 1;
 
 const WATCH_IGNORED_DIRS: &[&str] = &["__pycache__"];
+
 const WATCH_DEBOUNCE_MS: u64 = 300;
+
 const WATCH_MAX_BATCH_WINDOW_MS: u64 = 1_500;
+
 const WATCH_MAX_CHANGED_PATHS: usize = 2_000;
+
 const WATCH_EVENT_CHANNEL_CAPACITY: usize = 2_048;
+
 const RECENT_EVENT_CAPACITY: usize = 24;
+
 const WORKSPACE_TREE_MAX_DEPTH: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -448,6 +466,7 @@ struct GitignoreCacheEntry {
 }
 
 const GITIGNORE_CACHE_TTL: Duration = Duration::from_secs(30);
+
 const GITIGNORE_CACHE_MAX_ENTRIES: usize = 4_096;
 
 static GITIGNORE_CACHE: LazyLock<Mutex<HashMap<(String, String), GitignoreCacheEntry>>> =
@@ -1511,12 +1530,11 @@ pub async fn stop_workspace_state_stream_core(
         // between start and stop bookkeeping) must not underflow and wedge
         // the stream in permanent full-scan mode.
         if wants_tree_git {
-            let _ =
-                entry
-                    .full_subscribers
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                        count.checked_sub(1)
-                    });
+            let _ = entry.full_subscribers.try_update(
+                Ordering::AcqRel,
+                Ordering::Acquire,
+                |count| count.checked_sub(1),
+            );
         }
         if entry.ref_count > 1 {
             entry.ref_count -= 1;

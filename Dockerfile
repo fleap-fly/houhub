@@ -18,8 +18,8 @@ COPY src-tauri/ ./
 # houhub-mcp is the stdio MCP companion the runtime injects per session
 # (see acp/delegation/companion.rs). It must ship next to houhub-server so
 # `locate_houhub_mcp_binary()` finds it via the exe-sibling lookup.
-RUN cargo build --release --bin houhub-server --no-default-features \
- && cargo build --release --bin houhub-mcp --no-default-features
+RUN cargo build --release --bin houhub-server --no-default-features --features server-bin \
+ && cargo build --release --bin houhub-mcp --no-default-features --features mcp-bin
 
 # Stage 3: Runtime
 FROM node:22-bookworm-slim

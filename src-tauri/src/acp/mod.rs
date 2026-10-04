@@ -24,6 +24,8 @@ pub mod codex_goal;
 
 pub mod codex_model_catalog;
 
+pub mod computer_tools;
+
 pub mod connection;
 
 pub mod cursor_acp_retry_compat;
@@ -50,6 +52,8 @@ pub mod idle_sweep;
 
 pub mod internal_bus;
 
+pub mod js_text;
+
 pub mod latest_release;
 
 pub mod lifecycle;
@@ -75,6 +79,8 @@ pub mod registry;
 pub mod remote_registry;
 
 pub mod scratch_dir;
+
+pub mod service_error;
 
 pub mod session_info;
 

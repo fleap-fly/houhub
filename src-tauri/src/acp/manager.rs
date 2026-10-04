@@ -1,8 +1,13 @@
 use std::collections::BTreeMap;
+
 use std::collections::HashMap;
+
 use std::path::PathBuf;
+
 use std::sync::Arc;
+
 use std::time::Duration;
+
 use tokio::sync::Mutex;
 
 use sea_orm::{
@@ -13,28 +18,40 @@ use sea_orm::{
 use crate::acp::connection::{
     spawn_agent_connection, AgentConnection, ConnectionCommand, GoalControlAction, SteerOutcome,
 };
+
 use crate::acp::agent_mentions::strip_route_separator_from_prompt;
+
 use crate::acp::error::AcpError;
+
 use crate::acp::feedback::{
     bounded_feedback_batch, FeedbackItem, FeedbackStatus, PendingFeedback, SessionFeedbackAccess,
     MAX_FEEDBACK_CHARS, MAX_FEEDBACK_RESPONSE_BYTES,
 };
+
 use crate::acp::plan_approval::{
     PlanApprovalAnswer, RegisteredPlanApproval, SessionPlanApprovalAccess,
 };
+
 use crate::acp::question::{
     build_outcome, QuestionAnswer, QuestionOutcome, QuestionSpec, RegisteredQuestion,
     SessionQuestionAccess,
 };
+
 use crate::acp::terminal_runtime::TerminalShellRuntimeConfig;
+
 use crate::acp::types::{
     AcpEvent, AgentOptionsSnapshot, ConfigStaleKind, ConnectionInfo, ConnectionStatus,
     ForkResultInfo, PromptCapabilitiesInfo, PromptInputBlock,
 };
+
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
+
 use crate::db::service::conversation_service;
+
 use crate::db::AppDatabase;
+
 use crate::models::agent::AgentType;
+
 use crate::web::event_bridge::{emit_with_state, emit_with_state_gated, EventEmitter};
 
 /// Cap on the number of prompt-text chars kept in the `user_prompt_sent`
@@ -2546,41 +2563,6 @@ impl ConnectionManager {
         }
     }
 
-    /// Wait (bounded) for a fresh connection to publish the prompt capability
-    /// handshake. `spawn_agent` may return before initialization completes, so
-    /// callers that need to encode image blocks must wait for this snapshot.
-    /// A missing/ended connection is treated as unknown capability, allowing
-    /// the prompt itself to surface the real agent error.
-    pub async fn wait_for_prompt_capabilities(
-        &self,
-        conn_id: &str,
-        timeout: Duration,
-    ) -> Option<PromptCapabilitiesInfo> {
-        let state = {
-            let connections = self.connections.lock().await;
-            connections.get(conn_id)?.state.clone()
-        };
-        let start = std::time::Instant::now();
-        loop {
-            {
-                let snapshot = state.read().await;
-                if let Some(capabilities) = snapshot.prompt_capabilities.clone() {
-                    return Some(capabilities);
-                }
-                if matches!(
-                    snapshot.status,
-                    ConnectionStatus::Disconnected | ConnectionStatus::Error
-                ) {
-                    return None;
-                }
-            }
-            if start.elapsed() >= timeout {
-                return None;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-
     pub async fn disconnect_by_owner_window(&self, owner_window_label: &str) -> usize {
         let cmd_txs = {
             let mut connections = self.connections.lock().await;
@@ -2754,8 +2736,8 @@ impl ConnectionManager {
     /// breaks its command loop → `run_connection` unwinds →
     /// `acp::agent_process`'s `ChildGuard::drop` runs `kill_tree`) is enough on its own
     /// *when it gets to run*. It doesn't at process exit: `run_connection` is
-    /// driven on a dedicated `std::thread` (see `spawn_agent`), and when Tauri's
-    /// `ExitRequested` handler returns the process terminates those threads
+    /// driven on a dedicated `std::thread` (see `spawn_agent`), and when the
+    /// quit handler returns the process terminates those threads
     /// mid-flight — often before the driver reaches `ChildGuard::drop` — so the
     /// agent CLI (and its own children, e.g. MCP servers / a forked `node`) is
     /// reparented and lingers until it independently notices its stdin EOF
@@ -2916,6 +2898,41 @@ impl ConnectionManager {
         connections
             .get(conn_id)
             .map(|conn| (conn.state.clone(), conn.emitter.clone()))
+    }
+
+    /// Wait (bounded) for a fresh connection to publish the prompt capability
+    /// handshake. `spawn_agent` may return before initialization completes, so
+    /// callers that need to encode image blocks must wait for this snapshot.
+    /// A missing/ended connection is treated as unknown capability, allowing
+    /// the prompt itself to surface the real agent error.
+    pub async fn wait_for_prompt_capabilities(
+        &self,
+        conn_id: &str,
+        timeout: Duration,
+    ) -> Option<PromptCapabilitiesInfo> {
+        let state = {
+            let connections = self.connections.lock().await;
+            connections.get(conn_id)?.state.clone()
+        };
+        let start = std::time::Instant::now();
+        loop {
+            {
+                let snapshot = state.read().await;
+                if let Some(capabilities) = snapshot.prompt_capabilities.clone() {
+                    return Some(capabilities);
+                }
+                if matches!(
+                    snapshot.status,
+                    ConnectionStatus::Disconnected | ConnectionStatus::Error
+                ) {
+                    return None;
+                }
+            }
+            if start.elapsed() >= timeout {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Append a live-feedback note to a connection's session and broadcast it.

@@ -52,19 +52,29 @@
 //! mtime-gated (an unchanged file costs one `stat`).
 
 use std::collections::{HashMap, HashSet, VecDeque};
+
 use std::hash::{Hash, Hasher};
+
 use std::io::{BufRead, Read, Seek, SeekFrom};
+
 use std::path::PathBuf;
+
 use std::sync::{Arc, Mutex};
+
 use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
 use crate::acp::session_state::{background_keepalive_max_age, SessionState};
+
 use crate::acp::session_title::publish_native_title;
+
 use crate::acp::types::{AcpEvent, BackgroundSettledInfo, ConnectionStatus};
+
 use crate::models::agent::AgentType;
+
 use crate::models::message::MessageTurn;
+
 use crate::parsers::claude::{
     capture_tag, capture_title_record, find_clear_rollover_successor, find_session_file,
     group_into_turns, is_meta_message, slash_command_display,
@@ -73,15 +83,19 @@ use crate::parsers::claude::{
     task_notification_tool_use_id_regex, ClaudeRecordAccumulator, BACKGROUND_RESULT_MAX_CHARS,
     CONTEXT_CONTINUATION_PREFIX,
 };
+
 use crate::parsers::truncate_str;
+
 use crate::web::event_bridge::{emit_with_state, EventEmitter};
 
 /// Poll cadence while background work is outstanding or the transcript moved
 /// recently — tight enough that a completed task surfaces within a beat.
 const POLL_ACTIVE: Duration = Duration::from_secs(1);
+
 /// Cadence when nothing is pending: cron//loop turns can still land at any
 /// time, so the watch never stops — an unchanged file costs one `stat`.
 const POLL_IDLE: Duration = Duration::from_secs(3);
+
 /// How long after the last transcript growth the tight cadence is kept.
 /// Sized to cover the agent's reaction to a settled task: after the
 /// task-notification lands (last growth) the model may take 10–20s to write
@@ -90,18 +104,22 @@ const POLL_IDLE: Duration = Duration::from_secs(3);
 /// up to POLL_IDLE of avoidable surfacing latency. An unchanged file costs
 /// one `stat` per tick, so the wider window is effectively free.
 const RECENT_ACTIVITY_WINDOW: Duration = Duration::from_secs(30);
+
 /// Prompt fingerprints older than this are dropped unconsumed — a rejected /
 /// never-persisted prompt must not linger and swallow a later cron re-fire of
 /// the same text.
 const LEDGER_TTL: Duration = Duration::from_secs(600);
+
 /// Max fingerprints kept (oldest evicted first). Far above any realistic
 /// number of prompts in flight between transcript flushes.
 const LEDGER_CAP: usize = 32;
+
 /// Rotate the episode accumulator at the next out-of-turn boundary once it
 /// holds this many messages, bounding per-tick regroup cost during very long
 /// autonomous stretches. Already-emitted turns stay valid in the frontend
 /// overlay; rotation only re-bases the id namespace for what follows.
 const MAX_EPISODE_MESSAGES: usize = 512;
+
 /// Absolute episode bound: a SINGLE autonomous turn can exceed
 /// `MAX_EPISODE_MESSAGES` without ever hitting a boundary (a heavy /loop
 /// iteration runs hundreds of tool calls in one turn), and every tick
@@ -1305,8 +1323,10 @@ impl WatchState {
                         // is the launching tool call's id and `<result>` is the
                         // sub-agent's report. Carrying both lets the frontend flip
                         // the launch card in-memory (rewriting its marker) with no
-                        // `refetchDetail` — see `BackgroundSettledInfo`'s doc.
-                        // Absent for a background shell (no such tags → `None`).
+                        // `refetchDetail` — see `BackgroundSettledInfo`'s doc. A
+                        // background shell's notification names its `Bash` call
+                        // as well (with no `<result>`); the frontend leaves that
+                        // card alone.
                         let tool_use_id =
                             capture_tag(task_notification_tool_use_id_regex(), trimmed);
                         // Same cap the cold-parse fold applies, so the live card

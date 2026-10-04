@@ -1,11 +1,15 @@
 use std::sync::Arc;
 
 use axum::{extract::Extension, Json};
+
 use serde::{Deserialize, Serialize};
 
 use crate::app_error::AppCommandError;
+
 use crate::app_state::AppState;
+
 use crate::commands::folders as folder_commands;
+
 use crate::models::*;
 
 #[derive(Deserialize)]
@@ -415,6 +419,7 @@ pub async fn open_settings_window(
         Some("office-tools") => "settings/office-tools",
         Some("collaboration") => "settings/collaboration",
         Some("browser") => "settings/browser",
+        Some("computer-use") => "settings/computer-use",
         Some("version-control") => "settings/version-control",
         Some("shortcuts") => "settings/shortcuts",
         Some("system") => "settings/system",

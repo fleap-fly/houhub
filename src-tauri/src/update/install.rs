@@ -1,5 +1,6 @@
 //! Download → verify → extract → atomic swap of the server bundle
-//! (`houhub-server` + `houhub-mcp` + `web/`).
+//! (`houhub-server` + `houhub-mcp` + `web/`, and `houhub-computer-helper` where
+//! the release ships it).
 //!
 //! The running worker performs the swap, keeping a `.bak` of each artifact,
 //! then exits so the supervisor (or a re-exec) brings up the new version.
@@ -7,13 +8,17 @@
 //! verified.
 
 use std::collections::BTreeMap;
+
 use std::io::{Cursor, Read};
+
 use std::path::{Component, Path, PathBuf};
 
 use futures_util::StreamExt;
+
 use serde::Serialize;
 
 use crate::app_error::AppCommandError;
+
 use crate::update::{verify, version};
 
 /// Reject absurdly large archives outright. Server bundles are tens of MB;
@@ -85,6 +90,10 @@ fn mcp_bin_filename() -> &'static str {
 struct Targets {
     server_bin: PathBuf,
     mcp_bin: PathBuf,
+    /// The computer-use helper: swapped when the new bundle has one, so it
+    /// is always built from the same sources as the server (which refuses a
+    /// helper that is not).
+    helper_bin: PathBuf,
     web_dir: PathBuf,
 }
 
@@ -95,6 +104,7 @@ fn resolve_targets() -> Result<Targets, AppCommandError> {
         .ok_or_else(|| AppCommandError::io_error("Cannot resolve server binary directory"))?
         .to_path_buf();
     let mcp_bin = bindir.join(mcp_bin_filename());
+    let helper_bin = bindir.join(crate::computer::local::helper_file_name());
 
     // Resolve the `web/` *update target* deterministically — this is distinct
     // from "where to serve static files from right now". When HOUHUB_STATIC_DIR
@@ -119,6 +129,7 @@ fn resolve_targets() -> Result<Targets, AppCommandError> {
     Ok(Targets {
         server_bin,
         mcp_bin,
+        helper_bin,
         web_dir,
     })
 }
@@ -254,6 +265,7 @@ fn check_writable(dir: &Path) -> Result<(), AppCommandError> {
 /// plus `reason` (the OS error) for [`UPDATE_I18N_KEY_TARGET_WRITE_FAILED`].
 pub const UPDATE_I18N_KEY_TARGET_NOT_WRITABLE: &str =
     "SystemSettings.updateErrors.permissionDenied";
+
 pub const UPDATE_I18N_KEY_TARGET_WRITE_FAILED: &str =
     "SystemSettings.updateErrors.targetWriteFailed";
 
@@ -357,6 +369,7 @@ pub async fn perform_update(
     let bundle_root = find_bundle_root(&staging, asset)?;
     let new_server = bundle_root.join(server_bin_filename());
     let new_mcp = bundle_root.join(mcp_bin_filename());
+    let new_helper = bundle_root.join(crate::computer::local::helper_file_name());
     let new_web = bundle_root.join("web");
     // Require the full bundle before touching any live file. A signed but
     // mis-packaged release that dropped, say, `web/` must not be allowed to
@@ -368,8 +381,10 @@ pub async fn perform_update(
         ));
     }
 
-    // 4. Swap, web → mcp → server (server last: it is the one the restart
-    //    relaunches). Roll back already-swapped artifacts on any failure.
+    // 4. Swap, web → mcp → helper → server (server last: it is the one the
+    //    restart relaunches). Roll back already-swapped artifacts on any
+    //    failure. The helper only where the bundle has one: older releases
+    //    did not ship it.
     on_progress(UpdatePhase::Swapping, 0, None);
     if new_web.is_dir() {
         replace_dir(&targets.web_dir, &new_web)?;
@@ -380,7 +395,15 @@ pub async fn perform_update(
             return Err(e);
         }
     }
+    if new_helper.is_file() {
+        if let Err(e) = replace_file(&targets.helper_bin, &new_helper) {
+            let _ = restore_from_bak(&targets.mcp_bin);
+            let _ = restore_dir_from_bak(&targets.web_dir);
+            return Err(e);
+        }
+    }
     if let Err(e) = replace_file(&targets.server_bin, &new_server) {
+        let _ = restore_from_bak(&targets.helper_bin);
         let _ = restore_from_bak(&targets.mcp_bin);
         let _ = restore_dir_from_bak(&targets.web_dir);
         return Err(e);
@@ -397,6 +420,7 @@ pub async fn perform_update(
         // staged" until the next restart consumed it.
         let _ = take_upgrade_staged();
         let _ = restore_from_bak(&targets.server_bin);
+        let _ = restore_from_bak(&targets.helper_bin);
         let _ = restore_from_bak(&targets.mcp_bin);
         let _ = restore_dir_from_bak(&targets.web_dir);
         return Err(e);
@@ -449,8 +473,9 @@ fn rollback_targets(
     };
     let server_backed_up = has_bak(&targets.server_bin)?;
     let mcp_backed_up = has_bak(&targets.mcp_bin)?;
+    let helper_backed_up = has_bak(&targets.helper_bin)?;
     let web_backed_up = has_bak(&targets.web_dir)?;
-    if server_backed_up || mcp_backed_up {
+    if server_backed_up || mcp_backed_up || helper_backed_up {
         refuses_writes(targets.server_bin.parent())?;
     }
     if web_backed_up {
@@ -460,6 +485,7 @@ fn rollback_targets(
     let mut restored = false;
     restored |= restore_from_bak(&targets.server_bin)?;
     restored |= restore_from_bak(&targets.mcp_bin)?;
+    restored |= restore_from_bak(&targets.helper_bin)?;
     restored |= restore_dir_from_bak(&targets.web_dir)?;
     if !restored {
         return Err(AppCommandError::not_found(
@@ -1019,6 +1045,7 @@ fn extract_err(what: &str, e: impl std::fmt::Display) -> AppCommandError {
 /// Removes a directory tree on drop — keeps the data volume clean even when
 /// the swap errors out midway.
 struct ScopedDir(PathBuf);
+
 impl Drop for ScopedDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
@@ -1293,6 +1320,7 @@ mod tests {
         Targets {
             server_bin,
             mcp_bin: bindir.join("houhub-mcp"),
+            helper_bin: bindir.join("houhub-computer-helper"),
             web_dir,
         }
     }
@@ -1301,9 +1329,11 @@ mod tests {
     fn share_denied(dir: &Path) -> Result<(), AppCommandError> {
         share_fails(dir, std::io::ErrorKind::PermissionDenied)
     }
+
     fn share_full(dir: &Path) -> Result<(), AppCommandError> {
         share_fails(dir, std::io::ErrorKind::StorageFull)
     }
+
     fn share_fails(dir: &Path, kind: std::io::ErrorKind) -> Result<(), AppCommandError> {
         if dir.file_name().is_some_and(|name| name == "share") {
             Err(unwritable_target_error(dir, &std::io::Error::from(kind)))
@@ -1372,6 +1402,22 @@ mod tests {
         );
         // Not "rolled back" over a web bundle it never saw.
         assert_eq!(std::fs::read(&targets.server_bin).unwrap(), b"new");
+    }
+
+    /// The computer-use helper is rolled back with the server, so the two
+    /// stay built from the same sources — the server refuses a helper that
+    /// is not.
+    #[test]
+    fn a_rollback_takes_the_helper_back_with_the_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let targets = upgraded_install(dir.path());
+        std::fs::write(&targets.helper_bin, b"new").unwrap();
+        std::fs::write(bak_path(&targets.helper_bin), b"old").unwrap();
+
+        rollback_targets(&targets, |_| Ok(())).unwrap();
+
+        assert_eq!(std::fs::read(&targets.server_bin).unwrap(), b"old");
+        assert_eq!(std::fs::read(&targets.helper_bin).unwrap(), b"old");
     }
 
     #[cfg(unix)]

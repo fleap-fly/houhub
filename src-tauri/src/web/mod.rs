@@ -1,35 +1,55 @@
 pub mod auth;
+
 pub mod browser_bridge;
+
 pub mod browser_tunnel;
+
 pub mod compression;
+
 pub mod event_bridge;
+
 pub mod handlers;
+
 pub mod port_probe;
+
 pub mod router;
+
 pub mod shutdown;
+
 pub mod socket_inherit;
+
 pub mod ws;
+
 pub mod ws_attach;
 
 pub use port_probe::{PortState, WebServicePortProbe};
 
 use std::net::SocketAddr;
+
 use std::path::PathBuf;
+
 use std::sync::atomic::{AtomicU16, Ordering};
+
 use std::sync::{Arc, Mutex};
 
 use shutdown::ShutdownSignal;
 
 use sea_orm::{DatabaseConnection, TransactionError, TransactionTrait};
+
 use serde::{Deserialize, Serialize};
 
 use crate::app_error::{AppCommandError, AppErrorCode};
+
 use crate::app_state::AppState;
+
 use crate::db::service::app_metadata_service;
 
 const WEB_SERVICE_TOKEN_KEY: &str = "web_service_token";
+
 const WEB_SERVICE_PORT_KEY: &str = "web_service_port";
+
 const WEB_SERVICE_AUTO_START_KEY: &str = "web_service_auto_start";
+
 pub const DEFAULT_WEB_SERVICE_PORT: u16 = 3080;
 
 pub struct WebServerState {
@@ -298,10 +318,15 @@ pub async fn update_web_service_config_core(
 
 /// Stable i18n-key prefixes — the frontend maps these to localized text.
 const ERR_ALREADY_RUNNING: &str = "web_server.already_running";
+
 const ERR_INVALID_ADDRESS: &str = "web_server.invalid_address";
+
 const ERR_PORT_IN_USE: &str = "web_server.port_in_use";
+
 const ERR_PERMISSION_DENIED: &str = "web_server.permission_denied";
+
 const ERR_ADDRESS_UNAVAILABLE: &str = "web_server.address_unavailable";
+
 const ERR_BIND_FAILED: &str = "web_server.bind_failed";
 
 fn classify_bind_error(err: std::io::Error) -> AppCommandError {
@@ -905,6 +930,15 @@ pub(crate) async fn do_start_web_server_tauri(
             .state::<crate::acp::browser_tools::BrowserToolsRuntimeConfig>()
             .inner()
             .clone(),
+        // Same for computer use: a switch flipped over HTTP reaches the
+        // running sessions and the desktop's computer service.
+        computer_tools_config: app
+            .state::<crate::acp::computer_tools::ComputerToolsRuntimeConfig>()
+            .inner()
+            .clone(),
+        // Never set here: the desktop's screen is shared from its own
+        // window, not by the clients of its web service.
+        computer_service: std::sync::OnceLock::new(),
         system_op_lock: crate::app_state::default_system_op_lock(),
         // Reuse the same handle the desktop `app_update` commands write to so
         // HTTP and webview readers see the identical update snapshot.
