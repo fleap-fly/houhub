@@ -14614,6 +14614,7 @@ pub async fn acp_test_model_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn extract_version_token_finds_the_version_in_common_banners() {
