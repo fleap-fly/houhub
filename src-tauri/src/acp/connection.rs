@@ -5289,8 +5289,7 @@ pub struct DelegationInjection {
 /// 2. Sibling of the running executable — the production layout for every
 ///    shipping target. Tauri sidecar (`Contents/MacOS/houhub-mcp` on macOS,
 ///    next to `houhub.exe` on Windows, next to the unix binary on Linux
-///    deb/rpm), `install.sh`/`install.ps1` (drops `houhub-mcp` next to
-///    `houhub-server`), Docker image (`/usr/local/bin/houhub-mcp` next to
+///    deb/rpm), Docker image (`/usr/local/bin/houhub-mcp` next to
 ///    `houhub-server`), and `cargo build` dev output
 ///    (`target/<profile>/houhub-mcp`).
 /// 3. `PATH` lookup — last-resort for atypical layouts where ops moved the

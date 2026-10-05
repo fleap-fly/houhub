@@ -388,16 +388,16 @@ async fn async_main() -> ExitCode {
             );
         }
     }
-    // A server an earlier install.ps1 put in %LOCALAPPDATA%\houhub shares that
-    // folder with the desktop app once it is installed there too: each
-    // install replaces the other's houhub-mcp.exe, houhub-computer-helper.exe
-    // and web\. install.ps1 moves the server out.
+    // A server unpacked into %LOCALAPPDATA%\houhub shares that folder with the
+    // desktop app once it is installed there too: each install replaces the
+    // other's houhub-mcp.exe, houhub-computer-helper.exe and web\. Say so
+    // instead of leaving the collision to be discovered later.
     #[cfg(windows)]
     if std::env::current_exe().is_ok_and(|exe| beside_the_desktop_app(&exe)) {
         eprintln!(
             "[SERVER] This houhub-server is in the houhub desktop app's folder, where each \
-             replaces the other's houhub-mcp.exe, houhub-computer-helper.exe and web\\. Re-run \
-             install.ps1 to move it to %LOCALAPPDATA%\\houhub-server."
+             replaces the other's houhub-mcp.exe, houhub-computer-helper.exe and web\\. Move \
+             it to %LOCALAPPDATA%\\houhub-server."
         );
     }
     // Before accepting connections: keep ACP model terminal fallbacks aligned
