@@ -10,14 +10,19 @@
 //! outside with `screencapture -l <window id>`.
 
 use std::path::{Path, PathBuf};
+
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+
 use tauri::{AppHandle, Manager};
 
 use crate::browser::doc_guest::{DocGuests, DocMode};
+
 use crate::browser::registry::BrowserRegistry;
+
 use crate::browser::types::{Bounds, SurfaceChoice};
+
 use crate::commands::browser as browser_commands;
 
 pub fn spawn_if_enabled(app: AppHandle) {
@@ -259,6 +264,7 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
                     surface,
                     devtools: cmd.get("devtools").and_then(Value::as_bool).unwrap_or(false),
                     profile,
+                    zoom: cmd.get("zoom").and_then(Value::as_f64),
                 },
             )
             .map_err(err_string)?;
@@ -333,7 +339,26 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
             Ok(json!(state))
         }
         "browser_set_bounds" => {
-            browser_commands::set_bounds_core(&registry, &str_arg(cmd, "tab_id")?, bounds_arg(cmd)?)
+            browser_commands::set_bounds_core(
+                &registry,
+                &str_arg(cmd, "tab_id")?,
+                bounds_arg(cmd)?,
+                cmd.get("zoom").and_then(Value::as_f64),
+            )
+            .map_err(err_string)?;
+            Ok(Value::Null)
+        }
+        "browser_set_window_viewport" => {
+            let viewport = match (
+                cmd.get("width").and_then(Value::as_f64),
+                cmd.get("height").and_then(Value::as_f64),
+            ) {
+                (Some(width), Some(height)) => {
+                    Some(crate::browser::types::ViewportSize { width, height })
+                }
+                _ => None,
+            };
+            browser_commands::set_window_viewport_core(&registry, &str_arg(cmd, "tab_id")?, viewport)
                 .map_err(err_string)?;
             Ok(Value::Null)
         }

@@ -43,24 +43,34 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
+
 use futures::stream::{self, StreamExt};
+
 use serde::{Deserialize, Serialize};
 
 use crate::app_error::AppCommandError;
+
 use crate::commands::conversations::get_folder_conversation_core;
+
 use crate::db::entities::folder;
+
 use crate::db::service::app_metadata_service;
+
 use crate::db::service::token_usage_service::{
     self as usage_service, FactQuery, UsageFact, UsageFactRow,
 };
+
 use crate::models::conversation::DbConversationDetail;
+
 use crate::models::message::MessageTurn;
+
 use crate::models::token_usage::{
     TokenUsageBreakdownItem, TokenUsageBucket, TokenUsageConversationItem, TokenUsageFacets,
     TokenUsageFilter, TokenUsageFolderFacet, TokenUsageHeatCell, TokenUsagePoint,
     TokenUsageReport, TokenUsageStreak, TokenUsageSyncProgress, TokenUsageSyncResult,
     TokenUsageSyncStatus, TokenUsageTotals,
 };
+
 use crate::web::event_bridge::{emit_event, EventEmitter, TOKEN_USAGE_SYNC_PROGRESS_EVENT};
 
 use sea_orm::EntityTrait;
@@ -1358,6 +1368,7 @@ mod tests {
                 parent_tool_use_id: None,
                 delegation_call_id: None,
                 origin_cwd: None,
+                tag_ids: Vec::new(),
             },
             turns,
             session_stats: stats,

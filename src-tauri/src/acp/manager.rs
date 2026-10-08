@@ -2329,6 +2329,16 @@ impl ConnectionManager {
                         origin_cwd: Set(None),
                     };
                     let inserted = sibling.insert(txn).await?;
+                    // The sibling keeps the pre-fork history under the
+                    // original's name, so it keeps the original's tags too —
+                    // without them the user's tagging would appear to have
+                    // fallen off the conversation they forked FROM.
+                    crate::db::service::conversation_tag_service::copy_conversation_tags(
+                        txn,
+                        conversation_id,
+                        inserted.id,
+                    )
+                    .await?;
                     Ok(inserted.id)
                 })
             })
@@ -4142,6 +4152,7 @@ impl SessionPlanApprovalAccess for ConnectionManagerPlanApprovalLookup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::acp::connection::AgentConnection;
 
     /// An agent that has left the connection map but not yet exited can still
@@ -4277,15 +4288,22 @@ mod tests {
         drop(guard);
         assert!(mgr.external_restore_lock.try_read().is_ok());
     }
+
     // Test-only: the budget itself is enforced at the append in
     // `SessionState::apply_event`, so nothing in this module's production code
     // names it — only the tests that pin the bound do.
     use crate::acp::feedback::MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN;
+
     use crate::acp::session_state::SessionState;
+
     use crate::acp::types::ConnectionStatus;
+
     use crate::web::event_bridge::{EventEmitter, WebEvent, WebEventBroadcaster};
+
     use std::path::PathBuf;
+
     use std::sync::Arc;
+
     use tokio::sync::{broadcast, mpsc, RwLock};
 
     #[test]
@@ -6973,6 +6991,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sweep_idle_skips_active_background_work() {
+        let mgr = ConnectionManager::new();
+        insert_fake_connection(
+            &mgr,
+            "background",
+            AgentType::ClaudeCode,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
+        backdate_last_activity(&mgr, "background", 600).await;
+        {
+            let state = mgr.get_state("background").await.unwrap();
+            let mut state = state.write().await;
+            // Mirror what apply_event(BackgroundActivity) records: pending
+            // work plus a recent watcher heartbeat.
+            state.background_outstanding = 1;
+            state.background_activity_at = Some(chrono::Utc::now());
+        }
+        let n = mgr.sweep_idle(Duration::from_secs(300)).await;
+        assert_eq!(
+            n, 0,
+            "Connection with unresolved background work must not be swept \
+             (disconnecting kills the agent CLI and the background task with it)"
+        );
+        assert!(mgr.connections.lock().await.contains_key("background"));
+
+        // Once the watcher settles the work (outstanding back to 0), the same
+        // connection becomes sweepable again.
+        {
+            let state = mgr.get_state("background").await.unwrap();
+            let mut state = state.write().await;
+            state.background_outstanding = 0;
+            state.last_activity_at = chrono::Utc::now() - chrono::Duration::seconds(600);
+        }
+        let n = mgr.sweep_idle(Duration::from_secs(300)).await;
+        assert_eq!(n, 1, "settled background work no longer exempts the sweep");
+    }
+
+    #[tokio::test]
     async fn sweep_idle_picks_only_qualifying_subset() {
         let mgr = ConnectionManager::new();
         for id in ["a", "b", "c"] {
@@ -7362,6 +7420,59 @@ mod tests {
         assert_eq!(sibling.status, "pending_review");
         assert_eq!(sibling.folder_id, folder_id);
         assert_eq!(sibling.git_branch.as_deref(), Some("feature/x"));
+    }
+
+    #[tokio::test]
+    async fn fork_session_sibling_keeps_the_conversations_tags() {
+        use crate::db::service::conversation_tag_service;
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-tags").await;
+        let pre = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("Tagged".into()),
+            None,
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, pre.id, "session-S1", &[])
+            .await
+            .unwrap();
+        let global = conversation_tag_service::create_tag(&db.conn, None, "bug", "#d73a4a")
+            .await
+            .unwrap();
+        let owned = conversation_tag_service::create_tag(&db.conn, Some(folder_id), "ui", "#0e8a16")
+            .await
+            .unwrap();
+        conversation_tag_service::update_conversation_tags(
+            &db.conn,
+            pre.id,
+            &[global.id, owned.id],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let (mgr, join) =
+            manager_with_fake_fork("c-fork-tags", pre.id, "session-S2", "session-S1").await;
+        let result = mgr
+            .fork_session(&db, "c-fork-tags", None, None, None)
+            .await
+            .expect("fork_session should succeed");
+        let _ = join.await;
+
+        let mut expected = vec![global.id, owned.id];
+        expected.sort_unstable();
+        let sibling = conversation_service::get_by_id(&db.conn, result.sibling_conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(sibling.tag_ids, expected, "the pre-fork history keeps its tags");
+        let current = conversation_service::get_by_id(&db.conn, pre.id)
+            .await
+            .unwrap();
+        assert_eq!(current.tag_ids, expected, "the forked row keeps them too");
     }
 
     #[tokio::test]
@@ -7888,6 +7999,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fork_session_rejects_unbound_connection() {
+        // Without a linked conversation_id the sibling row would orphan S1
+        // history (no row to point at it). fork_session must refuse early —
+        // BEFORE sending the Fork command to the agent, so we don't burn an
+        // ACP round-trip on a request we can't persist.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        {
+            let mut map = mgr.connections.lock().await;
+            map.insert("c-unbound".into(), fake_connection("c-unbound", None));
+        }
+        let err = mgr
+            .fork_session(&db, "c-unbound", None, None, None)
+            .await
+            .expect_err("unbound fork must error");
+        assert!(
+            err.to_string().contains("linked conversation row"),
+            "error should mention missing linkage, got: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn fork_session_links_unbound_row_from_caller_ids() {
         // A historical conversation can resume by session id before its DB row
         // is bound to the connection. Fork-send forks before the first prompt,
@@ -7970,29 +8104,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(sibling.external_id.as_deref(), Some("session-S1"));
-    }
-
-    #[tokio::test]
-    async fn fork_session_rejects_unbound_connection() {
-        // Without a linked conversation_id the sibling row would orphan S1
-        // history (no row to point at it). fork_session must refuse early —
-        // BEFORE sending the Fork command to the agent, so we don't burn an
-        // ACP round-trip on a request we can't persist.
-        use crate::db::test_helpers;
-        let db = test_helpers::fresh_in_memory_db().await;
-        let mgr = ConnectionManager::new();
-        {
-            let mut map = mgr.connections.lock().await;
-            map.insert("c-unbound".into(), fake_connection("c-unbound", None));
-        }
-        let err = mgr
-            .fork_session(&db, "c-unbound", None, None, None)
-            .await
-            .expect_err("unbound fork must error");
-        assert!(
-            err.to_string().contains("linked conversation row"),
-            "error should mention missing linkage, got: {err}"
-        );
     }
 
     // --- wait_for_session_options polling ----------------------------------

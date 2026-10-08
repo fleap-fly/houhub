@@ -1,24 +1,31 @@
-
 use std::collections::{HashMap, HashSet};
 
 #[cfg(feature = "tauri-runtime")]
 use tauri::Manager;
 
 use crate::app_error::AppCommandError;
+
 use crate::db::entities::conversation;
+
 use crate::db::entities::folder::FolderKind;
+
 use crate::db::service::{conversation_service, folder_service, import_service, tab_service};
+
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
+
 use crate::models::*;
+
 // Concrete parser type only for `load_thread_name_index`, which is codex's own
 // index reader and not part of the `AgentParser` trait. Every history read goes
 // through `build_agent_parser`.
 use crate::parsers::codex::CodexParser;
+
 use crate::parsers::{
     build_agent_parser, folder_name_from_path, normalize_path_for_matching, path_eq_for_matching,
     AgentParser, ParseError,
 };
+
 use crate::web::event_bridge::{
     emit_event, ConversationChange, ConversationsBulkChanged, EventEmitter, ImportScanProgress,
     TabsChanged, CONVERSATIONS_BULK_CHANGED_EVENT, CONVERSATION_CHANGED_EVENT,
@@ -232,7 +239,7 @@ fn list_conversations_sync(
             .iter()
             .map(|&at| (at, build_agent_parser(at)))
             .collect();
-    // Registered custom agents read back from houhub's own ACP transcripts, so
+    // Registered custom agents read back from HouHub's own ACP transcripts, so
     // their sessions participate in folder grouping and stats like any other.
     for custom in crate::acp::custom_registry::all() {
         parsers.push((custom, build_agent_parser(custom)));
@@ -544,7 +551,7 @@ fn index_folder_rows(rows: &[ScanFolderRow]) -> HashMap<String, &ScanFolderRow> 
 /// top-level by definition.
 ///
 /// Resolving the ROOT rather than a folder id keeps the "is this a worktree"
-/// question separate from "is that repo a folder houhub has", which the importer
+/// question separate from "is that repo a folder HouHub has", which the importer
 /// answers later and against folders it may not have created yet.
 fn worktree_root_key(path: &str) -> Option<String> {
     let root = crate::git_repo::main_worktree_root(std::path::Path::new(path))?;
@@ -928,7 +935,7 @@ pub(crate) async fn import_selected_from_summaries(
         // a partial failure still commits and reports its good rows and still
         // broadcasts the folder it created.
         //
-        // A cwd that is a linked worktree of a repo houhub has goes in as a CHILD
+        // A cwd that is a linked worktree of a repo HouHub has goes in as a CHILD
         // of that repo, the way `open_worktree_folder_core` records one. Plain
         // `add_folder` leaves `parent_id` NULL, which is exactly the sidebar's
         // test for "top-level folder", so the same worktree lands beside its
@@ -2825,6 +2832,7 @@ fn parse_error_to_app_error(error: ParseError) -> AppCommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
 
     /// Serializes every test that touches the process-global [`IMPORT_GUARD`].
@@ -2869,6 +2877,7 @@ mod tests {
             parent_id: Some(1),
             parent_tool_use_id: Some(parent_tool_use_id.into()),
             delegation_call_id: Some("call-1".into()),
+            tag_ids: Vec::new(),
         }
     }
 
@@ -2896,7 +2905,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-            agent_message_id: None,
+        agent_message_id: None,
         }
     }
 
@@ -2935,7 +2944,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-            agent_message_id: None,
+        agent_message_id: None,
         }
     }
 
@@ -2954,7 +2963,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: completed.then_some(ts),
-            agent_message_id: None,
+        agent_message_id: None,
         }
     }
 
@@ -3457,7 +3466,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-            agent_message_id: None,
+        agent_message_id: None,
         }
     }
 
@@ -3720,7 +3729,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-            agent_message_id: None,
+        agent_message_id: None,
         }];
         let children = vec![summary_child(42, "tu-1", "completed")];
         inject_delegation_meta(&mut turns, &children);
@@ -4576,6 +4585,173 @@ mod tests {
         );
     }
 
+    /// The channel half of a title notification must not be on the caller's
+    /// critical path: `edit_thread_title` reaches Telegram with a 60s per-call
+    /// timeout, and `list_all_conversations` is the sidebar's primary read.
+    #[tokio::test]
+    async fn notify_conversation_title_updates_detaches_channel_sync_from_the_caller() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/houhub-notify-detached").await;
+        let row = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("detached title".into()),
+            None,
+        )
+        .await
+        .expect("create conversation");
+        let (broadcaster, emitter) = sync_test_emitter();
+        let mut events = broadcaster.subscribe();
+        let (chat_channel_manager, title_edits) =
+            title_sync_test_manager_with(&db, row.id, TitleEditRecorder::blocked()).await;
+
+        let handle = notify_conversation_title_updates(
+            &db.conn,
+            &emitter,
+            &chat_channel_manager,
+            vec![row.id],
+        )
+        .await;
+
+        // Returned while the backend is still parked: the sidebar upsert is
+        // already out, the outbound edit has not even been attempted.
+        let event = events.try_recv().expect("upsert must be emitted inline");
+        assert_eq!(event.payload["summary"]["title"], "detached title");
+        assert!(
+            title_edits.recorded().await.is_empty(),
+            "caller must not wait on the chat backend"
+        );
+
+        title_edits.unblock(1);
+        handle.await.expect("detached title sync task");
+        assert_eq!(
+            title_edits.recorded().await.as_slice(),
+            [format!("#{} detached title", row.id)],
+            "the detached task still propagates the title"
+        );
+    }
+
+    /// A detached edit can land after a rename that happened while it was in
+    /// flight. The last value the provider (and the binding's `display_title`)
+    /// ends up with must be the conversation's CURRENT title, not the one the
+    /// stalled sync started with — nothing retries afterwards.
+    #[tokio::test]
+    async fn detached_title_sync_converges_on_a_rename_that_lands_mid_flight() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/houhub-notify-late-rename").await;
+        let row = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("auto title".into()),
+            None,
+        )
+        .await
+        .expect("create conversation");
+        let (_broadcaster, emitter) = sync_test_emitter();
+        let (chat_channel_manager, title_edits) =
+            title_sync_test_manager_with(&db, row.id, TitleEditRecorder::blocked()).await;
+
+        let handle = notify_conversation_title_updates(
+            &db.conn,
+            &emitter,
+            &chat_channel_manager,
+            vec![row.id],
+        )
+        .await;
+
+        // The auto-title edit is parked mid-flight; the user renames underneath it.
+        conversation_service::update_title(&db.conn, row.id, "manual rename".into())
+            .await
+            .expect("manual rename");
+
+        title_edits.unblock(8);
+        handle.await.expect("detached title sync task");
+
+        let recorded = title_edits.recorded().await;
+        assert_eq!(
+            recorded.last().map(String::as_str),
+            Some(format!("#{} manual rename", row.id).as_str()),
+            "the provider must end on the newest title, not the stalled one: {recorded:?}"
+        );
+        let bindings =
+            crate::db::service::thread_binding_service::list_by_conversation(&db.conn, row.id)
+                .await
+                .expect("list bindings");
+        assert_eq!(
+            bindings[0].display_title.as_deref(),
+            Some(format!("#{} manual rename", row.id).as_str()),
+            "the persisted display title must match what the provider was last told"
+        );
+    }
+
+    /// The convergence loop must not be defeated by a RUN of renames that each
+    /// land mid-flight. Any fixed retry cap exits stale on a long enough run —
+    /// this drives more consecutive mid-flight renames than any such cap.
+    #[tokio::test]
+    async fn detached_title_sync_converges_after_a_run_of_mid_flight_renames() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/houhub-notify-rename-run").await;
+        let row = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("title 1".into()),
+            None,
+        )
+        .await
+        .expect("create conversation");
+        let (_broadcaster, emitter) = sync_test_emitter();
+        // Each provider edit is overtaken by the next rename before it returns.
+        let (chat_channel_manager, title_edits) = title_sync_test_manager_with(
+            &db,
+            row.id,
+            TitleEditRecorder::renaming_mid_edit(
+                &db,
+                row.id,
+                &["title 2", "title 3", "title 4", "title 5", "title 6"],
+            ),
+        )
+        .await;
+
+        notify_conversation_title_updates(
+            &db.conn,
+            &emitter,
+            &chat_channel_manager,
+            vec![row.id],
+        )
+        .await
+        .await
+        .expect("detached title sync task");
+
+        let recorded = title_edits.recorded().await;
+        let current = conversation_service::get_by_id(&db.conn, row.id)
+            .await
+            .expect("read conversation")
+            .title
+            .expect("conversation has a title");
+        // The invariant, stated against whatever the row actually ended on: the
+        // last thing the provider was told IS the conversation's current title.
+        assert_eq!(
+            recorded.last().map(String::as_str),
+            Some(format!("#{} {current}", row.id).as_str()),
+            "provider must end on the row's current title however long the run: {recorded:?}"
+        );
+        assert_eq!(
+            current, "title 6",
+            "fixture must exhaust every queued rename, or it is not testing a long run"
+        );
+        let bindings =
+            crate::db::service::thread_binding_service::list_by_conversation(&db.conn, row.id)
+                .await
+                .expect("list bindings");
+        assert_eq!(
+            bindings[0].display_title.as_deref(),
+            Some(format!("#{} title 6", row.id).as_str())
+        );
+    }
+
     #[tokio::test]
     async fn list_opened_tabs_core_empty_db_returns_empty() {
         let db = fresh_in_memory_db().await;
@@ -4963,8 +5139,8 @@ mod tests {
             &crate::chat_channel::manager::ChatChannelManager::new(),
             999_999,
         )
-        .await
-        .expect_err("missing folder must surface as error");
+            .await
+            .expect_err("missing folder must surface as error");
         let msg = format!("{err:?}");
         assert!(
             msg.to_lowercase().contains("not found") || msg.to_lowercase().contains("999999"),
@@ -5111,11 +5287,24 @@ mod tests {
         (broadcaster, emitter)
     }
 
+    /// Applies one queued rename per provider edit, so the rename provably
+    /// lands while that edit is still in flight — the exact interleaving a
+    /// detached sync has to survive.
+    #[derive(Clone)]
+    struct RenameDuringEdit {
+        conn: sea_orm::DatabaseConnection,
+        conversation_id: i32,
+        pending: std::sync::Arc<tokio::sync::Mutex<std::collections::VecDeque<String>>>,
+    }
+
     #[derive(Clone)]
     struct TitleEditRecorder {
         titles: std::sync::Arc<tokio::sync::Mutex<Vec<String>>>,
-        /// Stands in for Telegram's latency. Open by default.
+        /// Stands in for Telegram's latency. Open by default; `blocked()` parks
+        /// every `edit_thread_title` until the test hands out permits, which is
+        /// how the detached-channel-sync tests prove a caller did not wait.
         gate: std::sync::Arc<tokio::sync::Semaphore>,
+        rename_during_edit: Option<RenameDuringEdit>,
     }
 
     impl Default for TitleEditRecorder {
@@ -5125,11 +5314,41 @@ mod tests {
                 gate: std::sync::Arc::new(tokio::sync::Semaphore::new(
                     tokio::sync::Semaphore::MAX_PERMITS,
                 )),
+                rename_during_edit: None,
             }
         }
     }
 
     impl TitleEditRecorder {
+        fn blocked() -> Self {
+            Self {
+                gate: std::sync::Arc::new(tokio::sync::Semaphore::new(0)),
+                ..Default::default()
+            }
+        }
+
+        /// Open gate, but every edit is overtaken by the next queued rename.
+        fn renaming_mid_edit(
+            db: &crate::db::AppDatabase,
+            conversation_id: i32,
+            renames: &[&str],
+        ) -> Self {
+            Self {
+                rename_during_edit: Some(RenameDuringEdit {
+                    conn: db.conn.clone(),
+                    conversation_id,
+                    pending: std::sync::Arc::new(tokio::sync::Mutex::new(
+                        renames.iter().map(|t| (*t).to_string()).collect(),
+                    )),
+                }),
+                ..Default::default()
+            }
+        }
+
+        fn unblock(&self, edits: usize) {
+            self.gate.add_permits(edits);
+        }
+
         async fn recorded(&self) -> Vec<String> {
             self.titles.lock().await.clone()
         }
@@ -5205,6 +5424,14 @@ mod tests {
                 .expect("title edit gate closed")
                 .forget();
             self.recorder.titles.lock().await.push(title.to_string());
+            if let Some(hook) = &self.recorder.rename_during_edit {
+                let next = hook.pending.lock().await.pop_front();
+                if let Some(next) = next {
+                    conversation_service::update_title(&hook.conn, hook.conversation_id, next)
+                        .await
+                        .expect("rename during in-flight edit");
+                }
+            }
             Ok(())
         }
 
@@ -5990,7 +6217,7 @@ mod tests {
         assert_eq!(repo_row.parent_id, None);
     }
 
-    // Grouping under a repo houhub has never opened would invent a workspace row
+    // Grouping under a repo HouHub has never opened would invent a workspace row
     // the user did not ask for, so an unknown repo leaves the folder top-level.
     #[tokio::test]
     async fn batch_import_leaves_a_worktree_top_level_when_its_repo_is_unopened() {
@@ -6450,8 +6677,8 @@ mod tests {
             &crate::chat_channel::manager::ChatChannelManager::new(),
             folder_id,
         )
-        .await
-        .expect_err("legacy import must be rejected while an import is in progress");
+            .await
+            .expect_err("legacy import must be rejected while an import is in progress");
         let msg = format!("{err:?}").to_lowercase();
         assert!(
             msg.contains("already in progress"),
@@ -6549,6 +6776,7 @@ mod tests {
                 parent_tool_use_id: None,
                 delegation_call_id: None,
                 origin_cwd: None,
+                tag_ids: Vec::new(),
             },
             turns,
             session_stats: None,

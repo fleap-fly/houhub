@@ -1,6 +1,13 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 import {
   Crosshair,
   Eye,
@@ -53,6 +60,8 @@ import { leftChromeReserve } from "@/lib/window-chrome"
 import {
   isNavItemVisible,
   loadNavItemVisibility,
+  loadTagFilter,
+  saveTagFilter,
   loadShowCompleted,
   loadShowRecent,
   loadShowWorktrees,
@@ -74,6 +83,16 @@ import {
   type SidebarSectionOrder,
 } from "@/lib/sidebar-view-mode-storage"
 import { useCanvasBoardsStore } from "@/stores/canvas-boards-store"
+import { useConversationTagsStore } from "@/stores/conversation-tags-store"
+import {
+  EMPTY_TAG_FILTER,
+  pruneTagFilter,
+  type TagFilter,
+} from "@/lib/conversation-tags"
+import {
+  SidebarTagFilterBar,
+  SidebarTagFilterButton,
+} from "@/components/conversations/sidebar-tag-filter"
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
 
@@ -185,6 +204,18 @@ export function Sidebar() {
     DEFAULT_SECTION_ORDER
   )
   const [allExpanded, setAllExpanded] = useState(true)
+  // What the user picked, persisted as picked. The list gets it PRUNED to tags
+  // that still exist (below) — but only once the tag list has loaded: matching
+  // needs nothing but ids, so a persisted filter applies from the first paint
+  // instead of flashing the whole list and then narrowing it.
+  const [rawTagFilter, setRawTagFilter] = useState<TagFilter>(EMPTY_TAG_FILTER)
+  const tagsById = useConversationTagsStore((s) => s.tagsById)
+  const tagsHydrated = useConversationTagsStore((s) => s.hydrated)
+  const tagFilter = useMemo(
+    () =>
+      tagsHydrated ? pruneTagFilter(rawTagFilter, tagsById) : rawTagFilter,
+    [rawTagFilter, tagsById, tagsHydrated]
+  )
   const newConversationShortcutLabel = formatShortcutLabel(
     shortcuts.new_conversation,
     isMac
@@ -207,6 +238,12 @@ export function Sidebar() {
     setNavItems(loadNavItemVisibility())
     setSortMode(loadSortMode())
     setSectionOrder(loadSectionOrder())
+    setRawTagFilter(loadTagFilter())
+  }, [])
+
+  const handleSetTagFilter = useCallback((next: TagFilter) => {
+    setRawTagFilter(next)
+    saveTagFilter(next)
   }, [])
 
   const handleSetShowCompleted = useCallback((value: boolean) => {
@@ -327,6 +364,12 @@ export function Sidebar() {
             window's top edge, so its empty space must move the window. */}
         <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
         <div className="flex items-center gap-0.5">
+          {/* Narrow the list to conversations carrying chosen tags. A funnel,
+              unlike the view-options eye: this one filters. */}
+          <SidebarTagFilterButton
+            filter={tagFilter}
+            onChange={handleSetTagFilter}
+          />
           {/* Locate the active conversation in the list below (moved here from
               the conversation detail header). Always shown, leading the header
               cluster. The sidebar is unmounted while collapsed, so `listRef` is
@@ -595,6 +638,7 @@ export function Sidebar() {
         }
       >
         <CloudSessionsSidebarSection />
+        <SidebarTagFilterBar filter={tagFilter} onChange={handleSetTagFilter} />
         <SidebarConversationList
           ref={listRef}
           showCompleted={showCompleted}
@@ -602,6 +646,7 @@ export function Sidebar() {
           showRecent={showRecent}
           sortMode={sortMode}
           sectionOrder={sectionOrder}
+          tagFilter={tagFilter}
         />
       </div>
       <div className="shrink-0 border-t border-border/50 px-1.5 py-1.5">

@@ -98,7 +98,7 @@ export interface AppWorkspaceStoreState {
   updateConversationLocal: (
     id: number,
     patch: Partial<
-      Pick<DbConversationSummary, "status" | "title" | "pinned_at">
+      Pick<DbConversationSummary, "status" | "title" | "pinned_at" | "tag_ids">
     >
   ) => void
   applyConversationUpsert: (summary: DbConversationSummary) => void
@@ -431,14 +431,27 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       const next = prev.slice()
       // A pin toggle is a view preference, not activity — mirror the backend
       // (`update_pin`) and leave `updated_at` untouched so an updated-sorted
-      // folder doesn't briefly float the row. Status/title patches still bump.
-      const bumpUpdatedAt = !("pinned_at" in patch)
+      // folder doesn't briefly float the row. Tagging is the same kind of
+      // edit (the backend never touches the row for it). Status/title patches
+      // still bump.
+      const bumpUpdatedAt = !("pinned_at" in patch) && !("tag_ids" in patch)
       next[idx] = {
         ...next[idx],
         ...patch,
         ...(bumpUpdatedAt ? { updated_at: new Date().toISOString() } : {}),
       }
-      // Status/title/pin changes cannot affect the aggregate stats inputs.
+      // `stats` (computeStats) depends ONLY on the conversation count and each
+      // row's agent_type/message_count. This path replaces a row IN PLACE (count
+      // never changes), and the patch type is restricted to status/title/
+      // pinned_at/tag_ids — none of which is a stat input — so a patch here can
+      // never move a stat.
+      // Reuse the existing `stats` reference instead of recomputing O(n) and
+      // minting a fresh object: otherwise every turn-boundary
+      // `conversation_status_changed` tick (one per turn start/stop, per running
+      // agent) would re-render every `stats` subscriber for a no-op. The
+      // `statsAffecting` guard keeps this self-correcting if the patch type is
+      // ever widened to include a stat input (it recomputes then); today it is
+      // always false, i.e. always reuse.
       const statsAffecting = "message_count" in patch || "agent_type" in patch
       set(
         statsAffecting

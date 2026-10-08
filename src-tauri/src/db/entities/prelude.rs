@@ -22,6 +22,10 @@ pub use super::chat_channel_thread_binding::Entity as ChatChannelThreadBinding;
 
 pub use super::conversation::Entity as Conversation;
 
+pub use super::conversation_tag::Entity as ConversationTag;
+
+pub use super::conversation_tag_link::Entity as ConversationTagLink;
+
 pub use super::custom_agent::Entity as CustomAgent;
 
 pub use super::folder::Entity as Folder;

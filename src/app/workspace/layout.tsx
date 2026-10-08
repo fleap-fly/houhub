@@ -23,6 +23,8 @@ import {
   ConversationStatusEventBridge,
 } from "@/contexts/app-workspace-context"
 import { WorkbenchCloudProvider } from "@/workbench/workbench-cloud-context"
+import { ConversationTagsSync } from "@/stores/conversation-tags-store"
+import { ConversationTagsManagerHost } from "@/components/conversations/conversation-tags-manager"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { TaskProvider } from "@/contexts/task-context"
 import { AlertProvider } from "@/contexts/alert-context"
@@ -1287,6 +1289,14 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
             <AcpConnectionsProvider>
               <DelegationProvider>
                 <ConversationStatusEventBridge />
+                {/* Tag definitions (names, colours) for every chip in this
+                    window; which tags a conversation carries rides on its
+                    summary instead. */}
+                <ConversationTagsSync />
+                {/* The tag manager, opened from tag pickers, folder menus and
+                    the sidebar's tag filter — all popovers or menus that
+                    unmount as they close, so none can host it. */}
+                <ConversationTagsManagerHost />
                 <ConversationRuntimeProvider>
                   <WorkspaceProvider>
                     <TabProvider>

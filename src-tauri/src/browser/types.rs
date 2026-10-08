@@ -49,6 +49,16 @@ pub struct Bounds {
     pub height: f64,
 }
 
+/// A page's viewport, in CSS pixels: the device a tab emulates (see
+/// `src/lib/browser/browser-device.ts`). An owned window is sized to it; an
+/// embedded surface gets it as bounds and a page zoom instead.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportSize {
+    pub width: f64,
+    pub height: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BrowserErrorKind {
@@ -108,6 +118,11 @@ pub struct BrowserTabState {
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub origin: Option<String>,
+    /// The page zoom the surface was last given. Not the person's: the only
+    /// thing that sets it is a tab emulating a device in a slot smaller than
+    /// that device's viewport, which zooms the page out so it still lays out
+    /// at the device's width (`commands::browser::set_bounds_core`). Always
+    /// 1 for an owned window, which is sized to the device instead.
     pub zoom: f64,
     pub error: Option<BrowserErrorInfo>,
     /// Set when the tab's traffic egresses through a remote workspace host.
@@ -204,23 +219,30 @@ pub enum SurfaceChoice {
 pub const HANDOFF_BLOCK_HEADER: &str = "Captured from a web page in the built-in browser";
 
 pub const STATE_EVENT: &str = "browser://state";
+
 pub const CLOSED_EVENT: &str = "browser://closed";
+
 pub const POPUP_EVENT: &str = "browser://popup";
+
 /// Backend → frontend: please open this URL in a browser tab (agent tools,
 /// deep links, the dev puppet). The frontend owns tab records, so a backend
 /// side cannot create one directly.
 pub const OPEN_REQUEST_EVENT: &str = "browser://open-request";
+
 /// A browser shortcut the PAGE swallowed first (the page has keyboard focus,
 /// so the app's own DOM never sees the keystroke). Only the fixed set below
 /// is forwarded; the payload carries no page data.
 pub const SHORTCUT_EVENT: &str = "browser://shortcut";
+
 /// A top-level navigation a tab attempted was refused by policy: the address
 /// type is not allowed in a tab, or a site rule blocks the host. The status
 /// layer tells the user; nothing else happens.
 pub const NAVIGATION_BLOCKED_EVENT: &str = "browser://navigation-blocked";
+
 /// The mode and status of a document guest changed (`DocGuestState`): the
 /// user switched it, or the guest fell back to safe mode on its own.
 pub const DOC_STATE_EVENT: &str = "browser://doc-state";
+
 /// Whether the document in a tab has printed an error. At most two per
 /// document: `false` when a new one commits and the tab's console ring is
 /// cleared, `true` on the first error after that — within one document the
@@ -456,6 +478,14 @@ mod tests {
         let bounds: Bounds =
             serde_json::from_str(r#"{"x":1,"y":2.5,"width":300,"height":200}"#).unwrap();
         assert_eq!(bounds.y, 2.5);
+        let viewport: ViewportSize = serde_json::from_str(r#"{"width":390,"height":844}"#).unwrap();
+        assert_eq!(
+            viewport,
+            ViewportSize {
+                width: 390.0,
+                height: 844.0
+            }
+        );
         let choice: SurfaceChoice = serde_json::from_str(r#""window""#).unwrap();
         assert_eq!(choice, SurfaceChoice::Window);
 

@@ -37,6 +37,8 @@ pub mod computer_tools;
 
 pub mod config_sync;
 
+pub mod conversation_tags;
+
 pub mod conversations;
 
 pub mod custom_agents;
