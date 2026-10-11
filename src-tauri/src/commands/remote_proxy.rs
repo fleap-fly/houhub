@@ -2172,58 +2172,6 @@ pub(crate) fn http_url_to_ws_url(base_url: &str, path: &str) -> String {
     }
 }
 
-/// Number of consecutive WS connect failures before we give up and emit
-/// `__unauthorized__`. Matches the JS-side `wsFailCount >= 3` threshold.
-const WS_RECONNECT_FAIL_THRESHOLD: u32 = 3;
-
-/// Forward a text frame from the remote WS to all current subscribers of
-/// this connection. The remote houhub-server's `ws.rs` emits frames shaped
-/// `{ "channel": "...", "payload": ... }` (see `WebEventBroadcaster`).
-/// We re-emit the payload as-is into the Tauri event named
-/// `remote-ws-event-{connection_id}`, but only to webview labels listed in
-/// the subscriber set — never broadcast.
-async fn forward_text_message(
-    app: &AppHandle,
-    entry: &Arc<WsTaskEntry>,
-    event_name: &str,
-    text: &str,
-) -> Result<(), String> {
-    // Validate the JSON shape minimally to surface server-side bugs
-    // (malformed frames) without dropping the frame entirely.
-    let envelope: Value =
-        serde_json::from_str(text).map_err(|e| format!("invalid WS frame: {e}"))?;
-
-    if envelope
-        .get("channel")
-        .and_then(Value::as_str)
-        .is_some_and(|channel| channel == WS_READY_CHANNEL)
-    {
-        *entry.ready.write().await = true;
-    }
-
-    let labels = snapshot_subscribers(entry).await;
-    for label in labels {
-        if let Err(e) = app.emit_to(EventTarget::webview(&label), event_name, &envelope) {
-            tracing::error!("[RemoteProxy] emit_to {label} for {event_name} failed: {e}");
-        }
-    }
-    Ok(())
-}
-
-/// Emit one of the internal lifecycle channels (`__ready__`,
-/// `__disconnected__`, `__unauthorized__`) to all current subscribers.
-async fn emit_internal(
-    app: &AppHandle,
-    entry: &Arc<WsTaskEntry>,
-    event_name: &str,
-    channel: &'static str,
-) {
-    let labels = snapshot_subscribers(entry).await;
-    for label in labels {
-        emit_internal_to_label(app, &label, event_name, channel);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
