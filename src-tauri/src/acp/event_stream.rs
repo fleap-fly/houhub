@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
@@ -475,6 +476,8 @@ fn content_block_size(block: &crate::models::message::ContentBlock) -> usize {
     use crate::models::message::ContentBlock as CB;
     match block {
         CB::Text { text } | CB::Thinking { text } => 32 + json_str_len(text),
+        // `{"type":"turn_error","message":…}`
+        CB::TurnError { message } => 40 + json_str_len(message),
         CB::Image {
             data,
             mime_type,
@@ -962,6 +965,9 @@ mod tests {
                 },
                 ContentBlock::Thinking {
                     text: "思考\n".repeat(100),
+                },
+                ContentBlock::TurnError {
+                    message: "stream \"disconnected\"\n".repeat(50),
                 },
                 ContentBlock::Image {
                     data: "AAAA".repeat(32),

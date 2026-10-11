@@ -14,22 +14,32 @@
 //!     follows the exact shape of the ask-question / feedback toggles.
 
 use std::sync::Arc;
+
 use std::time::Duration;
 
 use async_trait::async_trait;
+
 use sea_orm::DatabaseConnection;
+
 use serde::{Deserialize, Serialize};
 
 use crate::acp::session_info::{
     SessionInfo, SessionInfoAccess, SessionInfoConfig, SessionInfoRuntimeConfig,
     SessionMessageItem, SessionMessages, MAX_SESSION_MESSAGES,
 };
+
 use crate::app_error::AppCommandError;
+
 use crate::commands::conversations::get_folder_conversation_core;
+
 use crate::db::service::{app_metadata_service, conversation_service, folder_service};
+
 use crate::db::AppDatabase;
+
 use crate::models::agent::AgentType;
+
 use crate::models::message::{ContentBlock, MessageTurn, TurnRole};
+
 use crate::web::event_bridge::{emit_event, EventEmitter, SESSION_INFO_SETTINGS_CHANGED_EVENT};
 
 /// Upper bound on a single compacted turn's text. Keeps one chatty turn from
@@ -46,6 +56,7 @@ const OVERALL_CHARS: usize = 16_000;
 /// the payload past the text budget. Tool-name chars are ALSO charged against
 /// [`OVERALL_CHARS`].
 const MAX_TOOLS_PER_TURN: usize = 16;
+
 const MAX_TOOL_NAME_CHARS: usize = 64;
 
 /// How long the transcript parse may run before the resolver gives up and returns
@@ -269,7 +280,8 @@ fn compact_turns(turns: &[MessageTurn], max: u32) -> SessionMessages {
     }
 }
 
-/// One turn → role + truncated text (Text/Thinking blocks) + tool names.
+/// One turn → role + truncated text (Text/Thinking blocks, and a failed
+/// turn's account of the failure) + tool names.
 fn compact_turn(turn: &MessageTurn) -> SessionMessageItem {
     let role = match turn.role {
         TurnRole::User => "user",
@@ -282,7 +294,9 @@ fn compact_turn(turn: &MessageTurn) -> SessionMessageItem {
     let mut tools: Vec<String> = Vec::new();
     for block in &turn.blocks {
         match block {
-            ContentBlock::Text { text } | ContentBlock::Thinking { text } => {
+            ContentBlock::Text { text }
+            | ContentBlock::Thinking { text }
+            | ContentBlock::TurnError { message: text } => {
                 let t = text.trim();
                 if !t.is_empty() {
                     parts.push(t);
@@ -429,8 +443,10 @@ pub async fn set_session_info_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::message::ContentBlock;
+
     use chrono::Utc;
+
+    use crate::models::message::ContentBlock;
 
     fn turn(role: TurnRole, blocks: Vec<ContentBlock>) -> MessageTurn {
         MessageTurn {
@@ -474,6 +490,20 @@ mod tests {
         assert_eq!(item.role, "assistant");
         assert_eq!(item.text, "hello\nhmm");
         assert_eq!(item.tools, vec!["Read".to_string()]); // deduped
+    }
+
+    /// A failed turn reads as its system line, so an agent looking at the
+    /// session sees that the turn failed, and why.
+    #[test]
+    fn compact_turn_keeps_a_failed_turn_s_account() {
+        let item = compact_turn(&turn(
+            TurnRole::System,
+            vec![ContentBlock::TurnError {
+                message: "API Error: 503".into(),
+            }],
+        ));
+        assert_eq!(item.role, "system");
+        assert_eq!(item.text, "API Error: 503");
     }
 
     #[test]

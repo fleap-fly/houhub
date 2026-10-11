@@ -4,16 +4,30 @@
 //! and `experts.rs` (`~/.houhub/skills/`). New features that need a
 //! user-scoped persistent directory should call into this module instead of
 //! re-deriving `dirs::home_dir().join(".houhub")` themselves.
+//!
+//! The `houhub_*_root` data directories resolve `$HOUHUB_HOME`, then
+//! `$HOUHUB_DATA_DIR`, then `~/.houhub`. Both binaries export `HOUHUB_DATA_DIR`
+//! before anything reads it — the desktop app from [`desktop_data_dir`] at the
+//! top of `run()`, `houhub-server` in `main` — so the data directory is what
+//! they resolve to, and `~/.houhub` only serves a process started without
+//! either variable.
 
 use std::path::{Path, PathBuf};
 
 const HOUHUB_DIR_NAME: &str = ".houhub";
+
 const PETS_DIR_NAME: &str = "pets";
+
 const BROWSER_PROFILES_DIR_NAME: &str = "browser-profiles";
+
 const UPLOADS_DIR_NAME: &str = "uploads";
+
 const LOGS_DIR_NAME: &str = "logs";
+
 const TURN_TIMINGS_DIR_NAME: &str = "turn-timings";
+
 const ACP_TRANSCRIPTS_DIR_NAME: &str = "acp-transcripts";
+
 const BACKGROUNDS_DIR_NAME: &str = "backgrounds";
 
 /// `$HOUHUB_HOME` if set (and non-empty), else `~/.houhub/`.
@@ -33,9 +47,8 @@ pub fn houhub_home_dir() -> PathBuf {
 ///
 /// Resolution order:
 /// 1. `$HOUHUB_HOME/pets` (explicit override, used in tests and custom installs)
-/// 2. `$HOUHUB_DATA_DIR/pets` (server-mode data directory, populated by
-///    `houhub-server` from the corresponding env var)
-/// 3. `~/.houhub/pets` (default for the desktop app)
+/// 2. `$HOUHUB_DATA_DIR/pets` (the data directory, see the module docs)
+/// 3. `~/.houhub/pets` (neither set)
 pub fn houhub_pets_root() -> PathBuf {
     if let Some(custom) = std::env::var_os("HOUHUB_HOME").filter(|s| !s.is_empty()) {
         return PathBuf::from(custom).join(PETS_DIR_NAME);
@@ -69,8 +82,8 @@ pub fn houhub_browser_profiles_root() -> PathBuf {
 ///
 /// Resolution order matches `houhub_pets_root()`:
 /// 1. `$HOUHUB_HOME/uploads`
-/// 2. `$HOUHUB_DATA_DIR/uploads` (server-mode data directory)
-/// 3. `~/.houhub/uploads` (desktop default)
+/// 2. `$HOUHUB_DATA_DIR/uploads` (the data directory, see the module docs)
+/// 3. `~/.houhub/uploads` (neither set)
 ///
 /// Files in this directory are not garbage-collected by houhub itself —
 /// later conversations may still reference them via `file://` URIs
@@ -105,8 +118,8 @@ pub fn houhub_uploads_root() -> PathBuf {
 ///
 /// Resolution mirrors [`houhub_pets_root`] exactly:
 /// 1. `$HOUHUB_HOME/backgrounds` (explicit override)
-/// 2. `$HOUHUB_DATA_DIR/backgrounds` (server-mode data directory)
-/// 3. `~/.houhub/backgrounds` (desktop default)
+/// 2. `$HOUHUB_DATA_DIR/backgrounds` (the data directory, see the module docs)
+/// 3. `~/.houhub/backgrounds` (neither set)
 pub fn houhub_backgrounds_root() -> PathBuf {
     if let Some(custom) = std::env::var_os("HOUHUB_HOME").filter(|s| !s.is_empty()) {
         return PathBuf::from(custom).join(BACKGROUNDS_DIR_NAME);
@@ -125,12 +138,14 @@ pub fn houhub_backgrounds_root() -> PathBuf {
 /// Resolution mirrors [`houhub_uploads_root`] exactly so logs land on the same
 /// filesystem root as uploads/pets/the database:
 /// 1. `$HOUHUB_HOME/logs` (explicit override)
-/// 2. `$HOUHUB_DATA_DIR/logs` (server-mode data directory)
-/// 3. `~/.houhub/logs` (default for the desktop app)
+/// 2. `$HOUHUB_DATA_DIR/logs` (the data directory, see the module docs)
+/// 3. `~/.houhub/logs` (neither set)
 ///
 /// Pure env + `dirs::home_dir()`, so it is callable at the very start of a
 /// process — before the database (or, in `houhub-server`, the tokio runtime)
-/// exists — which is exactly when the subscriber must be installed.
+/// exists — which is exactly when the subscriber must be installed. Both
+/// binaries export the data directory before that point, so the logs sit
+/// beside the database however the process was started.
 pub fn houhub_logs_root() -> PathBuf {
     if let Some(custom) = std::env::var_os("HOUHUB_HOME").filter(|s| !s.is_empty()) {
         return PathBuf::from(custom).join(LOGS_DIR_NAME);
@@ -151,8 +166,8 @@ pub fn houhub_logs_root() -> PathBuf {
 ///
 /// Resolution mirrors [`houhub_uploads_root`]:
 /// 1. `$HOUHUB_HOME/turn-timings`
-/// 2. `$HOUHUB_DATA_DIR/turn-timings` (server-mode data directory)
-/// 3. `~/.houhub/turn-timings` (desktop default)
+/// 2. `$HOUHUB_DATA_DIR/turn-timings` (the data directory, see the module docs)
+/// 3. `~/.houhub/turn-timings` (neither set)
 pub fn houhub_turn_timings_root() -> PathBuf {
     if let Some(custom) = std::env::var_os("HOUHUB_HOME").filter(|s| !s.is_empty()) {
         return PathBuf::from(custom).join(TURN_TIMINGS_DIR_NAME);
@@ -173,8 +188,8 @@ pub fn houhub_turn_timings_root() -> PathBuf {
 ///
 /// Resolution mirrors [`houhub_turn_timings_root`]:
 /// 1. `$HOUHUB_HOME/acp-transcripts`
-/// 2. `$HOUHUB_DATA_DIR/acp-transcripts` (server-mode data directory)
-/// 3. `~/.houhub/acp-transcripts` (desktop default)
+/// 2. `$HOUHUB_DATA_DIR/acp-transcripts` (the data directory, see the module docs)
+/// 3. `~/.houhub/acp-transcripts` (neither set)
 pub fn houhub_acp_transcripts_root() -> PathBuf {
     if let Some(custom) = std::env::var_os("HOUHUB_HOME").filter(|s| !s.is_empty()) {
         return PathBuf::from(custom).join(ACP_TRANSCRIPTS_DIR_NAME);
@@ -185,6 +200,31 @@ pub fn houhub_acp_transcripts_root() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join(HOUHUB_DIR_NAME).join(ACP_TRANSCRIPTS_DIR_NAME))
         .unwrap_or_else(|| PathBuf::from(HOUHUB_DIR_NAME).join(ACP_TRANSCRIPTS_DIR_NAME))
+}
+
+/// The data directory the desktop app exports as `HOUHUB_DATA_DIR` at the top
+/// of `run()`, before the logging init or anything else reads it: a preset
+/// `HOUHUB_DATA_DIR` (the operator's, or inherited from the houhub that launched
+/// this one), else the platform data directory joined with the bundle
+/// identifier — exactly what Tauri's `app_data_dir()` returns, which is not
+/// available until `setup`. Absolutized either way, like
+/// [`resolve_effective_data_dir`]; `None` when there is no platform data
+/// directory, where `setup` fails on `app_data_dir()` all the same.
+///
+/// Exporting it only in `setup`, as the desktop app used to, left the log
+/// directory to depend on how the process was started: a launch from the
+/// Start menu or the Dock wrote to `~/.houhub/logs`, while an instance houhub
+/// restarted (after an update) inherited the variable and wrote beside the
+/// database — and the Settings page always opened the latter.
+pub fn desktop_data_dir(
+    preset: Option<&std::ffi::OsStr>,
+    platform_data_dir: Option<&Path>,
+    identifier: &str,
+) -> Option<PathBuf> {
+    if let Some(custom) = preset.filter(|s| !s.is_empty()) {
+        return Some(crate::git_credential::absolutize(Path::new(custom)));
+    }
+    platform_data_dir.map(|dir| crate::git_credential::absolutize(&dir.join(identifier)))
 }
 
 /// Single source of truth for "where does the database live, and where
@@ -272,6 +312,38 @@ fn strip_prefix_ignore_ascii_case<'a>(text: &'a str, prefix: &str) -> Option<&'a
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The desktop app's data directory, decided before anything reads it: a
+    /// preset `HOUHUB_DATA_DIR` wins, else the platform data directory joined
+    /// with the bundle identifier — Tauri's `app_data_dir()`. Absolute either
+    /// way, since it is exported to every subprocess.
+    #[test]
+    fn the_desktop_data_dir_is_the_preset_else_the_identifier_dir() {
+        let platform = std::env::temp_dir().join("platform-data");
+        let preset = std::env::temp_dir().join("preset-data");
+        assert_eq!(
+            desktop_data_dir(None, Some(&platform), "com.houflow.houhub"),
+            Some(platform.join("com.houflow.houhub"))
+        );
+        assert_eq!(
+            desktop_data_dir(Some(std::ffi::OsStr::new("")), Some(&platform), "com.houflow.houhub"),
+            Some(platform.join("com.houflow.houhub")),
+            "an empty preset is no preset"
+        );
+        assert_eq!(
+            desktop_data_dir(Some(preset.as_os_str()), Some(&platform), "com.houflow.houhub"),
+            Some(preset.clone())
+        );
+        assert_eq!(
+            desktop_data_dir(Some(preset.as_os_str()), None, "com.houflow.houhub"),
+            Some(preset)
+        );
+        assert_eq!(desktop_data_dir(None, None, "com.houflow.houhub"), None);
+        let relative = desktop_data_dir(Some(std::ffi::OsStr::new("data")), None, "com.houflow.houhub")
+            .expect("a relative preset");
+        assert!(relative.is_absolute(), "{}", relative.display());
+        assert!(relative.ends_with("data"));
+    }
 
     /// The shape `fs::canonicalize` hands back on Windows, and the one that
     /// broke image attachments in issue #392.

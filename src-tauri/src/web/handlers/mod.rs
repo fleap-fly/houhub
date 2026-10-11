@@ -50,6 +50,8 @@ pub mod folders;
 
 pub mod forge;
 
+pub mod generative_ui;
+
 pub mod git;
 
 pub mod logging;

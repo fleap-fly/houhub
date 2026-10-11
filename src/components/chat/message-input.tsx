@@ -206,6 +206,7 @@ import {
   skillToReference,
 } from "@/components/chat/composer/invocation-reference"
 import type { KnownInvocations } from "@/lib/invocation-token"
+import { CommandOptionLabel } from "@/components/chat/composer/command-option-label"
 import { cutSelectionToClipboard } from "@/components/chat/composer/clipboard-actions"
 import {
   ComposerTokenAction,
@@ -3770,12 +3771,7 @@ export function MessageInput({
                   handleSlashSelect(cmd)
                 }}
               >
-                <span className="shrink-0 font-mono text-primary">
-                  {commandInvocationToken(cmd.name)}
-                </span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {cmd.description}
-                </span>
+                <CommandOptionLabel command={cmd} />
               </button>
             ))}
             {filteredSlashSkills.map((skill, i) => {

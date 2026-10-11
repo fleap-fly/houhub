@@ -1,12 +1,17 @@
 use std::sync::Arc;
 
 use axum::{extract::Extension, Json};
+
 use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
+
 use crate::app_state::AppState;
+
 use crate::commands::terminal::prepare_credential_env;
+
 use crate::terminal::manager::SpawnOptions;
+
 use crate::terminal::types::{TerminalInfo, TerminalSnapshot};
 
 // ---------------------------------------------------------------------------
@@ -26,6 +31,16 @@ pub struct TerminalSpawnParams {
 #[serde(rename_all = "camelCase")]
 pub struct TerminalIdParams {
     pub terminal_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalKillParams {
+    pub terminal_id: String,
+    /// Stop the process but keep the terminal's final output (see
+    /// `TerminalManager::stop`) instead of closing the terminal.
+    #[serde(default)]
+    pub keep_output: bool,
 }
 
 #[derive(Deserialize)]
@@ -111,12 +126,15 @@ pub async fn terminal_snapshot(
 
 pub async fn terminal_kill(
     Extension(state): Extension<Arc<AppState>>,
-    Json(params): Json<TerminalIdParams>,
+    Json(params): Json<TerminalKillParams>,
 ) -> Result<Json<()>, AppCommandError> {
     let manager = &state.terminal_manager;
-    manager
-        .kill(&params.terminal_id)
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    let result = if params.keep_output {
+        manager.stop(&params.terminal_id)
+    } else {
+        manager.kill(&params.terminal_id)
+    };
+    result.map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
 }
 
@@ -126,4 +144,20 @@ pub async fn terminal_list(
     let manager = &state.terminal_manager;
     let result = manager.list_with_exit_check(Some(&state.emitter));
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TerminalKillParams;
+
+    #[test]
+    fn a_kill_without_keep_output_still_closes_the_terminal() {
+        // Older clients send only the id, and that must stay a close.
+        let close: TerminalKillParams =
+            serde_json::from_str(r#"{"terminalId":"t"}"#).expect("close params");
+        assert!(!close.keep_output);
+        let stop: TerminalKillParams =
+            serde_json::from_str(r#"{"terminalId":"t","keepOutput":true}"#).expect("stop params");
+        assert!(stop.keep_output);
+    }
 }

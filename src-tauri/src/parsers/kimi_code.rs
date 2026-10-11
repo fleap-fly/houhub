@@ -1,16 +1,22 @@
 use std::collections::{HashMap, HashSet};
+
 use std::ffi::OsString;
+
 use std::fs;
+
 use std::io::{BufRead, BufReader};
+
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+
 use serde_json::Value;
 
 use crate::models::{
     AgentExecutionStats, AgentToolCall, AgentType, ContentBlock, ConversationDetail,
     ConversationSummary, MessageRole, MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
 };
+
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, is_safe_subagent_id, merge_context_window_stats,
@@ -80,6 +86,13 @@ pub struct KimiCodeParser {
     base_dir: PathBuf,
 }
 
+/// Whether a `session_index.jsonl` work dir is one `load_work_dir_index`
+/// keeps; backup restore merges the index by the same test
+/// (`ExternalSource::indexes`).
+pub(crate) fn is_usable_work_dir(dir: &str) -> bool {
+    !dir.trim().is_empty()
+}
+
 impl KimiCodeParser {
     pub fn new() -> Self {
         Self {
@@ -119,7 +132,7 @@ impl KimiCodeParser {
                 .get("workDir")
                 .and_then(Value::as_str)
                 .map(str::trim)
-                .filter(|s| !s.is_empty());
+                .filter(|dir| is_usable_work_dir(dir));
             if let (Some(id), Some(dir)) = (session_id, work_dir) {
                 map.insert(id.to_string(), dir.to_string());
             }

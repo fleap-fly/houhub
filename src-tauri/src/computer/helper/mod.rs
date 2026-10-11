@@ -26,33 +26,52 @@
 //! check; the helper serves its stdin, which is the pipe houhub gave it.
 
 pub mod act;
+
 #[cfg(target_os = "macos")]
 pub mod axwin;
+
 pub mod clipboard;
+
 pub mod driver_proc;
+
 #[cfg(windows)]
 pub mod hwnd;
+
 pub mod keystate;
+
 pub mod mcp;
+
 pub mod ops;
+
 pub mod screen;
+
 pub mod session;
+
 pub mod tree;
+
 #[cfg(all(target_os = "linux", feature = "computer-helper"))]
 pub mod x11win;
 
 use std::path::PathBuf;
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
 use std::sync::Arc;
+
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+
 use tokio::sync::{mpsc, Mutex};
 
 use self::act::SnapshotBook;
+
 use self::driver_proc::DriverProc;
+
 use self::ops::AppCache;
+
 use super::driver;
+
 use super::protocol::{
     read_frame, HelperError, HelperErrorCode, HelperMessage, HelperOp, HelperReady, HelperReply,
     HelperRequest, OsPermission, PeerCheck, PermissionReport, ProcessRun, RawAct, RawApp,
@@ -62,8 +81,11 @@ use super::protocol::{
 /// Exit codes, for houhub's log: they are all the helper says to a peer it has
 /// refused.
 pub const EXIT_OK: i32 = 0;
+
 pub const EXIT_FAILED: i32 = 1;
+
 pub const EXIT_PEER_REFUSED: i32 = 2;
+
 pub const EXIT_UNANCHORED: i32 = 3;
 
 /// houhub's designated requirement, compiled into release builds. See the
@@ -951,12 +973,15 @@ async fn handle_op(
             if !paste_ok && act::pastes(&action) {
                 return Err(act::paste_refused());
             }
-            let element_frame = {
+            let (element_frame, web) = {
                 let book = state.snapshots();
                 book.check(pid, window_id, &action, app_key.as_deref(), paste_ok)?;
-                action
-                    .element()
-                    .and_then(|element| book.frame(pid, window_id, element))
+                action.element().map_or((None, false), |element| {
+                    (
+                        book.frame(pid, window_id, element),
+                        book.in_web_content(pid, window_id, element),
+                    )
+                })
             };
             let mut window_frame =
                 act::check_points(&driver, pid, window_id, &action.points()).await?;
@@ -965,7 +990,10 @@ async fn handle_op(
             } else {
                 None
             };
-            let first = act::act(&driver, pid, window_id, &action, mode, &delivery, paste_ok).await;
+            let first = act::act(
+                &driver, pid, window_id, &action, mode, &delivery, paste_ok, web,
+            )
+            .await;
             let done = match first {
                 // The driver aims a point only by its snapshot's capture of
                 // the window, and holds none just now — no snapshot taken
@@ -980,7 +1008,10 @@ async fn handle_op(
                     }
                     window_frame =
                         act::check_points(&driver, pid, window_id, &action.points()).await?;
-                    act::act(&driver, pid, window_id, &action, mode, &delivery, paste_ok).await?
+                    act::act(
+                        &driver, pid, window_id, &action, mode, &delivery, paste_ok, web,
+                    )
+                    .await?
                 }
                 done => done?,
             };

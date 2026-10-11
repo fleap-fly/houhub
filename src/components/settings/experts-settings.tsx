@@ -16,10 +16,11 @@ import {
   expertsListAllInstallStatuses,
   expertsReadContent,
 } from "@/lib/api"
-import { toErrorMessage } from "@/lib/app-error"
-import { getExpertIcon, pickLocalized } from "@/lib/expert-presentation"
+import { useLatestCall } from "@/hooks/use-latest-call"
 import { piUsesCustomAgentDir } from "@/lib/pi-config"
 import type { AcpAgentInfo, ExpertLinkState, ExpertListItem } from "@/lib/types"
+import { toErrorMessage } from "@/lib/app-error"
+import { getExpertIcon, pickLocalized } from "@/lib/expert-presentation"
 
 const CATEGORY_SORT: Record<string, number> = {
   discovery: 1,
@@ -45,7 +46,11 @@ export function ExpertsBody({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
+  // A late answer from an earlier Refresh must not overwrite a newer one.
+  const beginLoad = useLatestCall()
+
   const refresh = useCallback(async () => {
+    const current = beginLoad()
     setLoading(true)
     setLoadError(null)
     try {
@@ -53,6 +58,7 @@ export function ExpertsBody({
         expertsList(),
         acpListAgents(),
       ])
+      if (!current()) return
       setExperts(expertList)
       setAgents(
         agentList.filter(
@@ -61,13 +67,14 @@ export function ExpertsBody({
       )
       setReloadKey((k) => k + 1)
     } catch (err) {
+      if (!current()) return
       setLoadError(toErrorMessage(err))
       setExperts([])
       setAgents([])
     } finally {
-      setLoading(false)
+      if (current()) setLoading(false)
     }
-  }, [])
+  }, [beginLoad])
 
   useEffect(() => {
     refresh().catch((err) => {

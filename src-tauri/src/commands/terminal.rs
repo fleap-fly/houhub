@@ -2,16 +2,21 @@ use std::collections::HashMap;
 
 #[cfg(feature = "tauri-runtime")]
 use tauri::Manager;
+
 #[cfg(feature = "tauri-runtime")]
 use tauri::State;
 
 use crate::git_credential;
+
 #[cfg(feature = "tauri-runtime")]
 use crate::terminal::error::TerminalError;
+
 #[cfg(feature = "tauri-runtime")]
 use crate::terminal::manager::{SpawnOptions, TerminalManager};
+
 #[cfg(feature = "tauri-runtime")]
 use crate::terminal::types::{TerminalInfo, TerminalSnapshot};
+
 #[cfg(feature = "tauri-runtime")]
 use crate::web::event_bridge::EventEmitter;
 
@@ -138,13 +143,21 @@ pub fn terminal_snapshot(
     Ok(manager.snapshot(&terminal_id))
 }
 
+/// Ends a terminal's process. `keep_output` stops it without closing it: the
+/// final output stays for the tab that still shows it (see
+/// [`TerminalManager::stop`]); otherwise the terminal is closed and forgotten.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub fn terminal_kill(
     terminal_id: String,
+    keep_output: Option<bool>,
     manager: State<'_, TerminalManager>,
 ) -> Result<(), TerminalError> {
-    manager.kill(&terminal_id)
+    if keep_output == Some(true) {
+        manager.stop(&terminal_id)
+    } else {
+        manager.kill(&terminal_id)
+    }
 }
 
 #[cfg(feature = "tauri-runtime")]

@@ -428,6 +428,10 @@ pub struct AcpDescribeAgentOptionsParams {
     pub agent_type: crate::models::AgentType,
     #[serde(default)]
     pub working_dir: Option<String>,
+    /// Config selections to apply on the probe session before reading the
+    /// snapshot — callers pass the model so per-model option lists match.
+    #[serde(default)]
+    pub config_values: Option<std::collections::BTreeMap<String, String>>,
 }
 
 pub async fn acp_describe_agent_options(
@@ -440,6 +444,7 @@ pub async fn acp_describe_agent_options(
         &state.data_dir,
         params.agent_type,
         params.working_dir,
+        params.config_values.unwrap_or_default(),
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
@@ -1488,6 +1493,24 @@ pub async fn acp_current_platform() -> Json<String> {
     Json(custom_agent_commands::acp_current_platform_core())
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpTestModelProviderParams {
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+}
+
+pub async fn acp_test_model_provider(
+    Json(params): Json<AcpTestModelProviderParams>,
+) -> Result<Json<acp_commands::ModelProviderTestOutcome>, AppCommandError> {
+    let outcome =
+        acp_commands::acp_test_model_provider_core(&params.base_url, &params.api_key, &params.model)
+            .await
+            .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(outcome))
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -1537,22 +1560,4 @@ mod tests {
         assert!(text.contains(r#"{"agentType":"antigravity"}"#));
         assert!(!text.contains("codex"));
     }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AcpTestModelProviderParams {
-    pub base_url: String,
-    pub api_key: String,
-    pub model: String,
-}
-
-pub async fn acp_test_model_provider(
-    Json(params): Json<AcpTestModelProviderParams>,
-) -> Result<Json<acp_commands::ModelProviderTestOutcome>, AppCommandError> {
-    let outcome =
-        acp_commands::acp_test_model_provider_core(&params.base_url, &params.api_key, &params.model)
-            .await
-            .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(outcome))
 }

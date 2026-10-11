@@ -18,7 +18,9 @@
 //! in-app mention badges, not OS navigation, and are ignored here.
 
 use crate::db::service::conversation_service;
+
 use crate::db::AppDatabase;
+
 use crate::models::DbConversationSummary;
 
 /// What a parsed `houhub://` URL wants the desktop app to do.
@@ -258,7 +260,7 @@ pub fn handle_raw_urls(app: &tauri::AppHandle, urls: &[String]) {
     use tauri::{Emitter, Manager};
 
     if urls.is_empty() {
-        windows::show_main_window(app);
+        crate::commands::workspace_windows::activate_workspace(app);
         return;
     }
 

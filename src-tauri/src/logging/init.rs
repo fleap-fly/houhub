@@ -18,13 +18,19 @@
 use std::path::Path;
 
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
+
 use tracing_appender::rolling::Rotation;
+
 use tracing_subscriber::filter::filter_fn;
+
 use tracing_subscriber::{fmt, prelude::*, reload, EnvFilter, Registry};
 
 use crate::logging::budget::{self, BudgetedWriter};
+
 use crate::logging::hub::LogHub;
+
 use crate::logging::layer::BufferEmitLayer;
+
 use crate::logging::{LogLevel, LogSettings, LOGGING_LEVEL_KEY};
 
 /// Reload handle stored in [`LogHub`]. The wrapped `EnvFilter` is applied as a
@@ -600,6 +606,11 @@ fn init_with_file(prefix: &str) -> LogGuard {
     let dir = crate::paths::houhub_logs_root();
     let (reload, guard) = build_subscriber(LogLevel::default(), Some(&dir), prefix);
     LogHub::install(reload);
+    // Under the `paths` target: the logging stack's own target is switched
+    // off (`TARGET_BACKSTOPS`), and this is about where the files are.
+    if let Some(dir) = crate::logging::panic_hook::log_file_dir() {
+        tracing::info!(target: "houhub_lib::paths", "[paths] logs go to {}", dir.display());
+    }
     LogGuard { _guard: guard }
 }
 

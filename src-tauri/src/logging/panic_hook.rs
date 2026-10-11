@@ -47,10 +47,15 @@
 //! effort, and there is no `unwrap` on this path.
 
 use std::backtrace::Backtrace;
+
 use std::io::Write;
+
 use std::panic::PanicHookInfo;
+
 use std::path::{Path, PathBuf};
+
 use std::sync::atomic::{AtomicUsize, Ordering};
+
 use std::sync::OnceLock;
 
 /// Tracing target for the panic record.
@@ -181,6 +186,14 @@ pub(crate) fn set_log_file(dir: &Path, prefix: &str, suffix: &'static str) {
         prefix: prefix.to_string(),
         suffix,
     });
+}
+
+/// The directory the rolling file sink writes to, or `None` when no file sink
+/// was built (the stderr-only modes, a failed init, and tests, which never
+/// build one). The Settings page lists and opens this directory, so it shows
+/// the files actually being written whatever the environment says later.
+pub(crate) fn log_file_dir() -> Option<&'static Path> {
+    FILE_SINK.get().map(|sink| sink.dir.as_path())
 }
 
 /// Install the hook, chaining to whatever was installed before.

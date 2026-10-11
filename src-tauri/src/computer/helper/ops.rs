@@ -10,40 +10,52 @@
 //! system itself: see `mark_out_of_sight`.)
 
 use std::collections::HashMap;
+
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
 use super::act::{ElementFacts, SnapshotFacts};
+
 use super::driver_proc::DriverProc;
+
 use super::mcp::ToolCallResult;
+
 use super::tree::{
     is_masked, names_a_secret, redact_secrets, without_app_menus, AppMenus, Dialect, TreeNode,
     APP_MENU_ROLES,
 };
+
 use crate::computer::procinfo::process_start;
+
 use crate::computer::protocol::{
     HelperError, HelperErrorCode, InstalledApp, OsPermission, RawApp, RawCapture, RawClipboard,
     RawLaunch, RawSnapshot, RawVerify, RawWindow, SnapshotRef,
 };
+
 use crate::computer::types::{
     PredicateResult, Rect, VerifyPredicate, VerifyRequest, VerifyStatus, MAX_VERIFY_PREDICATES,
 };
 
 const LIST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// A window-state read: an accessibility walk of at most [`WALK_BUDGET_MS`],
 /// the capture, and the encode.
 const WINDOW_STATE_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// How long the driver may walk a window's accessibility tree for a
 /// snapshot, in milliseconds. Its own default is a second, which cuts a
 /// large application's tree short; this is the twenty seconds macOS had
 /// before it, and within [`WINDOW_STATE_TIMEOUT`] even where the driver
 /// waits twice that and five seconds more for an application to answer.
 const WALK_BUDGET_MS: u64 = 20_000;
+
 /// Added to the caller's own `timeoutMs` for `verify_state`.
 const VERIFY_OVERHEAD: Duration = Duration::from_secs(30);
+
 /// The driver's own bounds on a verify.
 const MAX_VERIFY_TIMEOUT_MS: u32 = 10_000;
+
 const MAX_STABLE_SAMPLES: u32 = 5;
 
 /// Turn a refused driver call into the helper's error, by the driver's own
@@ -1243,6 +1255,10 @@ async fn protected_menu_titles(_pid: u32) -> Option<[String; 2]> {
 /// * an element is secret if ANY line carrying its index was judged secret,
 ///   or its own role, label or value say so — a forged line can add secrecy,
 ///   never take it away.
+///
+/// Whether an element is in web content is the driver's own marker on it
+/// (`in_web_content`, macOS): a web area above it — the same judgment by
+/// which the driver distrusts what typing there reads back.
 fn element_refs(
     nodes: &[TreeNode],
     elements: Option<&Value>,
@@ -1282,6 +1298,7 @@ fn element_refs(
                 role: role.to_string(),
                 secret,
                 paste: names_a_paste_control(role, text("label")),
+                web: element.get("in_web_content").and_then(Value::as_bool) == Some(true),
                 frame: element_frame(element),
             },
         );
@@ -1879,6 +1896,25 @@ mod tests {
         assert!(facts[&4].secret);
         // No structured list: nothing to offer.
         assert!(element_refs(&redacted.nodes, None).0.is_empty());
+    }
+
+    /// An element is in web content when the driver marks it so, and only
+    /// then.
+    #[test]
+    fn web_content_is_the_drivers_mark() {
+        use super::super::tree::{redact_tree, Dialect};
+        let tree = "- [0] AXWindow \"Termius\"\n  - [1] AXWebArea\n    - [2] AXTextField (Terminal input)\n  - [3] AXButton \"Close\"\n";
+        let elements = json!([
+            {"element_index": 0, "role": "AXWindow", "label": "Termius"},
+            {"element_index": 1, "role": "AXWebArea", "in_web_content": true},
+            {"element_index": 2, "role": "AXTextField", "in_web_content": true},
+            {"element_index": 3, "role": "AXButton", "label": "Close", "in_web_content": false},
+        ]);
+        let (_, facts) = element_refs(&redact_tree(tree, Dialect::Mac).nodes, Some(&elements));
+        assert!(facts[&2].web);
+        assert!(facts[&1].web);
+        assert!(!facts[&3].web);
+        assert!(!facts[&0].web);
     }
 
     /// A control is a paste's when it is pressed to do something — a menu
