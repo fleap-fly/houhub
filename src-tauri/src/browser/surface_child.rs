@@ -1200,43 +1200,6 @@ pub fn create(
     Ok(handle)
 }
 
-/// Build the child webview for a document guest: the same surface as a tab,
-/// with the guest's policy and the handler that serves `grant`'s files. The
-/// caller navigates to the document once the page ↔ host channel is in.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-#[allow(clippy::too_many_arguments)]
-pub fn create_document(
-    app: &AppHandle,
-    owner: &WebviewWindow,
-    tab_id: &str,
-    label: &str,
-    bounds: Bounds,
-    background: bool,
-    devtools: bool,
-    grant: Arc<DocGrant>,
-) -> Result<ChildHandle, ChildError> {
-    let handle = ChildHandle {
-        tab_id: tab_id.to_string(),
-        label: label.to_string(),
-        app: app.clone(),
-    };
-    let app = app.clone();
-    let owner = owner.clone();
-    let id = tab_id.to_string();
-    let label = label.to_string();
-    run_on_main(&app.clone(), move || -> Result<(), String> {
-        let kind = ChildKind::Document(grant);
-        // A guest's store is its own (non-persistent); the profile only names
-        // the WebView2 environment it would share on Windows.
-        let webview = build_child(&app, &owner, &id, &label, bounds, !background, devtools, None, &kind, profile::DEFAULT_PROFILE_ID)?;
-        attach_engine_hooks(&app, &id, &kind, &webview);
-        SURFACES.with(|s| s.borrow_mut().insert(id, webview));
-        Ok(())
-    })?
-    .map_err(ChildError::Op)?;
-    Ok(handle)
-}
-
 fn deny(app: &AppHandle, opener_tab_id: &str, url: &str, features: &NewWindowFeatures, reason: &str) -> NewWindowResponse {
     tracing::info!("[browser] tab {opener_tab_id}: new-window request for {url} denied ({reason})");
     events::emit_popup(

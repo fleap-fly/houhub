@@ -155,7 +155,6 @@ pub fn tab_label(tab_id: &str) -> String {
     feature = "tauri-runtime",
     any(target_os = "macos", target_os = "windows")
 ))]
-pub mod surface_child;
 
 #[cfg(test)]
 mod tests {
