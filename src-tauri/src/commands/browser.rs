@@ -4279,18 +4279,10 @@ pub async fn browser_clear_downloads(
     Ok(())
 }
 
-#[cfg(all(
-    feature = "browser-child",
-    any(target_os = "macos", target_os = "windows")
-))]
-const CHILD_SURFACE_COMPILED: bool = true;
-
 #[cfg(not(all(
     feature = "browser-child",
     any(target_os = "macos", target_os = "windows")
 )))]
-const CHILD_SURFACE_COMPILED: bool = false;
-
 #[cfg(test)]
 mod tests {
     use super::*;
