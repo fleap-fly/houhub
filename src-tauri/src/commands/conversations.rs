@@ -2922,50 +2922,6 @@ fn parse_error_to_app_error(error: ParseError) -> AppCommandError {
     }
 }
 
-#[cfg(feature = "tauri-runtime")]
-#[tauri::command]
-pub async fn list_conversations(
-    db: tauri::State<'_, AppDatabase>,
-    agent_type: Option<AgentType>,
-    search: Option<String>,
-    sort_by: Option<String>,
-    folder_path: Option<String>,
-) -> Result<Vec<ConversationSummary>, AppCommandError> {
-    list_conversations_core(&db.conn, agent_type, search, sort_by, folder_path).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[tauri::command]
-pub async fn get_conversation(
-    db: tauri::State<'_, AppDatabase>,
-    agent_type: AgentType,
-    conversation_id: String,
-) -> Result<ConversationDetail, AppCommandError> {
-    get_conversation_core(&db.conn, agent_type, conversation_id).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[tauri::command]
-pub async fn list_folders(
-    db: tauri::State<'_, AppDatabase>,
-) -> Result<Vec<FolderInfo>, AppCommandError> {
-    list_folders_core(&db.conn).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[tauri::command]
-pub async fn get_stats(db: tauri::State<'_, AppDatabase>) -> Result<AgentStats, AppCommandError> {
-    get_stats_core(&db.conn).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[tauri::command]
-pub async fn get_sidebar_data(
-    db: tauri::State<'_, AppDatabase>,
-) -> Result<SidebarData, AppCommandError> {
-    get_sidebar_data_core(&db.conn).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
