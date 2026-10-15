@@ -42,6 +42,9 @@ const eslintConfig = defineConfig([
     "public/vs/**",
     // External upstream source snapshots are review inputs, not product code.
     ".upstream/**",
+    // PDF.js's worker and wasm-decoder fallbacks, copied out of
+    // node_modules by postinstall like Monaco's above.
+    "public/pdfjs/**",
     // Gitignored scratch space for planning/review docs and one-off probe
     // scripts. Prettier already skips it — its `--ignore-path` defaults to
     // `.gitignore` — but flat config has no such default, so without this

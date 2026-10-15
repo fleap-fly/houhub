@@ -30,7 +30,7 @@ use crate::parsers::codex_code_mode::{
 };
 
 use crate::parsers::{
-    codex_desktop_attachments, folder_name_from_path, title_from_user_text, truncate_str,
+    codex_desktop_attachments, folder_name_from_path, title_from_user_text, truncate_str, AgentEnv,
     AgentParser, ParseError,
 };
 
@@ -216,8 +216,15 @@ impl Default for CodexParser {
 
 impl CodexParser {
     pub fn new() -> Self {
-        let base_dir = resolve_codex_home_dir().join("sessions");
-        Self { base_dir }
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Codex launched with `env`. `session_index.jsonl`
+    /// (the thread-name index) is read from the same home.
+    pub fn for_env(env: &AgentEnv) -> Self {
+        Self {
+            base_dir: resolve_codex_home_dir_for_env(env).join("sessions"),
+        }
     }
 
     /// Test-only constructor that lets callers point the parser at a fixture
@@ -255,7 +262,7 @@ impl CodexParser {
     ///
     /// Pointers chain — a fork of a fork, and every revert adds a rollout — so
     /// they are followed to the root. A chain ends early at a rollout it has
-    /// already visited (a malformed cycle) or one houhub cannot find, which is
+    /// already visited (a malformed cycle) or one HouHub cannot find, which is
     /// not an error: the rollout may have been pruned, or live in a codex home
     /// this parser isn't pointed at. What was reached renders on its own rather
     /// than the conversation being refused. One that is there but fails to
@@ -367,7 +374,7 @@ impl CodexParser {
     /// under the same thread id and leaves the old file in place, so the id
     /// matches several files and traversal order would decide — on NTFS, whose
     /// listings are name-sorted, always in favour of the stale original. codex
-    /// records the switch in its SQLite state; houhub reads only the rollouts, so
+    /// records the switch in its SQLite state; HouHub reads only the rollouts, so
     /// this is codex's own rule for when that state is unavailable: the newest
     /// file.
     fn find_current_rollout(&self, thread_id: &str) -> Option<PathBuf> {
@@ -856,7 +863,13 @@ impl CodexParser {
 }
 
 pub(crate) fn resolve_codex_home_dir() -> PathBuf {
-    resolve_codex_home_dir_from(std::env::var_os("CODEX_HOME"), dirs::home_dir())
+    resolve_codex_home_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The home of the Codex launched with `env`: its `CODEX_HOME`, else
+/// `~/.codex`.
+pub(crate) fn resolve_codex_home_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_codex_home_dir_from(env.var_os("CODEX_HOME"), dirs::home_dir())
 }
 
 fn resolve_codex_home_dir_from(
@@ -3064,6 +3077,10 @@ fn parse_codex_subagent_stats(
         lines_removed: None,
         other_tool_count: None,
         tool_calls,
+        timeline: Vec::new(),
+        recovered_result: None,
+        // Codex's sub-agent rollout is folded into these stats; there is no
+        // separate session for the card to open.
         child_session_id: None,
     })
 }
@@ -5300,10 +5317,10 @@ fn extract_turn_usage_from_codex_usage(usage: &serde_json::Value) -> Option<Turn
 /// Codex's `input_tokens` is the WHOLE prompt. It includes the tokens read from
 /// the prompt cache (`cached_input_tokens`) and the tokens written to it
 /// (`cache_write_input_tokens`, which some providers and gateways report and
-/// OpenAI's API leaves at 0), while houhub's four counters are disjoint. So
+/// OpenAI's API leaves at 0), while HouHub's four counters are disjoint. So
 /// both are split out of the input rather than counted as fresh input;
 /// codex-acp 2.2.0 made the same correction to its own `TokenCount`. A real
-/// rollout on houhub's bound provider reads `input 19915, cached 17152, write
+/// rollout on HouHub's bound provider reads `input 19915, cached 17152, write
 /// 2304`: 459 fresh.
 ///
 /// The write is capped at what the input has left after the read, so a provider
@@ -5899,11 +5916,11 @@ const CODEX_ACP_TITLE_MAX_UNITS: usize = 256;
 
 /// codex-acp's `normalizeSessionTitle` (`SessionTitle.ts`), which makes every
 /// `session_info_update.title` it publishes (a `session/list` title is not cut
-/// since 2.2.2, but houhub never lists): whitespace runs collapsed to one
+/// since 2.2.2, but HouHub never lists): whitespace runs collapsed to one
 /// space, then a title over 256 UTF-16 units cut to 255, never through a
-/// surrogate pair, and ended with "…". The cut cannot be left to houhub's own
+/// surrogate pair, and ended with "…". The cut cannot be left to HouHub's own
 /// 100-character one: it comes first, and the archive markers the live path
-/// strips afterwards can pull it inside the characters houhub keeps.
+/// strips afterwards can pull it inside the characters HouHub keeps.
 fn codex_acp_session_title(name: &str) -> String {
     let collapsed = name
         .split(is_js_whitespace)
@@ -6256,7 +6273,7 @@ struct PendingPromotedMessage {
 ///   blocks and compaction summaries, i.e. text codex deliberately keeps out of
 ///   the chat. That rule regresses 60 existing conversations.
 /// * *Per file, when the event channel is absent anywhere* — this is inert on the
-///   corpus, but it evaporates the moment the user resumes the session in houhub:
+///   corpus, but it evaporates the moment the user resumes the session in HouHub:
 ///   native `event_msg` records append to the SAME rollout, the gate flips off,
 ///   and the whole imported prefix disappears again. That is exactly the workflow
 ///   #452 reports.
@@ -8345,8 +8362,8 @@ mod tests {
                 "a\u{1680}b\u{202F}c\u{205F}d".into(),
                 Some("a b c d".into()),
             ),
-            // The cut comes before houhub strips archive markers, so markers
-            // can pull it inside the 100 characters houhub keeps.
+            // The cut comes before HouHub strips archive markers, so markers
+            // can pull it inside the 100 characters HouHub keeps.
             (
                 format!("{}{}", "[archived] ".repeat(15), "x".repeat(100)),
                 cut(format!("{}{}", "[archived] ".repeat(15), "x".repeat(90))),
@@ -8983,7 +9000,7 @@ mod tests {
 
     #[test]
     fn a_cache_write_is_split_out_of_codex_input() {
-        // A `last_token_usage` codex wrote for gpt-5.6-terra on houhub's bound
+        // A `last_token_usage` codex wrote for gpt-5.6-terra on HouHub's bound
         // provider: the 19 915 input tokens are 17 152 cache reads, 2 304
         // cache writes and only 459 fresh ones.
         let usage = serde_json::json!({
@@ -15701,7 +15718,7 @@ mod tests {
     #[test]
     fn a_resumed_mixed_rollout_keeps_both_halves_exactly_once() {
         // The reported workflow: the session is created elsewhere, then resumed
-        // in houhub — which appends NATIVE `event_msg` turns to the SAME file.
+        // in HouHub — which appends NATIVE `event_msg` turns to the SAME file.
         // A whole-file gate would drop the imported prefix the moment that
         // happened; the per-segment gate keeps it.
         let content = concat!(
@@ -16759,6 +16776,18 @@ mod tests {
         assert_eq!(
             turn_texts(&detail),
             vec![("assistant", Some("still readable".into()))]
+        );
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where HouHub's own environment does.
+    #[test]
+    fn for_env_reads_the_home_of_the_launch_env() {
+        let env = crate::parsers::AgentEnv::with_overrides(&[("CODEX_HOME", "/relocated/codex")]);
+        // `session_index.jsonl` is read from the sessions dir's parent.
+        assert_eq!(
+            super::CodexParser::for_env(&env).base_dir,
+            std::path::PathBuf::from("/relocated/codex").join("sessions")
         );
     }
 }

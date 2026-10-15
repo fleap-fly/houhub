@@ -4,8 +4,8 @@
 //! next to the chat: on macOS / Windows a wry child webview embedded in the
 //! workspace window at the bounds of a placeholder element (see Cargo.toml's
 //! `browser-child` note for why wry is driven directly rather than through
-//! tauri's `add_child`), on Linux (and as
-//! the fallback everywhere) an owned top-level window. The frontend only ever
+//! tauri's `add_child`), on Linux a GTK overlay within that same window.
+//! An owned top-level window remains an explicit fallback. The frontend only ever
 //! talks to it through the `browser_*` commands and the `browser://*` events;
 //! the page itself has no Tauri IPC at all — `browser-*` labels are absent from
 //! every capability on purpose, so a page script cannot reach any command.
@@ -53,54 +53,77 @@
 // renders a "browser tab" as an iframe in the user's own browser, which this
 // process has no handle on at all.
 pub mod agent;
+
 pub mod capture;
+
 pub mod console;
+
 pub mod eval;
+
 // The terminal that prints a dev server's address runs in both runtimes, so
 // the watch that notices it does too — `service_url` is pure text work and
 // `services` is a socket probe plus an event; neither touches a webview.
 pub mod service_url;
+
 pub mod services;
+
 pub mod types;
 
 #[cfg(feature = "tauri-runtime")]
 pub mod blank_page;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod channel;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod confirm;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod doc_guest;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod downloads;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod egress;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod events;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod handoff;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod hooks;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod listener;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod open_request;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod policy;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod profile;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod registry;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod remote;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod surface;
+
 #[cfg(all(
     feature = "browser-child",
     feature = "tauri-runtime",
-    any(target_os = "macos", target_os = "windows")
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 pub mod surface_child;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod surface_window;
 
@@ -112,8 +135,10 @@ pub mod smoke;
 
 #[cfg(feature = "tauri-runtime")]
 pub use doc_guest::DocGuests;
+
 #[cfg(feature = "tauri-runtime")]
 pub use downloads::BrowserDownloads;
+
 #[cfg(feature = "tauri-runtime")]
 pub use registry::BrowserRegistry;
 
@@ -124,6 +149,13 @@ pub const TAB_LABEL_PREFIX: &str = "browser-";
 pub fn tab_label(tab_id: &str) -> String {
     format!("{TAB_LABEL_PREFIX}{tab_id}")
 }
+
+#[cfg(all(
+    feature = "browser-child",
+    feature = "tauri-runtime",
+    any(target_os = "macos", target_os = "windows")
+))]
+pub mod surface_child;
 
 #[cfg(test)]
 mod tests {

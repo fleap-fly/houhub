@@ -7,29 +7,43 @@
 //! an agent reuses the expert system's symlink mechanism.
 
 use std::collections::BTreeMap;
+
 use std::fs;
+
 use std::io;
+
 use std::path::{Path, PathBuf};
+
 use std::process::Stdio;
+
 use std::sync::OnceLock;
+
 use std::time::Duration;
 
 use serde::Serialize;
+
 use tokio::sync::Mutex;
 
 use crate::acp::types::AgentSkillScope;
-use crate::app_error::AppCommandError;
+
 use crate::commands::acp::{
     preferred_scope_skill_dir, remove_skill_entry, resolve_command_on_path, scoped_skill_dirs,
     skill_storage_spec, validate_skill_id,
 };
+
 use crate::commands::experts::{
     central_experts_dir, classify_link, create_link_raw, path_is_symlink, read_link_target,
     ExpertInstallStatus, ExpertLinkState, LinkOp, LinkOpResult,
 };
+
+use crate::app_error::AppCommandError;
+
 use crate::commands::folders::resolve_tree_path;
+
 use crate::models::agent::AgentType;
+
 use crate::process::{collect_lines_lossy, tokio_command};
+
 use crate::web::event_bridge::EventEmitter;
 
 // ─── Error type ─────────────────────────────────────────────────────────
@@ -797,10 +811,14 @@ async fn stream_install_or_kill_tree(
 
 /// Where users can install OfficeCLI by hand when the network path fails.
 const OFFICECLI_MANUAL_URL: &str = "https://github.com/iOfficeAI/OfficeCLI";
+
 const OFFICECLI_INSTALL_SH_MIRROR_URL: &str = "https://d.officecli.ai/install.sh";
+
 const OFFICECLI_INSTALL_SH_GITHUB_URL: &str =
     "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh";
+
 const OFFICECLI_INSTALL_PS1_MIRROR_URL: &str = "https://d.officecli.ai/install.ps1";
+
 const OFFICECLI_INSTALL_PS1_GITHUB_URL: &str =
     "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1";
 
@@ -1418,18 +1436,51 @@ pub async fn start_office_watch(
     root_path: String,
     path: String,
 ) -> Result<crate::office_watch::OfficeWatchStarted, AppCommandError> {
-    crate::office_watch::start_office_watch_core(root_path, path)
-        .await
-        .map_err(Into::into)
+    crate::office_watch::start_office_watch_core(
+        root_path,
+        path,
+        crate::office_watch::WatchHolder::Desktop,
+    )
+    .await
+    .map_err(Into::into)
 }
 
 /// Release one reference to the watch preview for an office file; kills the
-/// server when the last viewer goes away.
+/// server when the last viewer goes away. `cap` names the watch the caller
+/// acquired: a release for one that has since been replaced is a no-op.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn stop_office_watch(root_path: String, path: String) -> Result<(), AppCommandError> {
-    crate::office_watch::stop_office_watch_core(root_path, path)
-        .await
-        .map_err(Into::into)
+pub async fn stop_office_watch(
+    root_path: String,
+    path: String,
+    cap: Option<String>,
+) -> Result<(), AppCommandError> {
+    crate::office_watch::stop_office_watch_core(
+        root_path,
+        path,
+        cap,
+        None,
+        crate::office_watch::WatchHolder::Desktop,
+    )
+    .await
+    .map_err(Into::into)
+}
+
+/// Whether the watch named by `cap` is still the live one serving an office
+/// file (see `crate::office_watch::renew_office_watch_core`; a desktop
+/// window's references never lapse, so for it this only asks).
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn renew_office_watch(
+    root_path: String,
+    path: String,
+    cap: String,
+) -> Result<bool, AppCommandError> {
+    Ok(crate::office_watch::renew_office_watch_core(
+        &root_path,
+        &path,
+        &cap,
+        None,
+        crate::office_watch::WatchHolder::Desktop,
+    ))
 }
 
 #[cfg(test)]

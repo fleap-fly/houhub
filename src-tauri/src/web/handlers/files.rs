@@ -1,22 +1,31 @@
 use axum::extract::Multipart;
+
 use axum::http::HeaderMap;
+
 use axum::Json;
+
 use serde::{Deserialize, Serialize};
+
 use tokio::io::AsyncWriteExt;
 
 use std::collections::BTreeMap;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::app_error::{
     AppCommandError, UPLOAD_I18N_KEY_QUOTA_EXCEEDED, UPLOAD_I18N_KEY_TOO_LARGE,
 };
+
 use crate::commands::folders as folder_commands;
+
 use crate::paths::{houhub_uploads_root, simplify_verbatim_path};
 
 use super::upload_jail;
 
 const UPLOAD_FILENAME_MAX_CHARS: usize = 120;
+
 const UPLOAD_COLLISION_SUFFIX_ATTEMPTS: usize = 999;
+
 const UPLOAD_UUID_FALLBACK_ATTEMPTS: usize = 16;
 
 // ---------------------------------------------------------------------------
@@ -218,7 +227,10 @@ pub async fn create_file_tree_entry(
 /// oversized bodies before they stream.
 ///
 /// Mirrored by `UPLOAD_MAX_BYTES` in `commands/remote_proxy.rs` and
-/// `src/lib/api.ts` — keep the three in lockstep.
+/// `src/lib/api.ts` — keep the three in lockstep. The docs site also states
+/// this cap (Storage limits,
+/// <https://docs.houhub.app/getting-started/configuration#storage-limits>, in
+/// English and Chinese); update it there whenever the value changes.
 pub const UPLOAD_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
 /// Env-controlled cap on the *total* bytes resident under

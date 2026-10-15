@@ -1,8 +1,11 @@
 use std::ffi::OsString;
+
 use std::path::{Path, PathBuf};
+
 use std::process::Stdio;
 
 use crate::app_error::AppCommandError;
+
 use crate::process::tokio_command;
 
 /// Open a file or directory in Visual Studio Code.
@@ -222,11 +225,10 @@ fn spawn_vscode(launch: &VsCodeLaunch, target: &Path) -> Result<(), AppCommandEr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::time::{Duration, Instant};
 
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+    use std::fs;
+
+    use std::time::{Duration, Instant};
 
     fn write_stub_recorder(dir: &Path, marker: &Path) -> PathBuf {
         #[cfg(windows)]
@@ -242,17 +244,13 @@ mod tests {
         #[cfg(not(windows))]
         {
             let stub = dir.join("code");
-            fs::write(
+            crate::process::write_test_script(
                 &stub,
-                format!(
+                &format!(
                     "#!/bin/sh\nprintf '%s\\n' \"$1\" > \"{}\"\n",
                     marker.display()
                 ),
-            )
-            .expect("write stub");
-            let mut perms = fs::metadata(&stub).expect("stat stub").permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&stub, perms).expect("chmod stub");
+            );
             stub
         }
     }

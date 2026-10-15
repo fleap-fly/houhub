@@ -2757,7 +2757,7 @@ dependencies = [
 
 [[package]]
 name = "houhub"
-version = "0.35.0"
+version = "0.35.1"
 dependencies = [
  "aes-gcm",
  "agent-client-protocol",
@@ -2781,8 +2781,10 @@ dependencies = [
  "futures-lite",
  "futures-util",
  "gtk",
+ "hmac",
  "http",
  "http-body",
+ "hyper-util",
  "iana-time-zone",
  "if-addrs",
  "ignore",
@@ -2840,6 +2842,7 @@ dependencies = [
  "toml 0.8.2",
  "toml_edit 0.19.15",
  "tower-http",
+ "tower-service",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

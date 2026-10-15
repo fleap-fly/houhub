@@ -602,6 +602,16 @@ async fn async_main() -> ExitCode {
         state.data_dir.clone(),
     ) {
         tokio::spawn(houhub_lib::work_task::run_task_engine(engine));
+        // Repository-panel auto-processing (mirrors lib.rs setup): only where
+        // the task engine runs, since it mints tasks unattended.
+        if let Some(processor) = houhub_lib::forge::auto::build(
+            houhub_lib::db::AppDatabase {
+                conn: state.db.conn.clone(),
+            },
+            state.emitter.clone(),
+        ) {
+            tokio::spawn(houhub_lib::forge::auto::run(processor));
+        }
     }
 
     // Config-sync uploader (mirrors lib.rs setup): sleeps a minute, then

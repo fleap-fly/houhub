@@ -1,24 +1,37 @@
 use std::collections::BTreeMap;
+
 use std::ffi::OsString;
+
 use std::fs::{File, OpenOptions};
+
 use std::io::{BufRead, BufReader, ErrorKind, Write};
+
 use std::path::{Path, PathBuf};
+
 use std::sync::Arc;
+
 use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::v1::{
     ReadTextFileRequest, ReadTextFileResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
+
 use tokio::sync::Semaphore;
 
 use crate::models::agent::AgentType;
+
 use crate::parsers::expand_home_prefix;
 
 const FS_MAX_CONCURRENT_OPS: usize = 8;
+
 const FS_IO_TIMEOUT: Duration = Duration::from_secs(30);
+
 const FS_MAX_FILE_SIZE_BYTES: u64 = 16 * 1024 * 1024;
+
 const FS_MAX_READ_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+
 const FS_MAX_WRITE_BYTES: usize = 2 * 1024 * 1024;
+
 const FS_SLOW_OPERATION_MS: u128 = 200;
 
 #[derive(Debug)]
@@ -40,6 +53,7 @@ impl FileSystemRuntimeError {
 /// for the ACP `fs/*` channel. `default` | `strict` | `unrestricted`; anything
 /// else warns and falls back to `default`.
 pub(crate) const FS_POLICY_ENV: &str = "HOUHUB_ACP_FS_POLICY";
+
 /// Additional **writable** roots, joined with the platform `PATH` separator
 /// (`:` on unix, `;` on Windows — parsed with `std::env::split_paths`, so a
 /// Windows drive letter's colon is not mistaken for a separator).
@@ -321,6 +335,7 @@ struct RootSlot {
 /// records why that is a deliberate divergence from `expanduser` and why it is
 /// safe: the unexpanded value is not absolute, so the slot is refused below.
 const VERBATIM: bool = false;
+
 const EXPANDS_TILDE: bool = true;
 
 /// Resolve one slot to the directory the LAUNCHED agent will actually use, or
@@ -1094,6 +1109,7 @@ fn log_if_slow(operation: &str, path: &Path, started_at: Instant) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use std::fs;
 
     fn temp_workspace() -> PathBuf {
@@ -1108,6 +1124,7 @@ mod tests {
     /// relative-path guards these tests exercise.
     #[cfg(windows)]
     const ABS_PREFIX: &str = "C:";
+
     #[cfg(not(windows))]
     const ABS_PREFIX: &str = "";
 
@@ -1571,7 +1588,7 @@ mod tests {
         }
     }
 
-    /// A `~` follows the CHILD's home, not HouHub's.
+    /// A `~` follows the CHILD's home, not houhub's.
     ///
     /// `merge_agent_env` copies `HOME` into the child like any other variable,
     /// and overriding it is the standard way to isolate a CLI's config — so
@@ -1581,7 +1598,7 @@ mod tests {
     /// leaving the one it does use unwritable. The `default_rel` branch already
     /// went through `child_home_dir`; this makes the override branch agree.
     #[test]
-    fn tilde_expands_against_the_childs_home_not_houhubs() {
+    fn tilde_expands_against_the_childs_home_not_codegs() {
         let houhub_home = dirs::home_dir().expect("home dir");
         // Platform-native: `child_home_dir` refuses a relative home, and a
         // unix-style `/srv/agy` is NOT absolute on Windows (no drive prefix),
@@ -1600,7 +1617,7 @@ mod tests {
         );
         assert!(
             !roots.contains(&houhub_home.join("profile")),
-            "HouHub's home must not: {roots:?}"
+            "houhub's home must not: {roots:?}"
         );
     }
 
@@ -2170,6 +2187,169 @@ mod tests {
         }
     }
 
+    /// The history parsers must look where the slot table says the LAUNCHED
+    /// agent lives once its settings relocate it. They used to read houhub's
+    /// own environment only, so a `CLAUDE_CONFIG_DIR` in `env_json` moved the
+    /// agent and its write root but left its history unreadable (#948).
+    ///
+    /// Each candidate wins in turn — the higher-precedence ones blanked
+    /// (removed for the child), the lower ones relocated elsewhere — so a
+    /// resolver reading the wrong key, or the right keys in the wrong order,
+    /// fails. Every value names a directory that does not exist under a fresh
+    /// tempdir, so nothing on the machine can change the answer (pi looks for
+    /// a `settings.json` under its agent dir); no skip is needed for variables
+    /// set in this process, because every candidate is overridden one way or
+    /// the other.
+    #[test]
+    fn parser_resolvers_follow_a_relocation_in_the_launch_env() {
+        use crate::parsers::{self, AgentEnv};
+
+        let base = tempfile::tempdir().expect("tempdir");
+
+        type Resolver = fn(&AgentEnv) -> PathBuf;
+        // `(agent, resolver its history parser is built from, slot index,
+        // where under that slot's root the resolver points)`.
+        let cases: [(AgentType, Resolver, usize, &[&str]); 16] = [
+            (
+                AgentType::Grok,
+                parsers::grok::resolve_grok_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Qoder,
+                parsers::qoder::resolve_qoder_config_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Antigravity,
+                parsers::antigravity::resolve_antigravity_sessions_dir_for_env,
+                0,
+                &["antigravity-acp", "conversations"],
+            ),
+            (
+                AgentType::ClaudeCode,
+                parsers::claude::resolve_claude_config_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Codex,
+                parsers::codex::resolve_codex_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Gemini,
+                parsers::gemini::resolve_gemini_base_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::CodeBuddy,
+                parsers::codebuddy::resolve_codebuddy_config_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::KimiCode,
+                parsers::kimi_code::resolve_kimi_code_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Cursor,
+                parsers::cursor::resolve_cursor_config_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Hermes,
+                parsers::hermes::resolve_hermes_home_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::OpenCode,
+                parsers::opencode::resolve_opencode_base_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Cline,
+                parsers::cline::cline_data_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Pi,
+                parsers::pi::resolve_pi_agent_dir_for_env,
+                0,
+                &[],
+            ),
+            (
+                AgentType::Pi,
+                parsers::pi::resolve_pi_sessions_dir_for_env,
+                1,
+                &[],
+            ),
+            (
+                AgentType::DeepSeek,
+                parsers::deepseek::resolve_deepseek_sessions_root_for_env,
+                1,
+                &[],
+            ),
+            (
+                AgentType::DeepSeek,
+                parsers::deepseek::resolve_deepseek_attachments_root_for_env,
+                0,
+                &["attachments", "v1"],
+            ),
+        ];
+
+        for (agent_type, resolve, slot_index, under_root) in cases {
+            let slot = &agent_root_slots(agent_type)[slot_index];
+            for winner in 0..slot.candidates.len() {
+                let runtime_env: BTreeMap<String, String> = slot
+                    .candidates
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (key, _, _))| {
+                        let value = match index.cmp(&winner) {
+                            std::cmp::Ordering::Less => String::new(),
+                            std::cmp::Ordering::Equal => base
+                                .path()
+                                .join("relocated")
+                                .join(key)
+                                .to_string_lossy()
+                                .into_owned(),
+                            std::cmp::Ordering::Greater => base
+                                .path()
+                                .join("unused")
+                                .join(key)
+                                .to_string_lossy()
+                                .into_owned(),
+                        };
+                        ((*key).to_string(), value)
+                    })
+                    .collect();
+                let key = slot.candidates[winner].0;
+
+                let root = resolve_root_slot(slot, &runtime_env)
+                    .expect("an absolute relocation resolves to a root");
+                let expected = under_root
+                    .iter()
+                    .fold(root, |path, segment| path.join(segment));
+                assert_eq!(
+                    resolve(&AgentEnv::from_overrides(runtime_env)),
+                    expected,
+                    "{agent_type:?} with {key} winning"
+                );
+            }
+        }
+    }
+
     /// Cursor's resolver prefers `CURSOR_CONFIG_DIR` over `XDG_CONFIG_HOME`;
     /// first match must win rather than both being admitted.
     #[test]
@@ -2241,6 +2421,7 @@ mod tests {
     /// unix-style literal is not on Windows.
     #[cfg(windows)]
     const CHILD_HOME_FIXTURE: (&str, &str) = ("USERPROFILE", "C:\\srv\\agy");
+
     #[cfg(not(windows))]
     const CHILD_HOME_FIXTURE: (&str, &str) = ("HOME", "/srv/agy");
 
@@ -2299,5 +2480,38 @@ mod tests {
         assert!(!leaked_tmp, "temporary file should be cleaned up");
 
         let _ = fs::remove_dir_all(workspace);
+    }
+
+    /// A `~` follows the CHILD's home, not HouHub's.
+    ///
+    /// `merge_agent_env` copies `HOME` into the child like any other variable,
+    /// and overriding it is the standard way to isolate a CLI's config — so
+    /// `HOME=/srv/agy GEMINI_HOME=~/profile` means `/srv/agy/profile` to the
+    /// server's own `expanduser` and nothing else. Expanding against
+    /// `dirs::home_dir()` authorized a directory the agent never opens while
+    /// leaving the one it does use unwritable. The `default_rel` branch already
+    /// went through `child_home_dir`; this makes the override branch agree.
+    #[test]
+    fn tilde_expands_against_the_childs_home_not_houhubs() {
+        let houhub_home = dirs::home_dir().expect("home dir");
+        // Platform-native: `child_home_dir` refuses a relative home, and a
+        // unix-style `/srv/agy` is NOT absolute on Windows (no drive prefix),
+        // so a shared literal would make this pass on unix and fail in the
+        // Windows server CI cell, which runs these lib tests for real.
+        let (home_key, child_home) = CHILD_HOME_FIXTURE;
+
+        let runtime_env = BTreeMap::from([
+            (home_key.to_string(), child_home.to_string()),
+            ("GEMINI_HOME".to_string(), "~/profile".to_string()),
+        ]);
+        let roots = agent_data_roots(AgentType::Antigravity, &runtime_env);
+        assert!(
+            roots.contains(&PathBuf::from(child_home).join("profile")),
+            "the child's own home must anchor the expansion, got {roots:?}"
+        );
+        assert!(
+            !roots.contains(&houhub_home.join("profile")),
+            "HouHub's home must not: {roots:?}"
+        );
     }
 }

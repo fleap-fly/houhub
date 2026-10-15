@@ -10,21 +10,31 @@
 //! than open a tab that could load the remote host's address from here.
 
 use std::borrow::Cow;
+
 use std::collections::BTreeMap;
+
 use std::sync::Arc;
+
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager, Url};
 
 use crate::app_error::AppCommandError;
+
 use crate::browser::egress::{
     Egress, EgressRegistry, EgressStatus, ProbeVerdict, StreamFailure, TargetLoader, TunnelTarget,
 };
+
 use crate::browser::profile;
+
 use crate::browser::types::BrowserErrorKind;
+
 use crate::db::service::remote_workspace_connection_service;
+
 use crate::db::AppDatabase;
+
 use crate::models::ToHeaderMap;
+
 use crate::web::browser_tunnel::frame::TUNNEL_PATH;
 
 /// The name the tabs of a remote profile give the remote host's loopback on
@@ -41,14 +51,19 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// This build or this machine cannot give remote tabs an egress (macOS before
 /// 14 has no data store of a profile's own to proxy).
 pub const BROWSER_I18N_KEY_REMOTE_UNAVAILABLE: &str = "browser.remote.error.unavailable";
+
 /// The remote houhub-server predates the tunnel.
 pub const BROWSER_I18N_KEY_REMOTE_UNSUPPORTED: &str = "browser.remote.error.unsupported";
+
 /// The remote houhub-server has its tunnel switched off.
 pub const BROWSER_I18N_KEY_REMOTE_DISABLED: &str = "browser.remote.error.disabled";
+
 /// The tunnel could not be opened; `{reason}` says why.
 pub const BROWSER_I18N_KEY_REMOTE_UNREACHABLE: &str = "browser.remote.error.unreachable";
+
 /// The probe saw this computer's engine go around the proxy.
 pub const BROWSER_I18N_KEY_REMOTE_BYPASSED: &str = "browser.remote.error.bypassed";
+
 /// The probe page never proved anything either way.
 pub const BROWSER_I18N_KEY_REMOTE_PROBE_FAILED: &str = "browser.remote.error.probeFailed";
 
@@ -271,7 +286,8 @@ enum ProbeSurface {
     #[cfg(all(target_os = "windows", feature = "browser-child"))]
     Child(crate::browser::surface_child::ChildHandle),
     /// Linux, and Windows without the embedded surface: a window that is
-    /// never shown, as the profile's tabs are owned windows there.
+    /// never shown, in the profile's own context (on Linux the one its
+    /// embedded tabs share too).
     #[cfg(not(any(target_os = "macos", all(target_os = "windows", feature = "browser-child"))))]
     Window(tauri::WebviewWindow),
 }

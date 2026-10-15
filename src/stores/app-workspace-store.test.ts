@@ -37,8 +37,6 @@ vi.mock("@/lib/api", () => ({
 const {
   getFolder,
   getGitHead,
-  listAllFolderDetails,
-  listOpenFolderDetails,
   listFolderGroups: readFolderGroups,
 } = await import("@/lib/api")
 const mockGetFolder = vi.mocked(getFolder)

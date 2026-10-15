@@ -10,26 +10,43 @@
 //! `acp://event` channel from the global firehose entirely.
 
 use std::collections::HashMap;
+
 use std::future::Future;
+
 use std::sync::atomic::Ordering;
+
 use std::sync::Arc;
+
 use std::time::Duration;
 
 use sea_orm::DatabaseConnection;
+
 use tokio::sync::{broadcast, mpsc};
 
 use crate::acp::delegation::broker::{DelegationBroker, DelegationMatchKey};
+
 use crate::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationSuccess};
+
 use crate::acp::internal_bus::InternalEventBus;
+
 use crate::acp::manager::ConnectionManager;
+
 use crate::acp::session_state::SessionState;
+
 use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope};
+
 use crate::db::entities::conversation::ConversationStatus;
+
 use crate::db::error::DbError;
+
 use crate::db::service::conversation_service;
+
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
+
 use crate::models::AgentType;
+
 use crate::web::event_bridge::{emit_with_state, EventEmitter};
+
 use tokio::sync::RwLock;
 
 /// Per-connection worker queue depth. Sized for the **filtered** event set
@@ -1794,6 +1811,7 @@ mod tests {
             status: crate::acp::types::ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),

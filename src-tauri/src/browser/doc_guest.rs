@@ -44,22 +44,32 @@
 //! mode the user chose (and the approval time it was chosen at).
 
 use std::collections::HashMap;
+
 use std::fs::{File, Metadata};
+
 use std::io::Read;
+
 use std::path::{Path, PathBuf};
+
 use std::sync::{Arc, Mutex, MutexGuard};
+
 use std::time::{SystemTime, UNIX_EPOCH};
+
 #[cfg(any(unix, test))]
 use std::time::Duration;
 
 use http::{header, Request, Response, StatusCode, Uri};
+
 use serde::{Deserialize, Serialize};
+
 use sha2::{Digest, Sha256};
+
 use tauri::Url;
 
 /// Label prefix of every document guest webview. Like `browser-`, it must
 /// never appear in a capability (`mod.rs` has the test).
 pub const DOC_LABEL_PREFIX: &str = "houhub-doc-";
+
 pub const DOC_SCHEME: &str = "houhub-doc";
 
 /// The host part of one grant's document URLs, minted when the grant is.
@@ -94,6 +104,7 @@ fn mapped_host(host: &str) -> String {
 /// Largest file the guest serves. A document preview that needs more than
 /// this in one response is not a document; the body is held in memory.
 const MAX_BODY_BYTES: u64 = 512 * 1024 * 1024;
+
 /// A range request is answered at most this large per response; the engine
 /// asks for the rest as it needs it.
 const MAX_RANGE_BYTES: u64 = 16 * 1024 * 1024;
@@ -103,8 +114,10 @@ pub fn doc_label(tab_id: &str) -> String {
 }
 
 /// Whether this build can host document guests: the embedded surface with a
-/// per-webview scheme handler. Linux has no embedded surface, and the inline
-/// preview stays in place there.
+/// per-webview scheme handler. Linux has the surface but not the handler: its
+/// views are built related to a view of another context, so a scheme wry's
+/// builder registers lands on a context they do not use. The inline preview
+/// stays in place there.
 pub fn supported() -> bool {
     cfg!(all(
         feature = "browser-child",

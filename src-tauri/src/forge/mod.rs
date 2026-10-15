@@ -5,11 +5,19 @@
 //! scope and why REST-direct beat shelling out to `gh`/`glab`).
 
 pub mod auth;
+
+pub mod auto;
+
 pub mod deliver;
+
 pub mod envelope;
+
 pub mod gitea;
+
 pub mod github;
+
 pub mod gitlab;
+
 pub mod settings;
 
 use std::sync::RwLock;
@@ -280,6 +288,7 @@ impl From<ForgeError> for crate::app_error::AppCommandError {
 /// constant because it is a GATE in three places (delivery, the local-merge
 /// refusal, the trigger command) and a typo in any of them opens one of them.
 pub const SOURCE_KIND_ISSUE: &str = "forge_issue";
+
 /// `work_task.source_kind` for a task triggered from a pull request (M8).
 pub const SOURCE_KIND_PR: &str = "forge_pr";
 
@@ -433,6 +442,138 @@ pub struct ForgeSourceMeta {
     pub writeback: Option<bool>,
 }
 
+/// Pages one auto-processing scan reads per collection before it hands the
+/// rest of the window to the next scan ([`OpenItemsScan::resume`]). A budget
+/// per scan, not a cap on what is ever read: ten thousand items a scan, so a
+/// backlog that size is worked through over several scans instead of spending
+/// the hour's API quota in one go and failing every time.
+pub const SCAN_MAX_PAGES: u32 = 100;
+
+/// Rows per scan page. The maximum both GitHub and GitLab serve; Gitea clamps
+/// it to its own `MAX_RESPONSE_ITEMS` (50 by default) and its client asks for
+/// that instead.
+pub const SCAN_PAGE_SIZE: u32 = 100;
+
+/// Pages a scan carrying on with a cut-short window reads AGAIN before the
+/// page its cursor names — see [`ScanCursor`] for what they absorb.
+pub const SCAN_CONTINUATION_OVERLAP_PAGES: u32 = 1;
+
+/// Where one collection of a scan's listing stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionCursor {
+    /// Read on from this page next time.
+    Next(u32),
+    /// Read to its last page — the rest of the window has nothing more here.
+    Done,
+}
+
+/// Where a listing cut short by the page budget carries on: per collection
+/// it reads (GitHub's one mixed feed; GitLab's and Gitea's one per kind), the
+/// next page — or that it was read to the end.
+///
+/// A PAGE number rather than a timestamp, and within the SAME window: the
+/// lists are newest-updated (Gitea: newest-created) first, so an item updated
+/// while the window is being worked through moves to the front, which shifts
+/// what follows DOWN a place — read again, never skipped. A timestamp
+/// resumption would need the opposite order, where every such update shifts
+/// the unread rows UP into pages already read and loses one at each boundary.
+///
+/// An item LEAVING the list (closed or deleted) does shift the rest up, and
+/// between two scans of a sweep — minutes apart — that is no longer rare: one
+/// read item closed moves the first unread one back onto the last page read.
+/// So a scan carrying on starts [`SCAN_CONTINUATION_OVERLAP_PAGES`] early and
+/// reads that page again; up to a page's worth of such closures lands inside
+/// the overlap, and the pick-up check absorbs the rows read twice. Within one
+/// scan the same shift needs a closure in the seconds between two page reads
+/// to matter, and is accepted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScanCursor {
+    collections: std::collections::BTreeMap<&'static str, CollectionCursor>,
+}
+
+impl ScanCursor {
+    /// The page to read `collection` from, or `None` when it was already read
+    /// to its end in this window. A collection the cursor has never seen
+    /// starts at page 1.
+    pub fn first_page(&self, collection: &'static str) -> Option<u32> {
+        match self.collections.get(collection) {
+            None => Some(1),
+            Some(CollectionCursor::Next(page)) => Some(*page),
+            Some(CollectionCursor::Done) => None,
+        }
+    }
+
+    pub fn record(&mut self, collection: &'static str, at: CollectionCursor) {
+        self.collections.insert(collection, at);
+    }
+
+    /// Whether some collection still has pages to read.
+    pub fn has_more(&self) -> bool {
+        self.collections
+            .values()
+            .any(|at| matches!(at, CollectionCursor::Next(_)))
+    }
+}
+
+/// What one auto-processing scan read from a repository: OPEN items of the
+/// wanted kinds updated at or after the scan's window start — all of them, or
+/// as many as the page budget allowed.
+#[derive(Debug, Clone, Default)]
+pub struct OpenItemsScan {
+    pub rows: Vec<ForgeIssueRow>,
+    /// `None` when every collection was read to its end; otherwise where the
+    /// next scan of the SAME window carries on.
+    pub resume: Option<ScanCursor>,
+}
+
+/// Read one collection of a scan listing from where `from` says, under the
+/// page budget, and record where it stands in `to`. `fetch_page` returns a
+/// page's rows and whether the server offers a page after it. Shared by the
+/// three forges so the budget and the cursor arithmetic exist once.
+pub(crate) async fn scan_collection<F, Fut>(
+    collection: &'static str,
+    from: &ScanCursor,
+    to: &mut ScanCursor,
+    rows: &mut Vec<ForgeIssueRow>,
+    budget: u32,
+    mut fetch_page: F,
+) -> Result<(), ForgeError>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<Output = Result<(Vec<ForgeIssueRow>, bool), ForgeError>>,
+{
+    let Some(cursor_page) = from.first_page(collection) else {
+        to.record(collection, CollectionCursor::Done);
+        return Ok(());
+    };
+    // Carrying on: back up into the overlap (never before page 1). Progress
+    // is still `budget - overlap` pages a scan.
+    let first = cursor_page
+        .saturating_sub(SCAN_CONTINUATION_OVERLAP_PAGES)
+        .max(1);
+    for page in first..first.saturating_add(budget) {
+        let (mut got, has_next) = fetch_page(page).await?;
+        rows.append(&mut got);
+        if !has_next {
+            to.record(collection, CollectionCursor::Done);
+            return Ok(());
+        }
+    }
+    to.record(
+        collection,
+        CollectionCursor::Next(first.saturating_add(budget)),
+    );
+    Ok(())
+}
+
+/// A scan watermark as every forge's "updated since" parameter accepts it:
+/// RFC 3339, whole seconds, `Z`. Rounded DOWN by the truncation, which errs
+/// toward reading an item twice — the dedup absorbs that — never toward
+/// missing one.
+pub fn scan_timestamp(since: chrono::DateTime<chrono::Utc>) -> String {
+    since.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
 /// List rows carry the body for the trigger snapshot; cap it so a megabyte
 /// issue body doesn't ride every list response. The untrusted-data envelope
 /// trims to 12k at prompt time — this keeps a margin above that.
@@ -450,13 +591,16 @@ pub enum ForgeTab {
 /// Page-size bounds. Both forges cap `per_page` at 100; the clamp lives here
 /// so a client cannot ask for a page that either API would reject outright.
 pub const MIN_PER_PAGE: u32 = 1;
+
 pub const MAX_PER_PAGE: u32 = 100;
+
 pub const DEFAULT_PER_PAGE: u32 = 20;
 
 /// Longest free-text filter accepted. GitHub caps the whole `q` at 256
 /// characters and the qualifiers already eat some of that, so a longer string
 /// would turn the search into a 422 rather than a narrower list.
 pub const MAX_SEARCH_CHARS: usize = 128;
+
 /// Most labels one filter may name. Both forges AND them together, so past a
 /// handful the result set is empty anyway — and each one lengthens GitHub's `q`.
 pub const MAX_LABEL_FILTERS: usize = 10;
@@ -991,6 +1135,7 @@ impl CommentFilters {
 /// rather than truncated: silently posting half of what someone wrote to a
 /// thread other people read is worse than telling them it is too long.
 pub const MAX_COMMENT_CHARS: usize = 65_536;
+
 /// Longest issue title accepted — GitHub's documented cap, and comfortably
 /// under GitLab's 255.
 pub const MAX_TITLE_CHARS: usize = 255;

@@ -26,11 +26,16 @@
 //! A model none of them names is left to the caller's name guess.
 
 use std::collections::HashMap;
+
 use std::path::{Path, PathBuf};
+
 use std::sync::{Arc, Mutex, OnceLock};
+
 use std::time::SystemTime;
 
 use serde_json::Value;
+
+use crate::parsers::AgentEnv;
 
 /// A model the way OpenCode addresses it: the provider that served it, and the
 /// id that provider knows it by. Kept exactly as the transcript spells both,
@@ -80,24 +85,24 @@ pub(crate) struct ModelLimitSources {
 }
 
 impl ModelLimitSources {
-    /// The files the OpenCode that houhub launches reads. Its agent process
-    /// inherits houhub's environment, so the same variables send both to the
-    /// same files.
-    pub(crate) fn from_env() -> Self {
+    /// The files the OpenCode launched with `env` reads: its environment is
+    /// houhub's with the agent's own overrides laid over it, so the same
+    /// variables send both to the same files.
+    pub(crate) fn for_env(env: &AgentEnv) -> Self {
         let env_path = |key: &str| {
-            std::env::var_os(key)
+            env.var_os(key)
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
         };
         Self {
-            config_dir: crate::acp::opencode_plugins::xdg_config_home()
+            config_dir: crate::acp::opencode_plugins::xdg_config_home_for_env(env)
                 .map(|dir| dir.join("opencode")),
             config_file: env_path("OPENCODE_CONFIG"),
             config_dir_env: env_path("OPENCODE_CONFIG_DIR"),
             home_dir: dirs::home_dir(),
-            project_config: !env_flag("OPENCODE_DISABLE_PROJECT_CONFIG"),
+            project_config: !env_flag(env, "OPENCODE_DISABLE_PROJECT_CONFIG"),
             catalog_file: env_path("OPENCODE_MODELS_PATH").or_else(|| {
-                crate::acp::opencode_plugins::xdg_cache_home()
+                crate::acp::opencode_plugins::xdg_cache_home_for_env(env)
                     .map(|dir| dir.join("opencode").join("models.json"))
             }),
             bundled_catalog: true,
@@ -240,8 +245,8 @@ impl ModelLimitSources {
 }
 
 /// OpenCode's reading of a boolean flag: `true` or `1`, in any case.
-fn env_flag(key: &str) -> bool {
-    std::env::var(key).is_ok_and(|value| {
+fn env_flag(env: &AgentEnv, key: &str) -> bool {
+    env.var(key).is_some_and(|value| {
         let value = value.to_ascii_lowercase();
         value == "true" || value == "1"
     })

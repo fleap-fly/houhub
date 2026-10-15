@@ -33,22 +33,35 @@
 //! arrives as a plain HTTP request, which gives the bypass away at once.
 
 use std::collections::HashMap;
+
 use std::net::SocketAddr;
+
 use std::sync::atomic::{AtomicU32, Ordering};
+
 use std::sync::{Arc, Mutex, Weak};
+
 use std::time::{Duration, Instant};
 
 use futures::future::BoxFuture;
+
 use futures_util::{SinkExt, StreamExt};
+
 use serde::Serialize;
+
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
 use tokio::net::{TcpListener, TcpStream};
+
 use tokio::sync::{mpsc, oneshot, watch, Notify};
+
 use tokio_tungstenite::tungstenite::http::HeaderMap;
+
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
+
 use tokio_util::sync::CancellationToken;
 
 use crate::web::browser_tunnel::frame::{CloseCode, Frame, TUNNEL_PROTOCOL};
+
 use crate::web::browser_tunnel::pump::{pump, StreamEvent};
 
 /// Longest an OPEN may wait for its answer. The server tries each address of
@@ -106,8 +119,11 @@ impl From<std::io::Error> for SocksError {
 }
 
 const SOCKS_VERSION: u8 = 5;
+
 const NO_AUTH: u8 = 0x00;
+
 const NO_ACCEPTABLE_METHOD: u8 = 0xff;
+
 const CMD_CONNECT: u8 = 0x01;
 
 /// SOCKS5 reply codes (RFC 1928 §6).
@@ -703,7 +719,14 @@ impl Egress {
             &target.headers,
         )
         .map_err(down)?;
-        match tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(request)).await {
+        // Dialed like the connection's own event socket: an address of the host
+        // that never answers must not stop the tunnel reaching one that does.
+        match tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            crate::commands::remote_proxy::connect_remote_ws(request),
+        )
+        .await
+        {
             Ok(Ok((socket, _))) => Ok(socket),
             Ok(Err(WsError::Http(response))) => Err(match response.status().as_u16() {
                 // An older server has no such route: a 404, or — where it
