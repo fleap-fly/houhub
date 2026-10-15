@@ -149,12 +149,6 @@ pub fn tab_label(tab_id: &str) -> String {
     format!("{TAB_LABEL_PREFIX}{tab_id}")
 }
 
-#[cfg(all(
-    feature = "browser-child",
-    feature = "tauri-runtime",
-    any(target_os = "macos", target_os = "windows")
-))]
-
 #[cfg(test)]
 mod tests {
     use super::TAB_LABEL_PREFIX;
