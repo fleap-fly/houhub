@@ -407,16 +407,6 @@ impl BrowserSurface {
     }
 }
 
-#[cfg(all(
-    feature = "browser-child",
-    any(target_os = "macos", target_os = "windows")
-))]
-impl From<super::surface_child::ChildError> for SurfaceError {
-    fn from(err: super::surface_child::ChildError) -> Self {
-        SurfaceError(err.to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::page_zoom_to_apply;
