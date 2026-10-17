@@ -205,10 +205,6 @@ where
     Ok(parsed)
 }
 
-/// File-content fingerprint: `(mtime, size)`. `mtime` is `Option` because a
-/// platform may not report it; a `None`/`None` comparison then falls back to
-/// size-only.
-
 #[cfg(test)]
 mod tests {
     use super::*;
