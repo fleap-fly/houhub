@@ -1,9 +1,13 @@
 use axum::Json;
+
 use serde::Deserialize;
+
 use serde_json::Value;
 
 use crate::app_error::AppCommandError;
+
 use crate::commands::mcp as mcp_commands;
+
 use crate::commands::mcp::{
     LocalMcpScan, LocalMcpServer, McpAppType, McpMarketplaceItem, McpMarketplaceProvider,
     McpMarketplaceServerDetail,
@@ -46,6 +50,9 @@ pub struct UpsertLocalServerParams {
     pub server_id: String,
     pub spec: Value,
     pub apps: Vec<McpAppType>,
+    /// The spec the editor loaded before the edit; absent for a new server.
+    #[serde(default)]
+    pub shown_spec: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -112,8 +119,13 @@ pub async fn mcp_install_from_marketplace(
 pub async fn mcp_upsert_local_server(
     Json(params): Json<UpsertLocalServerParams>,
 ) -> Result<Json<LocalMcpServer>, AppCommandError> {
-    let result =
-        mcp_commands::mcp_upsert_local_server(params.server_id, params.spec, params.apps).await?;
+    let result = mcp_commands::mcp_upsert_local_server(
+        params.server_id,
+        params.spec,
+        params.apps,
+        params.shown_spec,
+    )
+    .await?;
     Ok(Json(result))
 }
 

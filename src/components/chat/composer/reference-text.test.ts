@@ -64,6 +64,34 @@ describe("referenceToMarkdown", () => {
     ).toBe("[@Codex](houhub://agent/codex)")
   })
 
+  it("renders an assistant as a [@name](houhub://assistant/<id>) link", () => {
+    expect(
+      referenceToMarkdown(
+        ref({
+          refType: "assistant",
+          id: "3",
+          label: "Code Reviewer",
+          uri: "houhub://assistant/3",
+          meta: { assistantId: 3 },
+        })
+      )
+    ).toBe("[@Code Reviewer](houhub://assistant/3)")
+  })
+
+  it("escapes an assistant name that could break out of its link", () => {
+    // The backend's routing scan accepts backslash escapes inside the text.
+    expect(
+      referenceToMarkdown(
+        ref({
+          refType: "assistant",
+          id: "3",
+          label: "Rev](x) [y",
+          uri: "houhub://assistant/3",
+        })
+      )
+    ).toBe("[@Rev\\]\\(x\\) \\[y](houhub://assistant/3)")
+  })
+
   it("renders a skill as a /invocation token from its id", () => {
     expect(
       referenceToMarkdown(ref({ refType: "skill", id: "code-review" }))

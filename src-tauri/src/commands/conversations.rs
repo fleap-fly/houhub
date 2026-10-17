@@ -1224,6 +1224,20 @@ fn build_historical_delegation_meta(child: &DbConversationSummary) -> serde_json
             serde_json::Value::String(title.into()),
         );
     }
+    // The assistant the child ran as, off its row: the reloaded card draws it
+    // even when no live binding or tool result remains.
+    if let Some(assistant_id) = child.assistant_id {
+        obj.insert(
+            "assistant_id".into(),
+            serde_json::Value::Number(assistant_id.into()),
+        );
+        if let Some(name) = child.assistant_name.as_deref() {
+            obj.insert(
+                "assistant_name".into(),
+                serde_json::Value::String(name.into()),
+            );
+        }
+    }
     serde_json::Value::Object(obj)
 }
 
@@ -1451,7 +1465,7 @@ pub async fn get_folder_conversation_core(
         };
         // The session file is wherever the agent's launch environment put it:
         // a `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/… in its settings moves it out of
-        // the default directory houhub's own environment names.
+        // the default directory HouHub's own environment names.
         let agent_env = agent_setting_service::load_agent_env(conn, at).await;
         tokio::task::spawn_blocking(move || -> Result<_, AppCommandError> {
             let parser = build_agent_parser(at, &agent_env);
@@ -2970,6 +2984,8 @@ mod tests {
             parent_id: Some(1),
             parent_tool_use_id: Some(parent_tool_use_id.into()),
             delegation_call_id: Some("call-1".into()),
+            assistant_id: None,
+            assistant_name: None,
             tag_ids: Vec::new(),
         }
     }
@@ -3542,6 +3558,38 @@ mod tests {
         );
     }
 
+    /// A reloaded card of an assistant delegation draws the assistant from the
+    /// child row: its id, and its name as the task started.
+    #[test]
+    fn inject_delegation_meta_carries_the_assistant_off_the_child_row() {
+        let mut turns = vec![tool_use_turn(
+            Some("tu-a"),
+            "mcp__houhub-mcp__delegate_to_agent",
+        )];
+        let mut child = summary_child(43, "tu-a", "completed");
+        child.assistant_id = Some(3);
+        child.assistant_name = Some("Reviewer".into());
+        inject_delegation_meta(&mut turns, &[child]);
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("houhub.delegation").cloned())
+            .expect("meta should be set");
+        assert_eq!(inner["assistant_id"], 3);
+        assert_eq!(inner["assistant_name"], "Reviewer");
+        assert_eq!(inner["agent_type"], "codex");
+
+        // An agent delegation's meta carries no assistant keys at all.
+        let mut turns = vec![tool_use_turn(
+            Some("tu-b"),
+            "mcp__houhub-mcp__delegate_to_agent",
+        )];
+        inject_delegation_meta(&mut turns, &[summary_child(44, "tu-b", "completed")]);
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("houhub.delegation").cloned())
+            .unwrap();
+        assert!(inner.get("assistant_id").is_none());
+        assert!(inner.get("assistant_name").is_none());
+    }
+
     fn tool_result_turn(tool_use_id: &str, output: &str) -> MessageTurn {
         MessageTurn {
             id: "t2".into(),
@@ -3873,6 +3921,7 @@ mod tests {
             parent_conversation_id: parent_id,
             parent_tool_use_id: "tu-historical".into(),
             delegation_call_id: "call-historical".into(),
+            assistant: None,
         };
         conversation_service::create_with_delegation(
             &db.conn,
@@ -4403,7 +4452,7 @@ mod tests {
     }
 
     /// #948: `CLAUDE_CONFIG_DIR` set only in the agent's settings moves the
-    /// transcript out of the directory houhub's own environment names. Opening
+    /// transcript out of the directory HouHub's own environment names. Opening
     /// the conversation must read it from where the agent wrote it, not come
     /// back empty ("no messages"). Hermetic: the relocated dir is a tempdir,
     /// so nothing here reads the real `~/.claude`.
@@ -5417,6 +5466,7 @@ mod tests {
                 parent_conversation_id: parent_id,
                 parent_tool_use_id: (*tool_use).into(),
                 delegation_call_id: format!("call-{i}"),
+                assistant: None,
             };
             let child = conversation_service::create_with_delegation(
                 &db.conn,
@@ -5771,6 +5821,7 @@ mod tests {
                 parent_conversation_id: parent_id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await
@@ -5815,6 +5866,7 @@ mod tests {
                 parent_conversation_id: parent_id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await
@@ -6951,6 +7003,8 @@ mod tests {
                 parent_tool_use_id: None,
                 delegation_call_id: None,
                 origin_cwd: None,
+                assistant_id: None,
+                assistant_name: None,
                 tag_ids: Vec::new(),
             },
             turns,

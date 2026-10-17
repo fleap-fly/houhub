@@ -14,23 +14,30 @@
 use std::sync::Arc;
 
 use axum::extract::Extension;
+
 use axum::Json;
+
 use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
+
 use crate::app_state::AppState;
+
 use crate::commands::config_sync::local_io::{
     apply_rollback_core, export_content_core, import_bytes_core, list_rollbacks_core,
     peek_import_bytes_core, ConfigExportContent, ConfigImportPreview, ConfigImportResult,
 };
+
 use crate::commands::config_sync::snapshot::{
     rollback_dir, ConfigManifest, RollbackSnapshotInfo,
 };
+
 use crate::commands::config_sync::webdav_sync::{
     download_and_apply_core, load_settings, load_state, merge_settings, peek_remote_core,
     save_settings_core, test_connection_core, upload_snapshot_core, ConfigSyncSettingsInput,
     ConfigSyncSettingsView, ConfigSyncState, DownloadOutcome, UploadOutcome,
 };
+
 use crate::commands::config_sync::APP_VERSION;
 
 #[derive(Deserialize)]
@@ -100,7 +107,9 @@ pub async fn config_sync_peek_remote(
 pub async fn config_sync_download_apply(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<DownloadOutcome>, AppCommandError> {
-    download_and_apply_core(&state.db.conn).await.map(Json)
+    download_and_apply_core(&state.db.conn, &state.emitter)
+        .await
+        .map(Json)
 }
 
 pub async fn config_sync_export_content(
@@ -121,9 +130,14 @@ pub async fn config_sync_import_content(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<ContentParams>,
 ) -> Result<Json<ConfigImportResult>, AppCommandError> {
-    import_bytes_core(&state.db.conn, params.content.as_bytes(), &rollback_dir())
-        .await
-        .map(Json)
+    import_bytes_core(
+        &state.db.conn,
+        &state.emitter,
+        params.content.as_bytes(),
+        &rollback_dir(),
+    )
+    .await
+    .map(Json)
 }
 
 pub async fn config_sync_list_rollbacks(
@@ -141,7 +155,7 @@ pub async fn config_sync_apply_rollback(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<RollbackParams>,
 ) -> Result<Json<ConfigImportResult>, AppCommandError> {
-    apply_rollback_core(&state.db.conn, &rollback_dir(), &params.id)
+    apply_rollback_core(&state.db.conn, &state.emitter, &rollback_dir(), &params.id)
         .await
         .map(Json)
 }

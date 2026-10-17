@@ -17,22 +17,32 @@
 //! first would invert this into "looks valid, is truncated".
 
 use std::collections::BTreeMap;
+
 use std::sync::OnceLock;
 
 use sea_orm::DatabaseConnection;
+
 use serde::{Deserialize, Serialize};
+
 use tokio::sync::Mutex;
 
 use super::credentials::{self, SNAPSHOT_PASSPHRASE, WEBDAV_PASSWORD};
+
 use super::crypto;
+
 use super::snapshot::{
     apply_snapshot_core, build_manifest, collect_snapshot_core, parse_manifest, parse_snapshot,
     serialize_snapshot, sha256_hex, validate_manifest, ApplyReport, ConfigManifest,
     CONFIG_FILE_NAME, ENCRYPTION_AES_GCM, ENCRYPTION_NONE, MANIFEST_FILE_NAME,
 };
+
 use crate::app_error::{AppCommandError, CONFIG_SYNC_I18N_KEY_NO_REMOTE};
+
 use crate::db::service::app_metadata_service;
+
 use crate::network::webdav::{sanitize_path_segment, WebdavClient};
+
+use crate::web::event_bridge::EventEmitter;
 
 /// Settings of this feature. NOT in `portable_keys`: if they travelled, one
 /// machine's credentials would overwrite the other's and the two would sync
@@ -41,6 +51,7 @@ use crate::network::webdav::{sanitize_path_segment, WebdavClient};
 /// The two secrets live in the keyring ([`super::credentials`]), not in this
 /// row; what is left here is addresses and switches.
 pub const CONFIG_SYNC_SETTINGS_KEY: &str = "config_sync_settings";
+
 /// Last-uploaded hash and last result. Device-local by nature.
 pub const CONFIG_SYNC_STATE_KEY: &str = "config_sync_state";
 
@@ -48,8 +59,11 @@ pub const CONFIG_SYNC_STATE_KEY: &str = "config_sync_state";
 pub const PROTOCOL_VERSION: u32 = 1;
 
 pub const DEFAULT_REMOTE_DIR: &str = "houhub";
+
 pub const DEFAULT_PROFILE: &str = "default";
+
 pub const DEFAULT_INTERVAL_MINUTES: u32 = 5;
+
 /// A day. Not a real limit, just a guard against a value that would overflow
 /// the backoff multiplier or park the timer past the heat death of the laptop.
 const MAX_INTERVAL_MINUTES: u32 = 1440;
@@ -732,6 +746,7 @@ async fn open_after_download(
 /// another machine last pushed.
 pub async fn download_and_apply_core(
     conn: &DatabaseConnection,
+    emitter: &EventEmitter,
 ) -> Result<DownloadOutcome, AppCommandError> {
     let settings = load_settings(conn).await;
     let client = client_for(&settings)?;
@@ -771,7 +786,7 @@ pub async fn download_and_apply_core(
     let _suppression = super::auto_sync::suppress_auto_sync();
     let rollback_path =
         super::local_io::save_rollback(conn, &super::snapshot::rollback_dir()).await;
-    let applied = apply_snapshot_core(conn, &snapshot).await?;
+    let applied = apply_snapshot_core(conn, emitter, &snapshot).await?;
 
     Ok(DownloadOutcome {
         manifest,

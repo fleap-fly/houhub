@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * Multi-agent delegation settings panel. Two top-level concerns split into
+ * Multi-agent delegation settings panel. Three top-level concerns split into
  * tabs:
  *
  *   * "General" — feature kill switch + chain depth limit. Persisted as
@@ -9,6 +9,8 @@
  *   * "Agent defaults" — per-agent overrides (mode + config_values) that
  *     houhub-mcp uses when spawning a subagent for a `delegate_to_agent`
  *     call. Persisted as `delegation.agent_defaults` (one JSON blob).
+ *   * "Assistants" — the user's assistants. Each change is written at once,
+ *     so the section's save bar does not apply to (and is hidden on) it.
  *
  * Cancellation is handled out-of-band via MCP `notifications/cancelled`
  * forwarded from the parent agent CLI; there is no broker-side timeout to
@@ -22,10 +24,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { AlertTriangle, Bubbles, Gauge, Loader2 } from "lucide-react"
+import { AlertTriangle, Bubbles, Gauge, HardDrive, Power } from "lucide-react"
 import { toast } from "sonner"
 
-import { Button } from "@/components/ui/button"
+import { SettingCard, SettingRow } from "@/components/shared/setting-card"
+import {
+  SettingsError,
+  SettingsSaveBar,
+  SettingsSection,
+} from "@/components/shared/settings-section"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -39,8 +46,31 @@ import { toErrorMessage } from "@/lib/app-error"
 import { subscribe } from "@/lib/platform"
 import { DELEGATION_SETTINGS_CHANGED_EVENT } from "@/lib/types"
 import type { AgentDelegationDefaults, AgentType } from "@/lib/types"
-import { SettingRow } from "@/components/shared/setting-card"
+import { AssistantsPanel } from "./assistants-panel"
 import { DelegationAgentDefaultsPanel } from "./delegation-agent-defaults"
+
+type DelegationTab = "general" | "agentDefaults" | "assistants"
+
+function sameDefaults(
+  a: Partial<Record<AgentType, AgentDelegationDefaults>>,
+  b: Partial<Record<AgentType, AgentDelegationDefaults>>
+): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<AgentType>
+  for (const key of keys) {
+    const x = a[key]
+    const y = b[key]
+    if (!x || !y) {
+      if (x || y) return false
+      continue
+    }
+    if ((x.mode_id ?? null) !== (y.mode_id ?? null)) return false
+    const xv = x.config_values ?? {}
+    const yv = y.config_values ?? {}
+    const ids = new Set([...Object.keys(xv), ...Object.keys(yv)])
+    for (const id of ids) if (xv[id] !== yv[id]) return false
+  }
+  return true
+}
 
 const DEPTH_MIN = 1
 const DEPTH_MAX = 8
@@ -78,9 +108,20 @@ export function DelegationSettingsSection() {
    * the broadcast below. `enabled !== baselineEnabledRef.current` is therefore
    * "the user moved this and hasn't saved yet". */
   const baselineEnabledRef = useRef(false)
-  /** Bumped by every broadcast, so the initial load can tell that its own read
-   * is the older fact and leave the switch alone. */
+  /** Bumped by every broadcast, so a load or save reply can tell that a
+   * broadcast landed while it was out — and leave the switch and the saved
+   * record to it (see `persisted`). */
   const remoteGenRef = useRef(0)
+  /** What the backend has saved, whole — from the load, a save, or a
+   * broadcast — as opposed to the form's draft. Drives the unsaved-changes
+   * dots and the assistants tab's "multi-agent is off" notice. A reply only
+   * replaces it while no broadcast has arrived since its request went out.
+   * Broadcasts arrive in commit order, so once one has, the last one received
+   * is the saved state, or is about to be followed by it — whereas a reply can
+   * land after a newer broadcast (the load read "off", another window switched
+   * it on and broadcast, then the late reply would switch it back). */
+  const [persisted, setPersisted] = useState<DelegationSettings | null>(null)
+  const [tab, setTab] = useState<DelegationTab>("general")
 
   useEffect(() => {
     let cancelled = false
@@ -91,6 +132,7 @@ export function DelegationSettingsSection() {
         if (remoteGenRef.current === gen) {
           setEnabled(s.enabled)
           baselineEnabledRef.current = s.enabled
+          setPersisted(s)
         }
         setDepth(s.depth_limit)
         setCacheMb(s.completed_cache_max_mb)
@@ -172,6 +214,7 @@ export function DelegationSettingsSection() {
         setEnabled((current) =>
           current === previousBaseline ? remote.enabled : current
         )
+        setPersisted(remote)
       }
     )
       .then((fn) => {
@@ -195,12 +238,22 @@ export function DelegationSettingsSection() {
       agent_defaults: agentDefaults,
     }
     setSaving(true)
+    const gen = remoteGenRef.current
     try {
       const applied = await setDelegationSettings(payload)
+      // A broadcast that landed while the save was out owns the switch and the
+      // saved record from here: a generation cannot tell an older write (the
+      // status-bar popover's, committed just before this one) from a newer one,
+      // but every broadcast arrives in commit order, so the last one is right
+      // — the save's own included. Putting this reply's switch back instead
+      // would undo a popover flip that committed after it.
+      if (remoteGenRef.current === gen) {
+        setPersisted(applied)
+        setEnabled(applied.enabled)
+        baselineEnabledRef.current = applied.enabled
+      }
       // Mirror any server-side clamps / filter passes back into the UI so the
       // inputs reflect what was actually persisted.
-      setEnabled(applied.enabled)
-      baselineEnabledRef.current = applied.enabled
       setDepth(applied.depth_limit)
       setCacheMb(applied.completed_cache_max_mb)
       setAgentDefaults(applied.agent_defaults ?? {})
@@ -214,47 +267,68 @@ export function DelegationSettingsSection() {
     }
   }, [enabled, depth, cacheMb, agentDefaults, t])
 
-  return (
-    <section className="rounded-xl border bg-card p-4 space-y-4">
-      <div className="flex items-center gap-2">
-        <Bubbles className="h-4 w-4 text-muted-foreground" aria-hidden />
-        <h2 className="text-sm font-semibold">{t("title")}</h2>
-      </div>
-      <p className="text-xs text-muted-foreground leading-5">
-        {t("description")}
-      </p>
+  const generalDirty =
+    persisted !== null &&
+    (enabled !== persisted.enabled ||
+      clamp(depth, DEPTH_MIN, DEPTH_MAX) !== persisted.depth_limit ||
+      clampCacheMb(cacheMb) !== persisted.completed_cache_max_mb)
+  const defaultsDirty =
+    persisted !== null &&
+    !sameDefaults(agentDefaults, persisted.agent_defaults ?? {})
+  const unsavedTabs = [
+    ...(generalDirty ? [t("tabGeneral")] : []),
+    ...(defaultsDirty ? [t("tabAgentDefaults")] : []),
+  ]
+  const unsavedDot = (
+    <span
+      role="img"
+      className="size-1.5 shrink-0 rounded-full bg-amber-500"
+      aria-label={t("unsavedChanges")}
+      title={t("unsavedChanges")}
+    />
+  )
 
+  return (
+    <SettingsSection
+      icon={Bubbles}
+      title={t("title")}
+      description={t("description")}
+    >
       {loadError && (
-        <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-          {t("loadFailed", { detail: loadError })}
-        </p>
+        <SettingsError>{t("loadFailed", { detail: loadError })}</SettingsError>
       )}
 
-      <Tabs defaultValue="general">
+      <Tabs value={tab} onValueChange={(v) => setTab(v as DelegationTab)}>
         <TabsList>
-          <TabsTrigger value="general">{t("tabGeneral")}</TabsTrigger>
+          <TabsTrigger value="general">
+            {t("tabGeneral")}
+            {generalDirty ? unsavedDot : null}
+          </TabsTrigger>
           <TabsTrigger value="agentDefaults">
             {t("tabAgentDefaults")}
+            {defaultsDirty ? unsavedDot : null}
           </TabsTrigger>
+          <TabsTrigger value="assistants">{t("tabAssistants")}</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="general" className="space-y-4 pt-2">
-          <div className="flex items-center justify-between gap-3">
-            <div className="space-y-1 min-w-0">
-              <label
-                htmlFor="delegation-enabled"
-                className="text-sm font-medium"
-              >
-                {t("enable")}
-              </label>
-              <p className="text-xs text-muted-foreground">{t("enableHint")}</p>
-            </div>
-            <Switch
-              id="delegation-enabled"
-              checked={enabled}
-              onCheckedChange={setEnabled}
-              disabled={loading}
-              className="shrink-0"
+        {/* The kill switch and the two valves it gates are one decision, so
+            they share a card — the greyed-out inputs then read as belonging to
+            the switch above them rather than as three unrelated lines. */}
+        <TabsContent value="general" className="pt-2">
+          <SettingCard>
+            <SettingRow
+              icon={Power}
+              title={t("enable")}
+              description={t("enableHint")}
+              htmlFor="delegation-enabled"
+              control={
+                <Switch
+                  id="delegation-enabled"
+                  checked={enabled}
+                  onCheckedChange={setEnabled}
+                  disabled={loading}
+                />
+              }
             />
             {enabled && withheldAgents.length > 0 && (
               // Padded like a `SettingRow` (`px-3`) so the glyph and text line
@@ -287,37 +361,32 @@ export function DelegationSettingsSection() {
                 />
               }
             />
-          </div>
-
-          <div className="flex items-center justify-between gap-3">
-            <div className="space-y-1 min-w-0">
-              <label
-                htmlFor="delegation-cache-mb"
-                className="text-sm font-medium"
-              >
-                {t("completedCacheLabel")}
-              </label>
-              <p className="text-xs text-muted-foreground">
-                {t("completedCacheHint")}
-              </p>
-            </div>
-            <Input
-              id="delegation-cache-mb"
-              type="number"
-              min={0}
-              step={1}
-              value={Number.isNaN(cacheMb) ? "" : cacheMb}
-              onChange={(e) => {
-                const raw = e.target.value
-                // Empty (cleared) → NaN so `clampCacheMb` restores the default
-                // on save, instead of `Number("") === 0` silently persisting
-                // 0 (= unlimited). Explicit "0" still means unlimited.
-                setCacheMb(raw === "" ? NaN : Number(raw))
-              }}
-              disabled={loading || !enabled}
-              className="w-28 shrink-0"
+            <SettingRow
+              icon={HardDrive}
+              title={t("completedCacheLabel")}
+              description={t("completedCacheHint")}
+              htmlFor="delegation-cache-mb"
+              control={
+                <Input
+                  id="delegation-cache-mb"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={Number.isNaN(cacheMb) ? "" : cacheMb}
+                  onChange={(e) => {
+                    const raw = e.target.value
+                    // Empty (cleared) → NaN so `clampCacheMb` restores the
+                    // default on save, instead of `Number("") === 0` silently
+                    // persisting 0 (= unlimited). Explicit "0" still means
+                    // unlimited.
+                    setCacheMb(raw === "" ? NaN : Number(raw))
+                  }}
+                  disabled={loading || !enabled}
+                  className="h-8 w-24 bg-background text-xs"
+                />
+              }
             />
-          </div>
+          </SettingCard>
         </TabsContent>
 
         <TabsContent value="agentDefaults" className="pt-2">
@@ -325,22 +394,32 @@ export function DelegationSettingsSection() {
             value={agentDefaults}
             onChange={setAgentDefaults}
             disabled={loading || !enabled}
+            delegationEnabled={loading ? null : enabled}
+            onShowGeneral={() => setTab("general")}
+          />
+        </TabsContent>
+
+        <TabsContent value="assistants" className="pt-2">
+          <AssistantsPanel
+            delegationEnabled={persisted ? persisted.enabled : null}
+            unsavedTabs={unsavedTabs}
+            onShowUnsaved={() =>
+              setTab(generalDirty ? "general" : "agentDefaults")
+            }
+            onShowGeneral={() => setTab("general")}
           />
         </TabsContent>
       </Tabs>
 
-      <div className="flex justify-end pt-2">
-        <Button onClick={save} disabled={loading || saving} size="sm">
-          {saving ? (
-            <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              {t("saving")}
-            </>
-          ) : (
-            t("save")
-          )}
-        </Button>
-      </div>
-    </section>
+      {tab !== "assistants" ? (
+        <SettingsSaveBar
+          onSave={() => void save()}
+          saving={saving}
+          disabled={loading}
+          label={t("save")}
+          savingLabel={t("saving")}
+        />
+      ) : null}
+    </SettingsSection>
   )
 }

@@ -18,6 +18,8 @@
 //!   that no longer fits the pinned template (upstream renamed its archives)
 //!   offers nothing, rather than an install that would 404.
 //! - uvx: nothing, since Custom install does not support it.
+//! - system (the user's own install, e.g. Kiro CLI): nothing, since its own
+//!   updater keeps it current.
 //!
 //! An offered version is always one Custom install accepts, and installing it
 //! goes through exactly that path.
@@ -25,13 +27,18 @@
 use serde::Serialize;
 
 use crate::acp::custom_registry::{self, CustomAgentSource};
+
 use crate::acp::registry::{self, AcpAgentMeta, AgentDistribution};
+
 use crate::acp::remote_registry::{self, RegistryBinaryRelease};
+
 use crate::app_error::AppCommandError;
+
 use crate::commands::acp::{
     apply_custom_version_to_url, package_name_from_spec, sanitize_custom_version,
     NPM_OFFICIAL_REGISTRY,
 };
+
 use crate::models::agent::AgentType;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -106,6 +113,10 @@ fn lookup_for(meta: &AcpAgentMeta, custom_source: Option<CustomAgentSource>) -> 
                 pinned_url: p.url,
             }),
         AgentDistribution::Uvx { .. } => None,
+        // The user's own install, kept current by its vendor's updater (the
+        // Upgrade action); houhub pins no version of it. Already ruled out by
+        // `supports_custom_version` above.
+        AgentDistribution::System { .. } => None,
     }
 }
 
@@ -595,5 +606,8 @@ mod tests {
             ),
         );
         assert_eq!(lookup_for(&opaque, None), None);
+        // A system-installed agent updates itself; houhub has no pin for it.
+        let kiro = registry::get_agent_meta(AgentType::Kiro);
+        assert_eq!(lookup_for(&kiro, None), None);
     }
 }

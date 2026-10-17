@@ -26,6 +26,23 @@
 ; stopped, as before: one left running keeps its file locked. taskkill
 ; returns non-zero when no processes match, which is fine — we ignore the
 ; result.
+;
+; Stopping them is not always enough: whatever starts a companion — an agent,
+; or a houhub still running — can start one again before the installer
+; reaches the file, and a process this installer is not allowed to stop holds
+; the file all the same. But Windows lets the file of a running executable be
+; renamed.
+; So a sidecar whose file is still in use once the processes were stopped is
+; moved aside, to its own name plus `.<n>.old` in the same folder: whatever
+; runs it carries on, and the installer writes the new binary under the old
+; name. The aside files are deleted after the install, or by the next install
+; or uninstall, once nothing runs them any more.
+;
+; Not, though, when an interactive install is about to ask whether to close a
+; running houhub: on a no it stops there, and that houhub would be left without
+; its companion. Silent and passive installs, the updater's included, close it
+; without asking. An install stopped later on, at some other file, leaves a
+; moved file where it is; the next install deletes it and writes the new one.
 
 !macro HOUHUB_STOP_SIDECARS
   DetailPrint "Stopping houhub-mcp and houhub-computer-helper processes running from $INSTDIR..."
@@ -60,10 +77,51 @@
 !macro UNREGISTER_HOUHUB_PROTOCOL
   DetailPrint "Unregistering hou-agent-hub URL protocol..."
   DeleteRegKey HKCU "Software\Classes\hou-agent-hub"
+; $R9 = 1 when `path` can be opened for writing, as `File` will have to open
+; it, else 0. A running executable's file cannot be; a missing one counts as
+; writable.
+!macro HOUHUB_CAN_WRITE path
+  StrCpy $R9 1
+  ${If} ${FileExists} "${path}"
+    ClearErrors
+    FileOpen $R8 "${path}" a
+    ${If} ${Errors}
+      StrCpy $R9 0
+    ${Else}
+      FileClose $R8
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+!macro HOUHUB_MOVE_ASIDE_IF_IN_USE name
+  !insertmacro HOUHUB_CAN_WRITE "$INSTDIR\${name}"
+  ${If} $R9 = 0
+    System::Call 'kernel32::GetTickCount() i .R8'
+    DetailPrint "$INSTDIR\${name} is still in use, moving it aside..."
+    Rename "$INSTDIR\${name}" "$INSTDIR\${name}.$R8.old"
+  ${EndIf}
+!macroend
+
+!macro HOUHUB_DELETE_ASIDE
+  Delete "$INSTDIR\houhub-mcp.exe.*.old"
+  Delete "$INSTDIR\houhub-computer-helper.exe.*.old"
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL
   !insertmacro HOUHUB_STOP_SIDECARS
+  !insertmacro HOUHUB_DELETE_ASIDE
+  ; houhub.exe's file is in use while houhub runs.
+  !insertmacro HOUHUB_CAN_WRITE "$INSTDIR\${MAINBINARYNAME}.exe"
+  ${If} $R9 = 1
+  ${OrIf} ${Silent}
+  ${OrIf} $PassiveMode = 1
+    !insertmacro HOUHUB_MOVE_ASIDE_IF_IN_USE "houhub-mcp.exe"
+    !insertmacro HOUHUB_MOVE_ASIDE_IF_IN_USE "houhub-computer-helper.exe"
+  ${EndIf}
+!macroend
+
+!macro NSIS_HOOK_POSTINSTALL
+  !insertmacro HOUHUB_DELETE_ASIDE
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -72,6 +130,7 @@
 
 !macro NSIS_HOOK_PREUNINSTALL
   !insertmacro HOUHUB_STOP_SIDECARS
+  !insertmacro HOUHUB_DELETE_ASIDE
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

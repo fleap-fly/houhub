@@ -7,25 +7,35 @@
 //! together.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
 use sea_orm::DatabaseConnection;
+
 use serde::{Deserialize, Serialize};
 
 use crate::acp::manager::ConnectionManager;
+
 use crate::app_error::AppCommandError;
+
 use crate::db::service::{app_metadata_service, conversation_service};
+
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
+
 use crate::models::pet::{
     ImportCodexPetsRequest, ImportCodexPetsResult, ImportablePet, NewPetInput, PetCelebrationKind,
     PetDetail, PetMetaPatch, PetParentRef, PetSessionEntry, PetSessionsPayload, PetSpriteAsset,
     PetState, PetSummary, PetWindowConfig, PetWindowStatePatch,
 };
+
 use crate::pet_state_mapper::{read_pet_state, PetStateHandle};
+
 use crate::pets;
+
 use crate::pets::marketplace::{
     MarketplaceInstallRequest, MarketplaceInstallResponse, MarketplaceListParams,
     MarketplaceListResponse,
 };
+
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 /// KV key used by `app_metadata_service` for the persisted pet UI state.
@@ -242,6 +252,7 @@ pub async fn pet_list_active_sessions_core(
                 }
             }
             entry.title = summary.title.unwrap_or_default();
+            entry.assistant_name = summary.assistant_name;
         }
         entries.push(entry);
     }
@@ -658,6 +669,7 @@ mod tests {
                 parent_conversation_id: parent.id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await

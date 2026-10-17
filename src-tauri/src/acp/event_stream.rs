@@ -448,12 +448,17 @@ fn estimate_envelope_size(envelope: &EventEnvelope) -> usize {
                 + turns.iter().map(message_turn_size).sum::<usize>()
                 + settled
                     .iter()
-                    .map(|settlement| {
-                        128 + json_str_len(&settlement.task_id)
-                            + json_str_len(&settlement.status)
-                            + opt_str_size(&settlement.summary)
-                            + opt_str_size(&settlement.tool_use_id)
-                            + opt_str_size(&settlement.result)
+                    .map(|s| {
+                        // Keys + braces + commas for every field (task_id,
+                        // status, summary, tool_use_id, result, interim) plus
+                        // the element comma — generously fixed so `estimate >=
+                        // serialized` holds for every present/absent optional
+                        // combination.
+                        128 + json_str_len(&s.task_id)
+                            + json_str_len(&s.status)
+                            + opt_str_size(&s.summary)
+                            + opt_str_size(&s.tool_use_id)
+                            + opt_str_size(&s.result)
                     })
                     .sum::<usize>()
         }
@@ -1081,6 +1086,9 @@ mod tests {
                         // coverage of the (previously omitted) `result` field.
                         result: Some("Build \"log\"\n\t".repeat(2048)),
                         wire_visible: false,
+                        // Serialized only when set: the fixed per-entry
+                        // overhead must cover its key too.
+                        interim: true,
                     },
                     crate::acp::types::BackgroundSettledInfo {
                         task_id: "bipkee1pw".into(),
@@ -1089,6 +1097,7 @@ mod tests {
                         tool_use_id: None,
                         result: None,
                         wire_visible: false,
+                        interim: false,
                     },
                 ],
                 watermark: u64::MAX,

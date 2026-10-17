@@ -25,22 +25,32 @@
 //! deliberate future refactor (see docs/science-mode-spec.md §9), not a v1 goal.
 
 use std::collections::BTreeMap;
+
 use std::fs;
+
 use std::io;
+
 use std::path::{Path, PathBuf};
+
 use std::sync::OnceLock;
 
 use chrono::Utc;
+
 use include_dir::{include_dir, Dir, DirEntry};
+
 use serde::{Deserialize, Serialize};
+
 use sha2::{Digest, Sha256};
+
 use tokio::sync::Mutex;
 
 use crate::acp::types::AgentSkillScope;
+
 use crate::commands::acp::{
     preferred_scope_skill_dir, remove_skill_entry, scoped_skill_dirs, skill_storage_spec,
     validate_skill_id,
 };
+
 // Reuse the generic filesystem link primitives and link-state DTOs from experts
 // (same boundary office_tools.rs uses). The central store is shared, so science
 // installs into `central_experts_dir()` too.
@@ -48,6 +58,7 @@ use crate::commands::experts::{
     central_experts_dir, classify_link, create_link_raw, path_is_symlink, read_link_target,
     ExpertInstallStatus, ExpertLinkState, LinkOp, LinkOpResult,
 };
+
 use crate::models::agent::AgentType;
 
 // ─── Embedded bundle ────────────────────────────────────────────────────
@@ -55,6 +66,7 @@ use crate::models::agent::AgentType;
 static SCIENCE_BUNDLE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/science");
 
 const MANIFEST_FILE: &str = ".manifest.science.json";
+
 const SCIENCE_TOML: &str = "science.toml";
 
 // ─── Error type ─────────────────────────────────────────────────────────
@@ -636,6 +648,7 @@ fn supported_agents() -> Vec<AgentType> {
         AgentType::DeepSeek,
         AgentType::Qoder,
         AgentType::Antigravity,
+        AgentType::Kiro,
     ];
     // Custom agents that declared the shared skills store join the built-in
     // set — the same `skill_storage_spec` gate every skills surface uses, so
@@ -1019,6 +1032,10 @@ mod tests {
         assert!(
             expected.contains(&AgentType::Antigravity),
             "Antigravity declares a skill store, so it is one of the columns"
+        );
+        assert!(
+            expected.contains(&AgentType::Kiro),
+            "Kiro declares a skill store, so it is one of the columns"
         );
 
         let skill_id = bundled_metadata()

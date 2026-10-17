@@ -23,13 +23,18 @@ use tauri::{
     AppHandle, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
+
 use tokio::sync::watch;
+
+use super::overlay;
 
 pub const INDICATOR_LABEL: &str = "computer-indicator";
 
 /// The first size, in logical pixels, until the page has measured itself.
 const WIDTH: f64 = 360.0;
+
 const HEIGHT: f64 = 44.0;
+
 /// How far below the top of the main screen's work area it starts.
 const TOP: f64 = 10.0;
 
@@ -82,12 +87,12 @@ async fn follow(app: AppHandle, mut rx: watch::Receiver<Strip>) {
         match wanted {
             Strip::Shown => {
                 if let Some(window) = window(&app) {
-                    let _ = window.show();
+                    overlay::show(&window);
                 }
             }
             Strip::Hidden => {
                 if let Some(window) = app.get_webview_window(INDICATOR_LABEL) {
-                    let _ = window.hide();
+                    overlay::hide(&window);
                 }
             }
         }

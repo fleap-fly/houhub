@@ -36,17 +36,30 @@
 //! `delegation_call_id` routing — strictly a continuation of the original
 //! task, never a second iteration on it (the tool takes no task text).
 
+pub mod assistants;
+
 pub mod broker;
+
 pub mod companion;
+
 pub mod depth;
+
 pub mod event_emitter;
+
 pub mod listener;
+
 pub mod live_reply;
+
 pub mod meta_writer;
+
 pub mod parent_watcher;
+
 pub mod service;
+
 pub mod spawner;
+
 pub mod transport;
+
 pub mod types;
 
 /// Canonical titles written onto a parent tool call that was announced
@@ -60,6 +73,9 @@ pub mod types;
 /// what the frontend's tool-name normalizer already resolves to the dedicated
 /// delegation / status cards.
 pub const DELEGATE_TOOL_REWRITE_TITLE: &str = "houhub-mcp__delegate_to_agent";
+
 pub const STATUS_TOOL_REWRITE_TITLE: &str = "houhub-mcp__get_delegation_status";
+
 pub const CANCEL_TOOL_REWRITE_TITLE: &str = "houhub-mcp__cancel_delegation";
+
 pub const RESUME_TOOL_REWRITE_TITLE: &str = "houhub-mcp__resume_delegation";

@@ -54,6 +54,29 @@ pub enum AgentDistribution {
         /// its official installer launch it without `uv`.
         system_cmd: Option<(&'static str, &'static [&'static str])>,
     },
+    /// An agent HouHub never installs or pins: the vendor ships it only through
+    /// an installer of its own (a signed `.dmg`, an `.msi`, a shell script that
+    /// also wires up shell integrations), which the binary cache cannot
+    /// reproduce. The one supported install is the user's, found on PATH the
+    /// way [`AgentDistribution::Binary`]'s system fallback finds a CLI — PATH,
+    /// then `~/.local/bin`, then [`binary_system_dirs`] — and the Settings page
+    /// points at `install_url` instead of offering an Install button. Its
+    /// version is whatever `<cmd> --version` reports.
+    ///
+    /// UPGRADES go through the vendor's own updater when it has one
+    /// (`update_args`), so the copy the user's terminal runs and the copy HouHub
+    /// launches stay one and the same install.
+    System {
+        /// Command name on PATH.
+        cmd: &'static str,
+        args: &'static [&'static str],
+        env: &'static [(&'static str, &'static str)],
+        /// The vendor's own install instructions.
+        install_url: &'static str,
+        /// Arguments that make `cmd` update ITSELF in place without prompting,
+        /// or `None` when the CLI has no such command (no Upgrade button then).
+        update_args: Option<&'static [&'static str]>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +153,8 @@ impl AcpAgentMeta {
             AgentDistribution::Npx { version, .. }
             | AgentDistribution::Binary { version, .. }
             | AgentDistribution::Uvx { version, .. } => Some(*version),
+            // Nothing is pinned: the user's own install is the only version.
+            AgentDistribution::System { .. } => None,
         }
     }
 
@@ -159,7 +184,7 @@ impl AcpAgentMeta {
     pub fn supports_custom_version(&self) -> bool {
         match &self.distribution {
             AgentDistribution::Npx { .. } => true,
-            AgentDistribution::Uvx { .. } => false,
+            AgentDistribution::Uvx { .. } | AgentDistribution::System { .. } => false,
             AgentDistribution::Binary {
                 version, platforms, ..
             } => platforms
@@ -183,6 +208,10 @@ const ANTIGRAVITY_LAUNCH_ARGS: &[&str] = if cfg!(target_os = "linux") {
 } else {
     &[]
 };
+
+/// Where the Settings page sends a user who has no `kiro-cli` yet. The CLI's
+/// own `/docs/cli/installation/` redirects here.
+const KIRO_INSTALL_URL: &str = "https://kiro.dev/docs/getting-started/installation/";
 
 pub fn current_platform() -> &'static str {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -211,7 +240,7 @@ pub fn current_platform() -> &'static str {
     }
 }
 
-/// The thirteen built-in agents. Excludes user-registered custom agents — use
+/// The seventeen built-in agents. Excludes user-registered custom agents — use
 /// [`all_acp_agents`] for the live set.
 pub fn builtin_acp_agents() -> Vec<AgentType> {
     vec![
@@ -230,10 +259,12 @@ pub fn builtin_acp_agents() -> Vec<AgentType> {
         AgentType::DeepSeek,
         AgentType::Qoder,
         AgentType::Antigravity,
+        AgentType::Kiro,
+        AgentType::ZCode,
     ]
 }
 
-/// Every agent houhub can currently drive: the thirteen built-ins followed by
+/// Every agent HouHub can currently drive: the seventeen built-ins followed by
 /// the user's registered custom ACP agents (sorted by id).
 pub fn all_acp_agents() -> Vec<AgentType> {
     let mut agents = builtin_acp_agents();
@@ -258,6 +289,9 @@ pub fn registry_id_for(agent_type: AgentType) -> &'static str {
         AgentType::DeepSeek => "deepseek-acp",
         AgentType::Qoder => "qoder-cli",
         AgentType::Antigravity => "antigravity-acp",
+        AgentType::Kiro => "kiro-cli",
+        // Keep the pre-integration custom:zcode-acp registry and history distinct.
+        AgentType::ZCode => "houhub-zcode-acp",
         // A custom agent's registry id IS its identity.
         AgentType::Custom(id) => id,
     }
@@ -280,6 +314,8 @@ pub fn from_registry_id(id: &str) -> Option<AgentType> {
         "deepseek-acp" => Some(AgentType::DeepSeek),
         "qoder-cli" => Some(AgentType::Qoder),
         "antigravity-acp" => Some(AgentType::Antigravity),
+        "kiro-cli" => Some(AgentType::Kiro),
+        "houhub-zcode-acp" => Some(AgentType::ZCode),
         // Only ids the user has actually registered resolve. An unregistered
         // id must stay `None` so the ACP-registry picker still offers it as
         // "addable" rather than treating it as already supported.
@@ -289,6 +325,19 @@ pub fn from_registry_id(id: &str) -> Option<AgentType> {
     }
 }
 
+/// The vendor CLI wrapped by a HouHub entry that is really a THIRD-PARTY ACP
+/// *adapter*.
+///
+/// All but three of the built-ins distribute the vendor's own CLI (or, for
+/// Antigravity, the vendor's own ACP server), so a user's existing global
+/// install is found by the launch gate as-is. Claude Code and
+/// Codex wrap their CLIs through ACP adapters: neither `claude` nor `codex` speaks ACP, so HouHub
+/// installs a separate adapter package (`claude-agent-acp` / `codex-acp`,
+/// maintained by the Agent Client Protocol org) whose command name has nothing
+/// to do with the vendor CLI's. That mismatch is the single most reported
+/// confusion ("I have claude installed, why does HouHub say it isn't?"), so
+/// preflight and diagnostics probe the vendor CLI too and explain the split.
+/// ZCode uses a community adapter which requires the official ZCode runtime.
 #[derive(Debug, Clone, Copy)]
 pub struct AcpAdapterRelation {
     pub native_cmd: &'static str,
@@ -298,6 +347,11 @@ pub struct AcpAdapterRelation {
     pub docs_url: &'static str,
 }
 
+/// Adapter relation for an agent, or `None` when HouHub's entry IS the vendor's
+/// own CLI. ZCode also requires a separate community adapter.
+///
+/// Adding an entry here changes what preflight/diagnostics report — keep the
+/// `acp_adapter_relation_covers_only_wrapper_agents` test in sync.
 pub fn acp_adapter_relation(agent_type: AgentType) -> Option<AcpAdapterRelation> {
     match agent_type {
         AgentType::ClaudeCode => Some(AcpAdapterRelation {
@@ -314,15 +368,22 @@ pub fn acp_adapter_relation(agent_type: AgentType) -> Option<AcpAdapterRelation>
             extra_dirs: &[".local/bin"],
             docs_url: ACP_ADAPTER_DOCS_URL,
         }),
+        AgentType::ZCode => Some(AcpAdapterRelation {
+            native_cmd: "zcode",
+            native_label: "ZCode CLI",
+            shared_config_dir: "~/.zcode",
+            extra_dirs: &[".local/bin"],
+            docs_url: "https://github.com/william0wang/zcode-acp",
+        }),
         _ => None,
     }
 }
 
 /// Home-relative directories a vendor's OWN installer drops the agent binary
-/// into, for agents houhub can also manage itself.
+/// into, for agents HouHub can also manage itself.
 ///
 /// Distinct from [`AcpAdapterRelation::extra_dirs`], which describes a vendor
-/// CLI houhub never launches; these are launchable binaries, just not where a
+/// CLI HouHub never launches; these are launchable binaries, just not where a
 /// GUI-inherited PATH can see them. OpenCode's official install script uses
 /// `INSTALL_DIR=$HOME/.opencode/bin` and appends it to the user's shell rc — a
 /// file a desktop app launched from Finder or the Dock never reads, which is
@@ -351,7 +412,7 @@ pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
 
 /// The npm package the built-in Claude Code entry runs — and the name the
 /// adapter reports as `agentInfo.name` at `initialize`, which is its
-/// `packageJson.name` (read from the 0.58.1 to 0.90.0 sources). A custom agent
+/// `packageJson.name` (read from the 0.58.1 to 0.91.0 sources). A custom agent
 /// whose running adapter reports exactly this name follows the Claude Code
 /// steering policy (`connection.rs::steering_policy_agent`).
 pub const CLAUDE_AGENT_ACP_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp";
@@ -365,7 +426,7 @@ pub const CLAUDE_AGENT_ACP_PACKAGE: &str = "@agentclientprotocol/claude-agent-ac
 /// `None` means "never steer natively" even when the adapter advertises
 /// `_meta.steering.supported`: an adapter that ignores the opt-in falls back
 /// to `startedNewTurn` on the turn-end race — a detached turn no host request
-/// owns, which houhub's turn-scoped runtime must never trigger. codex-acp
+/// owns, which HouHub's turn-scoped runtime must never trigger. codex-acp
 /// ships `_session/steering` but not `promptRequired` — re-verified against
 /// the published 1.3.0 tarball (zero hits, same as 1.1.9) — so it stays
 /// `None` until a release implements the opt-in — then this is a one-line
@@ -400,7 +461,7 @@ pub fn steering_prompt_required_min_version(agent_type: AgentType) -> Option<&'s
         // the tool to the background and may join the running cycle (one result
         // naming both messages). The prompt still settles on the result that
         // answers the steer — measured live; see the claude entry's (qq) for
-        // what moving the tool cost houhub.
+        // what moving the tool cost HouHub.
         AgentType::ClaudeCode => Some("0.65.0"),
         _ => None,
     }
@@ -441,9 +502,9 @@ pub fn uses_cursor_acp_backend(agent_type: AgentType) -> bool {
 
 fn distribution_uses_cursor_acp(distribution: &AgentDistribution) -> bool {
     match distribution {
-        AgentDistribution::Npx { cmd, args, .. } | AgentDistribution::Binary { cmd, args, .. } => {
-            launch_spec_uses_cursor_acp(cmd, args)
-        }
+        AgentDistribution::Npx { cmd, args, .. }
+        | AgentDistribution::Binary { cmd, args, .. }
+        | AgentDistribution::System { cmd, args, .. } => launch_spec_uses_cursor_acp(cmd, args),
         AgentDistribution::Uvx {
             cmd,
             args,
@@ -535,7 +596,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // — {objective, status (active|paused|blocked|limited|complete),
             // iterations?, lastReason?, createdAt/updatedAt (Unix ms),
             // tokenBudget?, tokensUsed?, timeUsedSeconds?, controlMethod},
-            // `goal: null` clears. houhub picks the goal channel per connection
+            // `goal: null` clears. HouHub picks the goal channel per connection
             // at initialize (advertised ⇒ neutral only; see the
             // SessionInfoUpdate arm in connection.rs), the same selection that
             // keeps codex goals alive after its silent 1.2.0 switch. #967
@@ -550,7 +611,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // records ONLY, no resolve/tombstone wire; publication is STRICTLY
             // gated on the client advertising
             // `clientCapabilities._meta.jetbrains.air = {version >= 1,
-            // capabilities: ["sessionFailure"]}`. houhub advertises it
+            // capabilities: ["sessionFailure"]}`. HouHub advertises it
             // (`build_client_capabilities`) and projects the records into the
             // session-failure banner (`AcpEvent::SessionFailure`); on
             // session/load the adapter re-publishes still-active failures
@@ -575,12 +636,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // "notReported", "providerError", plus the new
             // `dist/file-change-audit.js`) — the AIR `agentFileChangeReport`
             // capability, shipped in lockstep with codex-acp 1.7.0. It is
-            // OFF unless the client asks for it twice, and houhub deliberately
+            // OFF unless the client asks for it twice, and HouHub deliberately
             // asks for neither; see `build_client_capabilities` in
             // connection.rs for the reasoning. The only ambient change is that
             // `airSessionFailureCapabilityMeta` became variadic so the agent
             // can advertise `["sessionFailure", "agentFileChangeReport"]` — an
-            // ADDITIVE element in an array houhub only ever membership-tests,
+            // ADDITIVE element in an array HouHub only ever membership-tests,
             // so the session-failure gate is unaffected.
             //
             // 0.70.0–0.73.0 is a large release (the package grows 692K → 1.1M
@@ -632,13 +693,13 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // sending all three is forward-compatible. The `messageId` to send
             // is the top-level one `applyMessageId` stamps on message/thought
             // chunks (present since ≤0.69.0; typed as the stable
-            // `ContentChunk::message_id` in the 1.x schema). houhub derives it
+            // `ContentChunk::message_id` in the 1.x schema). HouHub derives it
             // from the parsed transcript rather than the live chunks — see
             // `acp::fork::ForkPoint`.
             //
             // (d) The AIR capability array grew to `["sessionFailure",
             // "agentFileChangeReport", "nativeSubagentSessions", "asyncTasks"]`
-            // (0.76.0 appends a fifth, "recommendedValue" — see (k)). houhub
+            // (0.76.0 appends a fifth, "recommendedValue" — see (k)). HouHub
             // adopted `asyncTasks` and deliberately leaves the other two out, so
             // `native-subagents.js` and `file-change-audit.js` stay dark. See
             // `build_client_capabilities` for why each is in or out.
@@ -713,7 +774,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // 0.75.0 + 0.75.1 (four feature commits) are additive: an
             // `initialize` handshake replayed against both 0.74.0 and 0.75.1
-            // with houhub's own `clientCapabilities` differs by exactly two
+            // with HouHub's own `clientCapabilities` differs by exactly two
             // things — the version string and a new
             // `agentCapabilities._meta.authStatus: {}`. `sessionCapabilities`,
             // the AIR capability array, `steering`, `goal` and
@@ -759,7 +820,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // (j) `authStatus` (upstream #1080) — the agent pushes its own
             // sign-in identity over `_auth/status_update`, the connection-level
-            // notification codex-acp 1.9.0 introduced. houhub registers that
+            // notification codex-acp 1.9.0 introduced. HouHub registers that
             // handler unconditionally (not per agent), so claude's pushes are
             // already claimed and nothing changes; see `handle_auth_status_update`
             // for what claude adds over codex (a per-prompt probe, so a push can
@@ -772,7 +833,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // adapter goes 2.1.257 → 2.1.270 (`manifest.json` `version`).
             //
             // (k) `recommendedValue` (upstream #1111), the release's headline
-            // and a NEW AIR capability houhub now advertises — to claude here,
+            // and a NEW AIR capability HouHub now advertises — to claude here,
             // and to codex from 1.11.0, which shipped its own half of the same
             // capability (see the codex entry (a)); 1.10.0's bundle contained
             // zero occurrences of the string, so this was claude-only for
@@ -796,7 +857,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // The ambiguous row is the point. `current_model_id_from_opts` reads
             // the model selector's `current_value`, and that is the model id
-            // `record_turn_end` stamps onto every turn houhub journals — on the
+            // `record_turn_end` stamps onto every turn HouHub journals — on the
             // `default` row it is the literal string `"default"`, which no
             // consumer can resolve to a model. With the capability on, a session
             // still riding the SDK default reports the concrete model instead.
@@ -815,7 +876,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // user would have to re-pick to overwrite it is the one that went
             // away. `config_option_rejects_value` handles it off the agent's
             // OWN advertised value list rather than off this pin — which
-            // matters, because the pin only governs what houhub installs, while
+            // matters, because the pin only governs what HouHub installs, while
             // `resolve_npx_command` launches whatever `claude-agent-acp` is on
             // PATH.
             //
@@ -830,7 +891,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // option is gone, along with custom-agent discovery. This one is NOT
             // gated on the capability — 0.77.0 answers `set_config_option(agent,
             // …)` with `Unknown config option: agent` no matter what the client
-            // advertised (verified on the same live build). houhub never built a
+            // advertised (verified on the same live build). HouHub never built a
             // picker for it, but the option WAS advertised (and rendered by the
             // generic selector path) whenever the cwd had a custom agent
             // configured, so a user who picked a persona has it saved in
@@ -849,8 +910,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (m) `_meta.permission.defaultToNo` (SDK 0.3.268+, forwarded by
             // `presentation.js`): "the ask must not be approvable by a stray
             // keystroke". The adapter already lists the reject options FIRST for
-            // such an ask, and houhub renders options in wire order and
-            // pre-selects nothing, so the hard half was free. What houhub adds is
+            // such an ask, and HouHub renders options in wire order and
+            // pre-selects nothing, so the hard half was free. What HouHub adds is
             // the emphasis: `PermissionDialog` paints the decline as the primary
             // button and demotes every approve option to an outline, so the one
             // accent-coloured control on a dangerous card is not "Allow". Read
@@ -875,14 +936,14 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `inferLiveToolName` reads, and upstream explicitly keeps that key
             // populated "for clients that key off it". Schema 1.9 types it
             // (`ToolCall::name`, stable), so reading it no longer needs a raw
-            // reader — it would simply be a second source for information houhub
+            // reader — it would simply be a second source for information HouHub
             // already has, and one the other agents fill differently (see the
             // codex entry's (d)). The
             // multi-select custom-answer fix (#1031) lands in `elicitation.ts`,
-            // which claude never reaches: houhub advertises
+            // which claude never reaches: HouHub advertises
             // `elicitation.form` for Codex and DeepSeek only. The `TaskList`
             // ReDoS fix (#1006) and the `allowDangerouslySkipPermissions: false`
-            // host opt-out (#1129) are adapter-internal — houhub WANTS the
+            // host opt-out (#1129) are adapter-internal — HouHub WANTS the
             // `bypassPermissions` mode in the catalog, so it deliberately does
             // not send the opt-out.
             //
@@ -911,7 +972,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `clientCapabilities.session.compaction` being an object — a real
             // typed field, NOT an `_meta` key, so unlike every other opt-in on
             // this list it cannot be smuggled through `ClientCapabilities.meta`:
-            // the `agent-client-protocol-schema` 0.11.7 houhub pinned at the
+            // the `agent-client-protocol-schema` 0.11.7 HouHub pinned at the
             // time had no `session` field on `ClientCapabilities` at all, and no
             // `CompactionUpdate` / `CompactionSummaryChunk` on `SessionUpdate`
             // (both arrived in schema 1.9 behind `unstable_session_compaction`).
@@ -919,7 +980,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // ⚠️ THIS ENTRY USED TO CALL THAT "out of reach at this schema pin".
             // It is not, and the correction is worth stating because the same
             // wrong inference was drawn twice more below. The pin limits what
-            // the TYPED STRUCTS can say, not what houhub can put on the wire:
+            // the TYPED STRUCTS can say, not what HouHub can put on the wire:
             // `session/new` and `session/load` already go out as
             // `UntypedMessage`s, and `air_async_task_delta` already reads three
             // variants this very `SessionUpdate` cannot deserialize. Opting in
@@ -987,7 +1048,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // because it is easy to get backwards. Claude's opening `tool_call`
             // carries `rawInput` (a deep clone of the SDK tool input), but the
             // `tool_call_update` the PostToolUse hook emits for Edit/Write
-            // carries the diff content and NO `rawInput` at all. houhub's update
+            // carries the diff content and NO `rawInput` at all. HouHub's update
             // arm reads `raw_input` off THAT frame, finds none, and so runs
             // `synthesize_edit_input_from_diffs`, whose result REPLACES the
             // opening frame's input — so the card's "+N −M" ends up being
@@ -998,9 +1059,9 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // collapsed count and the expanded body are held to a per-input
             // parity contract by the shared `exceedsLineDiffBudget` gate, and
             // both sides of it re-diff that text here; taking the adapter's
-            // numbers for the header while the body stays houhub's own re-diff
+            // numbers for the header while the body stays HouHub's own re-diff
             // reintroduces exactly the drift the gate exists to prevent, for a
-            // number houhub can already compute exactly. And it would help
+            // number HouHub can already compute exactly. And it would help
             // precisely where it is absent: the per-hunk blocks it marks are far
             // too small to reach the LCS budget, while the whole-file `Write`
             // fallback (`oldText: originalFile`) — the one shape that could — is
@@ -1035,11 +1096,11 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // and the text rides beside it as the tool's own
             // `annotations[question].notes` — and the "Other" box is relabelled
             // to say so. It lands in `elicitation.ts`, which claude never
-            // reaches, because houhub advertises `elicitation.form` for Codex and
+            // reaches, because HouHub advertises `elicitation.form` for Codex and
             // DeepSeek only. Recorded because it is the near-twin of codex-acp
             // 1.12.0's `request_user_input` reshape (codex entry (a)): the same
             // "a free-text note must not eat the selection" idea, arriving in
-            // the same fortnight, on the one adapter where houhub is not the
+            // the same fortnight, on the one adapter where HouHub is not the
             // client that sees it.
             //
             // 0.79.0 is two upstream changes (#1070, #1143) plus the release
@@ -1055,7 +1116,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // (t) **A shell approval's heading is now the COMMAND, not the
             // model's summary** (#1070, upstream #1068) — the one delta in this
-            // release that costs houhub code. Through 0.78.0
+            // release that costs HouHub code. Through 0.78.0
             // `buildClaudePermissionPresentation` gave a `Bash`/`PowerShell`
             // request `shellTitle = compactText(input.description) ?? toolName`
             // and used it for BOTH the presentation's `toolCall.title` and its
@@ -1074,10 +1135,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // the summary to the command the moment it started. They are now the
             // same string.
             //
-            // The other half is a regression houhub has to absorb, and it lands
+            // The other half is a regression HouHub has to absorb, and it lands
             // exactly where the client was most careful. `_meta.permission.title`
             // is now byte-identical to `toolCall.title` AND to the command
-            // houhub renders in the card's own block; `parsePermissionToolCall`
+            // HouHub renders in the card's own block; `parsePermissionToolCall`
             // prefers that meta title over the title precisely BECAUSE the title
             // used to be the command. So the heading turns into a second copy of
             // the command block, and the model's one-line label leaves the card
@@ -1104,10 +1165,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (`_meta.claudeCode.title` = the description), the terminal
             // `_meta` on the opening frame, and the error-result arm that yields
             // to the terminal channel. The terminal half is gated on the client
-            // `_meta.terminal_output` capability, which houhub does not advertise,
+            // `_meta.terminal_output` capability, which HouHub does not advertise,
             // so it stays inert and the description keeps riding `content`.
             //
-            // houhub only half-knew the name, and the halves it knew were the
+            // HouHub only half-knew the name, and the halves it knew were the
             // cheap ones. `getToolIcon` and `classifyToolKind` both carried a
             // `powershell` arm (added for pi, which swaps the same name in on
             // Windows), but `normalizeToolName` did not — so every dispatch
@@ -1129,16 +1190,16 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // runs. Settling the deferred turn on one of those would release
             // `session/prompt` with the promised text still ahead — the
             // out-of-turn delivery class upstream fixed in #864–#866 — so the
-            // hold now waits for `num_turns > 0`. houhub advertises `asyncTasks`
+            // hold now waits for `num_turns > 0`. HouHub advertises `asyncTasks`
             // and runs claude background shells/workflows/monitors through it,
-            // so this is a fix houhub gets by bumping.
+            // so this is a fix HouHub gets by bumping.
             //
             // `_meta.claudeCode.mcpServer` (SDK 0.3.274's `McpServerProvenance`,
             // `{name, source}`) is NOT consumed. It answers "which server serves
             // this `mcp__*` tool, and was it registered in-process by the host
-            // (`source: "sdk"`) or configured"; houhub injects houhub-mcp over
+            // (`source: "sdk"`) or configured"; HouHub injects houhub-mcp over
             // stdio, which is a configured source and never reads `sdk`, and the
-            // only trust question houhub asks of an MCP tool call — is this one of
+            // only trust question HouHub asks of an MCP tool call — is this one of
             // the companions I minted? — it already answers from the tool name
             // it chose itself. What DOES change without asking is its sibling:
             // the block is now emitted when `mcpServer` is present even with no
@@ -1155,7 +1216,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `@anthropic-ai/claude-agent-sdk` goes 0.3.274 → 0.3.280, i.e. CLI
             // 2.1.274 → **2.1.280** (`manifest.json`); `engines.node` stays
             // ">=22". Three of the four need nothing here; the fourth is the
-            // only item in this whole bump that costs houhub code, and it costs
+            // only item in this whole bump that costs HouHub code, and it costs
             // it in the HISTORY parser rather than on the wire.
             //
             // (w) **The subagent hand-back frame** (CLI-side, arrives with the
@@ -1165,7 +1226,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // provenance paragraph and indents every line of the report two
             // spaces. 0.81.0's `tools.ts` unwraps it (`unwrapHandbackFrame`)
             // before the report reaches a client, so the LIVE path is clean by
-            // bumping — but houhub also renders `Agent`/`Task` results from the
+            // bumping — but HouHub also renders `Agent`/`Task` results from the
             // CLI's own JSONL (`parsers::claude::extract_tool_result_text` takes
             // the tool_result text; `toolUseResult` is only mined for
             // `structuredPatch` and agent stats), and there the frame is still
@@ -1176,13 +1237,13 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // of the 2.1.280 binary rather than transcribed from the adapter.
             // Note this is NOT gated on the adapter: a user whose standalone
             // Claude Code CLI reaches 2.1.277 writes the frame into every
-            // transcript houhub imports, adapter or no adapter.
+            // transcript HouHub imports, adapter or no adapter.
             //
             // (x) `terminal_output_delta` (#1150, the twin of codex-acp 1.13.0's
             // #528). A client may now advertise `_meta.terminal_output_delta`
             // instead of `_meta.terminal_output`; the adapter treats EITHER as
             // "this client takes terminal output" and renames the key it emits.
-            // houhub advertises neither to claude, deliberately — see
+            // HouHub advertises neither to claude, deliberately — see
             // `build_client_capabilities`, and (u) above for what the `content`
             // channel is still carrying because of it. Inert.
             //
@@ -1190,7 +1251,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // cancelled or errored turn calls `ContextCompactionLifecycle
             // ::interrupt()`, which settles the entity and refuses the late,
             // uncorrelated hooks the abandoned work keeps emitting until a new
-            // turn's dispatch calls `resume()`. houhub renders compaction from
+            // turn's dispatch calls `resume()`. HouHub renders compaction from
             // the legacy `_meta.contextCompaction` tool call (the
             // the `compaction_update` presentation too, see (p)),
             // and that call is exactly what used to be left `in_progress`
@@ -1204,7 +1265,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // that as "the running total restarted" and take the reading itself
             // as the increment. `lastModelUsageReading` is now `undefined` on a
             // resumed session and the first result's rows come from its own
-            // per-turn `usage` instead. This lands straight in houhub's
+            // per-turn `usage` instead. This lands straight in HouHub's
             // `_meta.quota.model_usage` consumer — the per-model rows on the
             // first turn after a resume were inflated by the entire prior
             // session. Nothing to do beyond the bump.
@@ -1226,7 +1287,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // * It takes over the AIR lane. The model-fallback advisory is
             //   `if (!supportsNotices && supportsAirSessionFailures(...))`, so
-            //   turning notices on stops feeding houhub's existing
+            //   turning notices on stops feeding HouHub's existing
             //   `SessionFailure` banner; codex-acp says the same in its
             //   readme-dev ("notices take precedence over AIR advisory
             //   records"). ACCEPTED: advisories become notifications (a
@@ -1252,11 +1313,11 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // #1166) and moves NO dependency: `@anthropic-ai/claude-agent-sdk`
             // stays 0.3.280 (so the CLI is still 2.1.280), the ACP SDK stays
             // 1.5.0, `engines.node` stays ">=22", and the `initialize` response
-            // to houhub's handshake matches 0.81.0's field for field apart from
+            // to HouHub's handshake matches 0.81.0's field for field apart from
             // the version (both probed live over stdio). Two items cost
-            // houhub code, (bb) and (cc). The rest arrive free or are inert, and
+            // HouHub code, (bb) and (cc). The rest arrive free or are inert, and
             // they are written down because three of them settle something
-            // houhub reported upstream or already works around.
+            // HouHub reported upstream or already works around.
             //
             // (bb) **File-tool argument aliases** (#1161). CLI 2.1.280 accepts
             // `path` for Write's `file_path` and `file_text` / `file_content`
@@ -1265,7 +1326,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // block, and with it `rawInput` and the JSONL, keeps the model's
             // spelling. The adapter fixed only its OWN title, diff and
             // locations (`normalizeWriteInput`); `rawInput` is still the raw
-            // clone, and every houhub card reads `rawInput`, so an aliased
+            // clone, and every HouHub card reads `rawInput`, so an aliased
             // Write rendered with no path and no body. Edit has carried the
             // same kind of renames for longer — `path`, `old_str`, `new_str`,
             // `replace_name`, all already in the 2.1.274 binary — and the
@@ -1278,7 +1339,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // keyed on `_meta.claudeCode.toolName`. A permission request needs
             // nothing: the CLI parses, and so coerces, the input before
             // `canUseTool` sees it. Like (w), this is not gated on the adapter:
-            // any 2.1.280 CLI writes these spellings into the transcripts houhub
+            // any 2.1.280 CLI writes these spellings into the transcripts HouHub
             // reads. On success the CLI also appends a model-directed note to
             // the Write result ("Note: Write's parameters are named `file_path`
             // and `content`. …"); it is short and true, and stays visible.
@@ -1303,7 +1364,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // for good. `session_modes_reject_id` screens it off the session's
             // own mode list, the same way.
             //
-            // (dd) Plan approval: two of the three defects houhub reported as
+            // (dd) Plan approval: two of the three defects HouHub reported as
             // #1077 are fixed, and the third is not. #1163 — an allowed
             // ExitPlanMode now publishes the mode it leaves the session in, as
             // a `current_mode_update` plus a `mode` `config_option_update`, and
@@ -1311,7 +1372,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // fell back to acceptEdits reads as acceptEdits. Through 0.81.0
             // only the clear-context options did, and the composer kept
             // showing Plan while the session ran in Auto. Both frames land on
-            // paths houhub already has; claude's composer is driven by its
+            // paths HouHub already has; claude's composer is driven by its
             // `mode` config option, which is not re-asserted at send time, so
             // the published mode holds for the rest of the connection. #1164 —
             // bypass is offered NEXT TO Auto instead of being dead code behind
@@ -1322,11 +1383,11 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // still gives the Claude-side session a fresh uuid
             // (`options.sessionId = publicSessionId ? randomUUID() :
             // sessionId`), so a later `session/load` of the public id is
-            // silently truncated at the plan. houhub still does not work
+            // silently truncated at the plan. HouHub still does not work
             // around it.
             //
             // (ee) A steered turn settles on the result that answers the steer
-            // (#1166). houhub steers claude natively
+            // (#1166). HouHub steers claude natively
             // (`steering_prompt_required_min_version`), and through 0.81.0 a
             // steered turn settled only at an SDK `idle` after the steer's
             // echo — so a steer the CLI never replayed, or an idle swallowed by
@@ -1334,7 +1395,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `session/prompt` parked until cancel or the next prompt (#1114).
             // A result whose `user_message_uuids` names the steer now settles
             // it, and the idle stays as the fallback. A free fix to exactly
-            // the turn boundary houhub's in-flight tracking keys on.
+            // the turn boundary HouHub's in-flight tracking keys on.
             //
             // (ff) Usage. #1132: the CLI's synthetic frames (spend limit,
             // sign-in prompt, local command output — `model: "<synthetic>"`,
@@ -1358,11 +1419,11 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `systemPrompt` / `disableBuiltInTools`,
             // `_meta.claudeCode.emitRawSDKMessages` and every process-level
             // `_meta.claudeCode.options` key, skills normalized as a set — not
-            // just cwd and MCP servers. houhub sends the same `_meta`
+            // just cwd and MCP servers. HouHub sends the same `_meta`
             // (`emitRawSDKMessages: true`, nothing else) on new, load and
             // resume, and the resume that follows a fork creates its session
             // cold (`unstable_forkSession` never enters the adapter's session
-            // map, so there is no fingerprint to compare), so no houhub flow
+            // map, so there is no fingerprint to compare), so no HouHub flow
             // rebuilds a query it did not rebuild before.
             //
             // (hh) The rest need nothing. #1035: a marker-only custom slash-
@@ -1373,35 +1434,35 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // history path, so the two paths now agree. #1055 tags the
             // informational fallback line with `_meta.claudeCode.kind =
             // "informational"`, which only a client WITHOUT the notices
-            // capability ever receives; houhub advertises it (see (aa)). #1103:
+            // capability ever receives; HouHub advertises it (see (aa)). #1103:
             // a successful result that merely MENTIONS `Please run /login` no
             // longer fails the turn as `auth_required`, nor rolls a goal back.
-            // #1104 touches only `providers/set`, which houhub never sends.
+            // #1104 touches only `providers/set`, which HouHub never sends.
             // #1146: an unreadable managed-policy tier no longer kills the
             // adapter before it answers `initialize`.
             //
             // 0.81.2 + 0.82.0 are four upstream changes (#1170, #1173, #1153,
-            // #1179) and move no dependency that reaches houhub:
+            // #1179) and move no dependency that reaches HouHub:
             // `@anthropic-ai/claude-agent-sdk` stays 0.3.280 (CLI 2.1.280), the
             // ACP SDK 1.5.0, `engines.node` ">=22"; the one new runtime
             // dependency is `diff` (the adapter now builds Git patches). The
-            // effect on houhub was MEASURED rather than read: both versions' own
+            // effect on HouHub was MEASURED rather than read: both versions' own
             // scenario harness (`src/tests/acp-scenarios`, a mocked SDK, 40
-            // scenarios) re-run with houhub's exact `clientCapabilities`, and the
+            // scenarios) re-run with HouHub's exact `clientCapabilities`, and the
             // two recordings diffed frame by frame.
             //
-            // (ii) **The AIR tool-call contract** (#1153) — BREAKING for houhub,
-            // because houhub is an AIR client: the adapter switches the whole
+            // (ii) **The AIR tool-call contract** (#1153) — BREAKING for HouHub,
+            // because HouHub is an AIR client: the adapter switches the whole
             // contract on the mere presence of
             // `clientCapabilities._meta.jetbrains.air` (`isAirClient`), which
-            // houhub sends for `sessionFailure` / `asyncTasks` /
+            // HouHub sends for `sessionFailure` / `asyncTasks` /
             // `recommendedValue`. Plain and Zed clients keep the old fields.
-            // For an AIR client, and where houhub absorbs it
+            // For an AIR client, and where HouHub absorbs it
             // (`crate::acp::air_contract` unless named otherwise):
             //   * a `tool_call_update`'s `_meta` carries only the keys that
             //     changed, per key inside `claudeCode` and `jetbrains.air`, so
             //     `toolName` / `parentToolUseId` ride the OPENING frame only.
-            //     Merged per call by `ToolCallMetaLedger`; houhub replaces a
+            //     Merged per call by `ToolCallMetaLedger`; HouHub replaces a
             //     call's `_meta` whole, so the first partial update used to
             //     un-nest a subagent's child from its capsule.
             //   * `claudeCode.title` / `subagent` / `skill` / `skillPath` go to
@@ -1420,7 +1481,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     (`permission_record`); the edit text is filled from the live
             //     call on the frontend (`fillStrippedEditInput`).
             //   * a Read, and a Grep/Glob that names a path, completes with NO
-            //     result text ("AIR shows … the list of viewed files"). houhub
+            //     result text ("AIR shows … the list of viewed files"). HouHub
             //     already subscribes to the raw SDK stream
             //     (`emitRawSDKMessages`), where the `tool_result` arrives just
             //     before the completion: `claude_viewed_results` fills a BARE
@@ -1438,11 +1499,11 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     `session_info_update._meta.goal`) → `_meta.jetbrains.air.goal`.
             //     `init_advertises_goal` / `session_info_goal_value` read both.
             //   * mode `_meta.kind`, the `_askUserQuestionCustomAnswer` marker
-            //     (→ `customAnswer`) and `diffStats` move or go. houhub maps no
+            //     (→ `customAnswer`) and `diffStats` move or go. HouHub maps no
             //     mode meta, never reaches claude's elicitation, and never read
             //     `diffStats`; `question.rs` reads both marker spellings anyway.
             //   Free with it: a subagent's streamed text is no longer re-sent in
-            //   full after its chunks (houhub's capsule transcript showed that
+            //   full after its chunks (HouHub's capsule transcript showed that
             //   paragraph twice), and a plan that repeats the previous one is
             //   not re-sent.
             //
@@ -1451,11 +1512,11 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // REQUEST, whose `oldText: null` placeholders the permission card
             // would read as an emptied file, and shows a live Write no diff at
             // all until approval; `rawInputRendering` and `planFile` remove the
-            // description / prompt / plan copies houhub's cards render.
+            // description / prompt / plan copies HouHub's cards render.
             //
             // (jj) #1179: a sign-in failure is ONLY the ACP `authRequired`
             // rejection now — no AIR `access` record with a `login` action,
-            // which is where the Sign in button on houhub's notification came
+            // which is where the Sign in button on HouHub's notification came
             // from. The `turn_failed_auth_required` verdict carries that button
             // itself now (frontend `notifyTurnFailure`), for every agent.
             //
@@ -1469,12 +1530,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // dependency bumps: `@anthropic-ai/claude-agent-sdk` 0.3.280 →
             // 0.3.283 → 0.3.284, i.e. the bundled CLI 2.1.280 → 2.1.284; the
             // ACP SDK 1.5.0 → 1.5.1; `engines.node` still ">=22". The ACP
-            // traffic houhub reads was measured the same way as for 0.82.0 and
+            // traffic HouHub reads was measured the same way as for 0.82.0 and
             // did not move: the adapter's scenario harness (40 scenarios, mocked
-            // SDK) re-run on both tags with houhub's exact `clientCapabilities`,
+            // SDK) re-run on both tags with HouHub's exact `clientCapabilities`,
             // and with each opt-in AIR capability added, is byte-identical, and
             // so is `initialize` minus the version. What moved is the CLI behind
-            // it — including the raw SDK stream houhub also reads, see (nn) —
+            // it — including the raw SDK stream HouHub also reads, see (nn) —
             // measured live over stdio with no model call (a `UserPromptSubmit`
             // hook blocks the prompt).
             //
@@ -1499,7 +1560,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // (nn) Plugin load failures (CLI 2.1.283, `system/init`'s
             // `plugin_errors`) have "no ACP surface": the adapter only writes
-            // them to its stderr. houhub reads them off the raw SDK stream it
+            // them to its stderr. HouHub reads them off the raw SDK stream it
             // already takes (`claude_plugin_load_failures`) and raises one
             // warning per new list. Measured: an ENABLED plugin that is merely
             // absent — an unknown marketplace plugin, or the `<id>@local` MCP
@@ -1515,7 +1576,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // burst of `count_tokens` requests (about 20 per call, counted at a
             // local gateway; 0.82.0 sends none), and SDK control requests are
             // serialized — so the NEXT control request waits for it, and so
-            // does a prompt. Measured with houhub's connect-time replay shape:
+            // does a prompt. Measured with HouHub's connect-time replay shape:
             // the first `set_config_option` after `session/new` took ~0.5 s
             // (fast local gateway) / ~2 s (a remote gateway) instead of ~0.03 s,
             // the effort replay after a model switch the same again, and a
@@ -1524,7 +1585,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // were still blocked when the probe gave up (90–120 s).
             // `getContextUsage({ detail: "summary" })` returns the same
             // `rawMaxTokens` in ~0.1 s with no request at all (measured on both
-            // gateways), so the fix is a one-liner in the adapter. houhub has no
+            // gateways), so the fix is a one-liner in the adapter. HouHub has no
             // lever on the call: the adapter is a global npm install, and the
             // CLI offers no setting for the default `detail`. Reported upstream
             // with a repro as agentclientprotocol/claude-agent-acp#1192; check
@@ -1533,22 +1594,22 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (pp) Inert: managed `deniedModels` now also filters the picker
             // (#1186); the adapter ignores the new `mcp_tool_listing` stream
             // event; `conversation_reset` gains `trigger` / `user_message_uuid`
-            // / `timestamp` and `system/init` gains `view_mode` — houhub reads
+            // / `timestamp` and `system/init` gains `view_mode` — HouHub reads
             // none of those frames.
             //
             // 0.85.0 is three upstream changes (#1208, #1210, #1211). The
             // bundled `@anthropic-ai/claude-agent-sdk` goes 0.3.284 → 0.3.286,
             // i.e. CLI 2.1.284 → **2.1.286**; the ACP SDK stays 1.5.1 and
             // `engines.node` ">=22". As on 0.84.0, the adapter's own traffic did
-            // not move for houhub — its scenario harness (40 scenarios, mocked
-            // SDK) re-run on both tags with houhub's exact `clientCapabilities`
+            // not move for HouHub — its scenario harness (40 scenarios, mocked
+            // SDK) re-run on both tags with HouHub's exact `clientCapabilities`
             // is byte-identical, and so is `initialize` minus the version — but
             // the CLI behind it did. (qq) and (rr) were measured live over stdio
             // against a local fake Anthropic API (no model call), 0.84.0 and
             // 0.85.0 side by side.
             //
             // (qq) **A steer no longer waits on a foreground tool** (CLI
-            // 2.1.286, #1211). houhub steers claude natively, and a
+            // 2.1.286, #1211). HouHub steers claude natively, and a
             // `_session/steering` that lands while a foreground Bash, MCP or
             // Agent call runs now moves that call to the background and lets the
             // steer through. 2.1.284 held a Bash steer until the command
@@ -1559,7 +1620,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `_meta.jetbrains.air.asyncTasks.backgrounded`; an
             // `async_task_spawned` (shell) takes over, the steer is answered and
             // the prompt settles; when the command exits, the CLI runs a turn of
-            // its own on the task notification. Two consequences for houhub:
+            // its own on the task notification. Two consequences for HouHub:
             //   * The command card printed that notice as its output.
             //     `parseBackgroundLaunch` (frontend) now knows all four wordings
             //     the CLI acknowledges a background command with —
@@ -1567,7 +1628,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     shows its Background badge and one line instead, live and from
             //     history alike.
             //   * An MCP call moves the same way ("MCP tool "…" was moved to the
-            //     background as task …"), and houhub's own blocking
+            //     background as task …"), and HouHub's own blocking
             //     `ask_user_question` is one. Steering while its card was up left
             //     the question parked past the turn: the card gone with the
             //     turn, the one-per-connection slot held, every later ask on the
@@ -1597,14 +1658,14 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   * #1208 hides other agents' and sessions' messages (`is_meta`
             //     user records whose `origin.kind` is peer, channel, observer,
             //     observer-activity or slack-ping) from `session/load` replay.
-            //     houhub never renders claude's replay (it resumes, and discards
+            //     HouHub never renders claude's replay (it resumes, and discards
             //     a load's), and `parsers::claude` skips every `isMeta` record;
             //     the 2.1.286 binary writes peer and channel messages with
             //     `isMeta: true`.
             //   * #1208's other half keeps a settings-enabled `ultracode` on
-            //     across the adapter's effort applies; houhub writes neither key.
+            //     across the adapter's effort applies; HouHub writes neither key.
             //   * #1210 sends the root `_askUserQuestionCustomAnswer` marker to
-            //     AIR again. houhub advertises no elicitation to claude, so the
+            //     AIR again. HouHub advertises no elicitation to claude, so the
             //     adapter disallows AskUserQuestion here.
             //   * SDK 0.3.286: a `system/session_title_changed` raw frame (new
             //     in the binary, not seen on the probes; no consumer, and
@@ -1626,7 +1687,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // the ACP SDK 1.5.1 → 1.6.0. The Claude SDK stays 0.3.286, so the
             // CLI is the same 2.1.286 binary (byte-identical in both installs),
             // and `engines.node` stays ">=22". The scenario harness is again
-            // byte-identical on both tags with houhub's `clientCapabilities`,
+            // byte-identical on both tags with HouHub's `clientCapabilities`,
             // and so are `initialize` and `session/new` over stdio. The probes
             // below ran live against the local fake Anthropic API, 0.85.0 and
             // 0.85.1 side by side.
@@ -1642,7 +1703,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // steered Bash or MCP call completes with its background notice
             // before the turn ends; a tool call cut off at the output limit gets
             // an `InputValidationError` result from 2.1.286; approving or
-            // cancelling a plan answers `ExitPlanMode` (houhub is offered no
+            // cancelling a plan answers `ExitPlanMode` (HouHub is offered no
             // clear-context option); and a CLI killed mid-tool ends with "The
             // connection to Claude was lost.", as on 0.85.0. A steer that lands
             // while a tool call is still streaming does trip it, see (fff). The
@@ -1651,11 +1712,11 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // (uu) #1205 restores background-task stops on `session/load`
             // replay instead of showing the `<task-notification>` as a prompt.
-            // houhub never renders that replay, and `parsers::claude` already
+            // HouHub never renders that replay, and `parsers::claude` already
             // hides those records and strips one embedded in a prompt. But a
             // background shell's notification names the `Bash` call that started
             // it in `<tool-use-id>` — the probes show it, and so do transcripts
-            // from 2.1.257 on — and houhub's live settle path took every named
+            // from 2.1.257 on — and HouHub's live settle path took every named
             // call for a sub-agent launch: it rewrote a background command's
             // card into the sub-agent lifecycle marker, which the command card
             // printed raw. Since 2.1.286 a steer that lands during a command
@@ -1665,14 +1726,14 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // (vv) #1216 answers `session/close` without awaiting the interrupt
             // reply: a fresh session closed in 519 ms on 0.85.0 and 2 ms on
-            // 0.85.1. houhub sends one close only, for the parent a fork leaves,
+            // 0.85.1. HouHub sends one close only, for the parent a fork leaves,
             // and never awaits its answer, so the parent's CLI just exits
             // sooner.
             //
             // (ww) #1217's draft ACP v2 is opt-in
             // (`CLAUDE_AGENT_ACP_EXPERIMENTAL_V2=1`) and routes by the protocol
-            // version `initialize` asks for. houhub asks for 1; with the variable
-            // set, a whole houhub turn is frame-for-frame the same.
+            // version `initialize` asks for. HouHub asks for 1; with the variable
+            // set, a whole HouHub turn is frame-for-frame the same.
             //
             // (oo) still holds on 0.85.1: 15 `count_tokens` per `session/new`,
             // and #1201 is still open.
@@ -1682,7 +1743,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // ">=22". Most of its commits build the draft ACP v2 surface, which
             // stays opt-in (see (ww)); the rest add `/mcp` (#1218) and fix the
             // cancel, close and context-window paths. The scenario harness
-            // re-run on both tags with houhub's exact `clientCapabilities`
+            // re-run on both tags with HouHub's exact `clientCapabilities`
             // differs in one frame, the same in all 40 scenarios:
             // `available_commands_update` now ends with the adapter's own `mcp`
             // entry. `initialize` is the same minus the version. The probes
@@ -1697,7 +1758,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // of the CLI's model-row builders now value a Fable row by the
             // family alias, as Opus, Sonnet and Haiku already were. Through a
             // gateway the row goes from `claude-fable-5-1` to `fable` under the
-            // same name and description. A Fable pick houhub saved before is
+            // same name and description. A Fable pick HouHub saved before is
             // `claude-fable-5-1`, which the selector no longer lists, so every
             // connect would have dropped it for the default model (Opus there).
             // `heal_respelled_model_pick` replays it as the one row that names
@@ -1709,12 +1770,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // server list, and runs a reconnect, enable or disable through the
             // SDK control API, which 2.1.286 refused in an SDK session.
             // Measured: `/mcp` lists the probe server with its tool count, and
-            // `/mcp reconnect probe` reconnects it. houhub's slash menu lists it
+            // `/mcp reconnect probe` reconnects it. HouHub's slash menu lists it
             // like any other command, and the reply renders as Markdown. The
             // transcript keeps only the command and Claude Code's own text, and
             // `parsers::claude` hides a local command with its output, so a
             // reload shows neither, as for `/usage`. A reconnect starts OAuth
-            // only for a client with URL elicitation, which houhub does not
+            // only for a client with URL elicitation, which HouHub does not
             // advertise.
             //
             // (zz) The main-thread `agent` option is back (#1250, undoing
@@ -1722,7 +1783,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // the user, the project or a plugin), `session/new` lists `agent`
             // with `default` and each custom agent, and a pick applies that
             // agent's prompt from the next turn (measured: the persona reaches
-            // the system prompt). houhub renders it as any other select and
+            // the system prompt). HouHub renders it as any other select and
             // replays a saved pick through `config_option_rejects_value`, so an
             // agent no longer defined is skipped. With no custom agent the
             // option is absent, and an `agent` pick saved before 0.77.0 is still
@@ -1732,7 +1793,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (#1218): the mode of the last prompt, unless a plan was exited
             // after it. Measured: set `acceptEdits`, prompt, resume in a new
             // process — 0.85.1 comes back in `default`, 0.86.0 in `acceptEdits`.
-            // houhub still sets the saved composer mode at connect when it
+            // HouHub still sets the saved composer mode at connect when it
             // differs (`apply_preferred_session_options`), so only a user who
             // never picked a mode sees the transcript's.
             //
@@ -1740,19 +1801,19 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // drops the user messages it abandons from Claude Code's queue
             // before the interrupt, so they no longer run after all. Measured
             // with a prompt queued behind a slow turn: 0.85.1 still sent it to
-            // the model after the cancel, 0.86.0 did not. houhub never queues a
+            // the model after the cancel, 0.86.0 did not. HouHub never queues a
             // prompt behind a running turn (the `turn_in_flight` gate), so what
             // it gains is a steer the CLI still holds when the user stops (read
             // from the source); a steer the CLI has already taken in runs on
             // both, as measured. `session/close` now answers after the turns it
-            // cancels have ended (5 s at most); houhub's one close is for an idle
+            // cancels have ended (5 s at most); HouHub's one close is for an idle
             // fork parent and is never awaited. Read from the source: a held
             // turn cancelled mid-follow-up now ends at its interrupt's idle,
             // after the follow-up's flushed output, and a force-cancel that
             // fires while an update is being sent no longer leaves the turn
             // open.
             //
-            // (ccc) Nothing to change in houhub, each checked:
+            // (ccc) Nothing to change in HouHub, each checked:
             //   * #1241 counts a subagent's permission request as the turn
             //     waiting on the user. Over v1 that only makes a steer sent
             //     while such a card is open non-interrupting, as the main
@@ -1764,10 +1825,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     `_meta.jetbrains.air.{kind: "skill", skillPath}`. Not adopted:
             //     the adapter resolves SKILL.md only under the session cwd and
             //     the home directory, so plugin and bundled skills never carry
-            //     it, and a marker in the slash menu would split houhub's skills
+            //     it, and a marker in the slash menu would split HouHub's skills
             //     into two looks.
             //   * Write/Edit diffs and permission titles change only for the v2
-            //     surface or a `diffPatch` client, and houhub is neither for
+            //     surface or a `diffPatch` client, and HouHub is neither for
             //     Claude.
             //   * CLI 2.1.287 offers MCP servers on the 2025-11-25 protocol
             //     `elicitation: {form, url}` where 2.1.286 sent `{}`. houhub-mcp
@@ -1775,7 +1836,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     server with the same handshake still lists its tools.
             //   * A `context: fork` skill typed as `/<skill>` now streams its
             //     fork, parented to a synthetic `forked-command-<skill>` id that
-            //     no tool call carries. houhub drops parented text whose parent
+            //     no tool call carries. HouHub drops parented text whose parent
             //     never arrived, and shows such tool calls as ordinary cards
             //     (under an Agent card instead while one is still running, by
             //     the positional fallback); the main thread's answer still
@@ -1794,7 +1855,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // dependencies). 0.88.0 (#1276) moves the Claude SDK 0.3.287 →
             // 0.3.293, i.e. CLI 2.1.287 → **2.1.293**. The ACP SDK stays 1.7.0
             // and `engines.node` stays ">=22". 0.88.0's scenario harness, run
-            // on the sources of both tags with houhub's exact
+            // on the sources of both tags with HouHub's exact
             // `clientCapabilities`, is byte-identical in all 40 scenarios; the
             // Monitor scenario it replaced differs as (eee) says. The probes
             // below ran live against the local fake Anthropic API (no model
@@ -1807,19 +1868,19 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // answers it with that turn's result. The transcript records the
             // prompt as a `queued_command` attachment, which `parsers::claude`
             // renders as a user turn (`queued_human_prompt`) and the background
-            // watcher matches against the prompts houhub sent, so the rest of
+            // watcher matches against the prompts HouHub sent, so the rest of
             // the turn stays off the overlay. 0.86.0 took the result for an
             // autonomous one and left the prompt open: measured, no answer in
-            // 45 s, so houhub's turn kept spinning. 0.88.0 settles it
+            // 45 s, so HouHub's turn kept spinning. 0.88.0 settles it
             // (`end_turn`, 4.8 s after the send). A prompt that arrives while
             // the autonomous turn is still waiting on the model is not folded
             // on either version; it runs as its own turn afterwards.
             //
             // (eee) **Monitor tasks leave the async-task channel** (#1249). The
             // task of a `Monitor` call (the SDK reports it as `local_bash`) and
-            // a `local_monitor` task are no longer published. houhub's task strip
+            // a `local_monitor` task are no longer published. HouHub's task strip
             // therefore lists no running monitor and offers no stop for one,
-            // and houhub cannot bring the control back:
+            // and HouHub cannot bring the control back:
             // `_session/async_task/stop` refuses a task the adapter does not
             // publish. Measured on 0.86.0's Monitor scenario: 0.86.0 sends
             // `async_task_spawned` and two progress frames, 0.88.0 neither. The
@@ -1828,7 +1889,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // events), never from result text; a late frame of an earlier run
             // (`run_id`, SDK 0.3.292+) is dropped; and a subagent's task keeps
             // reporting to the subagent's session after the subagent finished.
-            // houhub's Bash card reads the launch text itself
+            // HouHub's Bash card reads the launch text itself
             // (`parseBackgroundLaunch`), so a backgrounded command looks the
             // same.
             //
@@ -1839,7 +1900,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // the turn through (tt): the prompt settled `end_turn` with an AIR
             // `sessionFailure` titled "Claude ended the turn without returning
             // results for tool calls: <id>" (actions retry and new session),
-            // and houhub's failure banner showed it over a turn that went fine.
+            // and HouHub's failure banner showed it over a turn that went fine.
             // 0.88.0 reports no failure. It closes only that card as `failed`,
             // with "Claude stopped this tool call before it ran." The call never
             // reaches a complete assistant message, so the transcript has no
@@ -1866,14 +1927,14 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `file_path` when `path` is absent, a repeat dropped), while the
             // stream, `rawInput` and the JSONL keep the model's spelling, and
             // the result gains "Note: Grep's parameter for where to search is
-            // named `path`. …", which houhub's search parser keeps as a note.
+            // named `path`. …", which HouHub's search parser keeps as a note.
             // `canonical_file_tool_input` makes the same repair, so the search
             // card shows the path. The native CLI offers no Grep tool by
             // default (it searches through Bash), so no probe reached it and
             // few setups will. The
             // Agent tool takes `effort`, and WebFetch takes `offset` to read on
             // past 100,000 characters. The adapter adds both to its own titles,
-            // which houhub does not show, so houhub's Agent and WebFetch cards
+            // which HouHub does not show, so HouHub's Agent and WebFetch cards
             // read them from `rawInput`.
             //
             // (iii) **MCP handshake** (CLI 2.1.292). A stdio server is first
@@ -1884,7 +1945,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // follows 6 ms after the probe, and `session/new` takes as long as
             // on 0.86.0.
             //
-            // (jjj) Nothing to change in houhub, each checked:
+            // (jjj) Nothing to change in HouHub, each checked:
             //   * A resume and a load both come back in plan mode after a plan
             //     mode prompt, on both versions.
             //   * An async Agent launch keeps its result text; the structured
@@ -1892,15 +1953,15 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   * `latest_per_family` keeps Fable 5.1, Opus 5.5 and Sonnet 5.5,
             //     and the Fable row keeps the value `fable`.
             //   * 2.1.292 honours `NO_PROXY` for the CLI's own sign-in and
-            //     policy requests, so the bypass list houhub exports with its
+            //     policy requests, so the bypass list HouHub exports with its
             //     proxy setting now reaches them too.
             //
             // 0.89.0 changes the adapter only: the Claude SDK stays 0.3.293
             // (CLI 2.1.293), the ACP SDK moves 1.7.0 → 1.8.0 and
             // `engines.node` stays ">=22". Each tag's own scenario harness, run
-            // with houhub's exact `clientCapabilities`, is byte-identical in all
+            // with HouHub's exact `clientCapabilities`, is byte-identical in all
             // 40 scenarios apart from `initialize`, whose AIR capability list
-            // gains "customInstructions" (houhub reads nothing off that list).
+            // gains "customInstructions" (HouHub reads nothing off that list).
             // A live conversation against the local fake Anthropic API (a new
             // session, a Bash turn, then resume and load in fresh processes)
             // matches 0.88.0's frame for frame apart from timing.
@@ -1908,10 +1969,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (kkk) **Archived titles** (#1268). JetBrains AIR archives a
             // session by appending its title again as `[archived] <title>` (a
             // `custom-title` and an `agent-name` record). The adapter now
-            // publishes such a title to an AIR client, which houhub is, without
+            // publishes such a title to an AIR client, which HouHub is, without
             // the marker, while the transcript keeps it: measured live, 0.88.0
             // publishes "[archived] Probe title" and 0.89.0 "Probe title" (the
-            // prefixed one still to a client that is not AIR). houhub's two
+            // prefixed one still to a client that is not AIR). HouHub's two
             // title producers, the wire and the transcript, would then disagree
             // and the sidebar row flip between them, so both read a title
             // through `parsers::claude::displayed_session_title`, which drops
@@ -1920,19 +1981,19 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (lll) The session index (`sessionIndex`, #1268: an indexed
             // `session/list`, `_session/rename` / `archive` / `unarchive` and a
             // pushed `_session/list/subscribe`) is not adopted. It lives inside
-            // a running adapter, while houhub's list is read offline from the
+            // a running adapter, while HouHub's list is read offline from the
             // transcripts, for every agent, and must work with none running.
             // Undeclared it is inert: a live trace shows the same one settings
             // watcher as 0.88.0, no timer and no extra scan of the projects
             // directory, about 0.6 MB more heap, and the new methods answer
             // -32601. Without it an AIR client's `session/delete` ARCHIVES
             // (appends the title records above and keeps the transcript) and
-            // `session/list` hides archived sessions; houhub sends neither.
+            // `session/list` hides archived sessions; HouHub sends neither.
             //
             // (mmm) Custom instructions (#1177: `_meta.jetbrains.air.
             // customInstructions` on `session/new`, appended to the
             // `claude_code` preset, honoured from any client) are not adopted:
-            // no houhub surface supplies session-level instructions. Measured
+            // no HouHub surface supplies session-level instructions. Measured
             // live, CLI 2.1.293 freezes a session's system prompt at its first
             // model request (a `prompt_snapshot` attachment replayed on every
             // resume, load and fork, and across a `/compact`), so instructions
@@ -1945,16 +2006,16 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // strictly: a malformed `mcpServers` entry (a stdio server without
             // `args` or `env`, an http one without `headers`, `env` as an
             // object) or a non-string `additionalDirectories` item now fails the
-            // request with -32602 where 0.88.0 dropped it. houhub builds its
+            // request with -32602 where 0.88.0 dropped it. HouHub builds its
             // entries through the Rust crate's typed constructors, which always
             // write those fields, and they pass on both versions.
             //
-            // (ooo) Nothing else reaches houhub. `session/close` of a session
+            // (ooo) Nothing else reaches HouHub. `session/close` of a session
             // that is not loaded answers `{}` instead of -32603
             // (`close_forked_parent` only logs either way). The message drain
             // yields to the event loop every 8 ms: timing only, and a
             // 30,000-delta flood with a cancel measured no difference. #1278
-            // recreates live sessions on the ACP `logout`, which houhub never
+            // recreates live sessions on the ACP `logout`, which HouHub never
             // sends to Claude, and #1288–#1290 change the experimental ACP v2
             // surface only.
             //
@@ -1963,7 +2024,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // CLI binary is byte for byte the same 2.1.293; the ACP SDK 1.8.0)
             // and `engines.node` stays ">=22". The published package differs
             // from 0.89.0's in `dist/session-index/*` and `package.json`, as
-            // the tag diff does. Each tag's scenario harness, run with houhub's
+            // the tag diff does. Each tag's scenario harness, run with HouHub's
             // exact `clientCapabilities`, is byte-identical in all 40
             // scenarios, `initialize` included. A live conversation against the
             // local fake Anthropic API (a new session, three turns, then a
@@ -1979,7 +2040,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // lookup listed the whole project directory per row and could read
             // another copy of the session. All of it serves a client that
             // declared `sessionIndex` (see (lll)), or the archive behind an
-            // AIR client's `session/delete`, which has no subscriber. houhub
+            // AIR client's `session/delete`, which has no subscriber. HouHub
             // declares neither and sends none of these requests.
             //
             // (qqq) The rule the index now applies itself is the SDK's title
@@ -1990,8 +2051,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // else the AI title, else the newest `last-prompt` record, a
             // `summary` record or the first prompt. The adapter then collapses
             // white space and cuts at 256 UTF-16 units (`sanitizeTitle`).
-            // houhub's history parser titles an untitled session by its first
-            // prompt, reference links folded, and both of houhub's transcript
+            // HouHub's history parser titles an untitled session by its first
+            // prompt, reference links folded, and both of HouHub's transcript
             // readers keep a stored title's spacing. Measured with the CLI's
             // title request refused (a gateway may refuse it), adopting the
             // wire title flipped the row against every detail fetch: after
@@ -2004,7 +2065,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // login flow\n\nplease  look at auth.ts first" throughout. A
             // generated title that came back with a double space was stored
             // with it as an `ai-title` record and published collapsed. So for
-            // Claude houhub no longer writes the wire title while it can read
+            // Claude HouHub no longer writes the wire title while it can read
             // the transcript: the notification loop holds it and wakes the
             // transcript watcher, which drops it, publishing it only while it
             // has no transcript it can read, as with a `CLAUDE_CONFIG_DIR` set
@@ -2013,14 +2074,14 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // reports apart from that fallback is a transcript record too: the
             // CLI appends a custom title before it writes the sidecar, and
             // stores a generated one as an `ai-title` record.
-            // houhub keeps its first-prompt fallback; showing the SDK's newest
+            // HouHub keeps its first-prompt fallback; showing the SDK's newest
             // prompt instead would be a separate choice.
             //
             // 0.90.0 moves the Claude SDK 0.3.293 → 0.3.296, i.e. CLI 2.1.293 →
             // **2.1.296**. The ACP SDK stays 1.8.0 and `engines.node` stays
             // ">=22". The published package differs from 0.89.1's in exactly
             // the files the tag diff touches. 0.90.0's scenario harness, run on
-            // the sources of both tags with houhub's exact `clientCapabilities`,
+            // the sources of both tags with HouHub's exact `clientCapabilities`,
             // is byte-identical in all 40 scenarios, `initialize` included
             // (live, the handshake differs only in the version). The harness has
             // no cancel and no fork scenario, which is where this release moved;
@@ -2033,7 +2094,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // modes and config options, so the client can prompt it at once. A
             // later `session/resume` returns that session only when it names the
             // same settings (the adapter's session fingerprint); otherwise it
-            // tears the session down and starts another. houhub's fork named
+            // tears the session down and starts another. HouHub's fork named
             // only the `cwd` while its resume names the connection's servers
             // and `_meta.claudeCode` too, so, measured live, every fork started
             // two processes, the resume spending ~240 ms on the restart. The fork
@@ -2056,17 +2117,18 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // want to proceed with this tool use. …" text and
             // `nonExecutionKind: "user-rejected"`, as the transcript records
             // it), a foreground subagent's call with "The turn was cancelled
-            // before this tool call returned a result." None of it needs houhub
-            // code. houhub emits its own `TurnComplete` the moment the user
-            // stops a turn, so the closings and the follow-up arrive out of
-            // turn: the closings stay out of the finished turn
-            // (`outOfTurnToolCalls`), whose cards read as before until the
-            // conversation is reloaded from the transcript, which carries the
-            // same results; the follow-up is a turn Claude Code started on its
-            // own, as when a background command finishes while idle. A
-            // background subagent's calls get no closing on either version
-            // (it may run on through a cancel), and the CLI reports its stop
-            // after the response.
+            // before this tool call returned a result." HouHub emits its own
+            // `TurnComplete` the moment the user stops a turn, so the closings
+            // and the follow-up arrive out of turn. The frontend folds the
+            // closings into the stopped turn's message and settles the cards of
+            // the turn it already promoted with them, as they would have
+            // settled inside it (`cancelledTurn`; before that, a stopped
+            // command read as completed until the conversation was reloaded
+            // from the transcript, which carries the same results). The
+            // follow-up is a turn Claude Code started on its own, as when a
+            // background command finishes while idle. A background subagent's
+            // calls get no closing on either version (it may run on through a
+            // cancel), and the CLI reports its stop after the response.
             //
             // (ttt) The subagents RFD form (#1320–#1322, #1324, #1328) goes only
             // to a client that declares `subagents` and is not AIR. An AIR
@@ -2075,10 +2137,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // background command's terminal exits when its task ends) applies
             // to terminal-rendering clients that are not AIR; AIR keeps the
             // exit at the tool result. #1265 merges `CLAUDE_MODEL_CONFIG` into
-            // `_meta.claudeCode.options.settings`, neither of which houhub sets.
+            // `_meta.claudeCode.options.settings`, neither of which HouHub sets.
             // #1266 relabels an API key helper in `_auth/status_update`, which
-            // houhub only logs. An approved ExitPlanMode plan becomes a
-            // `plan_update` only for a client with plan operations, which houhub
+            // HouHub only logs. An approved ExitPlanMode plan becomes a
+            // `plan_update` only for a client with plan operations, which HouHub
             // does not declare. The rest changes the experimental ACP v2
             // surface.
             //
@@ -2087,7 +2149,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // Haiku 5.5, unchanged through 2.1.299) are 2.1.293's, so the
             // settings panels' model placeholders stand; the probes'
             // transcripts use the same record and attachment types. What
-            // reaches houhub:
+            // reaches HouHub:
             //   * Tool inputs (2.1.295, read from the 2.1.296 binary). Bash
             //     takes `command_description` for `description`, and Grep reads
             //     grep's `-l` / `-c` as `output_mode` and drops `-r`, repaired
@@ -2102,9 +2164,111 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     but its absence proves nothing, since a gateway session runs
             //     at 1M without one, so the history gauge keeps assuming 1M and
             //     labels and pricing keep the answering model.
+            //
+            // 0.91.0 moves the Claude SDK 0.3.296 → 0.3.300, i.e. CLI 2.1.296 →
+            // **2.1.300** (the CLI changelog has no 2.1.297 or 2.1.298). The
+            // ACP SDK stays 1.8.0 and `engines.node` stays ">=22". The
+            // published package differs from 0.90.0's in exactly the files the
+            // tag diff touches (`turn-events.ts` changed a comment only and
+            // compiles the same). The scenario harness, the same in both tags,
+            // is byte-identical in all 40 scenarios with HouHub's exact
+            // `clientCapabilities`, `initialize` included. It has no cancel,
+            // fork or self-started-cycle scenario, which is where the adapter
+            // moved; the probes below ran live against the local fake Anthropic
+            // API (no model call), 0.90.0 and 0.91.0 side by side.
+            //
+            // (vvv) **Cancel** (#1334, #1336, #1339, #1342, #1344, #1345).
+            // Measured with HouHub's capabilities: a root Bash and a foreground
+            // subagent's command are closed before the `cancelled` response
+            // exactly as on 0.90.0. A background subagent the cancel stops
+            // (an AIR client's interrupt still stops them; #1348 spares them
+            // only for a subagents RFD client) now gets its open command
+            // closed `failed`, with "The turn was cancelled before this tool
+            // call returned a result.", after the response, where 0.90.0 left
+            // it open for good. HouHub ends the turn itself when the user stops
+            // it, so this closing lands out of turn like (sss)'s, but the call
+            // sits in the subagent's launch card, which settled when the launch
+            // was acknowledged and which such closings never revise
+            // (`applyLateToolCallReports`): it reads as before until a reload.
+            // #1339, #1342 and #1344 close the tool calls of a model cycle
+            // Claude Code started on its own (its follow-up after a background
+            // task) at the cycle's end, which a cancel HouHub sends between its
+            // prompts can stop (a `/goal` that lands, say); HouHub renders those
+            // cycles from the transcript (`background_watch`), never from the
+            // wire, so the closings change nothing it shows. #1334 (read from
+            // the source and its tests, a race no probe hits on demand): a tool
+            // that the stopped work asks to run after the cancel was reported,
+            // such as one of a steer the CLI had already taken in, is denied
+            // with "The user cancelled this prompt." and shows nothing, where
+            // it used to raise a permission request with no tool call behind
+            // it.
+            //
+            // (www) Nothing to change in HouHub, each checked:
+            //   * The subagents RFD surface (#1332, #1337, #1347, #1348) and
+            //     the ACP v2 one (#1346) serve neither an AIR client nor v1;
+            //     see (ttt).
+            //   * #1340 narrows the model picker to what a `providers/set`
+            //     gateway lists. HouHub routes Claude through a gateway with
+            //     `ANTHROPIC_BASE_URL`, which the adapter does not list, and
+            //     the picker is the same on both versions, values included
+            //     (`opus` recommended, `fable`, `sonnet`, `haiku`).
+            //   * #1338 races an elicitation against Claude Code withdrawing
+            //     it. HouHub declares no elicitation to Claude, and a withdrawn
+            //     permission request (`$/cancel_request`) already closes its
+            //     card.
+            //   * #1335 ends a terminal for a client that renders terminals;
+            //     HouHub takes no terminal `_meta` from Claude (see
+            //     `hosted_terminal_output_key`).
+            //   * #1351 (`session/delete`) and #1352 (`agentWorktree`, for a
+            //     `sessionIndex` client) answer requests HouHub never sends.
+            //   * #1353 keeps a live session that was never prompted when a
+            //     resume or load names other settings. HouHub's resume of a fork
+            //     names the settings the fork did (see (rrr)); measured, a fork
+            //     and its resume run one CLI process on both versions, and the
+            //     resume answers in 2 to 4 ms.
+            //   * The SDK now runs adaptive thinking for `MAX_THINKING_TOKENS=0`
+            //     on a model that cannot turn thinking off; HouHub never sets it.
+            //
+            // (xxx) **CLI 2.1.299 and 2.1.300.** What reaches HouHub:
+            //   * Transcripts record each main-loop API request (2.1.300):
+            //     `api-request-shape` (the system prompt and tools, once per
+            //     shape; 69 KB in the probe), `api-request-blob` (the messages
+            //     the transcript does not already hold, the prompt as sent with
+            //     its system reminders among them) and `api-request` (the
+            //     parameters and a digest), and the reply's assistant records
+            //     name theirs in `requestRef`. Title and compaction requests are
+            //     not recorded (measured: 4 of the probe's 11 requests). Every
+            //     HouHub reader of a Claude transcript dispatches on the record
+            //     `type`, so none of these is conversation, though a blob
+            //     carries a user `message`; a parser test pins that such a
+            //     transcript parses exactly as the same session without them.
+            //   * A background sub-agent that ends its run while background work
+            //     of its own still runs notifies `completed`, then notifies
+            //     again once that work is done and the agent has finished
+            //     (measured on both CLIs). The first notification's note says
+            //     its result "may be interim", 2.1.300 words its summary "… is
+            //     waiting on its own background work", and 2.1.300's note says
+            //     an agent resumed with messages that reached it too late "will
+            //     notify again". HouHub took the first one for the end: the card
+            //     read "Background task completed" over that summary, a
+            //     "finished" notification went out, and the task left the count
+            //     that holds off the idle sweeps (the adapter's async-task table
+            //     still covers a background shell of the sub-agent, not a
+            //     sub-agent of its own). `task_notification_is_interim` reads
+            //     the note: the card reads as an interim result, nothing is
+            //     announced, and the task stays counted until the final one.
+            //   * A `/compact` writes the same records as on 2.1.296. Tool
+            //     inputs and the `latest_per_family` catalog are unchanged (the
+            //     one new input repair is the Claude Projects `project_write`
+            //     tool's), so the model placeholders stand.
+            //   * A steered message now keeps its documents and sends its images
+            //     at reduced size, and `ScheduleWakeup` fires while a background
+            //     task runs in an SDK session. HouHub already sends both kinds of
+            //     attachment with a steer and renders such wakeups from the
+            //     transcript.
             distribution: AgentDistribution::Npx {
-                version: "0.90.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.90.0",
+                version: "0.91.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.91.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -2154,18 +2318,18 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // sends a `session/request_permission` marked
             // `_meta.codex = {kind:"plan_review", planItemId}` whose `toolCall`
             // (`plan-review:<itemId>`, kind `switch_mode`, `rawInput.plan`) was
-            // NEVER announced as a `tool_call` — houhub seeds it from the request
+            // NEVER announced as a `tool_call` — HouHub seeds it from the request
             // (see `codex_plan_review_meta` / `handle_permission_request`) so the
             // follow-up `tool_call_update` has a card to merge into. On approval
             // codex flips the mode back to default (a mid-turn
             // `config_option_update`) and runs the implementation turn inside
             // the SAME `session/prompt`. 1.1.8 (#342) also hangs a structured
             // `_meta.permission = {version, changes[]}` on each permission
-            // option, whose `changes[].description` houhub surfaces in the
+            // option, whose `changes[].description` HouHub surfaces in the
             // permission card — the contract claude-agent-acp joined in 0.64.1
             // (#930), so that rendering is no longer codex-only. The
             // `clientCapabilities.plan` path (structured
-            // `plan_update`s) does NOT apply: houhub does not advertise that
+            // `plan_update`s) does NOT apply: HouHub does not advertise that
             // capability (see `build_client_capabilities`), so plans keep
             // arriving as `agent_message_chunk`s. That also makes 1.1.9 (#354,
             // which coalesces streamed plan snapshots to one `plan_update`
@@ -2178,7 +2342,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // transitions move to the provider-neutral
             // `session_info_update._meta.goal` snapshot the claude adapter
             // speaks since 0.66.0 — the legacy `_meta.codex.goal` key is GONE,
-            // so houhub's initialize-pinned channel selection (SessionInfoUpdate
+            // so HouHub's initialize-pinned channel selection (SessionInfoUpdate
             // arm, connection.rs) is what keeps GoalCard alive from this
             // release on. The neutral snapshot collapses usageLimited/
             // budgetLimited into status "limited", adds paused/blocked,
@@ -2189,7 +2353,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // to the final record shape in 1.3.0/#393, same wire as
             // claude-agent-acp 0.67.0 — see that entry): typed session
             // failures gated STRICTLY on the client advertising
-            // `clientCapabilities._meta.jetbrains.air`, which houhub does
+            // `clientCapabilities._meta.jetbrains.air`, which HouHub does
             // (`build_client_capabilities`). Advertising REPLACES the legacy
             // surfaces on the wire: `_meta.codex.error` (both willRetry
             // branches), warning/config-warning text chunks and dropped
@@ -2213,7 +2377,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // switching). New in the bundle and fine on generic cards:
             // synthetic "Guardian Review" tool calls (kind "think") and
             // fuzzyFileSearch ids. Structured plan_update stays inert — its
-            // gate is the TOP-LEVEL `clientCapabilities.plan`, which houhub does
+            // gate is the TOP-LEVEL `clientCapabilities.plan`, which HouHub does
             // not advertise. 1.3.0 still ships NO steering `promptRequired`
             // opt-in (tarball grep: zero hits ⇒ the arm below stays None) and
             // still declares no `engines.node`, so the 20.0.0 floor is
@@ -2291,7 +2455,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `subagent_state_update`. The v1 schema still carries neither (as
             // of 1.9), but that was never the blocker — a raw pre-dispatch
             // reader gets past it, as the AIR task frames show. What keeps it
-            // out is that advertising DELETES the tool call houhub anchors the
+            // out is that advertising DELETES the tool call HouHub anchors the
             // sub-agent capsule on; `build_client_capabilities` records the
             // whole trade.
             // Likewise still not adopted: `agentFileChangeReport` (unchanged
@@ -2408,7 +2572,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // and the literal-set delta is six strings in (`recommendedValue`,
             // `thread/turns/list`, `paginated`, `legacy`, `desc`, the version)
             // against three out (`GPT`, `Mini`, the version). Four changes reach
-            // houhub:
+            // HouHub:
             //
             // (a) AIR **`recommendedValue`** — the reason for the bump, and the
             // only new client-facing surface. `createSessionConfigOptions` now
@@ -2428,7 +2592,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // See `build_client_capabilities` for the live three-run trace and
             // why it is safe.
             //
-            // (b) Model display names are REFORMATTED, and houhub shows them
+            // (b) Model display names are REFORMATTED, and HouHub shows them
             // verbatim. `MODEL_NAME_TOKEN_OVERRIDES` (gpt→GPT, mini→Mini,
             // codex→Codex, dashes kept) is replaced by `formatModelDisplayName`,
             // which STRIPS a leading `gpt-`, splits on `[-/]+` and title-cases
@@ -2438,7 +2602,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // VALUES (`gpt-6-astra`, …) are unchanged, and the model picker
             // groups by value prefix (`lib/model-config-groups.ts`), so nothing
             // regroups — but the composer chip now reads `5.5` rather than
-            // `GPT-5.5`, which is a deliberate upstream change, not a houhub bug.
+            // `GPT-5.5`, which is a deliberate upstream change, not a HouHub bug.
             //
             // (c) `session/load` history now pages through `thread/turns/list`
             // (50/page, `sortDirection: "desc"`, `itemsView: "full"`, with a
@@ -2446,7 +2610,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `historyMode: "paginated"`, instead of one `thread/read
             // {includeTurns: true}`. `session/resume`, `session/fork` and the
             // audit fork additionally pass `excludeTurns: true`, so the turns no
-            // longer ride the resume response at all. houhub's codex sessions
+            // longer ride the resume response at all. HouHub's codex sessions
             // take the resume path and do not drain a replay (see the "No drain"
             // note in connection.rs), so this is invisible to the timeline and
             // strictly cheaper on long threads.
@@ -2454,14 +2618,14 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (d) A standalone MCP-elicitation tool call is now FINALIZED. When
             // codex falls back to `session/request_permission` for an
             // elicitation — a message-only form, or a `url` elicitation, both of
-            // which houhub hits because it advertises `elicitation.form` but
+            // which HouHub hits because it advertises `elicitation.form` but
             // deliberately not `elicitation.url` — 1.10.0 posted a `pending`
             // tool call and never updated it, leaving it pending for the life of
             // the connection. 1.11.0 answers with a `tool_call_update`
             // (`completed`, `rawOutput: {action}`) and the request now carries a
             // `title` ("MCP tool call approval" / "Question from MCP server" /
             // "MCP server requests to open a URL") plus `rawInput.description`.
-            // Pure gain for houhub's permission card and tool-call row; no client
+            // Pure gain for HouHub's permission card and tool-call row; no client
             // change needed.
             //
             // Everything else holds: no literal was removed except the two
@@ -2472,21 +2636,21 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // moves ^0.153.3 → ^0.153.4 (a patch).
             //
             // 1.12.0 is a MUCH bigger bump than 1.11.0 — +624/-599 bundle lines
-            // — and unlike that one it carries a REGRESSION for houhub as well as
+            // — and unlike that one it carries a REGRESSION for HouHub as well as
             // gains. Five deltas, in descending order of what they cost us:
             //
             // (a) **`request_user_input` was reshaped**, and reading it the old
             // way is not cosmetic. `buildUserInputRequest` swapped its two
             // strings — `title` was the short tab header and `description` the
             // question; now `title` IS the question and `description` the
-            // header (emitted only when the model supplied one). houhub reads
+            // header (emitted only when the model supplied one). HouHub reads
             // `description`-first, so the card would have shown a codex ask
             // BACKWARDS: on a single-question ask there is no tab strip, so the
             // only thing on screen would be the header ("Approach") and the
             // question itself would never be displayed. The companion field
             // moved too: `<id>__other` / `_meta.codex.isOtherAnswer` (titled
             // "Other") became `<id>_note` / `_meta.codex.role = "user_note"`
-            // (titled "Additional answer or note"), so houhub's companion skip
+            // (titled "Additional answer or note"), so HouHub's companion skip
             // missed it and rendered it as a duplicate question; and an
             // `isOther` question's `oneOf` now ends with an injected "None of
             // the above" pointing at that hidden note field. `question.rs`
@@ -2504,7 +2668,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // WHETHER any of it applies at all is a separate gate, and a
             // stricter one: `ElicitationPeer`, taken from the connection's agent
-            // type. houhub advertises `elicitation.form` to DeepSeek too, and
+            // type. HouHub advertises `elicitation.form` to DeepSeek too, and
             // either adapter can relay an arbitrary MCP server's form down the
             // same handler, so the parser may not decide "this is codex" from
             // `_meta.codex.*` in the payload — `_meta` is an open namespace and
@@ -2513,10 +2677,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // regardless of what the form carries.
             //
             // Two more deltas of the same rework need no client change: every
-            // question is now in `required` (houhub's card requires an answer or
+            // question is now in `required` (HouHub's card requires an answer or
             // a decline either way), and the request `message` is the constant
             // "Codex needs your input to continue." instead of the single
-            // question's text — which houhub drops on the Questions path and
+            // question's text — which HouHub drops on the Questions path and
             // never displayed.
             //
             // (b) The AIR **`agentFileChangeReport`** is no longer a model
@@ -2525,7 +2689,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (`AgentFileChangeReportBudget`, a 30s budget, interrupt/unsubscribe
             // plumbing); 1.12.0 deletes all of that and parses the
             // `turn/diff/updated` unified diff instead, buffered per turn behind
-            // the same capability gate (`collectTurnDiffs`), 8MiB cap. houhub
+            // the same capability gate (`collectTurnDiffs`), 8MiB cap. HouHub
             // still does not advertise it, and the cost half of that decision is
             // now moot — but the coverage half got STRONGER, not weaker: the
             // report hard-codes `uncertainty` to "Codex turn diffs may omit
@@ -2533,21 +2697,21 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // including shell commands, version-control commands, generators,
             // and child processes", i.e. it is now explicitly narrower than the
             // model audit it replaced, and far narrower than the recursive
-            // `notify` watcher houhub already runs. See `build_client_capabilities`.
+            // `notify` watcher HouHub already runs. See `build_client_capabilities`.
             //
             // (c) **`diffStats`** — a new AIR key, and the only one here that is
             // NOT capability-gated: `withAirMeta(…, AIR_DIFF_STATS_KEY, …)` is
             // called unconditionally on every add/update/delete file-change
             // `_meta` (`{version: 1, added, removed}`, derived from the real
             // patch hunks; `null` and therefore omitted when the patch does not
-            // parse). So it already arrives, and houhub already ignores it —
+            // parse). So it already arrives, and HouHub already ignores it —
             // deliberately. The edit card's collapsed "+N −M" and its expanded
             // diff body are held to a hard per-input parity contract
             // (`exceedsLineDiffBudget`, one shared budget across
             // `estimateChangedLineStats` and `generateUnifiedDiff`), and codex
-            // ships FULL old/new file text in the ACP `Diff` block, which houhub
+            // ships FULL old/new file text in the ACP `Diff` block, which HouHub
             // re-diffs itself. Taking the agent's hunk counts for the header
-            // while the body stays houhub's own re-diff is exactly the drift that
+            // while the body stays HouHub's own re-diff is exactly the drift that
             // contract exists to prevent. claude-agent-acp 0.78.0 shipped the
             // same key from the other direction (claude entry (r)) — per
             // structuredPatch hunk rather than per file — and is declined for
@@ -2559,15 +2723,15 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `request_permissions`, and `<namespace><tool>` for dynamic tool
             // calls — on the live stream, the completion updates, the permission
             // request and the `session/load` function-call replay alike. When
-            // this was written the schema crate houhub pinned (0.11.x) dropped
+            // this was written the schema crate HouHub pinned (0.11.x) dropped
             // the field; schema 1.9 types it as a stable `ToolCall::name`, so
             // reading it no longer takes a raw reader — but it is still not
             // read, because it adds nothing: every surface it names is one
-            // houhub already classifies from `kind` + `title` — command
+            // HouHub already classifies from `kind` + `title` — command
             // executions are `kind: "execute"` with the command as the title,
             // `view_image` is `kind: "read"` with a resource_link, and a dynamic
             // tool call's title already IS the tool name (`name` only adds the
-            // namespace prefix, which houhub does not render). MCP tool calls,
+            // namespace prefix, which HouHub does not render). MCP tool calls,
             // the one place an exact name would help, get NO `name` at all —
             // they keep `mcp.<server>.<tool>` plus `_meta.is_mcp_tool_call`.
             //
@@ -2588,7 +2752,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `engines.node`, so the 20.0.0 floor stays. One config delta needs
             // no action: `forceGitRootTurnDiffPaths` now pins
             // `features.cwd_relative_turn_diffs = false` in the merged config so
-            // turn-diff paths are git-root relative — houhub writes no such key
+            // turn-diff paths are git-root relative — HouHub writes no such key
             // (repo grep: zero hits) and reads no turn diff.
             //
             // 1.13.0 is six upstream changes (#515, #523, #525, #528, #531,
@@ -2609,7 +2773,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // What codex adds to the claude-side note is the LIST of what
             // moves: with notices on, config warnings, deprecation notices,
             // plain warnings, model rerouting and the legacy `thread/compacted`
-            // advisory all leave the channels houhub reads today for `notice`
+            // advisory all leave the channels HouHub reads today for `notice`
             // updates. Two of those are a straight UPGRADE rather than a
             // trade, because their current channel is not a surface at all:
             // `modelRerouted` is a THOUGHT chunk today (it pollutes reasoning
@@ -2631,12 +2795,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // (g) **houhub now reads codex's terminal output channel** (#528 is
             // what made this legible, but the channel itself is older). codex
-            // has always had pi's #519 shape and houhub never noticed, because
+            // has always had pi's #519 shape and HouHub never noticed, because
             // codex ALSO repeats the output as `rawOutput` at the end:
             // `createTerminalCommandEvent` names a terminal by the item's own id
-            // (houhub never created it — every poll misses and ages out at
+            // (HouHub never created it — every poll misses and ages out at
             // `TERMINAL_POLL_MISSING_LIMIT`), and the real output streams as
-            // `_meta.terminal_output_delta` deltas that houhub dropped on the
+            // `_meta.terminal_output_delta` deltas that HouHub dropped on the
             // floor. So a codex shell card sat on the `[Terminal: …]`
             // placeholder for the whole command and then filled in at once.
             // `hosted_terminal_*` in `connection.rs` now covers codex alongside
@@ -2649,7 +2813,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // returns `terminal_output_delta` by DEFAULT, so the streaming above
             // needed nothing on the wire; what the flag buys is that
             // `completeCommandExecutionEvent` stops repeating the whole
-            // aggregated output as `rawOutput`, which houhub used to parse only to
+            // aggregated output as `rawOutput`, which HouHub used to parse only to
             // discard. It was first held back for the `search`/`listFiles`
             // cards, on the premise that they render from the
             // `{formatted_output, exit_code}` envelope — but that premise was
@@ -2680,19 +2844,19 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // interrupted now closes ALL child sessions rather than only the one
             // whose thread id matched (`closingChildSessions`), and `wait()`
             // returns `"timed_out"` so the caller finalizes pending child
-            // updates before closing them — both of which used to leave houhub's
+            // updates before closing them — both of which used to leave HouHub's
             // collab capsules hanging. `/compact` now reports a real turn
             // (`onTurnStarted` + a returned `turn/completed`) instead of
             // resolving with nothing. `thread/attachment/updated` and the
             // `ThreadAttachment*` app-server v2 types are new upstream surface
             // the adapter itself maps to nothing (`return null`), and
             // `FeedbackUploadResponse.promptHash` belongs to a feedback upload
-            // houhub does not drive.
+            // HouHub does not drive.
             //
             // 1.13.1 is one upstream change (#541): `@openai/codex` ^0.155.1 →
             // **^0.156.1** (a caret on a 0.x minor, so it stays inside
             // 0.156.x). The adapter's own code moves by a single function (see
-            // (l)), and the `initialize` response to houhub's handshake matches
+            // (l)), and the `initialize` response to HouHub's handshake matches
             // 1.13.0's field for field apart from the version (both probed
             // live over stdio). `engines` is still absent, so the 20.0.0 floor
             // stays.
@@ -2727,7 +2891,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (k) Inert: codex 0.156 retires the `friendly` / `pragmatic`
             // personality styles and removes the deprecated `thread/rollback`
             // API (a legacy `thread_rolled_back` rollout record still parses).
-            // houhub exposes no personality, never calls the API, and
+            // HouHub exposes no personality, never calls the API, and
             // `parsers::codex` has never read the record. `ThreadResumeResponse`
             // gains `collaborationMode`, which 1.13.1 does not read: its
             // `collaboration_mode` option still comes from the
@@ -2736,12 +2900,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (l) Rollout and replay shapes. A user image can now be a FILE
             // reference — `input_image` with `file_id` instead of `image_url`,
             // and `user_message` gains `file_ids` / `image_order` — which only
-            // a client uploading to the Files API produces; houhub sends inline
+            // a client uploading to the Files API produces; HouHub sends inline
             // and local images. `parsers::codex` skips an image with no inline
             // data (an image-only turn still renders as "Attached resources").
             // The adapter's one code change renders such an input as
             // `image:<fileId>` text in `session/load` replay (and audio /
-            // mention inputs as nothing), which never reaches houhub: codex
+            // mention inputs as nothing), which never reaches HouHub: codex
             // sessions are resumed without draining a replay. The other new
             // fields (`root_turn_id`, MCP `turn_id` / `mcp_app_ui`,
             // `disabledPluginIds`, `availableAccessPrograms`, MCP
@@ -2754,7 +2918,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (^0.156.1 → **^0.158.0**). `engines` is still absent, so the
             // 20.0.0 floor stays. Measured like the claude side: both versions'
             // own scenario harness (33 scenarios, a mocked app-server) re-run
-            // with houhub's exact `clientCapabilities` and diffed.
+            // with HouHub's exact `clientCapabilities` and diffed.
             //
             // (m) The AIR tool-call contract (#530), codex side
             // (`crate::acp::air_contract` unless named otherwise):
@@ -2776,7 +2940,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     jetbrains.air.permission`; `_meta.commandAction` →
             //     `jetbrains.air.commandAction` (`is_config_option_state_command`);
             //     the goal → `jetbrains.air.goal`; `_meta.codex.phase` →
-            //     `jetbrains.air.phase` (houhub reads no chunk `_meta` live).
+            //     `jetbrains.air.phase` (HouHub reads no chunk `_meta` live).
             //   * fileChange: ONE diff block PER HUNK — context and changed lines,
             //     no line numbers — for EVERY client; 1.13.x read the file and
             //     sent its whole old and new text in one block. Keyed by path,
@@ -2836,13 +3000,13 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // byte-identical to 0.159.1's). `engines` is still absent, so the
             // 20.0.0 floor stays. The adapter's own code moves by one table row
             // (see (v)): its scenario harness (33 scenarios, a mocked app-server)
-            // replays byte-identically under houhub's exact `clientCapabilities`
+            // replays byte-identically under HouHub's exact `clientCapabilities`
             // on both tags, and the live `initialize` response matches 2.0.0's
             // field for field apart from the version.
             //
             // (s) **GPT-6.1 Sol** (0.159.1) is codex's new DEFAULT: priority 1,
             // ahead of GPT-6 Astra, taking the catalog from 10 slugs to 11. Live
-            // on a throwaway `CODEX_HOME` in houhub's bound-provider shape, a
+            // on a throwaway `CODEX_HOME` in HouHub's bound-provider shape, a
             // fresh `session/new` opens on `gpt-6.1-sol` (2.0.0: `gpt-6-astra`),
             // the AIR `recommendedValue` follows, and the `model` option reads
             // 6.1 Sol / 6 Astra / 6 Sol / 6 Luna / 5.6 Sol / 5.6 Terra /
@@ -2857,28 +3021,28 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (t) The catalog's FILE order stopped being priority order: GPT-6.1
             // Sol sits second in `models.json`, and in `debug models --bundled`,
             // behind GPT-6 Astra's priority 2. codex sorts by priority, but
-            // houhub's generated `model_catalog_json` renumbered the officials by
+            // HouHub's generated `model_catalog_json` renumbered the officials by
             // position — a user with custom models or removed officials would
             // have got 6 Astra ahead of 6.1 Sol, and as the default. Both catalog
             // loaders now sort (`codex_model_catalog::sort_by_priority`), and so
             // do the expansion and the root-`model` fallback.
             //
-            // (u) That generated catalog is a whole-table replace which houhub
+            // (u) That generated catalog is a whole-table replace which HouHub
             // only rewrote on a settings save, so those same users would not
             // have seen GPT-6.1 Sol at all after upgrading. Installing or
             // upgrading codex-acp now refreshes the official catalog from the
-            // codex it drives and re-expands houhub's catalog from its stored
+            // codex it drives and re-expands HouHub's catalog from its stored
             // intent (`resync_codex_generated_catalog` in commands/acp.rs).
             //
             // (v) Inert or not adopted. A live stdio diff shows one more change:
             // the `$plugin-creator` skill command is gone (0.159.0 removed the
-            // bundled skill; houhub never referenced it). `tooManyDenials` joins
+            // bundled skill; HouHub never referenced it). `tooManyDenials` joins
             // the error table as `provider_error` — the typed cause 0.159 gives
             // its Guardian circuit breaker behind the opt-in
-            // `auto_review.circuit_break_action = "strict"`, which houhub does
+            // `auto_review.circuit_break_action = "strict"`, which HouHub does
             // not write. Strict mode puts it on an INTERRUPTED turn's `error`
             // and sends no `error` notification, while `handleFailedTurn`
-            // reports FAILED turns only, so houhub sees no typed failure from it
+            // reports FAILED turns only, so HouHub sees no typed failure from it
             // either way; the rollout's `turn_aborted` gains the same optional
             // `error`, and `parsers::codex` does not read `turn_aborted`.
             // `features.instant_interrupt` (new input preempting a streaming
@@ -2898,17 +3062,17 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // ^0.159.1, which a fresh install now resolves to 0.159.3: a
             // TUI-only backport whose `debug models --bundled` output is
             // byte-identical to the snapshot), and `engines` is still absent.
-            // Live over stdio with houhub's exact `clientCapabilities`, the
+            // Live over stdio with HouHub's exact `clientCapabilities`, the
             // `initialize` and `session/new` responses and every frame after
             // them match 2.0.1's apart from the version.
             //
-            // (w) #570, `request_user_input` for AIR clients, which houhub is.
+            // (w) #570, `request_user_input` for AIR clients, which HouHub is.
             // An `isOther` question no longer gets the synthetic "None of the
             // above" choice, its note field gains
             // `_meta.jetbrains.air.customAnswer: true`, and a choice-field
             // string that matches no option is the user's own answer, handed
             // to codex as `["None of the above", "user_note: <text>"]` —
-            // codex's own encoding, the one its TUI writes for "Other". houhub
+            // codex's own encoding, the one its TUI writes for "Other". HouHub
             // already sent the card's "Other" text that way (main field,
             // verbatim), so the round trip needs nothing. What changed is the
             // reloaded rollout: 2.0.1 handed codex `["<text>"]`, and the pair
@@ -2918,11 +3082,11 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // The marker is a bare `true` here and `{questionId,
             // isCustomAnswer: true}` on claude; `question::
             // is_custom_answer_property` reads both. Recorded off the adapter's
-            // own handler driven with houhub's capabilities, on both tags.
+            // own handler driven with HouHub's capabilities, on both tags.
             //
             // (x) #564: a `session/load` / `session/resume` of a thread another
             // app-server holds — the Codex app, the CLI, an IDE extension, or
-            // houhub's own forking connection — fails with -32600 and
+            // HouHub's own forking connection — fails with -32600 and
             // `data.reason: "thread_active_writer"` instead of a -32603
             // carrying codex's raw text. `classify_session_load_error` keys the
             // `session_busy` banner on the reason; the text match stays for
@@ -2930,7 +3094,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // holder (it named only the fork). Reproduced live on both tags
             // with two adapter processes on one `CODEX_HOME`; once the holder
             // exits, the same load succeeds, so the banner's Reload recovers.
-            // houhub's own forking connection no longer holds on until it
+            // HouHub's own forking connection no longer holds on until it
             // exits: it closes the parent right after the step that resumes
             // the child (`connection::close_forked_parent`), and codex then
             // unloads the thread after `thread_unload_delay_secs` (60 by
@@ -2942,7 +3106,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // unchanged (a fresh install still resolves `@openai/codex`
             // 0.159.3) and `engines` is still absent; the published bundle
             // differs from 2.1.0's by the three fixes and the version. Measured
-            // live over stdio with houhub's exact `clientCapabilities` against a
+            // live over stdio with HouHub's exact `clientCapabilities` against a
             // scripted Responses server: a plain turn's frames match 2.1.0's
             // apart from the version, and each fix shows up as below.
             //
@@ -2950,15 +3114,15 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `{"type":"error","status":4xx|5xx,"error":{"type":…,"message":…}}`
             // with one of nine known error types, the body codex passes on
             // verbatim for an HTTP 400 — the `sessionFailure` title (and the
-            // legacy text chunk houhub does not get) carry `error.message`
-            // instead of the JSON. houhub shows the title as sent, so the
+            // legacy text chunk HouHub does not get) carry `error.message`
+            // instead of the JSON. HouHub shows the title as sent, so the
             // banner reads the sentence with no change here. Live, a 400 with
             // that body ends the prompt `end_turn` with the failure on its
             // `_meta`, titled with the JSON on 2.1.0 and with the message on
             // 2.1.1. The adapter leaves one place undecoded: a failed
             // compaction's `error` (`compaction_update`), which the compaction
             // card shows. Live, a compaction whose request got that 400 put the
-            // JSON on the card beside the readable banner, so houhub reads the
+            // JSON on the card beside the readable banner, so HouHub reads the
             // card's error down itself (`acp::service_error`, the adapter's
             // rule ported, with JavaScript's idea of a blank message; only a
             // body escaping a lone surrogate, which serde_json refuses, stays
@@ -2977,11 +3141,11 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // Codex desktop app writes into a user message (`# Files mentioned
             // by the user:` … `## My request:`) as one `resource_link` per file
             // plus the request text, and a native local image, audio file or
-            // file mention as a `resource_link`. houhub never renders that
+            // file mention as a `resource_link`. HouHub never renders that
             // replay (the transcript comes from the rollout), so
             // `parsers::codex` decodes the same envelope itself
             // (`parsers::codex_desktop_attachments`): each file becomes the
-            // link houhub renders any attachment as, a badge plus a chip, with
+            // link HouHub renders any attachment as, a badge plus a chip, with
             // the request after it. It also reads the early desktop marker
             // `## My request for Codex:`, which 2.1.1 replays as text. Live on
             // both tags: 2.1.0 replays either envelope as one text block, 2.1.1
@@ -2993,7 +3157,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // npm. `@openai/codex` moves ^0.159.1 → **^0.160.1** (a fresh
             // install resolves 0.160.1), whose `debug models --bundled` output
             // is byte-identical to 0.159.3's, so the offline snapshot stands;
-            // `engines` is still absent. Under houhub's exact
+            // `engines` is still absent. Under HouHub's exact
             // `clientCapabilities` the adapter's 33-scenario harness differs
             // between the tags only by two AIR capabilities in `initialize`
             // ("customInstructions", "codexHooks") and the `/mcp` entry of (ee).
@@ -3012,11 +3176,11 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // but useless: a turn in flight never answered (a cancel did not
             // help), an open permission card was never withdrawn, every later
             // prompt ended in an internal-error failure and every open failed
-            // with "Connection is disposed." until houhub respawned the adapter.
+            // with "Connection is disposed." until HouHub respawned the adapter.
             // Now a turn in flight settles at once, `end_turn` with a
             // `connection` `sessionFailure`, its open tool calls failed and its
             // permission requests withdrawn by `$/cancel_request` (all of which
-            // houhub already renders), and the next request restarts the
+            // HouHub already renders), and the next request restarts the
             // app-server and reopens the session. A request that meets the loss
             // fails with code 1001 and `data.restartable`
             // (`connection::codex_app_server_lost`). A restartable loss costs
@@ -3031,7 +3195,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // thread, which is read from the source.
             //
             // (dd) A fork stays subscribed (#590), so it takes a prompt at once.
-            // houhub's resume after the fork is redundant on 2.2 but harmless
+            // HouHub's resume after the fork is redundant on 2.2 but harmless
             // (measured: fork → resume → close the parent → prompt works on
             // both tags) and stays for older adapters. The fork still never
             // releases the parent, so `close_forked_parent` stays as well.
@@ -3042,22 +3206,22 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // of each session MCP server, houhub-mcp included, which is harmless:
             // houhub-mcp opens its socket on `tools/call` only. `$skill` commands
             // carry their SKILL.md path in `_meta.jetbrains.air.skillPath`,
-            // which houhub does not show.
+            // which HouHub does not show.
             //
-            // (ff) Inert for houhub. #587 reports the servers config.toml
+            // (ff) Inert for HouHub. #587 reports the servers config.toml
             // replaces only when `DISABLE_MCP_CONFIG_FILTERING` is not "true",
-            // and `apply_codex_env_policy` sets it. That has to stay: houhub
+            // and `apply_codex_env_policy` sets it. That has to stay: HouHub
             // forwards config.toml's servers under their own names, and each
             // would otherwise come back as a failed `mcp__<name>__startup` card.
             // #588's hook trust needs `CODEX_CONFIG.hooks` (and cross-spawn a
-            // Windows `CODEX_PATH`), neither of which houhub sets. #546's custom
+            // Windows `CODEX_PATH`), neither of which HouHub sets. #546's custom
             // instructions are read from `session/new`'s `_meta` only (they
             // become the thread's developer instructions and persist in the
-            // rollout), which houhub does not send. #594 changes `authenticate`,
-            // which houhub never calls for codex. The session index (#590) needs
+            // rollout), which HouHub does not send. #594 changes `authenticate`,
+            // which HouHub never calls for codex. The session index (#590) needs
             // the `sessionIndex` capability, as on claude (lll). The prompt
             // response's `usage` now sums the whole prompt and reports
-            // `cachedWriteTokens`; houhub reads neither, and the context ring
+            // `cachedWriteTokens`; HouHub reads neither, and the context ring
             // follows `usage_update`, which is unchanged.
             //
             // (gg) codex 0.160 itself. The rollout gains one record, a
@@ -3067,28 +3231,28 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // persisted formats are otherwise unchanged. The catalog's new
             // `model_messages.content_filter_guidance` is strict
             // (`codex_model_catalog::model_messages_override_is_safe`). A
-            // provider's `model_catalog_url` is now authoritative; houhub never
+            // provider's `model_catalog_url` is now authoritative; HouHub never
             // writes one. Hooks behave as on 0.159: an untrusted hook in the
             // user's config.toml is skipped silently.
             //
             // (hh) Found on the way, and older than this pin: codex counts a
             // prompt-cache WRITE inside `input_tokens`
-            // (`cache_write_input_tokens`, which houhub's bound provider
+            // (`cache_write_input_tokens`, which HouHub's bound provider
             // reports), and `parsers::codex` split out only the read, so every
             // write read as fresh input. 2.2.0 corrected its own counter the
             // same way (`TokenCount`); the parser now splits both
             // (`codex_usage_counters`, token-usage `FACT_SCHEMA_VERSION` 4).
             //
-            // 2.2.2 changes one thing (#606), and nothing houhub reads: a
+            // 2.2.2 changes one thing (#606), and nothing HouHub reads: a
             // `session/list` row, and a pushed `_session/list/changes` row, is
             // titled by the first non-blank of the thread's `name`, `title`,
             // `summary` and `preview`, collapsed to one line and no longer cut
-            // to 256. houhub sends no `session/list` and subscribes to no list.
+            // to 256. HouHub sends no `session/list` and subscribes to no list.
             // The published bundle differs from 2.2.1's by that change and the
             // version only. Fresh installs of the two pins lock the same
             // package versions bar the adapter's own and the same codex 0.160.1
             // binary, and `initialize` (bar the version) is identical. The
-            // `session_info_update` titles houhub does read are unchanged, still
+            // `session_info_update` titles HouHub does read are unchanged, still
             // collapsed and cut at 256 — measured live on both tags: the
             // first-prompt fallback, the generated title, a `/rename` echo and
             // the title `session/load` republishes (`session/resume` publishes
@@ -3118,7 +3282,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             name: "Gemini CLI",
             description: "Google's official CLI for Gemini",
             // 0.59.0 → 0.60.0 is a sandbox / path-security release and touches
-            // nothing houhub reads. Verified by slicing both bundles on their
+            // nothing HouHub reads. Verified by slicing both bundles on their
             // `// packages/<pkg>/src/<file>.ts` source markers and diffing per
             // source file, after normalising two esbuild artefacts that make an
             // unnormalised diff useless here: identifier renumbering (`fs30` →
@@ -3130,7 +3294,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // What survives is all sandbox managers (new, per-OS), the
             // extensions registry, MCP OAuth, the policy engine and path
-            // security. Of the surfaces houhub depends on:
+            // security. Of the surfaces HouHub depends on:
             //
             // - `loadConversationRecord` (the parser's contract — the four
             //   record kinds) is byte-identical modulo the renumbering.
@@ -3147,7 +3311,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `mcp-client.ts` now drops MCP-server env entries whose key is in
             // `BLOCKED_EXECUTION_ENVS`. That list is loader/interpreter hijacks
             // (`NODE_OPTIONS`, `LD_PRELOAD`, `DYLD_*`, `PYTHONPATH`, `BASH_ENV`,
-            // …); houhub injects `houhub-mcp` with `HOUHUB_*`, so nothing we send
+            // …); HouHub injects `houhub-mcp` with `HOUHUB_*`, so nothing we send
             // is dropped. `engines.node` stays `>=20`.
             distribution: AgentDistribution::Npx {
                 version: "0.60.0",
@@ -3177,7 +3341,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 // `NODE_RELEASE_FLOORS` are literally `{24,16,0}` and
                 // `{26,1,0}`. A Node 22 user with the old floor would pass
                 // preflight and then hard-fail at launch, so the floor tracks
-                // the LOWEST supported release. (houhub's `node_required` is a
+                // the LOWEST supported release. (HouHub's `node_required` is a
                 // single minimum, so it cannot express the excluded 25.x and
                 // 26.0.x windows.) 2026.9.4 through 2026.9.8 leave that range
                 // and those floors untouched (`node-version.mjs` is
@@ -3188,25 +3352,25 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 // `loadSession`, `resumeSession`), with `acp` registered in
                 // `dist/acp-cli-*.mjs`.
                 //
-                // 2026.9.8 moves nothing houhub touches. Its ACP bridge
+                // 2026.9.8 moves nothing HouHub touches. Its ACP bridge
                 // (`dist/server-*.mjs`) matches 2026.9.7's line for line apart
                 // from the order and hashed names of its imports;
                 // `dist/acp-cli-*.mjs`, which defines the `--url`, `--session`
-                // and `--reset-session` flags houhub passes, is unchanged; and
+                // and `--reset-session` flags HouHub passes, is unchanged; and
                 // `@agentclientprotocol/sdk` stays at 1.4.0. The one launch-path
                 // change is Windows-only: a compile-cache path longer than 200
                 // characters now turns the cache off and says so on stderr.
                 //
                 // 2026.9.7 leaves `initialize` and the update kinds alone and
-                // changes two paths houhub only sees through their output. A
+                // changes two paths HouHub only sees through their output. A
                 // streamed reply is merged from delta-only gateway frames
-                // (`mergeChatStreamMessage`), still reaching houhub as message
+                // (`mergeChatStreamMessage`), still reaching HouHub as message
                 // and thought chunks. And a prompt cut off by a gateway
                 // disconnect is now rebuilt from the session's chat history;
                 // when that fails, the bridge sends an `agent_message_chunk`
                 // "[OpenClaw interruption] Full reply recovery unavailable
                 // (<reason>). Check the session history." and fails the
-                // `session/prompt` with that message, which houhub reports like
+                // `session/prompt` with that message, which HouHub reports like
                 // any other failed prompt.
                 //
                 // 2026.9.6's one wire-visible change is ORDER: `session/update`s
@@ -3214,7 +3378,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 // `session/new` answer has been written
                 // (`AcpSessionNewOrdering`). The ACP SDK writes a result only
                 // after its handler returns, so updates sent from inside
-                // `session/new` used to reach the wire first. houhub is
+                // `session/new` used to reach the wire first. HouHub is
                 // indifferent to which order it gets: it can only register a
                 // session's router once the answer names the id, and anything
                 // that arrives before then is parked and replayed into that
@@ -3230,8 +3394,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             description: "Autonomous coding agent CLI",
             // 3.0.66 moved cline's build from Bun 1.3.13 to 1.4.2, and from
             // then on its darwin-arm64 binary passes `codesign --verify
-            // --strict` (3.0.71's still does, still on Bun 1.4.2). Its
-            // darwin-x64 binary fails that check from 3.0.66 through 3.0.71: it
+            // --strict` (3.0.72's still does, still on Bun 1.4.2). Its
+            // darwin-x64 binary fails that check from 3.0.66 through 3.0.72: it
             // keeps the Developer ID signature of Bun's own runtime over a file
             // that no longer matches it; whether macOS kills it was not tested.
             // The earlier pins checked (3.0.55, 3.0.60–3.0.65) all shipped
@@ -3241,32 +3405,57 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `cline --version` exited 137, and ACP sessions died within a
             // second of `initialize`.
             //
-            // The ACP surface is unchanged in 3.0.71. Its one change under
-            // `apps/cli/src/acp` hands an explicit `--thinking` to ACP sessions,
-            // and only the flag counts there, not reasoning saved in cline's
-            // provider settings; houhub passes no such flag, so a session still
-            // runs with thinking off and no effort. `--acp` still sets
-            // `enableAgentTeams: false`, and `initialize`, `session/new` and a
-            // prompt turn match 3.0.70 but for the version, as do the session
-            // files that turn writes. Its SDK now also scans a workspace's
-            // `.claude/skills`, which houhub's skill spec for Cline already
-            // lists.
+            // The ACP surface is unchanged in 3.0.72: nothing under
+            // `apps/cli/src/acp` changed, and `initialize`, `session/new`,
+            // `session/load` and a prompt turn match 3.0.71 but for the
+            // version, as do the session files that turn writes. A session
+            // still gets thinking only from an explicit `--thinking` (3.0.71
+            // made the flag count there, not reasoning saved in cline's
+            // provider settings), which HouHub does not pass, so it runs with
+            // thinking off and no effort. `--acp` still sets
+            // `enableAgentTeams: false`, and the SDK still scans a workspace's
+            // `.claude/skills`, which HouHub's skill spec for Cline lists.
             //
-            // Earlier releases moved what reaches houhub through the SDK. Since
+            // What 3.0.72 changes reaches HouHub through its SDK (0.0.94). A
+            // provider error that arrives after a reply has started streaming
+            // is now retried up to 3 times, back to back, and what the failed
+            // attempt already streamed is not taken back: HouHub receives that
+            // partial text followed by the retry's full reply, cline stores the
+            // two as one assistant message, and later turns send the model that
+            // message. When every attempt fails, the partial text repeats once
+            // per attempt. A provider's HTTP error now ends its message with
+            // "(Request ID: <x-request-id>)", in the `session/prompt` error and
+            // in the display-only error record alike. In cline's bundled model
+            // catalog, the `cline` provider's default (used when `CLINE_MODEL`
+            // is unset) moved from `anthropic/claude-sonnet-5.5` to
+            // `google/gemini-4-argon`. A 3.0.72 `cline --acp` replaces a 3.0.71
+            // hub daemon still running on the same data dir, and loads and
+            // continues the sessions 3.0.71 wrote.
+            //
+            // MCP reaches cline only through its own settings file. Its ACP
+            // agent keeps the `mcpServers` of `session/new` and `session/load`
+            // and never connects them (the same in every release from 3.0.55
+            // through 3.0.72; live on 3.0.71 and 3.0.72, a stdio server sent
+            // there is never started), so HouHub forwards none and injects no
+            // houhub-mcp companion (see `agent_delivers_wire_mcp`). The servers
+            // HouHub's MCP settings write to
+            // `~/.cline/data/settings/cline_mcp_settings.json` are started, and
+            // their tools reach the model. Their connect budget has been 10 s
+            // since 3.0.69 (`DEFAULT_MCP_CONNECT_TIMEOUT_MS`, still 10 s in
+            // 3.0.72).
+            //
+            // Earlier releases moved what reaches HouHub through the SDK. Since
             // 3.0.69 a reply whose finish reason the AI SDK does not recognise
             // is continued once, and the nudge cline sends for it ("Previous
             // turn ended unexpectedly. Continue from where you left off.") is
             // persisted as a `role:"user"` message flagged `displayRole:
             // "system"`, which `parsers::cline` keeps out of the transcript
             // along with cline's other model-only messages; live, the two
-            // halves arrive as one message. 3.0.69 also raised the stdio MCP
-            // connect budget from 3 s to 10 s (`DEFAULT_MCP_CONNECT_TIMEOUT_MS`,
-            // still 10 s in 3.0.71), which gives the houhub-mcp companion more
-            // headroom. What moved in 3.0.66 is token accounting; see
-            // `outputTokens` in `parsers::cline`.
+            // halves arrive as one message. What moved in 3.0.66 is token
+            // accounting; see `outputTokens` in `parsers::cline`.
             distribution: AgentDistribution::Npx {
-                version: "3.0.71",
-                package: "cline@3.0.71",
+                version: "3.0.72",
+                package: "cline@3.0.72",
                 cmd: "cline",
                 args: &["--acp"],
                 env: &[],
@@ -3284,59 +3473,64 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // ad-hoc signature Bun leaves behind — the one macOS 27 kills
             // binaries over (see the Cline entry). 1.18.33's darwin-arm64
             // binary fails `codesign --verify --strict` yet ran, so nothing
-            // had happened to read its bad page. 1.19.0's darwin-arm64 and
+            // had happened to read its bad page. 1.19.1's darwin-arm64 and
             // darwin-x64 binaries carry the same Developer ID signature and
             // pass that check (still built with Bun 1.3.14).
             //
-            // 1.19.0 points 1.x installs at OpenCode 2, and what it changes
-            // stays off the path houhub runs. `opencode upgrade --major` now
+            // 1.19.0 pointed 1.x installs at OpenCode 2, and what it changed
+            // stays off the path HouHub runs. `opencode upgrade --major`
             // replaces the install with OpenCode 2, and the TUI no longer
             // installs updates by itself; `opencode acp` never ran that update
-            // check, in 1.18.35 or now. A PATH install moved to 2.x this way is
-            // a case `opencode_launch` already handles, by asking `acp --help`
-            // for the listen flags. The ACP bridge, session, storage, tool,
-            // plugin and npm sources are byte-identical to 1.18.35, and so is
-            // the database schema the two create. `initialize` and
-            // `session/new` match too, apart from the free OpenCode Zen models
-            // the binary lists. The rest of what ships in the binary: a PTY
-            // websocket connect is refused on a foreign origin even without a
-            // ticket (the ACP bridge opens no PTY), Copilot models accept
-            // interleaved `reasoning_opaque` values, and OpenAI's `ultrafast`
-            // service tier is accepted.
+            // check. A PATH install moved to 2.x this way is a case
+            // `opencode_launch` already handles, by asking `acp --help` for the
+            // listen flags.
+            //
+            // 1.19.1 discontinues session sharing, and its one functional change
+            // is that. The share service is gone from the runtime, sharing a
+            // session fails ("Session sharing has been discontinued"), `share:
+            // "auto"` no longer shares new sessions, and importing a share URL
+            // is refused; the `share` config key is still accepted. The hosted
+            // service went with it: opncd.ai answers its share pages with 410
+            // Gone, so a link an older release creates opens nothing. HouHub's
+            // OpenCode settings still offer the key, with a hint saying so. The
+            // ACP bridge, session, storage, tool, config, provider, plugin and
+            // npm sources are byte-identical to 1.19.0. `initialize` and
+            // `session/new` match too, apart from the free models the binary
+            // lists (now named `OpenCode/…` rather than `OpenCode Zen/…`).
             distribution: AgentDistribution::Binary {
-                version: "1.19.0",
+                version: "1.19.1",
                 cmd: "opencode",
                 args: &["acp"],
                 env: &[],
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.19.0/opencode-darwin-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.19.1/opencode-darwin-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.19.0/opencode-darwin-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.19.1/opencode-darwin-x64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.19.0/opencode-linux-arm64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.19.1/opencode-linux-arm64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.19.0/opencode-linux-x64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.19.1/opencode-linux-x64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.19.0/opencode-windows-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.19.1/opencode-windows-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v1.19.0/opencode-windows-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v1.19.1/opencode-windows-x64.zip",
                         sha256: None,
                     },
                 ],
@@ -3355,8 +3549,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // Docker / Nix are the supported channels. The npm `hermes-agent`
             // package is a COMMUNITY bridge (wyrtensi/hermes-agent-npm, not
             // Nous Research), pinned here at an exact, audited version: its
-            // postinstall clones the OFFICIAL repo at tag v0.22.0 verifying the
-            // full commit SHA (e06df9c2…), bootstraps an isolated, uv-managed
+            // postinstall clones the OFFICIAL repo at tag v0.22.2 verifying the
+            // full commit SHA (d923a5eb…), bootstraps an isolated, uv-managed
             // Python 3.14 venv with a checksum-pinned uv, and runs `uv sync
             // --frozen --extra all --no-dev` (⊇ the acp+mcp extras) from
             // upstream's lockfile — all inside the npm package directory;
@@ -3375,39 +3569,50 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // hard-compares `rev-parse <tag>^{commit}` against the 40-hex pin
             // before the `checkout --detach`.
             //
-            // 0.22.0 audited: every file but `package.json` is byte-identical to
-            // 0.21.6, `scripts/postinstall.js`, `bin/` and all of `lib/`
-            // (including `uv-installer.js` and its uv 0.12.13 digest table)
-            // among them. `package.json` moves the version and the upstream tag
-            // and commit; `pythonVersion` stays 3.14, where 0.21.6 raised it
-            // from 3.11. The install marker keys on the version, tag and commit
-            // as well as the Python version, so upgrading rebuilds the checkout
-            // and its venv. The annotated tag v0.22.0 dereferences to exactly
-            // e06df9c2…, tagged by "Hermes Release Automation" on 2026-10-14
-            // (unsigned) for the release teknium1 published. Its `uv.lock` drops
-            // `backoff` and `langfuse` and moves `nemo-relay` to 0.10.0; on
-            // macOS arm64 `--extra all` still installs 106 packages.
+            // 0.22.2 audited: every file but `package.json` is byte-identical to
+            // 0.22.0 (and to 0.22.1 and 0.21.6), `scripts/postinstall.js`,
+            // `bin/` and all of `lib/` (including `uv-installer.js` and its uv
+            // 0.12.13 digest table) among them. `package.json` moves the
+            // version, its description and the upstream tag and commit;
+            // `pythonVersion` stays 3.14. The install marker keys on the
+            // version, tag and commit as well as the Python version, so
+            // upgrading rebuilds the checkout and its venv. The annotated tag
+            // v0.22.2 dereferences to exactly d923a5eb…, tagged by "Hermes
+            // Release Automation" on 2026-10-15 (unsigned). That commit is a
+            // merge whose tree is the `release/0.22.1` branch head, with v0.22.1
+            // (297552a9…) as its second parent: upstream cut v0.22.1 from
+            // `main` by mistake, and v0.22.2 is the release it was meant to be,
+            // so this pin skips 0.22.1. Its `uv.lock` moves `httpx2` and
+            // `httpcore2` from 2.7.0 to 2.12.0 and adds an emscripten-only
+            // `httpx2-jsfetch`; on macOS arm64 `--extra all` still installs 106
+            // packages.
             //
-            // Upstream's `acp_adapter/` changed only in formatting and type
-            // annotations from v0.21.6 to v0.22.0, and `state.db` stays at
-            // schema 31 with the same DDL, so what v0.21.6 changed still holds.
+            // Upstream's `acp_adapter/` is byte-identical from v0.22.0 to
+            // v0.22.2, as are the `hermes_state*.py` modules and the toolset
+            // code, and `state.db` stays at schema 31 with the same DDL; the
+            // live ACP answers match 0.22.0's apart from `agentInfo.version`.
             // At stdio shutdown the adapter stamps `ended_at` (`end_reason =
             // 'acp_disconnect'`) on every session it holds, and `session/load` /
             // `session/resume` clear it, so the column does not mean the
             // transcript's end; `parsers::hermes` reads a session's last
-            // activity from its newest message instead. A literal message that
-            // begins with the `\x00json:` content sentinel is stored escaped,
-            // which `parsers::hermes` decodes as text. The rest leaves houhub's
-            // assumptions standing: the per-platform toolset resolver
-            // (`platform_toolsets.acp`, `agent.disabled_toolsets`; houhub writes
+            // activity from its newest message instead. Load and resume also
+            // rewrite the session's active message rows: each row gets a new
+            // `id` and keeps its `message_uid`, timestamp and order. A literal
+            // message that begins with the `\x00json:` content sentinel is
+            // stored escaped, which `parsers::hermes` decodes as text, until
+            // that rewrite stores it decoded, as a parts array. The rest leaves
+            // HouHub's assumptions standing: the per-platform toolset resolver
+            // (`platform_toolsets.acp`, `agent.disabled_toolsets`; HouHub writes
             // neither), every enabled `mcp_servers` entry switched on by
             // default, and servers handed over on `session/new` (houhub-mcp
-            // included) appended unconditionally as `mcp-<name>`. A fresh
-            // session's default toolset carries `browser_exec` and, since
-            // v0.22.0, a single `browser_vault` tool where v0.21.6 had five
-            // `browser_vault_*` ones. The adapter installs the OS trust store
-            // before any outbound call, and `agentInfo.version` comes from
-            // release metadata ("0.22.0").
+            // included) appended unconditionally as `mcp-<name>`, their tools
+            // named `mcp__<server>__<tool>`. A fresh session's default toolset
+            // carries `browser_exec` and a single `browser_vault` tool; by
+            // default `browser_vault` and every MCP tool are reached through
+            // the `tool_search` / `tool_describe` / `tool_call` bridge rather
+            // than listed to the model directly. The adapter installs the OS
+            // trust store before any outbound call, and `agentInfo.version`
+            // comes from the pinned tag ("0.22.2").
             //
             // Launch preference: `resolve_npx_command("hermes")` checks PATH,
             // then `~/.local/bin` (the official installer's target), then the
@@ -3415,10 +3620,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // that, an official-installer `hermes` (which self-updates)
             // outranks the npm-managed copy even when the app's PATH lacks
             // `~/.local/bin`. The npm global install is the managed/one-click
-            // channel houhub's Install button drives.
+            // channel HouHub's Install button drives.
             distribution: AgentDistribution::Npx {
-                version: "0.22.0",
-                package: "hermes-agent@0.22.0",
+                version: "0.22.2",
+                package: "hermes-agent@0.22.2",
                 cmd: "hermes",
                 args: &["acp"],
                 env: &[],
@@ -3433,39 +3638,78 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // 2.160.0 through 2.161.2 loaded `esbuild` unguarded at startup
             // while listing it only as an OPTIONAL dependency, so an install
             // that skipped optional deps died on `--acp` ("Cannot find module
-            // 'esbuild'"); houhub's own `npm install -g` passes
+            // 'esbuild'"); HouHub's own `npm install -g` passes
             // `--include=optional`, so managed installs always had it. 2.161.3
             // dropped `esbuild` entirely (no dependency lists it, no bundle
-            // loads it), and 2.164.0 still answers `initialize` from an install
-            // without optional dependencies. The `@agentclientprotocol/sdk` and
-            // `@openai/agents-core` dependencies are still type-only. `--acp`
-            // runs `dist/codebuddy-headless.js`, which the launcher picks for
-            // it, not `dist/codebuddy.js`.
+            // loads it), and 2.168.0 still answers `initialize`, and runs whole
+            // turns, from an install without optional dependencies. Neither
+            // declared dependency is loaded at runtime: the bundles carry their
+            // own copies of `@openai/agents-core` and of the ACP TypeScript
+            // SDK. 2.167.0 swapped `@agentclientprotocol/sdk-server` (an alias
+            // of `@agentclientprotocol/sdk@1.4.0`) for
+            // `@agentclientprotocol/sdk@1.7.0` and moved the inlined copy to
+            // 1.7.0 with it. `--acp` runs `dist/codebuddy-headless.js`, which
+            // the launcher picks for it, not `dist/codebuddy.js`.
             //
-            // 2.162.0 through 2.164.0 leave the wire houhub reads alone:
-            // `initialize` and the unauthenticated `session/new` answer match
-            // 2.161.4, no `sessionUpdate` kind or `session/*` method came or
-            // went, and argument streaming is the same code. Those
-            // `tool_call_update` frames carry the sub-agent link
-            // (`codebuddy.ai/parentToolCallId`) inside `_meta`, where houhub
-            // nests child calls from, and after a call's first frame they are
-            // merged over a 100 ms window (flushed early at 64 KiB), each
-            // merged frame carrying the latest `rawInput` and `_meta`. Two
-            // changes reach the history parser. Task-list reminders for the
-            // model are now persisted as `<system-reminder>` user records
-            // flagged `isMeta`, which `parsers::codebuddy` drops like every
-            // injected record. And a custom model can now use the OpenAI
-            // Responses API, whose records carry the agents SDK's usage
-            // (`inputTokens` / `outputTokens`) where a Chat Completions model's
-            // carry the provider's `prompt_tokens` / `completion_tokens`; the
-            // parser reads both. Mods (function hooks) now load by default, and
-            // while loaded they send `_codebuddy.ai/modSlots` and
-            // `_codebuddy.ai/modRenderInvalidate` notifications to every
-            // connection; they name no session, so they are never parked for a
-            // session router, and houhub maps them to nothing.
+            // The 1.7.0 transport caps an incoming line at 32 MiB, and a longer
+            // one gets no error reply: 2.168.0 stops reading stdin and never
+            // answers again, though the process stays up, where 2.164.0 read
+            // and answered the same 33 MiB line. A prompt reaches that size with
+            // roughly 24 MiB of images, which HouHub's attachment limits allow.
+            // The transport also honours `$/cancel_request` now, but a
+            // `session/prompt` it names keeps running until `session/cancel`,
+            // as before.
+            //
+            // Otherwise 2.167.0 and 2.168.0 (2.165.0 and 2.166.0 were never
+            // published) leave the wire HouHub reads alone: `initialize` and the
+            // unauthenticated `session/new` answer match 2.164.0, no
+            // `sessionUpdate` kind or `session/*` method came or went, and
+            // argument streaming is the same code. Recorded turns (text, a Read
+            // over `fs/read_text_file`, a Bash call over `terminal/create`, a
+            // sub-agent, an MCP tool behind `DeferExecuteTool`) match 2.164.0
+            // frame for frame apart from usage numbers and the notifications
+            // below. Argument-streaming `tool_call_update` frames carry the
+            // sub-agent link (`codebuddy.ai/parentToolCallId`) inside `_meta`,
+            // where HouHub nests child calls from, and after a call's first frame
+            // they are merged over a 100 ms window (flushed early at 64 KiB),
+            // each merged frame carrying the latest `rawInput` and `_meta`.
+            //
+            // Mods (function hooks) load by default. While loaded they send
+            // `_codebuddy.ai/modRenderInvalidate` to every connection and, since
+            // 2.167.0, `_codebuddy.ai/modSlots` only to connections that hold a
+            // session; neither names one, so they are never parked for a
+            // session router. 2.167.0 added `_codebuddy.ai/modResidentInvalidate`
+            // `{sessionId, generation}`, sent whenever the mods reload,
+            // including right after `session/new` and `session/load` with no mod
+            // installed. It names the session, so it reaches that session's
+            // router, which ignores it like any ext notification HouHub does not
+            // know. 2.168.0 also repeats `available_commands_update` (same list)
+            // about two seconds after `session/new`.
+            //
+            // Three changes reach the history parser. 2.162.0 through 2.164.0
+            // persisted task-list reminders for the model as `<system-reminder>`
+            // user records flagged `isMeta`; 2.167.0 stopped writing them but
+            // leaves those already on disk, which `parsers::codebuddy` drops like
+            // every injected record. Since 2.167.0 a built-in prompt command
+            // such as `/init` is stored as its `<command-message>` /
+            // `<command-name>` (and `<command-args>`) tags followed by the prompt
+            // it expands to, where 2.164.0 stored the expansion alone; custom
+            // commands were already stored that way. CodeBuddy's own replay
+            // shows the command as typed, and `parsers::codebuddy` folds the
+            // record back to it the same way. And `--acp` no longer prunes old
+            // sessions: the 30-day cleanup runs only when
+            // `CODEBUDDY_SESSION_HISTORY_CLEANUP` is `1`/`true`, which the
+            // launcher sets for interactive launches only, so CodeBuddy's own
+            // interactive runs still clean the directory HouHub reads. The usage
+            // writer is the same code as 2.164.0: a Chat Completions model's
+            // records carry the provider's `prompt_tokens` /
+            // `completion_tokens`, a custom Responses-API model's (2.163.0+) the
+            // agents SDK's `inputTokens` / `outputTokens`, on the last item of
+            // each response (a `function_call` when the request ends in a tool
+            // call); the parser reads both.
             distribution: AgentDistribution::Npx {
-                version: "2.164.0",
-                package: "@tencent-ai/codebuddy-code@2.164.0",
+                version: "2.168.0",
+                package: "@tencent-ai/codebuddy-code@2.168.0",
                 cmd: "codebuddy",
                 args: &["--acp"],
                 env: &[],
@@ -3516,7 +3760,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // through it (`session/fork` deliberately warns and ignores
             // `mcpServers`, inheriting the source session's), and the "does not
             // declare a runtime identity" throw is nowhere in the bundle. The
-            // rest of the surface houhub touches is unmoved too: the same
+            // rest of the surface HouHub touches is unmoved too: the same
             // `mcp.json` Zod schema (see `commands/mcp.rs`) and an `initialize`
             // answering `sessionCapabilities: {list, resume, close, delete,
             // fork, additionalDirectories}` with image + embeddedContext
@@ -3533,7 +3777,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // on xstate actors and the whole LLM provider layer is replaced
             // (`KimiChatProvider` and friends are gone as named classes), which
             // drops ~2.2 MB off `dist/main.mjs` and moves hundreds of symbols.
-            // None of it reaches houhub: every surface we touch is byte-identical
+            // None of it reaches HouHub: every surface we touch is byte-identical
             // once bundler renumbering (`init_src$7` → `init_src$8`) is ignored.
             // The mandated check passes verbatim — same absent-`type` stdio arm
             // with `runtime_id:"local"`, same three entry points routing through
@@ -3579,7 +3823,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // anywhere in the bundle), and `engines.node` is still >=22.19.0.
             // Region-by-region the whole `packages/acp-server` set is
             // byte-identical to 0.43.1 except one line of `slash.ts`, and every
-            // other surface houhub touches (`config.toml`'s provider/model Zod
+            // other surface HouHub touches (`config.toml`'s provider/model Zod
             // schemas — `max_context_size` still `int().min(1)` and still the
             // same six provider types; `mcp.json`; the credentials gate;
             // `skillRoots`; `wire/wireService`) differs only by bundler
@@ -3589,7 +3833,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // an improvement: skills carrying the new `scopes: ("tui"|"web")[]`
             // field are dropped from ACP `availableCommands`, so the TUI-only
             // `custom-theme` theme editor (and the new `/desktop`) stop showing
-            // up in houhub's slash menu. Live A/B confirms it — 17 commands on
+            // up in HouHub's slash menu. Live A/B confirms it — 17 commands on
             // 0.43.1, the same 16 minus `custom-theme` on 2.0.0.
             //
             // Backed by a live run as for 0.39.0 and 0.42.0, because a major
@@ -3606,7 +3850,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // layout. The upstream steering fixes in this release ride on
             // `transcript`'s `groupTurns`, which the ACP replay does not use
             // (`replay.ts` projects the raw context history), so they do not
-            // reach houhub.
+            // reach HouHub.
             //
             // 2.0.1 is a patch release and reads like one. The mandated check
             // passes verbatim — the converter's absent-`type` arm is
@@ -3639,7 +3883,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // are DELETED outright — all of them `packages/kap-server/` (ws v3,
             // projection, protocol messages, history routes). That is the
             // `kimi web` server, booted only from `cli/sub/web` and the TUI
-            // `/web` command; houhub drives `kimi acp` over stdio and never
+            // `/web` command; HouHub drives `kimi acp` over stdio and never
             // reaches it. Every `packages/acp-server/` region is renumber-only,
             // as are `wire/record` + `wireService`, `skillRoots`, config.toml's
             // `max_context_size` Zod and `mcp.json`. The 24 real regions are
@@ -3678,9 +3922,9 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (`KIMI_CODE_WATCH=1` or `[watch] enabled = true` turn it back
             // on), so config.toml, `mcp.json` and skill roots are no longer
             // watched mid-process.
-            // Nothing houhub does at launch depends on that — config.toml is
+            // Nothing HouHub does at launch depends on that — config.toml is
             // written before the spawn and houhub-mcp rides `session/new` — but
-            // an MCP server or skill added from houhub's settings while a Kimi
+            // an MCP server or skill added from HouHub's settings while a Kimi
             // session is open now lands on the next connect. The bundled
             // models.dev catalog grew, yet its `moonshotai` rows are untouched,
             // so the `infer_context_window_max_tokens` mirror still holds. A
@@ -3690,16 +3934,16 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `mcp__<server>__<tool>`), and the `agents/main/wire.jsonl` record
             // and loop-event type sets.
             //
-            // ONE change does reach houhub: a new symlink-escape guard in the
+            // ONE change does reach HouHub: a new symlink-escape guard in the
             // `Read` / `Glob` / `Grep` / `ReadMediaFile` / `Edit` / `Write`
             // tools refuses a path that is lexically inside `cwd` +
             // `additionalDirectories` + the skill roots but whose real path
             // lands outside all of them ("… through a symbolic link that
             // points outside the working directory. Access is blocked; use the
             // real path directly or add the target directory to the
-            // workspace."). houhub builds two things in exactly that shape, and
+            // workspace."). HouHub builds two things in exactly that shape, and
             // 2.0.2 read through both: a multi-folder workspace's folders are
-            // real symlinks under the cwd (houhub sends no
+            // real symlinks under the cwd (HouHub sends no
             // `additionalDirectories`), and an expert or office skill is
             // `~/.kimi-code/skills/<id>` linked to `~/.houhub/skills/<id>` —
             // still listed as `skill:<id>`, but a `Read` of the skill's own
@@ -3724,7 +3968,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `path-access`, `workspaceDirsService`, `projectLocalConfigService`
             // and `watch` are back to their 2.0.2 regions once bundler
             // renumbering is ignored — the build that read through both of
-            // houhub's link shapes — and `local.toml` is read without the trust
+            // HouHub's link shapes — and `local.toml` is read without the trust
             // gate again. With watching back on, the 2.1.0 note above about
             // settings changes landing only on the next connect no longer
             // applies. The same rollback also drops 2.1.0's hardening of
@@ -3746,18 +3990,18 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `session/fork` still ignoring `mcpServers`, neither
             // `acpMcpServersToConfigs` nor the runtime-identity throw in the
             // bundle). `engines.node` (>=22.19.0) and the runtime dependencies
-            // are unmoved. So are the sources of everything else houhub mirrors:
+            // are unmoved. So are the sources of everything else HouHub mirrors:
             // config.toml's provider/model schemas, `KIMI_MODEL_*`, the skill
             // roots, the auth gate, the bundled models.dev rows and the
             // `wire.jsonl` writer. A live A/B against 2.1.1, driven with
-            // houhub's config.toml block, gate token and client capabilities,
+            // HouHub's config.toml block, gate token and client capabilities,
             // matched on `initialize`, `session/new` (modes, config options,
             // slash commands), the `session/update` kinds and the wire record
             // types. A stdio server handed over on `session/new` is spawned,
             // listed and called, and 2.2.0 resumes and loads a session that
             // 2.1.1 wrote.
             //
-            // Four engine changes still reach houhub:
+            // Four engine changes still reach HouHub:
             //
             // - `UserPromptSubmit` hook output is folded into the prompt
             //   message, tagged `meta.source = "user prompt submit hook"`,
@@ -3769,15 +4013,15 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   `kaos`. An entry still naming it now fails the whole `mcp.json`
             //   at load, where 2.1.1 refused only that server, so
             //   `commands/mcp.rs` drops it from any entry it saves. An entry
-            //   houhub does not touch stays as written: failing the file is
+            //   HouHub does not touch stays as written: failing the file is
             //   upstream's choice, and quietly turning a `kaos` server into a
-            //   local launch is not houhub's to make.
+            //   local launch is not HouHub's to make.
             // - The output cap no longer comes from the declared context size
             //   for a model with no output limit of its own. An `openai` /
             //   `openai_responses` provider then sends no cap at all, a `kimi`
             //   one caps output at the window minus what is in use, and
             //   `anthropic` keeps a default that drops from 128000 to 64000 for
-            //   a model Kimi does not recognize. 2.1.1 used houhub's declared
+            //   a model Kimi does not recognize. 2.1.1 used HouHub's declared
             //   `max_context_size` (`llm.request.maxTokens = 262144`), which an
             //   OpenAI-compatible server rejects when it is above the model's
             //   own output limit. See `KIMI_DEFAULT_MAX_CONTEXT_SIZE`.
@@ -3791,12 +4035,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // One new lever stays unused. `KIMI_CODE_TRUST_WORKSPACE=1` marks
             // the workspace trusted, and trust is what loads a repository's own
             // `.mcp.json` and `.kimi-code/mcp.json`, i.e. commands the
-            // repository chooses. Set from houhub, it would start them on the
-            // next session with nobody approving them, the hole houhub's old
+            // repository chooses. Set from HouHub, it would start them on the
+            // next session with nobody approving them, the hole HouHub's old
             // seeding of pi's trust opened (see
             // `commands::acp::pi_project_trust_launch_block`). A user who wants
             // it sets it in the agent's environment. The rest is inert for
-            // houhub. NotifyUser now also needs a host that declares the
+            // HouHub. NotifyUser now also needs a host that declares the
             // `update_panel` UI capability, which ACP never does. Tower mode,
             // `kimi app`, the TUI work and the opt-in
             // `KIMI_CODE_LLM_HEADERS_TIMEOUT_MS` do not touch `kimi acp`.
@@ -3838,13 +4082,17 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             description: "xAI's official coding agent and CLI (ACP via grok agent stdio)",
             // `@xai-official/grok` ships each platform's native binary as a
             // brotli-compressed **optional dependency** (`@xai-official/grok-<os>-<arch>`);
-            // the npm `bin/grok` trampoline decompresses it into `~/.grok/bin` on
-            // first run. Public mirrors (e.g. registry.npmmirror.com, a common CN
-            // default) lag far behind this package — at time of writing only 0.1.4,
-            // which predates the `grok agent stdio` ACP subcommand — so the pinned
-            // version isn't resolvable there.
+            // the package's `postinstall` decompresses it into `$GROK_HOME/bin`
+            // (default `~/.grok/bin`) during `npm install`, and the npm
+            // `bin/grok` trampoline does so on first run if that never happened.
+            // Public mirrors (e.g. registry.npmmirror.com, a common CN default)
+            // lag behind this package and are incomplete: re-checked for the
+            // 1.0.60 bump, its `latest` there is still 0.1.4, which predates the
+            // `grok agent stdio` ACP subcommand, and although it now lists most
+            // 1.0.x releases, 1.0.52 and 1.0.60 both answer 404 there — so the
+            // pinned version isn't resolvable there.
             //
-            // Both concerns are handled by houhub's shared `npm install -g` path
+            // Both concerns are handled by HouHub's shared `npm install -g` path
             // (`install_npm_global_package_streaming` in commands/acp.rs), which
             // always passes `--include=optional` (pulls the platform binary) and
             // `--registry=https://registry.npmjs.org` (bypasses lagging mirrors)
@@ -3853,7 +4101,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // leading `KEY=value` argv and the spawn layer's `parse_env_var` only accepts
             // `[A-Za-z0-9_]` env names, which npm's `@scope:registry` key is not.)
             //
-            // 1.0.0 changed ONE thing that reaches houhub without any code change
+            // 1.0.0 changed ONE thing that reaches HouHub without any code change
             // here: its `initialize` advertises `sessionCapabilities.resume`
             // (0.2.118 advertised only `list`), so reconnecting to an existing
             // Grok session takes `connect_agent`'s resume → load → new chain at
@@ -3862,44 +4110,53 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // reply carries the `_meta["x.ai/sessionConfig"]` and per-model
             // `models` that the composer's selectors and context ring read, and
             // prompting straight after it works. It also skips `session/load`'s
-            // history replay, which houhub only drained to discard. The 1.0.1–
-            // 1.0.52 patches add nothing further here: re-probed live against
-            // the 1.0.52 binary (with 1.0.51 as the A/B; both refuse
+            // history replay, which HouHub only drained to discard. The 1.0.1–
+            // 1.0.60 patches add nothing further here: re-probed live against
+            // the 1.0.60 binary (with 1.0.52 as the A/B; both refuse
             // `session/new` and `session/resume` without a credential, so those
-            // ran with a placeholder `XAI_API_KEY`), `initialize` still answers
+            // ran with a placeholder `XAI_API_KEY`, and the turns ran on a local
+            // `[model.<id>]` endpoint), `initialize` still answers
             // `sessionCapabilities: {list, resume, close}` plus the same
             // `promptCapabilities.embeddedContext` (and `mcpCapabilities`
-            // http+sse, `loadSession: true`), and `session/resume` still
+            // http+sse, `loadSession: true`), and `session/resume` from a fresh
+            // process still restores the conversation without replaying it and
             // carries `x.ai/sessionConfig` and the per-model `models`, so the
-            // resume rung stands. The `_meta` keys added since are ones houhub
-            // does not read: `x.ai/memoryNotesWritable` in those replies
-            // (1.0.51, in place of `x.ai/memoryMode`), and from 1.0.52
+            // resume rung stands. Every scenario probed (turns with foreground
+            // and background commands, a permission request, grok's
+            // ask-question and exit-plan-mode requests, resume and load) gives
+            // the same frames on both once ids, timing and the number of
+            // terminal-output polls are normalized. The `_meta` keys added since
+            // 1.0.0 are ones HouHub does not read: `x.ai/memoryNotesWritable` in
+            // those replies (1.0.51, in place of `x.ai/memoryMode`), and from 1.0.52
             // `requestTrimmedTokens` beside `totalTokens` on `session/update`
             // and `x.ai/requestingSessionId` on a permission request's tool
-            // call. Nor does houhub map the two status updates 1.0.50 added on
-            // `_x.ai/session/update`, `login_refused` (with a `remedy` text)
-            // and `backend_responsive`, any more than grok's other status
-            // updates. A session's directory, its `summary.json` keys and the
-            // `updates.jsonl` envelope are unchanged after a turn. All six
-            // `@xai-official/grok-<os>-<arch>` optional deps are published at
-            // 1.0.52 — they are OPTIONAL, so a platform that lags would fail
-            // only for that platform's users, at run time, in the trampoline.
-            // The pin tracks `dist-tags.latest`, NOT the highest version
-            // number: 1.0.52 is `latest` while `alpha` has reached 1.0.58.
+            // call; 1.0.53–1.0.60 add none. Nor does HouHub map the two status
+            // updates 1.0.50 added on `_x.ai/session/update`, `login_refused`
+            // (with a `remedy` text) and `backend_responsive`, any more than
+            // grok's other status updates. A session's directory, its
+            // `summary.json` keys and the `updates.jsonl` envelope are unchanged
+            // after a turn; by 1.0.60 the directory also holds a
+            // `usage.json.lock` beside `usage.json`, neither of which HouHub
+            // reads. All six `@xai-official/grok-<os>-<arch>` optional deps are
+            // published at 1.0.60 — they are OPTIONAL, so a platform that lags
+            // would fail only for that platform's users, at run time, in the
+            // trampoline. The pin tracks `dist-tags.latest`, NOT the highest
+            // version number: 1.0.60 is `latest` while `alpha` has reached
+            // 1.0.61.
             //
-            // One tool input houhub renders did change after 1.0.41:
+            // One tool input HouHub renders did change after 1.0.41:
             // `run_terminal_command` dropped `background` and `timeout` for
             // `block_until_ms` (how long to wait before backgrounding the
             // command: 30000 by default, 0 at once), so a grok shell card no
-            // longer has a timeout to show; 1.0.52 still takes it. A background
+            // longer has a timeout to show; 1.0.60 still takes it. A background
             // launch answers with the text "Background task <id> started"
-            // (seen live through 1.0.52), which is what houhub's launch matcher
+            // (seen live through 1.0.60), which is what HouHub's launch matcher
             // (`parseBackgroundLaunch`) reads. Since 1.0.52 a background task's
             // `command` (its poll card title, result and completion snapshot)
             // is the command the model wrote rather than the `/bin/bash -lc
-            // '…'` line that runs it; houhub shows it as it arrives.
+            // '…'` line that runs it; HouHub shows it as it arrives.
             //
-            // 1.0.40 DID add one thing that reaches houhub, and it needed a fix
+            // 1.0.40 DID add one thing that reaches HouHub, and it needed a fix
             // on our side: it narrates `session/new` progress on the
             // `_x.ai/session/setup` notification, whose first five phases carry
             // `"sessionId": null` because they run before the id exists. The
@@ -3910,24 +4167,26 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // frame and it would sit in the retry queue for the connection's
             // life. `ClaimNullSessionIds` in connection.rs claims
             // those frames before they can be parked, so this bump is safe only
-            // together with that guard. 1.0.52 still sends exactly those five
-            // (`auth` … `mcp_merge`); every later phase, from
+            // together with that guard. 1.0.60 still sends exactly those five
+            // (`auth` … `mcp_merge`), also ahead of a `session/new` it then
+            // refuses for want of a credential; every later phase, from
             // `persistence_init` on (`agent_build` among them), carries the id.
             // `_x.ai/mcp/servers_updated` has no `sessionId` field at all, and
             // it follows the MCP servers' own startup rather than those phases:
-            // on 1.0.51 and 1.0.52 it came right after `persistence_init`, or
-            // right after `initialize` when no session was opened. houhub does
-            // not read it, and a frame without the field is never parked, so
-            // where it lands changes nothing.
+            // on 1.0.52 and 1.0.60 it came right after `persistence_init`, or
+            // right after `initialize` when no session was opened
+            // (`session/resume` and `session/load` narrate no phases). HouHub
+            // does not read it, and a frame without the field is never parked,
+            // so where it lands changes nothing.
             distribution: AgentDistribution::Npx {
-                version: "1.0.52",
-                package: "@xai-official/grok@1.0.52",
+                version: "1.0.60",
+                package: "@xai-official/grok@1.0.60",
                 cmd: "grok",
                 // Only the ACP subcommand lives here. Grok's ROOT-level launch
                 // flags (`--no-auto-update` always, `--permission-mode <value>`
                 // only for a non-default permission mode) MUST precede this
                 // subcommand — `grok agent stdio` itself rejects them (re-verified
-                // against 1.0.52: it still only accepts --debug/--debug-file/
+                // against 1.0.60: it still only accepts --debug/--debug-file/
                 // --leader-socket) — so `build_agent` inserts them ahead of these
                 // args rather than appending after. Since 1.0.3 `grok --help` no
                 // longer LISTS `--no-auto-update`, but it is still accepted:
@@ -3938,7 +4197,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 // auto/dontAsk/bypassPermissions/plan).
                 args: &["agent", "stdio"],
                 env: &[],
-                // `@xai-official/grok@1.0.52` declares `engines.node: ">=20"`;
+                // `@xai-official/grok@1.0.60` declares `engines.node: ">=20"`;
                 // surface that in preflight so Node 18 isn't silently accepted.
                 node_required: Some("20.0.0"),
             },
@@ -3960,46 +4219,72 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (downloads.cursor.com/lab/<version>/<os>/<arch>/...); custom
             // versions substitute into the same pattern.
             //
-            // 2026.10.01-14929f9 leaves the ACP layer alone: its 18
-            // `./src/acp/*` modules match 2026.09.28-64d2043's once minified
-            // names are normalized (only build paths, the embedded version
-            // string and one chunk number differ), and `initialize` and the
-            // unauthenticated `session/new` answer are identical. Every pin
-            // still has to be triaged in `cursor_acp_retry_compat`.
+            // 2026.10.14-0f9edde changes the ACP layer, though `initialize` and
+            // the unauthenticated `session/new` answer are identical to
+            // 2026.10.01-14929f9's. Compared module by module with minified
+            // names normalized, three changes reach HouHub:
+            //
+            // * The completion drain at the end of a prompt (now
+            //   `background-completion-drain.ts`, formerly
+            //   `subagent-completion-drain.ts`) also runs for shells the model
+            //   asked to watch (a shell call with an `outputNotification`
+            //   pattern), on every client, where it used to run only for a
+            //   client that negotiated `subagents`, which HouHub never does.
+            //   While a watched shell runs, `session/prompt` stays open and
+            //   Cursor shows a `watch-<uuid>` tool call (kind `other`, titled
+            //   "Watching: <reason>" or "Watching N shells", `rawInput.shells`
+            //   listing them) that it completes when the watch ends. When the
+            //   shell's output matches, Cursor runs a follow-up turn
+            //   (`backgroundTaskCompletionAction`) inside the same request; a
+            //   follow-up that fails puts the completion back in the queue and
+            //   fails the request. `cursor_acp_retry_compat` gives each
+            //   follow-up its own retry policy, as the TUI does.
+            // * `newSession`, `loadSession` and `prompt` first check that the
+            //   account's effective team is still the one the agent started
+            //   with. If it is not, they answer -32603 "Your team has switched
+            //   to <team>. Create a new session to continue." and the process
+            //   exits with status 0 ten milliseconds later. HouHub keeps the
+            //   connection over a rejected prompt, then loses it when the agent
+            //   exits.
+            // * A new `generateVideoToolCall` presents as kind `other`, titled
+            //   "Generate Video: <prompt>", with `rawInput._toolName:
+            //   "generateVideo"`; HouHub shows it as a generic tool card.
+            //
+            // Every pin still has to be triaged in `cursor_acp_retry_compat`.
             distribution: AgentDistribution::Binary {
-                version: "2026.10.01-14929f9",
+                version: "2026.10.14-0f9edde",
                 cmd: "cursor-agent",
                 args: &["acp"],
                 env: &[],
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://downloads.cursor.com/lab/2026.10.01-14929f9/darwin/arm64/agent-cli-package.tar.gz",
+                        url: "https://downloads.cursor.com/lab/2026.10.14-0f9edde/darwin/arm64/agent-cli-package.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://downloads.cursor.com/lab/2026.10.01-14929f9/darwin/x64/agent-cli-package.tar.gz",
+                        url: "https://downloads.cursor.com/lab/2026.10.14-0f9edde/darwin/x64/agent-cli-package.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://downloads.cursor.com/lab/2026.10.01-14929f9/linux/arm64/agent-cli-package.tar.gz",
+                        url: "https://downloads.cursor.com/lab/2026.10.14-0f9edde/linux/arm64/agent-cli-package.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://downloads.cursor.com/lab/2026.10.01-14929f9/linux/x64/agent-cli-package.tar.gz",
+                        url: "https://downloads.cursor.com/lab/2026.10.14-0f9edde/linux/x64/agent-cli-package.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://downloads.cursor.com/lab/2026.10.01-14929f9/windows/arm64/agent-cli-package.zip",
+                        url: "https://downloads.cursor.com/lab/2026.10.14-0f9edde/windows/arm64/agent-cli-package.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://downloads.cursor.com/lab/2026.10.01-14929f9/windows/x64/agent-cli-package.zip",
+                        url: "https://downloads.cursor.com/lab/2026.10.14-0f9edde/windows/x64/agent-cli-package.zip",
                         sha256: None,
                     },
                 ],
@@ -4010,6 +4295,41 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 }),
             },
         },
+        AgentType::ZCode => AcpAgentMeta {
+            agent_type,
+            supports_mcp: true,
+            name: "ZCode",
+            description: "Official ZCode runtime via the community ACP bridge",
+            // Validated end to end on Windows with ZCode CLI 0.16.9 and bridge
+            // 0.69.2. The bridge requires an existing official ZCode
+            // installation; zcode::resolve_runtime supplies explicit Node/CLI
+            // paths. HouHub owns history through its ACP transcript in this
+            // phase.
+            //
+            // Bridge 0.72.0 keeps everything HouHub's launch and session handling
+            // rely on: `dist/cli.js`, the runtime selection (Bun re-exec unless
+            // `ZCODE_ACP_RUNTIME=node`) and the backend resolver are
+            // byte-identical to 0.69.2's, and `initialize` answers the same
+            // apart from the version. The mode gate still works as HouHub drives
+            // it (`set_mode`, then `set_config_option("mode")` echoing the
+            // mode), and fork, attachments and MCP forwarding are unchanged.
+            // Since 0.69.3 a new session's placeholder reports the configured
+            // initial mode (the bridge config's `session.mode`, then
+            // `ZCODE_ACP_MODE`, else `yolo`) where it reported `yolo`
+            // regardless; HouHub's gate confirms its own choice either way.
+            // 0.72.0 adds `usage` and `turnMs` to the `_zcode/turnState`
+            // notification that ends a turn, which HouHub does not read. The
+            // rest (quota cards, CLIProxy, sandbox pacing when a workspace arms
+            // the sandbox) is opt-in and outside what HouHub drives.
+            distribution: AgentDistribution::Npx {
+                version: "0.72.0",
+                package: "zcode-acp-server@0.72.0",
+                cmd: "zcode-acp-server",
+                args: &["server"],
+                env: &[],
+                node_required: Some("22.0.0"),
+            },
+        },
         AgentType::DeepSeek => AcpAgentMeta {
             agent_type,
             supports_mcp: true,
@@ -4018,7 +4338,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `deepseek-acp` is the community editor bridge for DeepSeek
             // Harness (DSH): the harness's own `@deepseek-ai/dsh-acp` is an
             // automation-only transport (no streaming, no tool presentation,
-            // rejects MCP), so houhub drives this adapter instead. It speaks
+            // rejects MCP), so HouHub drives this adapter instead. It speaks
             // ACP over stdio with NO arguments; auth is the `DEEPSEEK_API_KEY`
             // env (or `~/.dsh/.credentials.yaml`), and per-session model /
             // reasoning-effort / sandbox selection arrives through standard
@@ -4133,12 +4453,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   `sessionCapabilities`（含无条件的 `fork: {}`）与
             //   `promptCapabilities` 都没动，上面那串能力断言仍然成立。
             // * `agent_message_chunk` / `agent_thought_chunk` / `user_message_chunk`
-            //   现在带 `messageId`。对 houhub 是**惰性**的：1.x schema 里它是稳定的
+            //   现在带 `messageId`。对 HouHub 是**惰性**的：1.x schema 里它是稳定的
             //   `ContentChunk::message_id`（当年 pin 的 0.11 把它放在没开的
             //   `unstable_message_id` feature 后面、被 serde 当未知字段丢掉），但
-            //   houhub 不读它——分叉点取自解析出来的日志而不是 live 转写。
+            //   HouHub 不读它——分叉点取自解析出来的日志而不是 live 转写。
             //
-            // 0.9.0 唯一需要 houhub 跟着改的是**模型目录**，而它落在设置面板那条线上
+            // 0.9.0 唯一需要 HouHub 跟着改的是**模型目录**，而它落在设置面板那条线上
             // （`commands::deepseek_settings`），不在协议层：
             //
             // * 目录的来源换人了。`boot.ts` 现在把自己的 `DEEPSEEK_MODELS` 作为
@@ -4196,8 +4516,9 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // acceptEdits/auto/dontAsk/yolo, `yolo` being the one labelled
             // "Bypass Permissions" (`bypassPermissions` is accepted as an alias
             // for it, `plan` is rejected) — re-read live on 1.1.64, 1.1.65,
-            // 1.1.67 and 1.1.71, and nothing in houhub names them. Session logs
-            // land as `$QODER_CONFIG_DIR/projects/<encoded-cwd>/<sessionId>.jsonl`
+            // 1.1.67, 1.1.71 and 1.1.72, and nothing in HouHub names them.
+            // Session logs land as
+            // `$QODER_CONFIG_DIR/projects/<encoded-cwd>/<sessionId>.jsonl`
             // (default `~/.qoder/...`) in the Claude-Code-style chunk-log
             // envelope, which `parsers::qoder` reads for history — including
             // the `custom-title` / `ai-title` records that carry the session's
@@ -4215,7 +4536,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (`ai-title` comes only from the interactive TUI, never an ACP
             // session). The one protocol change is in 1.1.67: the
             // `reasoning_effort` option moves from `category: "model"` to
-            // `"thought_level"`. houhub needs nothing for it: the model-label
+            // `"thought_level"`. HouHub needs nothing for it: the model-label
             // store finds the model selector by its `model` id first, the
             // composer's model-only handling (search, provider groups) never
             // applied to a short effort list, and saved preferences still
@@ -4230,13 +4551,29 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // an `AskUserQuestion` form, a foreground sub-agent and `/rename`,
             // then `session/load` from a new process) gives identical answers,
             // update streams, load replay and transcript records once ids,
-            // times and paths are normalized. The token-usage gate below, the
-            // config-dir resolution and the `AskUserQuestion` form handling are
-            // the same code in every release from 1.1.67 to 1.1.71.
+            // times and paths are normalized.
+            //
+            // 1.1.72 changes only the two bundles and the version strings: the
+            // vendored qoder-security plugin is still the byte-identical 0.9.5,
+            // and `postinstall.cjs`, the npm dispatcher and the ripgrep binaries
+            // are byte-identical. Its code changes sit outside the ACP layer
+            // (WebSearch and VideoGenRetrieve move into the built-in
+            // `qoder-tools` plugin and stay available over ACP, `/model` and
+            // `/release-notes` move into the account plugin, the model catalog
+            // cache becomes `catalog-v7`), and the ACP module is structurally
+            // unchanged. A live A/B of 1.1.72 against 1.1.71 under
+            // `--fake-responses` (the same scenario, with the `AskUserQuestion`
+            // form answered once with an option and once with free text) gives
+            // identical answers, update streams, load replay and transcript
+            // records once ids, times, paths and the per-request
+            // `requestTokenAnchor` hashes are normalized. The token-usage gate
+            // below, the config-dir resolution and the `AskUserQuestion` form
+            // handling are the same code in every release from 1.1.67 to
+            // 1.1.72.
             //
             // `QODER_EXPOSE_TOKEN_USAGE` turns OFF qoder's own token-count
             // redaction, and without it every qoder session reports zero tokens
-            // everywhere houhub can see. The CLI passes each response's usage
+            // everywhere HouHub can see. The CLI passes each response's usage
             // through a sanitizer that keeps the real counters only when the
             // model came from a BYO/custom provider or that env is truthy
             // (`1`/`true`/`yes`); otherwise it rewrites `input_tokens`,
@@ -4251,17 +4588,18 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //
             // The name is assembled at runtime from a `QODER_`/`QODERCN_`
             // prefix (`Sr(A) = `${vv}${A}``, `ebA = Sr("EXPOSE_TOKEN_USAGE")`
-            // in 1.1.54, `yr` / `CRA` in 1.1.67, `Dr` / `qMA` in 1.1.71; the
-            // minified names change every build), so grepping the bundle for
-            // the full literal returns nothing — grep the bare suffix instead,
-            // the same trap `parsers::qoder` documents for the config-dir vars.
+            // in 1.1.54, `yr` / `CRA` in 1.1.67, `Dr` / `qMA` in 1.1.71, `yr` /
+            // `VMA` in 1.1.72; the minified names change every build), so
+            // grepping the bundle for the full literal returns nothing — grep
+            // the bare suffix instead, the same trap `parsers::qoder` documents
+            // for the config-dir vars.
             //
             // Registry env is only the base: `merge_agent_env` lets a per-agent
             // `runtime_env` override it, so a user who wants the redaction back
             // sets `QODER_EXPOSE_TOKEN_USAGE=0` in the agent's env settings.
             distribution: AgentDistribution::Npx {
-                version: "1.1.71",
-                package: "@qoder-ai/qodercli@1.1.71",
+                version: "1.1.72",
+                package: "@qoder-ai/qodercli@1.1.72",
                 cmd: "qoder",
                 args: &["--acp"],
                 env: &[("QODER_EXPOSE_TOKEN_USAGE", "1")],
@@ -4304,7 +4642,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `-32000 Authentication required` unless
             // `$GEMINI_HOME/antigravity-acp/settings.json` declares
             // `auth.type` (env-based selection was removed upstream; the
-            // server's own message says so). houhub does not implement the ACP
+            // server's own message says so). HouHub does not implement the ACP
             // `authenticate` request, so the launch path writes that file
             // instead — see `sync_antigravity_settings_file` in connection.rs
             // and the Antigravity settings panel that feeds it. With
@@ -4332,19 +4670,19 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // 1.3.0, checked against 1.2.1: every archive is still flat with
             // the same two executables and modes, and `tools.py`,
             // `config_options.py`, `paths.py`, `settings.py` and `oauth/` are
-            // byte-identical. So the MCP `rawInput` houhub folds, the mode
+            // byte-identical. So the MCP `rawInput` HouHub folds, the mode
             // values, the token paths and the loopback OAuth flow the login
             // relay drives are unchanged. `initialize` matches, and
             // `session/new` still fails `-32000 Authentication required` until
             // settings.json declares `auth.type`, which gained a `gateway`
-            // value houhub does not offer. New on the wire is `usage_update`,
+            // value HouHub does not offer. New on the wire is `usage_update`,
             // which reaches the context ring like any agent's, and the Windows
-            // server is still the PyInstaller onefile that houhub's TMP/TEMP
+            // server is still the PyInstaller onefile that HouHub's TMP/TEMP
             // scratch and `_MEI*` reaping are built for. One launch detail
             // moved: `main.py` now appends `localhost,127.0.0.1,::1` to both
-            // `NO_PROXY` spellings whenever a proxy variable is set. houhub
+            // `NO_PROXY` spellings whenever a proxy variable is set. HouHub
             // already exports those hosts, so its value passes through, except
-            // `*`, which houhub sends alone because Python skips a `*` inside a
+            // `*`, which HouHub sends alone because Python skips a `*` inside a
             // list. The server turns it into `*,localhost,127.0.0.1,::1`, so
             // with a proxy configured and a `*` bypass list, its urllib and
             // requests traffic is proxied again.
@@ -4353,7 +4691,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // the same two executables and modes. `main.py`, `tools.py`,
             // `paths.py`, `settings.py` and `oauth/` are byte-identical, and
             // the mode and `auth.type` values are unchanged, so the MCP
-            // `rawInput` houhub folds, the token paths, the login relay's OAuth
+            // `rawInput` HouHub folds, the token paths, the login relay's OAuth
             // flow and the `NO_PROXY` rewrite above all still hold. `initialize`
             // only adds `agentCapabilities._meta.antigravity` (`tier`,
             // `systemPrompt.append`), `session/new` still fails `-32000` until
@@ -4366,7 +4704,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `session_model_list_offers` in connection.rs replays it as saved
             // for the server to map. A model switch now takes effect at the
             // next prompt, and `start_subagent` became `invoke_subagent` beside
-            // a new `run_workflow` tool; houhub maps neither name.
+            // a new `run_workflow` tool; HouHub maps neither name.
             distribution: AgentDistribution::Binary {
                 version: "1.4.0",
                 // Never resolvable on PATH (there is no standalone CLI by
@@ -4416,6 +4754,58 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                         windows: &["localharness_external.exe"],
                     },
                 }),
+            },
+        },
+        AgentType::Kiro => AcpAgentMeta {
+            agent_type,
+            supports_mcp: true,
+            name: "Kiro CLI",
+            description: "Amazon's Kiro agent in the terminal (native ACP via kiro-cli acp)",
+            // `kiro-cli acp` is the CLI's OWN ACP server. Verified handshake
+            // against 2.24.1: `agentInfo.name = "Kiro CLI Agent"`,
+            // `loadSession: true`, empty `sessionCapabilities`, image prompts
+            // (no embeddedContext), MCP http but NOT sse, and no
+            // `authMethods` — sign-in is the CLI's own `kiro-cli login`, which
+            // the ACP server reuses. `session/new` answers with standard
+            // `modes` (the agent configs: kiro_default / kiro_planner /
+            // kiro_guide, plus any user agent under `~/.kiro/agents`) and the
+            // pre-config-options `models`, but no `configOptions`; reasoning
+            // effort and thinking arrive on `_kiro.dev/metadata`. The composer
+            // selectors are therefore built per agent in `acp::connection`
+            // (see `synthesize_kiro_model_option`).
+            //
+            // SYSTEM, NOT BINARY. Kiro ships only through its own installers:
+            // a universal `Kiro CLI.dmg` on macOS (an app bundle that links
+            // its binaries into `~/.local/bin` on first launch), an `.msi` on
+            // Windows, and Linux archives whose bundled `install.sh` places
+            // them in `~/.local/bin`. The binary cache can do none of the
+            // first two, and `kiro-cli` is a dispatcher that execs a sibling
+            // `kiro-cli-chat` (the ACP server itself), so it is not a
+            // single-file install either. A houhub-managed copy would also
+            // diverge from the one the user's terminal runs, while both share
+            // `~/.kiro` (sessions, settings, agents, sign-in) and the CLI
+            // updates itself in place (`kiro-cli update`). So HouHub launches
+            // the user's install and never pins one; `~/.local/bin` is probed
+            // by the system resolver even when a Finder-launched app's PATH
+            // lacks it.
+            //
+            // Sessions land in `~/.kiro/sessions/cli/<id>.json` (metadata) +
+            // `<id>.jsonl` (the event log) for every entrypoint, ACP included,
+            // which `parsers::kiro` reads for history. MCP servers come from
+            // `~/.kiro/settings/mcp.json`, which the CLI loads natively, so
+            // HouHub manages that file and does not forward the same servers
+            // over `session/new` (see `load_mcp_servers_for_agent`).
+            distribution: AgentDistribution::System {
+                cmd: "kiro-cli",
+                args: &["acp"],
+                env: &[],
+                install_url: KIRO_INSTALL_URL,
+                // `kiro-cli update --non-interactive` checks Kiro's release
+                // channel and installs a newer build without asking (2.24.1:
+                // "No updates available, 2.24.1 is the latest version." when
+                // current, exit 0) — the same updater `kiro-cli update` runs
+                // in the terminal, so the install stays the vendor's.
+                update_args: Some(&["update", "--non-interactive"]),
             },
         },
         // Handled by the early return above; kept so the match stays
@@ -4624,8 +5014,8 @@ mod tests {
         let meta = get_agent_meta(AgentType::Cursor);
         assert_binary_version(
             AgentType::Cursor,
-            "2026.10.01-14929f9",
-            "/lab/2026.10.01-14929f9/",
+            "2026.10.14-0f9edde",
+            "/lab/2026.10.14-0f9edde/",
         );
         match meta.distribution {
             AgentDistribution::Binary {
@@ -4648,6 +5038,46 @@ mod tests {
         match get_agent_meta(AgentType::OpenCode).distribution {
             AgentDistribution::Binary { dir_entry, .. } => assert!(dir_entry.is_none()),
             other => panic!("expected binary distribution for OpenCode, got {other:?}"),
+        }
+    }
+
+    // Kiro is the one SYSTEM agent: its installers (a .dmg, an .msi, a Linux
+    // install.sh) are nothing the binary cache can replay, so there is no pin,
+    // no custom version, and the launch is the user's own `kiro-cli acp` —
+    // upgraded in place by the CLI's own updater.
+    #[test]
+    fn kiro_launches_the_system_cli_without_a_pin() {
+        let meta = get_agent_meta(AgentType::Kiro);
+        assert_eq!(registry_id_for(AgentType::Kiro), "kiro-cli");
+        assert_eq!(from_registry_id("kiro-cli"), Some(AgentType::Kiro));
+        assert_eq!(meta.registry_version(), None);
+        assert!(!meta.supports_custom_version());
+        assert!(!uses_cursor_acp_backend(AgentType::Kiro));
+        match meta.distribution {
+            AgentDistribution::System {
+                cmd,
+                args,
+                env,
+                install_url,
+                update_args,
+            } => {
+                assert_eq!(cmd, "kiro-cli");
+                assert_eq!(args, &["acp"]);
+                assert!(env.is_empty());
+                assert!(install_url.starts_with("https://kiro.dev/"));
+                assert_eq!(update_args, Some(&["update", "--non-interactive"][..]));
+            }
+            other => panic!("expected system distribution for Kiro, got {other:?}"),
+        }
+        // No other built-in rides the system distribution: every one of them
+        // has a pinned version HouHub installs itself.
+        for agent_type in builtin_acp_agents() {
+            if agent_type != AgentType::Kiro {
+                assert!(
+                    get_agent_meta(agent_type).registry_version().is_some(),
+                    "{agent_type:?} lost its pin"
+                );
+            }
         }
     }
 
@@ -4694,7 +5124,7 @@ mod tests {
 
     #[test]
     fn goal_control_is_out_of_band_gates_codex_only() {
-        // codex changes the goal through an app-server RPC, so houhub may follow
+        // codex changes the goal through an app-server RPC, so HouHub may follow
         // a pause/clear with the interrupt that actually stops the work. claude
         // delivers the same request as the prompt text "/goal clear" — killing
         // that turn would kill the clear — and every unverified adapter fails
@@ -4716,8 +5146,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.90.0",
-            "@agentclientprotocol/claude-agent-acp@0.90.0",
+            "0.91.0",
+            "@agentclientprotocol/claude-agent-acp@0.91.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -4738,14 +5168,14 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Cline,
-            "3.0.71",
-            "cline@3.0.71",
+            "3.0.72",
+            "cline@3.0.72",
             Some("22.0.0"),
         );
         assert_npx_version(
             AgentType::CodeBuddy,
-            "2.164.0",
-            "@tencent-ai/codebuddy-code@2.164.0",
+            "2.168.0",
+            "@tencent-ai/codebuddy-code@2.168.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -4763,8 +5193,8 @@ mod tests {
         assert_npx_version(AgentType::Pi, "0.0.34", "pi-acp@0.0.34", Some("22.0.0"));
         assert_npx_version(
             AgentType::Grok,
-            "1.0.52",
-            "@xai-official/grok@1.0.52",
+            "1.0.60",
+            "@xai-official/grok@1.0.60",
             Some("20.0.0"),
         );
         assert_npx_version(
@@ -4775,19 +5205,19 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Qoder,
-            "1.1.71",
-            "@qoder-ai/qodercli@1.1.71",
+            "1.1.72",
+            "@qoder-ai/qodercli@1.1.72",
             Some("20.0.0"),
         );
-        assert_binary_version(AgentType::OpenCode, "1.19.0", "/releases/download/v1.19.0/");
+        assert_binary_version(AgentType::OpenCode, "1.19.1", "/releases/download/v1.19.1/");
         // Hermes rides the community npm bridge (upstream retired its PyPI
         // channel at 0.19.0; see the registry entry). The npm package version
         // tracks the upstream version 1:1, and the pin must stay EXACT — the
         // audited wrapper code is only what the pinned version ships.
         assert_npx_version(
             AgentType::Hermes,
-            "0.22.0",
-            "hermes-agent@0.22.0",
+            "0.22.2",
+            "hermes-agent@0.22.2",
             Some("20.0.0"),
         );
     }
@@ -4806,8 +5236,8 @@ mod tests {
 
     // The Hermes launch command must be the wrapper's `hermes` bin with the
     // `acp` subcommand — the package's OTHER bins (`hermes-agent`,
-    // `hermes-npm`) map to different console scripts (`run_agent:main` and
-    // the bridge maintenance CLI), not the ACP adapter. `resolve_npx_command`
+    // `hermes-npm`) map to different console scripts (`agent.legacy_cli:main`
+    // and the bridge maintenance CLI), not the ACP adapter. `resolve_npx_command`
     // checks PATH and `~/.local/bin` before the npm prefix, so an
     // official-installer `hermes` keeps outranking the npm-managed copy
     // without any policy bit.
@@ -4867,14 +5297,17 @@ mod tests {
     fn acp_adapter_relation_covers_only_wrapper_agents() {
         for agent_type in all_acp_agents() {
             let relation = acp_adapter_relation(agent_type);
-            let expected = matches!(agent_type, AgentType::ClaudeCode | AgentType::Codex);
+            let expected = matches!(
+                agent_type,
+                AgentType::ClaudeCode | AgentType::Codex | AgentType::ZCode
+            );
             assert_eq!(
                 relation.is_some(),
                 expected,
                 "unexpected adapter relation for {agent_type:?}"
             );
             // The whole point is that the vendor CLI's name differs from the
-            // adapter command houhub actually launches.
+            // adapter command HouHub actually launches.
             if let Some(relation) = relation {
                 match get_agent_meta(agent_type).distribution {
                     AgentDistribution::Npx { cmd, .. } => {

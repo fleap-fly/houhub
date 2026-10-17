@@ -14,21 +14,30 @@ use serde::{Deserialize, Serialize};
 /// for 11 rows (1536×2288). Height therefore grows in whole 208px steps and
 /// is validated per sheet rather than pinned to a single value.
 pub const SPRITE_SHEET_WIDTH: u32 = 1536;
+
 /// Height of the base 9-row sheet. Treated as the canonical *minimum*; taller
 /// sheets are accepted as long as the height is a whole multiple of a row.
 pub const SPRITE_SHEET_HEIGHT: u32 = 1872;
+
 #[allow(dead_code)]
 pub const SPRITE_GRID_COLS: u32 = 8;
+
 /// Row count of the base format, i.e. the minimum number of rows a sheet must
 /// carry (all base animation states). Newer sheets append rows beyond this.
 pub const SPRITE_GRID_ROWS: u32 = 9;
+
 #[allow(dead_code)]
-pub const SPRITE_FRAME_WIDTH: u32 = SPRITE_SHEET_WIDTH / SPRITE_GRID_COLS; // 192
-pub const SPRITE_FRAME_HEIGHT: u32 = SPRITE_SHEET_HEIGHT / SPRITE_GRID_ROWS; // 208
+pub const SPRITE_FRAME_WIDTH: u32 = SPRITE_SHEET_WIDTH / SPRITE_GRID_COLS;
+
+ // 192
+pub const SPRITE_FRAME_HEIGHT: u32 = SPRITE_SHEET_HEIGHT / SPRITE_GRID_ROWS;
+
+ // 208
 
 /// Filename codex writes inside each pet directory. Stored as a relative path
 /// in `pet.json::spritesheetPath`; we resolve it against the pet directory.
 pub const SPRITESHEET_FILENAME: &str = "spritesheet.webp";
+
 pub const PET_MANIFEST_FILENAME: &str = "pet.json";
 
 /// Animation rows in the spritesheet, top-to-bottom, mirroring the
@@ -316,6 +325,11 @@ pub struct PetSessionEntry {
     /// Absent for ordinary sessions, which are their own jump target.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<PetParentRef>,
+    /// The assistant a delegation sub-agent runs as, by the name it started
+    /// with — the panel names the row after it rather than after the agent.
+    /// Resolved by the command layer, like `title`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assistant_name: Option<String>,
 }
 
 /// Aggregate payload for the `pet://sessions` event and the
@@ -424,6 +438,7 @@ mod tests {
                 options: vec![],
             }),
             parent: None,
+            assistant_name: None,
         }
     }
 
@@ -433,7 +448,7 @@ mod tests {
         let payload = PetSessionsPayload::from_entries(vec![
             session_entry(ConnectionStatus::Prompting, false), // running
             session_entry(ConnectionStatus::Prompting, true), // waiting: pending outranks prompting
-            session_entry(ConnectionStatus::Error, false),    // error
+            session_entry(ConnectionStatus::Error, false),     // error
             session_entry(ConnectionStatus::Connected, false), // idle-ish: counted nowhere
         ]);
         assert_eq!(payload.running_count, 1);

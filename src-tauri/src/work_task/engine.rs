@@ -6260,6 +6260,13 @@ fn auto_merge_candidate(
     if task.pending_merge.is_some() {
         return false;
     }
+    // Put aside to handle later: the user postponed exactly the decision an
+    // unattended landing would make for them. Same "column present" predicate
+    // as `begin_merge`'s authoritative `DeferredAt IS NULL`, for the same
+    // reason as the queue check above.
+    if task.deferred_at.is_some() {
+        return false;
+    }
     if task.files_changed == Some(0) {
         return false;
     }
@@ -7769,6 +7776,14 @@ mod tests {
         assert!(!auto_merge_candidate(&task, &settings));
         task.pending_merge = None;
 
+        // Put aside to handle later: the user postponed this very decision.
+        // Flipping only the mark (the row is a candidate on every other gate)
+        // proves it is what blocks, and clearing it that nothing else does.
+        task.deferred_at = Some(chrono::Utc::now());
+        assert!(!auto_merge_candidate(&task, &settings));
+        task.deferred_at = None;
+        assert!(auto_merge_candidate(&task, &settings));
+
         // Only review is mergeable.
         task.status = WorkTaskStatus::Running;
         assert!(!auto_merge_candidate(&task, &settings));
@@ -7894,6 +7909,7 @@ mod tests {
             preflight: None,
             archived_at: None,
             scheduled_at: None,
+            deferred_at: None,
             source_kind: None,
             source_key: None,
             source_meta: None,
@@ -10455,6 +10471,8 @@ mod tests {
                 agent_type: AgentType::Codex,
                 task_preview: "run the tests".into(),
                 task_id: "task-1".into(),
+                assistant_id: None,
+                assistant_name: None,
             },
         )
     }
@@ -10472,6 +10490,8 @@ mod tests {
                     duration_ms: 0,
                     text_preview: None,
                 },
+                assistant_id: None,
+                assistant_name: None,
             },
         )
     }

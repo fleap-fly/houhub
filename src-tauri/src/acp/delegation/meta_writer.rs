@@ -27,10 +27,13 @@
 //! `commands::conversations::inject_delegation_meta` on a cold reload.
 
 use async_trait::async_trait;
+
 use std::sync::Arc;
 
 use crate::acp::manager::ConnectionManager;
+
 use crate::acp::types::AcpEvent;
+
 use crate::web::event_bridge::{emit_with_state, emit_with_state_gated};
 
 /// Top-level key under which delegation state lives on a tool call's
@@ -288,6 +291,7 @@ pub fn build_delegation_meta(
     duration_ms: Option<u64>,
     task_preview: Option<&str>,
     task_id: Option<&str>,
+    assistant: Option<&crate::acp::delegation::types::AssistantRef>,
 ) -> serde_json::Value {
     let mut inner = serde_json::Map::new();
     inner.insert(
@@ -354,6 +358,20 @@ pub fn build_delegation_meta(
             serde_json::Value::String(id.to_string()),
         );
     }
+    // The assistant the task runs as, on EVERY write for the same
+    // replace-wholesale reason as the task fields above: the card of a host
+    // that announced the call identity-less (Cursor) has nothing else to draw
+    // the assistant from once the live binding is gone.
+    if let Some(a) = assistant {
+        inner.insert(
+            "assistant_id".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(a.id)),
+        );
+        inner.insert(
+            "assistant_name".to_string(),
+            serde_json::Value::String(a.name.clone()),
+        );
+    }
     let mut outer = serde_json::Map::new();
     outer.insert(
         DELEGATION_META_KEY.to_string(),
@@ -385,6 +403,7 @@ mod tests {
             None,
             Some("run the tests"),
             Some("task-abc"),
+            None,
         );
         let inner = v.get(DELEGATION_META_KEY).unwrap().as_object().unwrap();
         assert_eq!(inner.get("status").unwrap().as_str().unwrap(), "running");
@@ -412,7 +431,7 @@ mod tests {
 
     #[test]
     fn build_meta_with_error_code() {
-        let v = build_delegation_meta("failed", None, Some(7), Some("timeout"), None, None, None, None);
+        let v = build_delegation_meta("failed", None, Some(7), Some("timeout"), None, None, None, None, None);
         let inner = v.get(DELEGATION_META_KEY).unwrap().as_object().unwrap();
         assert_eq!(inner.get("status").unwrap().as_str().unwrap(), "failed");
         assert_eq!(
@@ -433,6 +452,7 @@ mod tests {
             None,
             None,
             Some(1234),
+            None,
             None,
             None,
         );
@@ -486,7 +506,7 @@ mod tests {
             .write_meta(
                 "p1",
                 "tu-1",
-                build_delegation_meta("running", None, Some(9), None, None, None, None, None),
+                build_delegation_meta("running", None, Some(9), None, None, None, None, None, None),
             )
             .await;
         assert!(
@@ -505,7 +525,7 @@ mod tests {
             .write_meta(
                 "p1",
                 "tu-1",
-                build_delegation_meta("completed", None, Some(9), None, None, None, None, None),
+                build_delegation_meta("completed", None, Some(9), None, None, None, None, None, None),
             )
             .await;
         assert!(

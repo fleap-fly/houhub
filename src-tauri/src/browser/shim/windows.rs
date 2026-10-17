@@ -29,12 +29,17 @@
 //! keep a webview alive past its tab.
 
 use std::cell::{Cell, RefCell};
+
 use std::collections::HashMap;
+
 use std::rc::Rc;
 
 use serde_json::{json, Value};
+
 use tauri::{Url, WebviewWindow};
+
 use tauri_runtime_wry::wry::{self, WebViewExtWindows};
+
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2, ICoreWebView2Controller, ICoreWebView2DevToolsProtocolEventReceivedEventArgs2,
     ICoreWebView2DevToolsProtocolEventReceiver, ICoreWebView2Environment15,
@@ -55,6 +60,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED,
     COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
 };
+
 use webview2_com::{
     take_pwstr, CallDevToolsProtocolMethodCompletedHandler, CapturePreviewCompletedHandler,
     DevToolsProtocolEventReceivedEventHandler, FindStartCompletedHandler, FrameChildFrameCreatedEventHandler,
@@ -62,29 +68,42 @@ use webview2_com::{
     NavigationStartingEventHandler, PermissionRequestedEventHandler,
     WebResourceRequestedEventHandler, WindowCloseRequestedEventHandler,
 };
+
 use windows::core::{Interface, BOOL, HSTRING, PWSTR};
+
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+
 use windows::Win32::System::Com::{IStream, STREAM_SEEK_SET};
+
 use windows::Win32::UI::Shell::{
     DefSubclassProc, GetWindowSubclass, RemoveWindowSubclass, SetWindowSubclass, SHCreateMemStream,
 };
+
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, SetWindowPos, SIZE_MINIMIZED, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOZORDER,
     WM_ENTERSIZEMOVE, WM_MOVE, WM_MOVING, WM_NCDESTROY, WM_SETFOCUS, WM_SIZE,
 };
 
 use super::super::agent::PointerButton;
+
 use super::super::channel::MessageSink;
+
 use super::super::console;
+
 use super::super::hooks::LoadFailure;
+
 use super::super::profile;
+
 use super::super::surface::{PointerFailure, PointerGesture};
+
 use super::super::types::BrowserErrorKind;
+
 pub use super::{NavigationEvent, NavigationSink, PageCloseSink};
 
 /// Name of the isolated world the helper and the binding live in. Must match
 /// nothing a page can name: CDP worlds are addressed by this string alone.
 pub const WORLD_NAME: &str = "houhub";
+
 /// The function `Runtime.addBinding` exposes in that world; the helper's send
 /// primitive (`src/browser-injected/helper.js` looks for exactly this name).
 pub const BINDING_NAME: &str = "__houhubSend";
@@ -1693,7 +1712,8 @@ const RESIZE_HOOK_ID: usize = 0xC0DE;
 /// installs it for the webview that IS the window's content and for no other
 /// — but it removes it whenever ANY webview whose parent is that window is
 /// dropped, child webviews included: `impl Drop for InnerWebView` detaches
-/// unconditionally (wry 0.55.1, `src/webview2/mod.rs:71`, still so on `dev`).
+/// unconditionally (wry 0.55.1 through 0.57.0, `src/webview2/mod.rs:76` in
+/// the latter).
 ///
 /// A browser tab IS a child webview of the workspace window, so closing one
 /// left that window with no resize hook at all. The app's own webview then

@@ -1,11 +1,15 @@
 use std::sync::Arc;
 
 use axum::{extract::Extension, Json};
+
 use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
+
 use crate::app_state::AppState;
+
 use crate::commands::work_task as core;
+
 use crate::models::{
     WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
     WorkTaskTemplateDraft, WorkTaskTemplateInfo,
@@ -178,6 +182,13 @@ pub struct ArchiveParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DeferParams {
+    pub id: i32,
+    pub deferred: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiffParams {
     pub id: i32,
     #[serde(default)]
@@ -326,7 +337,7 @@ pub async fn work_task_requeue(
         params.blocks,
         params.allow_duplicate_source,
     )
-        .await
+    .await
         .map_err(AppCommandError::from)?;
     Ok(Json(()))
 }
@@ -415,6 +426,16 @@ pub async fn work_task_archive(
     Json(params): Json<ArchiveParams>,
 ) -> Result<Json<()>, AppCommandError> {
     core::work_task_archive_core(&state.emitter, &state.db, params.id, params.archived)
+        .await
+        .map_err(AppCommandError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn work_task_defer(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<DeferParams>,
+) -> Result<Json<()>, AppCommandError> {
+    core::work_task_defer_core(&state.emitter, &state.db, params.id, params.deferred)
         .await
         .map_err(AppCommandError::from)?;
     Ok(Json(()))

@@ -1,4 +1,5 @@
 use sea_orm::entity::prelude::*;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
@@ -68,6 +69,15 @@ pub struct Model {
     pub pinned_at: Option<DateTimeUtc>,
     /// Original working directory for sessions moved out of a task worktree.
     pub origin_cwd: Option<String>,
+    /// The assistant a delegation child ran as; `None` for every other row.
+    /// Written once with the child, never updated, and deliberately not a
+    /// foreign key — the child keeps its identity even if the assistant row
+    /// is gone. See `m20261016_000002_conversation_assistant`.
+    pub assistant_id: Option<i32>,
+    /// JSON `AssistantRunSnapshot`: the assistant's name, options and
+    /// instructions as they were when the delegation started. A resume replays
+    /// this, never the assistant's current row.
+    pub assistant_snapshot: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

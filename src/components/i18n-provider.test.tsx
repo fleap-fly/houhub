@@ -1,64 +1,58 @@
-import { act, render, screen } from "@testing-library/react"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import {
-  AppI18nProvider,
-  LANGUAGE_SETTINGS_BOOT_TIMEOUT_MS,
-} from "./i18n-provider"
+import { render, screen, waitFor } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
-const getSystemLanguageSettingsMock = vi.hoisted(() => vi.fn())
-const listenMock = vi.hoisted(() => vi.fn(async () => vi.fn()))
+import type { SystemLanguageSettings } from "@/lib/types"
 
-vi.mock("@/lib/api", () => ({
-  getSystemLanguageSettings: getSystemLanguageSettingsMock,
+const api = vi.hoisted(() => ({
+  getSystemLanguageSettings: vi.fn<() => Promise<SystemLanguageSettings>>(),
 }))
+vi.mock("@/lib/api", () => api)
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: listenMock,
-}))
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { AppI18nProvider } from "./i18n-provider"
 
-describe("AppI18nProvider", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "warn").mockImplementation(() => {})
-    getSystemLanguageSettingsMock.mockReset()
-    listenMock.mockClear()
-  })
+function renderTabs() {
+  render(
+    <AppI18nProvider>
+      <Tabs defaultValue="one">
+        <TabsList>
+          <TabsTrigger value="one">One</TabsTrigger>
+        </TabsList>
+        <TabsContent value="one">Body</TabsContent>
+      </Tabs>
+    </AppI18nProvider>
+  )
+}
 
+const tabsRoot = () => screen.getByText("Body").closest('[data-slot="tabs"]')
+
+describe("AppI18nProvider direction", () => {
   afterEach(() => {
-    vi.useRealTimers()
-    vi.restoreAllMocks()
+    document.documentElement.dir = ""
+    window.localStorage.clear()
   })
 
-  it("renders the app after the boot timeout when language settings never resolve", async () => {
-    vi.useFakeTimers()
-    getSystemLanguageSettingsMock.mockReturnValue(new Promise(() => {}))
-
-    render(
-      <AppI18nProvider initialLocale="en" initialMessages={{}}>
-        <div>workspace ready</div>
-      </AppI18nProvider>
-    )
-
-    expect(screen.getByText("houhub")).toBeInTheDocument()
-
-    await act(async () => {
-      vi.advanceTimersByTime(LANGUAGE_SETTINGS_BOOT_TIMEOUT_MS)
+  // Radix components read their direction from context, not from the page:
+  // without a provider a Tabs root stamps `dir="ltr"` on itself, and
+  // everything inside it — switches, rows, menus — stays left-to-right in an
+  // Arabic window whose page is right-to-left.
+  it("hands Radix components the page's right-to-left direction", async () => {
+    api.getSystemLanguageSettings.mockResolvedValue({
+      mode: "manual",
+      language: "ar",
     })
-
-    expect(screen.getByText("workspace ready")).toBeInTheDocument()
+    renderTabs()
+    await waitFor(() => expect(tabsRoot()).toHaveAttribute("dir", "rtl"))
+    expect(document.documentElement.dir).toBe("rtl")
   })
 
-  it("renders the app immediately when language settings resolve", async () => {
-    getSystemLanguageSettingsMock.mockResolvedValue({
+  it("keeps them left-to-right otherwise", async () => {
+    api.getSystemLanguageSettings.mockResolvedValue({
       mode: "manual",
       language: "en",
     })
-
-    render(
-      <AppI18nProvider initialLocale="en" initialMessages={{}}>
-        <div>workspace ready</div>
-      </AppI18nProvider>
-    )
-
-    expect(await screen.findByText("workspace ready")).toBeInTheDocument()
+    renderTabs()
+    await waitFor(() => expect(tabsRoot()).toHaveAttribute("dir", "ltr"))
+    expect(document.documentElement.dir).toBe("ltr")
   })
 })

@@ -3,8 +3,11 @@
 //! SeaORM entity.
 
 use houhub_lib::db::entities::conversation;
+
 use houhub_lib::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
 use houhub_lib::models::agent::AgentType;
+
 use sea_orm::{ActiveModelTrait, EntityTrait, NotSet, Set};
 
 #[tokio::test]
@@ -38,6 +41,8 @@ async fn delegation_columns_round_trip() {
         deleted_at: Set(None),
         pinned_at: Set(None),
         origin_cwd: Set(None),
+        assistant_id: Set(None),
+        assistant_snapshot: Set(None),
     };
     let inserted = active.insert(&db.conn).await.expect("insert");
     let id = inserted.id;

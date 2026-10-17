@@ -50,6 +50,33 @@ describe("parseHouHubReferenceUri", () => {
     })
   })
 
+  it("parses an assistant uri, stripping a leading @ from the label", () => {
+    expect(
+      parseHouHubReferenceUri("houhub://assistant/3", "@Code Reviewer")
+    ).toEqual({
+      refType: "assistant",
+      id: "3",
+      label: "Code Reviewer",
+      uri: "houhub://assistant/3",
+      meta: { assistantId: 3 },
+    })
+    expect(parseHouHubReferenceUri("houhub://assistant/12", "")?.label).toBe(
+      "#12"
+    )
+  })
+
+  it("takes only the assistant ids the backend routes", () => {
+    for (const uri of [
+      "houhub://assistant/0",
+      "houhub://assistant/03",
+      "houhub://assistant/abc",
+      "houhub://assistant/12345678901",
+      "houhub://assistant/3/extra",
+    ]) {
+      expect(parseHouHubReferenceUri(uri, "@x")).toBeNull()
+    }
+  })
+
   it("parses a new-format session uri, recovering the agent type", () => {
     expect(
       parseHouHubReferenceUri("houhub://session/codex_abc123", "My chat")

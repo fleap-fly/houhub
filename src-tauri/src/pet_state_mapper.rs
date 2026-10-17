@@ -15,19 +15,29 @@
 //! over both receivers in the same `tokio::select!` loop.
 
 use std::collections::{HashMap, HashSet};
+
 use std::future::Future;
+
 use std::sync::atomic::Ordering;
+
 use std::sync::{Arc, RwLock};
+
 use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc};
+
 use tokio::task::JoinHandle;
 
 use crate::acp::internal_bus::InternalEventBus;
+
 use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope};
+
 use crate::db::entities::conversation::ConversationStatus;
+
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
+
 use crate::models::pet::PetState;
+
 use crate::web::event_bridge::{emit_event, EventEmitter, WebEvent, WebEventBroadcaster};
 
 /// Shared latest-known `PetState`, written by the subscriber task and read
@@ -916,6 +926,8 @@ mod tests {
                 agent_type: crate::models::agent::AgentType::Codex,
                 task_preview: "run the tests".into(),
                 task_id: "task-pet-1".into(),
+                assistant_id: None,
+                assistant_name: None,
             },
         )
     }
@@ -933,6 +945,8 @@ mod tests {
                     duration_ms: 0,
                     text_preview: None,
                 },
+                assistant_id: None,
+                assistant_name: None,
             },
         )
     }

@@ -33,16 +33,22 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
+
 use sea_orm::sea_query::OnConflict;
+
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
     DbErr, EntityTrait, QueryFilter, QueryOrder, Set, SqlErr, TransactionTrait,
 };
 
 use crate::db::entities::folder::FolderKind;
+
 use crate::db::entities::{conversation, conversation_tag, conversation_tag_link, folder};
+
 use crate::db::error::DbError;
+
 use crate::db::service::app_metadata_service;
+
 use crate::models::{ConversationBranchTag, ConversationTagDetail};
 
 /// Longest tag name kept, in characters. A tag renders as a small chip that
@@ -936,6 +942,7 @@ mod tests {
                 parent_conversation_id: parent,
                 parent_tool_use_id: "tool-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await

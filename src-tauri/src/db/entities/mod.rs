@@ -2,6 +2,8 @@ pub mod agent_setting;
 
 pub mod app_metadata;
 
+pub mod assistant;
+
 pub mod automation;
 
 pub mod automation_run;

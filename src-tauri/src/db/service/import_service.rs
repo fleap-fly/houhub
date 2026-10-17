@@ -14,7 +14,7 @@ use crate::models::{AgentType, ConversationSummary, ImportResult};
 use crate::parsers::{build_agent_parser, path_eq_for_matching, AgentEnv, AgentEnvs, AgentParser};
 
 /// Every locally-parsable agent, in the canonical parser order.
-const ALL_PARSER_AGENTS: [AgentType; 15] = [
+const ALL_PARSER_AGENTS: [AgentType; 17] = [
     AgentType::ClaudeCode,
     AgentType::Codex,
     AgentType::OpenCode,
@@ -30,6 +30,9 @@ const ALL_PARSER_AGENTS: [AgentType; 15] = [
     AgentType::DeepSeek,
     AgentType::Qoder,
     AgentType::Antigravity,
+    AgentType::Kiro,
+    // HouHub-owned ACP history only; no scan of ZCode's native SQLite store.
+    AgentType::ZCode,
 ];
 
 fn build_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn AgentParser> {
@@ -114,7 +117,7 @@ where
 
 /// What an import does when a parsed session already has a SOFT-DELETED row.
 ///
-/// Deleting a conversation in houhub only stamps `deleted_at`; neither the row
+/// Deleting a conversation in HouHub only stamps `deleted_at`; neither the row
 /// nor the agent's session file is destroyed. So "import" has a meaningful
 /// answer for a deleted session — bring it back — but only when the user asked
 /// for that specific session by name.
@@ -505,6 +508,8 @@ async fn import_one(
         deleted_at: Set(None),
         pinned_at: Set(None),
         origin_cwd: Set(None),
+        assistant_id: Set(None),
+        assistant_snapshot: Set(None),
     };
     conv.insert(conn).await?;
     Ok(ImportOutcome::Imported)
@@ -513,7 +518,9 @@ async fn import_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
     use chrono::{DateTime, Duration, Utc};
 
     /// [`import_one`] under [`DeletedPolicy::Skip`] — the implicit-pass
@@ -952,6 +959,8 @@ mod tests {
             deleted_at: Set(Some(now)),
             pinned_at: Set(None),
             origin_cwd: Set(None),
+            assistant_id: Set(None),
+            assistant_snapshot: Set(None),
         }
         .insert(&db.conn)
         .await
@@ -1230,7 +1239,6 @@ mod tests {
             model: Set(None),
             git_branch: Set(None),
             external_id: Set(Some("child-ext".to_string())),
-            origin_cwd: Set(None),
             parent_id: Set(Some(parent_id)),
             parent_tool_use_id: Set(None),
             delegation_call_id: Set(None),
@@ -1239,6 +1247,9 @@ mod tests {
             updated_at: Set(now),
             deleted_at: Set(None),
             pinned_at: Set(None),
+            origin_cwd: Set(None),
+            assistant_id: Set(None),
+            assistant_snapshot: Set(None),
         }
         .insert(&db.conn)
         .await

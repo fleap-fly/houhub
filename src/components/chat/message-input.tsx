@@ -3752,7 +3752,11 @@ export function MessageInput({
               `@` panel); navigation is routed from the editor's keydown. */}
           <div ref={slashMenuListRef} className="flex-1 overflow-y-auto p-1">
             {slashMenuLoading && (
-              <div className="px-3 py-2 text-sm text-muted-foreground">
+              <div
+                role="status"
+                aria-live="polite"
+                className="px-3 py-2 text-sm text-muted-foreground"
+              >
                 {t("slashLoading")}
               </div>
             )}

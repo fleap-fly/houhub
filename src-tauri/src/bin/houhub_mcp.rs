@@ -27,15 +27,20 @@
 //! interleaved frames never corrupt the wire.
 
 use std::io::Write;
+
 use std::process::ExitCode;
+
 use std::sync::Arc;
 
 use houhub_lib::acp::delegation::companion::{
     dispatch_line, drain_and_cancel_all, CompanionContext, CompanionFeatures, InflightCalls,
     JsonRpcResponse, LineAction, SpawnResult,
 };
+
 use houhub_lib::acp::delegation::parent_watcher::{wait_for_parent_exit, DEFAULT_POLL_INTERVAL};
+
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Stdout};
+
 use tokio::sync::Mutex;
 
 struct Args {
@@ -186,6 +191,7 @@ async fn main() -> ExitCode {
         features: CompanionFeatures::parse(args.features.as_deref()),
         custom_agents: parse_csv(args.custom_agents.as_deref()),
         disabled_agents: parse_csv(args.disabled_agents.as_deref()),
+        assistant_support: Default::default(),
     };
 
     let stdin = tokio::io::stdin();

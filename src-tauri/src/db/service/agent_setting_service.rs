@@ -49,6 +49,8 @@ pub(crate) fn default_enabled(agent_type: AgentType) -> bool {
             | AgentType::DeepSeek
             | AgentType::Qoder
             | AgentType::Antigravity
+            | AgentType::Kiro
+            | AgentType::ZCode
             // A user who just registered a custom agent wants to use it.
             | AgentType::Custom(_)
     )
@@ -146,7 +148,7 @@ pub async fn get_by_agent_type(
 /// every history read would mean reading credential files.
 ///
 /// A settings read that fails costs only the overrides: the caller still gets
-/// houhub's own environment, which is where every history read looked before
+/// HouHub's own environment, which is where every history read looked before
 /// the settings were consulted at all.
 pub async fn load_agent_env(conn: &DatabaseConnection, agent_type: AgentType) -> AgentEnv {
     match get_by_agent_type(conn, agent_type).await {
@@ -368,4 +370,14 @@ mod tests {
             .expect("codex setting");
         assert!(!setting.enabled);
     }
+
+    // Every built-in starts enabled. The match above has no catch-all arm for
+    // "the rest", so a newly added agent missing from it silently ships
+    // disabled — which is how Kiro would have arrived.
+    #[test]
+    fn every_builtin_defaults_to_enabled() {
+        for agent in crate::models::agent::BUILTIN_AGENT_TYPES {
+            assert!(default_enabled(*agent), "{agent:?} defaults to disabled");
+        }
+}
 }

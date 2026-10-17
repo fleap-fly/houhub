@@ -70,23 +70,36 @@
 //! - `marker`    — the mark an action leaves where it landed
 
 pub mod agent;
+
 pub mod appident;
+
 pub mod backend;
+
 pub mod driver;
+
 pub mod helper;
+
 pub mod keys;
+
 pub mod procinfo;
+
 pub mod protocol;
+
 pub mod stop_shortcut;
+
 pub mod targets;
+
 pub mod types;
 
 #[cfg(target_os = "macos")]
 pub mod codesign;
+
 #[cfg(target_os = "macos")]
 pub mod launch_req;
+
 #[cfg(target_os = "macos")]
 pub mod spawn;
+
 #[cfg(target_os = "macos")]
 pub mod tcc;
 
@@ -94,16 +107,24 @@ pub mod tcc;
 // and houhub-server's where the person who runs it lets it share the screen
 // it runs on (`HOUHUB_COMPUTER_USE`).
 pub mod driver_admin;
+
 pub mod events;
+
 #[cfg(target_os = "macos")]
 pub mod helper_app;
+
 pub mod local;
 
 // What only the desktop app has: a window above every other, the mark an
 // action leaves, and a shortcut held with the OS.
 #[cfg(feature = "tauri-runtime")]
 pub mod indicator;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod marker;
+
+#[cfg(feature = "tauri-runtime")]
+mod overlay;
+
 #[cfg(feature = "tauri-runtime")]
 pub mod stop_key;

@@ -5,13 +5,19 @@
 use std::sync::Arc;
 
 use gtk::prelude::*;
+
 use tauri::WebviewWindow;
+
 use tauri_runtime_wry::wry::{self, WebViewExtUnix};
 
 use super::linux;
+
 use super::{NavigationSink, PageCloseSink};
+
 use crate::browser::channel::{self, MessageSink};
+
 use crate::browser::surface::{PointerFailure, PointerGesture};
+
 use crate::browser::types::Bounds;
 
 const OVERLAY_NAME: &str = "houhub-browser-overlay";
@@ -91,9 +97,9 @@ fn release_focus_of(page: &gtk::Widget) {
     }
 }
 
-/// Persist both the requested size and Fixed coordinates. Wry 0.55's
-/// set_bounds only changes the current allocation, which GTK overwrites at
-/// the next layout pass with the old position and size.
+/// Persist both the requested size and Fixed coordinates. Wry's set_bounds
+/// (0.55 through 0.57) only changes the current allocation, which GTK
+/// overwrites at the next layout pass with the old position and size.
 pub fn set_bounds(webview: &wry::WebView, bounds: Bounds) -> wry::Result<()> {
     let widget = webview.webview();
     let parent = widget
@@ -122,15 +128,25 @@ macro_rules! native_op {
 }
 
 native_op!(webview_pointer -> usize);
+
 native_op!(current_url -> Option<String>);
+
 native_op!(is_loading -> bool);
+
 native_op!(is_destroyed -> bool);
+
 native_op!(go_back -> ());
+
 native_op!(go_forward -> ());
+
 native_op!(can_go_back -> bool);
+
 native_op!(can_go_forward -> bool);
+
 native_op!(stop_loading -> ());
+
 native_op!(clear_find -> Result<(), String>);
+
 native_op!(debug_view -> serde_json::Value);
 
 pub fn forget_navigation_delegate(webview: &wry::WebView) {

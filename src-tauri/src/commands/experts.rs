@@ -25,22 +25,32 @@
 //! after each sync.
 
 use std::collections::BTreeMap;
+
 use std::fs;
+
 use std::io;
+
 use std::path::{Path, PathBuf};
+
 use std::sync::OnceLock;
 
 use chrono::Utc;
+
 use include_dir::{include_dir, Dir, DirEntry};
+
 use serde::{Deserialize, Serialize};
+
 use sha2::{Digest, Sha256};
+
 use tokio::sync::Mutex;
 
 use crate::acp::types::AgentSkillScope;
+
 use crate::commands::acp::{
     preferred_scope_skill_dir, remove_skill_entry, scoped_skill_dirs, skill_storage_spec,
     validate_skill_id,
 };
+
 use crate::models::agent::AgentType;
 
 // ─── Embedded bundle ────────────────────────────────────────────────────
@@ -48,8 +58,11 @@ use crate::models::agent::AgentType;
 static EXPERTS_BUNDLE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/experts");
 
 const CENTRAL_DIR_NAME: &str = ".houhub";
+
 const CENTRAL_SKILLS_SUBDIR: &str = "skills";
+
 const MANIFEST_FILE: &str = ".manifest.json";
+
 const EXPERTS_TOML: &str = "experts.toml";
 
 // ─── Error type ─────────────────────────────────────────────────────────
@@ -806,6 +819,7 @@ fn supported_agents() -> Vec<AgentType> {
         AgentType::DeepSeek,
         AgentType::Qoder,
         AgentType::Antigravity,
+        AgentType::Kiro,
     ];
     // Custom agents that declared the shared skills store join the built-in
     // set — the same `skill_storage_spec` gate every skills surface uses, so
