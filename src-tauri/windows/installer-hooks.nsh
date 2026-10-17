@@ -77,6 +77,8 @@
 !macro UNREGISTER_HOUHUB_PROTOCOL
   DetailPrint "Unregistering hou-agent-hub URL protocol..."
   DeleteRegKey HKCU "Software\Classes\hou-agent-hub"
+!macroend
+
 ; $R9 = 1 when `path` can be opened for writing, as `File` will have to open
 ; it, else 0. A running executable's file cannot be; a missing one counts as
 ; writable.
