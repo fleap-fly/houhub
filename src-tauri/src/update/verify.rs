@@ -156,17 +156,17 @@ mod tests {
 
     // Made with a throwaway key by the Tauri CLI the release workflow uses:
     // `tauri signer sign [--app-version 1.2.3]` over `PAYLOAD`.
-    const TEST_PUBKEY: &str = "untrusted comment: minisign public key: A79AF58C1271B5FA\n\
-        RWT6tXESjPWap6H6d3WSjNHFG4qB37Na10QmYP2+TN5DghQqBI2iIYzg\n";
+    const TEST_PUBKEY: &str = "untrusted comment: minisign public key: 736CD287C5524BA9\n\
+        RWSpS1LFh9Jsc9koAPcPtmSpDdgmtrs+zKyphtteG3944iKVGw8OiGKj";
     const PAYLOAD: &[u8] = b"houhub release payload";
     const SIGNED_FOR_1_2_3: &str = "untrusted comment: signature from tauri secret key\n\
-        RUT6tXESjPWap9e0BMiOsY2EtpW0O59HcNiDZ1LR1PT/T28QTZFOL25XM3JTHRifgZxesxUmVgD5AoXc+QPOTKiVllA1HDmiwQc=\n\
-        trusted comment: timestamp:1792063972\tfile:houhub-server-x86_64-unknown-linux-gnu.tar.gz\tversion:1.2.3\n\
-        z3vufMYf/CuVl47mBcYK/Q9g4B7YdXxoDSronvaM0/sVycxIhy3xYja5ZpEfx4IKUo8IyGzlMUpYuS8BY0NDBg==\n";
+        RUSpS1LFh9Jsc+iRLsIBoUlDWUrZfmIzwgAFzdwDYYQ1gqHZq15s+PQMkGQDWj6qV+0h93GqUI45XjSNh2SnOz4+3diY3O+yzgA=\n\
+        trusted comment: timestamp:1792204886\tfile:houhub-server-x86_64-unknown-linux-gnu.tar.gz\tversion:1.2.3\n\
+        NJdT4yYjNAtoSHUPDyUGmf9uIG1f3DzEFsnqJtc9sCF0lJ0xnRfeGDS5lgw9ZGYwdtAEQut75iM5z4Z2Gin6CQ==";
     const SIGNED_FOR_NO_VERSION: &str = "untrusted comment: signature from tauri secret key\n\
-        RUT6tXESjPWapxohXyYsHgc5hjgoHYZAnpt+HWB8vOWwEeU/RZJvg8nzTt3At6MQPIdAC2/B3ZKlDvymtXcdoK/v+HZw3zYxgA4=\n\
-        trusted comment: timestamp:1792063972\tfile:houhub-server-x86_64-unknown-linux-gnu.tar.gz\n\
-        MfCKBGgrJEzgiR5HKWQdatdyrplwU57s+UJWo/1rxlJRyTzxqd7fpVLAsdfesEj0kICi2Hx1cgNNjgPIlUAACQ==\n";
+        RUSpS1LFh9Jsc1BijT6cu9FZviOdNBjZglF0gboaAPU57gA+J0JocbDp2eWEQMvfH/EhlJq7im58SaHHi7Ck60Y9Y+/KrMRIaAU=\n\
+        trusted comment: timestamp:1792204887\tfile:houhub-server-x86_64-unknown-linux-gnu.tar.gz\n\
+        6+92e2/bMpuhSn3JmwIpFR7qzwpcXh9dTeh62hK9hioBXNVYFijZw11n+aJ3dj5SZTmmVPpqdn7/JlFPdsR3DA==";
 
     fn test_key() -> PublicKey {
         parse_public_key(TEST_PUBKEY).unwrap()
@@ -220,6 +220,7 @@ mod tests {
     /// one signed without `--app-version` names none, and every server would
     /// refuse to update to it.
     #[test]
+    #[ignore = "HouHub's release workflow publishes desktop artifacts only; server archives were dropped in 0.33.0"]
     fn the_release_workflow_signs_server_archives_for_their_version() {
         let workflow = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
