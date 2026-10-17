@@ -124,9 +124,6 @@
 
 !macro NSIS_HOOK_POSTINSTALL
   !insertmacro HOUHUB_DELETE_ASIDE
-!macroend
-
-!macro NSIS_HOOK_POSTINSTALL
   !insertmacro REGISTER_HOUHUB_PROTOCOL
 !macroend
 
