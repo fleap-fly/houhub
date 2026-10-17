@@ -141,6 +141,13 @@ fn server_self_update_supported() -> bool {
 
 #[cfg(not(feature = "tauri-runtime"))]
 fn server_self_update_supported() -> bool {
+    // A container is replaced wholesale (`docker pull`): an in-place swap would
+    // vanish on the next recreate, and our release pipeline publishes desktop
+    // artifacts only, so there is no `houhub-server-*` archive to fetch. The UI
+    // points the operator at a fresh image instead of a doomed "update now".
+    if crate::update::runtime::is_docker() {
+        return false;
+    }
     // Windows server self-update is intentionally disabled: swapping a running
     // .exe and the standalone re-exec port rebind have not been validated on a
     // real Windows host. Only Linux/macOS are supported for now. (The desktop
@@ -155,6 +162,10 @@ fn server_rollback_available() -> bool {
 
 #[cfg(not(feature = "tauri-runtime"))]
 fn server_rollback_available() -> bool {
+    // Nothing is ever staged in a container, so there is nothing to roll back to.
+    if crate::update::runtime::is_docker() {
+        return false;
+    }
     crate::update::install::rollback_available()
 }
 
@@ -257,6 +268,18 @@ pub async fn app_update_status() -> Json<ServerUpdateStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A container is replaced by pulling an image; in-place swaps cannot work
+    /// there (and our releases carry no `houhub-server-*` archive at all), so the
+    /// UI must not offer one.
+    #[test]
+    fn a_container_never_advertises_in_place_updates() {
+        temp_env::with_var(crate::update::runtime::ENV_RUNTIME, Some("docker"), || {
+            assert!(!server_self_update_supported());
+            assert!(!server_rollback_available());
+            assert!(server_self_update_blocker().is_none());
+        });
+    }
 
     #[test]
     fn status_carries_the_blocker_in_the_shape_the_ui_reads() {

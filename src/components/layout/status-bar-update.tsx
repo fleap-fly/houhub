@@ -131,7 +131,6 @@ export function StatusBarUpdate() {
     dismissedVersion,
     canInstallInPlace,
     runtime,
-    selfUpdateSupported,
     selfUpdateBlocker,
     dismissAvailable,
     startUpdate,
@@ -347,15 +346,13 @@ export function StatusBarUpdate() {
           <p className="text-2xs leading-5 text-amber-500">{blockerHint}</p>
         )}
 
-        {/* Docker upgrades only live as long as the container does. */}
-        {available &&
-          selfUpdateSupported &&
-          !selfUpdateBlocker &&
-          runtime === "docker" && (
-            <p className="text-2xs leading-5 text-muted-foreground/80">
-              {t("dockerUpgradeHint")}
-            </p>
-          )}
+        {/* A container is replaced by pulling an image — worth saying even
+            though no in-place update is offered there. */}
+        {available && runtime === "docker" && (
+          <p className="text-2xs leading-5 text-muted-foreground/80">
+            {t("dockerUpgradeHint")}
+          </p>
+        )}
 
         <div className="flex items-center justify-end gap-2">
           {showAvailable && (

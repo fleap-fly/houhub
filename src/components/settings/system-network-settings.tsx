@@ -640,14 +640,11 @@ export function SystemNetworkSettings() {
               <p className="text-2xs leading-5 text-amber-500">{blockerHint}</p>
             )}
 
-            {availableUpdate &&
-              serverSelfUpdate &&
-              !selfUpdateBlocker &&
-              serverRuntime === "docker" && (
-                <p className="text-muted-foreground/80 text-2xs leading-5">
-                  {t("dockerUpgradeHint")}
-                </p>
-              )}
+            {availableUpdate && serverRuntime === "docker" && (
+              <p className="text-muted-foreground/80 text-2xs leading-5">
+                {t("dockerUpgradeHint")}
+              </p>
+            )}
 
             {availableUpdate && (
               <div className="space-y-2 pt-2 border-t border-border/70">
