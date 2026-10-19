@@ -2695,7 +2695,7 @@ dependencies = [
 
 [[package]]
 name = "houhub"
-version = "0.36.0"
+version = "0.36.1"
 dependencies = [
  "aes-gcm",
  "agent-client-protocol",
