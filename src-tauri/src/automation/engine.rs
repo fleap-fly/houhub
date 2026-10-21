@@ -12,32 +12,50 @@
 //!   `sweep_idle` already skips (it only reaps `Connected`).
 
 use std::collections::HashMap;
+
 use std::path::{Path, PathBuf};
+
 use std::sync::{Arc, OnceLock};
+
 use std::time::Duration;
 
 use chrono::Utc;
+
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
+
 use tokio::sync::broadcast::error::RecvError;
+
 use tokio::sync::Mutex;
+
 use tokio::time::MissedTickBehavior;
 
 use crate::acp::manager::ConnectionManager;
+
 use crate::acp::types::{AcpEvent, EventEnvelope, PromptInputBlock};
+
 use crate::acp::InternalEventBus;
+
 use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
+
 use crate::commands::conversations::{create_conversation_core, emit_conversation_upsert};
+
 use crate::commands::folders::{
     emit_folder_upsert, get_folder_core, git_checkout, git_is_clean, git_list_branches,
     git_worktree_add, open_worktree_folder_core, resolve_worktree_folder_core,
 };
+
 use crate::db::entities::conversation::{self, ConversationStatus};
+
 use crate::db::service::{automation_service, conversation_service};
+
 use crate::db::AppDatabase;
+
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
+
 use crate::models::{
     AgentType, AutomationConfig, AutomationInfo, AutomationRunStatus, IsolationMode,
 };
+
 use crate::web::event_bridge::{
     emit_event, AutomationChange, EventEmitter, AUTOMATION_CHANGED_EVENT,
 };
@@ -55,9 +73,22 @@ const SCHEDULER_INTERVAL_SECS: u64 = 30;
 
 /// Run-history prune cadence + retention window.
 const PRUNE_INTERVAL_SECS: u64 = 6 * 60 * 60;
+
 const RUN_RETENTION_DAYS: i64 = 30;
 
 static ENGINE: OnceLock<Arc<AutomationEngine>> = OnceLock::new();
+
+/// The summary of a run that queued work task `id`; the task's id has no
+/// column of its own, so [`queued_task_id`] reads it back from here.
+pub(crate) fn queued_task_summary(id: i32, title: &str) -> String {
+    format!("queued task #{id}: {title}")
+}
+
+/// The work task a run queued, from its summary.
+pub(crate) fn queued_task_id(summary: &str) -> Option<i32> {
+    let rest = summary.strip_prefix("queued task #")?;
+    rest.split(':').next()?.parse().ok()
+}
 
 /// The process-global engine, set once at boot by [`build_engine`]. Read by the
 /// manual "run now" / cancel commands (and, later, the scheduler).
@@ -413,7 +444,7 @@ impl AutomationEngine {
             AutomationRunStatus::Succeeded,
             None,
             None,
-            Some(format!("queued task #{}: {}", info.id, info.title)),
+            Some(queued_task_summary(info.id, &info.title)),
         )
         .await
         .map_err(|e| e.to_string())?;

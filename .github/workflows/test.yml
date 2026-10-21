@@ -56,6 +56,11 @@ jobs:
         # repo-wide typecheck in `pnpm build` never sees our entry point.
         run: pnpm browser:agent:types
 
+      # 0.36.0 shipped a panel whose context hook had no mounted provider and
+      # every launch died on Next's error page; this turns that into a red check.
+      - name: Provider mount check
+        run: pnpm check:providers
+
       - name: Unit tests (vitest)
         run: pnpm test
 

@@ -711,6 +711,16 @@ function MobileFolderWorkspaceShell({
   const auxOpen = auxOpenRequested && isConversations
   const terminalOpen = terminalOpenRequested && isConversations
 
+  // A full-page route opened from inside the aux drawer — a work tab's "open
+  // full page", a repository row's task chip — would otherwise land UNDER the
+  // drawer, which on a phone covers nearly the whole screen. The desktop panel
+  // collapses for a route by itself (see FolderWorkspaceShell); here the drawer
+  // closes, and its toggle stays hidden until the conversations come back.
+  const setAuxOpen = useAuxPanelStore((state) => state.setOpen)
+  useEffect(() => {
+    if (!isConversations) setAuxOpen(false)
+  }, [isConversations, setAuxOpen])
+
   // Each of these drawers is a state toggle, not a route: without a history
   // entry behind them the back gesture falls through and unloads the whole
   // page. One pushed entry per open drawer lets back close the topmost one

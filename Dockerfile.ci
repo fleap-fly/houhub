@@ -27,6 +27,9 @@ COPY dist/${TARGETARCH}/houhub-server /usr/local/bin/houhub-server
 # (see acp/delegation/companion.rs). It must ship next to houhub-server so
 # `locate_houhub_mcp_binary()` finds it via the exe-sibling lookup.
 COPY dist/${TARGETARCH}/houhub-mcp /usr/local/bin/houhub-mcp
+# houhub-cli: `docker exec <container> houhub-cli run …` finds this server through
+# its discovery file under HOUHUB_DATA_DIR (/data/cli).
+COPY dist/${TARGETARCH}/houhub-cli /usr/local/bin/houhub-cli
 COPY dist/web /app/web
 
 ENV HOUHUB_STATIC_DIR=/app/web

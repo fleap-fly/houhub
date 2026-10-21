@@ -87,7 +87,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { TabBar } from "@/components/tabs/tab-bar"
 import { TabDragGhost } from "@/components/tabs/tab-drag-ghost"
 import { useSidebarContext } from "@/contexts/sidebar-context"
-import { useAuxPanelContext } from "@/contexts/aux-panel-context"
+import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { useWorkspaceView } from "@/contexts/workspace-context"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { usePlatform } from "@/hooks/use-platform"
@@ -1550,6 +1550,16 @@ const ConversationTabView = memo(function ConversationTabView({
     [conn.connectionId, tAsyncTasks]
   )
 
+  /** Turn Claude Code's Remote Control off the way the user would: by sending
+   *  `/remote-control off`, which the adapter answers itself. */
+  const handleRemoteControlOff = useCallback(() => {
+    const command = "/remote-control off"
+    handleSend({
+      blocks: [{ type: "text", text: command }],
+      displayText: command,
+    })
+  }, [handleSend])
+
   const handleOpenAgentsSettings = useCallback(() => {
     openSettingsWindow("agents", { agentType: selectedAgent }).catch((err) => {
       console.error(
@@ -2145,6 +2155,9 @@ const ConversationTabView = memo(function ConversationTabView({
         detailError={detailError}
         acpLoadError={acpLoadError}
         hideEmptyState={!hasPersistedConversation || hasSentMessage}
+        // The conversation page's navigator, plan and sub-agents show in the
+        // Session Details side panel rather than over the messages.
+        insightsInSidebar
         onReload={canShowDetailErrorActions ? handleReloadDetail : undefined}
         onNewSession={
           canShowDetailErrorActions ? handleOpenNewSession : undefined
@@ -2299,6 +2312,13 @@ const ConversationTabView = memo(function ConversationTabView({
           ? handleStopAsyncTask
           : undefined
       }
+      remoteControl={connIsForOtherAgent ? null : conn.remoteControl}
+      onRemoteControlOff={
+        // Owners of a live connection only, like the stop above.
+        conn.connectionId !== null && !conn.isViewer
+          ? handleRemoteControlOff
+          : undefined
+      }
       pendingPermission={conn.pendingPermission}
       pendingQuestion={conn.pendingQuestion}
       pendingAskQuestion={conn.pendingAskQuestion}
@@ -2320,6 +2340,8 @@ const ConversationTabView = memo(function ConversationTabView({
       onConfigOptionChange={handleSetConfigOption}
       agentType={selectedAgent}
       availableCommands={connectionCommands}
+      // The previous agent's prediction is no use to the one just picked.
+      promptSuggestion={connIsForOtherAgent ? null : conn.promptSuggestion}
       attachmentTabId={tabId}
       draftStorageKey={draftStorageKey}
       hideInput={isWelcomeMode || Boolean(acpLoadError)}
@@ -2565,7 +2587,7 @@ const GROUP_EDGE_EPSILON = 0.1
 function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
   const isMobile = useIsMobile()
   const { isOpen: sidebarOpen } = useSidebarContext()
-  const { isOpen: auxOpen } = useAuxPanelContext()
+  const auxOpen = useAuxPanelStore((state) => state.isOpen)
   const { mode, conversationMaximized } = useWorkspaceView()
   const { isMac, isWindows, isLinux } = usePlatform()
   const { zoomLevel } = useZoomLevel()

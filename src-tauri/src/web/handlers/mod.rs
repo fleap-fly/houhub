@@ -8,6 +8,8 @@ pub mod automation;
 
 pub mod canvas;
 
+pub mod cli_access;
+
 pub mod background;
 
 pub mod backup;

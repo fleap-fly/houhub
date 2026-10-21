@@ -236,6 +236,7 @@ async fn end_to_end_named_pipe_happy_path() {
             as Arc<dyn houhub_lib::acp::browser_tools::BrowserToolAccess>,
         Arc::new(houhub_lib::acp::computer_tools::NoComputerDesktop)
             as Arc<dyn houhub_lib::acp::computer_tools::ComputerToolAccess>,
+        Arc::new(houhub_lib::acp::result_tool::NoResultTool),
     );
 
     let pipe = unique_pipe("happy");
@@ -343,6 +344,7 @@ async fn end_to_end_named_pipe_back_to_back_requests() {
             as Arc<dyn houhub_lib::acp::browser_tools::BrowserToolAccess>,
         Arc::new(houhub_lib::acp::computer_tools::NoComputerDesktop)
             as Arc<dyn houhub_lib::acp::computer_tools::ComputerToolAccess>,
+        Arc::new(houhub_lib::acp::result_tool::NoResultTool),
     );
 
     let pipe = unique_pipe("repeat");

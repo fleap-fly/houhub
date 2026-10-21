@@ -24,6 +24,8 @@ pub mod codex_goal;
 
 pub mod codex_model_catalog;
 
+pub mod command_code;
+
 pub mod computer_tools;
 
 pub mod connection;
@@ -78,6 +80,8 @@ pub mod registry;
 
 pub mod remote_registry;
 
+pub mod result_tool;
+
 pub mod scratch_dir;
 
 pub mod service_error;
@@ -93,6 +97,8 @@ pub mod stderr_tail;
 pub mod temp_reclaim;
 
 pub mod terminal_runtime;
+
+pub mod trae;
 
 pub mod types;
 

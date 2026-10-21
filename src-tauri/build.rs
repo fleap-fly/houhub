@@ -90,7 +90,7 @@ fn ensure_sidecar_placeholder() {
     };
     let dir = PathBuf::from("binaries");
 
-    for name in ["houhub-mcp", "houhub-computer-helper"] {
+    for name in ["houhub-mcp", "houhub-computer-helper", "houhub-cli"] {
         let path = dir.join(format!("{name}-{triple}{ext}"));
 
         println!("cargo:rerun-if-changed={}", path.display());

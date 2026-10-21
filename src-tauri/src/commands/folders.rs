@@ -1,28 +1,44 @@
 use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
+
 use std::fs::OpenOptions;
+
 use std::hash::{Hash, Hasher};
+
 use std::io::Write;
+
 use std::path::{Component, Path, PathBuf};
+
 use std::process::Stdio;
+
 use std::sync::LazyLock;
+
 use std::time::UNIX_EPOCH;
 
 use base64::Engine as _;
+
 use ignore::WalkBuilder;
+
 use serde::Serialize;
 
 use tokio::sync::Semaphore;
+
 use walkdir::WalkDir;
 
 #[cfg(feature = "tauri-runtime")]
 use tauri::Manager;
 
 use crate::app_error::AppCommandError;
+
 use crate::db::error::DbError;
+
 use crate::db::service::{folder_group_service, folder_service};
+
 use crate::db::AppDatabase;
+
 use crate::models::GitCredentials;
+
 use crate::models::{FolderDetail, FolderGroupDetail, FolderHistoryEntry, SidebarLayoutEntry};
+
 use crate::web::event_bridge::EventEmitter;
 
 /// Configure a git command for remote operations:
@@ -146,14 +162,6 @@ pub struct GitBranchList {
     pub main_worktree_branch: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct GitWorktreeRemoval {
-    pub worktree_path: Option<String>,
-    pub branch_deleted: bool,
-    pub folder_id: Option<i32>,
-    pub reparented: u32,
-}
-
 /// Where a given branch is checked out, resolved against the registered folders.
 /// `path` is the canonical filesystem path of the worktree (or main working
 /// tree) hosting the branch — `None` when the branch is not checked out in any
@@ -164,6 +172,14 @@ pub struct GitWorktreeRemoval {
 pub struct WorktreeResolution {
     pub path: Option<String>,
     pub folder_id: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GitWorktreeRemoval {
+    pub worktree_path: Option<String>,
+    pub branch_deleted: bool,
+    pub folder_id: Option<i32>,
+    pub reparented: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -728,7 +744,7 @@ pub async fn open_worktree_folder_core(
 /// - The write only lands when no alias is set yet (see
 ///   [`folder_service::seed_folder_alias`]), so re-registering a worktree — a
 ///   task retry, a re-created checkout — never overwrites a name the user chose.
-async fn seed_worktree_alias(db: &AppDatabase, folder_id: i32, path: &str) {
+pub(crate) async fn seed_worktree_alias(db: &AppDatabase, folder_id: i32, path: &str) {
     let Some(branch) = resolve_git_head(path).await.ok().and_then(|h| h.branch) else {
         return;
     };
@@ -3180,16 +3196,6 @@ pub async fn resolve_worktree_folder_core(
     })
 }
 
-#[cfg(feature = "tauri-runtime")]
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn resolve_worktree_folder(
-    db: tauri::State<'_, AppDatabase>,
-    repo_path: String,
-    branch: String,
-) -> Result<WorktreeResolution, AppCommandError> {
-    resolve_worktree_folder_core(&db, repo_path, branch).await
-}
-
 async fn folder_at_path(
     db: &AppDatabase,
     path: &Path,
@@ -3204,107 +3210,14 @@ async fn folder_at_path(
     }))
 }
 
-async fn reparent_target(
-    db: &AppDatabase,
-    worktree_folder_id: i32,
-    source_folder_id: i32,
-) -> Option<i32> {
-    let recorded_parent = folder_service::get_folder_by_id(&db.conn, worktree_folder_id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|folder| folder.parent_id);
-    let target = match recorded_parent {
-        Some(parent_id) => Some(parent_id),
-        None if source_folder_id > 0 => folder_service::get_folder_by_id(
-            &db.conn,
-            source_folder_id,
-        )
-        .await
-        .ok()
-        .flatten()
-        .map(|folder| folder.parent_id.unwrap_or(folder.id)),
-        None => None,
-    };
-    target.filter(|id| *id != worktree_folder_id)
-}
-
-async fn converge_removed_worktree_folder(
-    db: &AppDatabase,
-    emitter: &EventEmitter,
-    worktree_folder_id: i32,
-    project_folder_id: i32,
-    worktree_path: &str,
-) -> u32 {
-    use crate::db::service::{conversation_service, tab_service, work_task_service};
-
-    let moved = conversation_service::reparent_folder_conversations(
-        &db.conn,
-        worktree_folder_id,
-        project_folder_id,
-        worktree_path,
-    )
-    .await
-    .unwrap_or(0) as u32;
-
-    match tab_service::delete_folder_tabs_and_bump(&db.conn, worktree_folder_id).await {
-        Ok(invalidation) => {
-            if let Some(tabs) = invalidation.emit {
-                crate::web::event_bridge::emit_event(
-                    emitter,
-                    crate::web::event_bridge::TABS_CHANGED_EVENT,
-                    crate::web::event_bridge::TabsChanged {
-                        version: invalidation.version,
-                        origin: "server".to_string(),
-                        tabs,
-                    },
-                );
-            }
-        }
-        Err(error) => tracing::warn!(
-            "[folders] tab cleanup failed for folder {worktree_folder_id}: {error}"
-        ),
-    }
-
-    let folder_gone = match folder_service::soft_delete_folder(&db.conn, worktree_folder_id).await {
-        Ok(()) => true,
-        Err(error) => {
-            tracing::warn!(
-                "[folders] worktree folder {worktree_folder_id} soft-delete failed: {error}"
-            );
-            false
-        }
-    };
-    let detached = work_task_service::clear_worktree_by_folder(&db.conn, worktree_folder_id)
-        .await
-        .unwrap_or_else(|error| {
-            tracing::warn!(
-                "[folders] task detach failed for folder {worktree_folder_id}: {error}"
-            );
-            Vec::new()
-        });
-
-    crate::web::event_bridge::emit_event(
-        emitter,
-        crate::web::event_bridge::CONVERSATIONS_BULK_CHANGED_EVENT,
-        crate::web::event_bridge::ConversationsBulkChanged {
-            imported: 0,
-            updated: moved,
-            folder_ids: vec![project_folder_id],
-        },
-    );
-    if folder_gone {
-        emit_folder_deleted(emitter, worktree_folder_id);
-    }
-    for task_id in detached {
-        crate::web::event_bridge::emit_event(
-            emitter,
-            crate::web::event_bridge::WORK_TASK_CHANGED_EVENT,
-            crate::web::event_bridge::WorkTaskChange::Upsert { id: task_id },
-        );
-    }
-    crate::office_watch::stop_office_watches_under_root(worktree_path);
-    moved
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn resolve_worktree_folder(
+    db: tauri::State<'_, AppDatabase>,
+    repo_path: String,
+    branch: String,
+) -> Result<WorktreeResolution, AppCommandError> {
+    resolve_worktree_folder_core(&db, repo_path, branch).await
 }
 
 pub async fn git_remove_worktree_core(
@@ -3438,6 +3351,109 @@ pub async fn git_remove_worktree_core(
         removal.branch_deleted = true;
     }
     Ok(removal)
+}
+
+async fn reparent_target(
+    db: &AppDatabase,
+    worktree_folder_id: i32,
+    source_folder_id: i32,
+) -> Option<i32> {
+    let recorded_parent = folder_service::get_folder_by_id(&db.conn, worktree_folder_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|folder| folder.parent_id);
+    let target = match recorded_parent {
+        Some(parent_id) => Some(parent_id),
+        None if source_folder_id > 0 => folder_service::get_folder_by_id(
+            &db.conn,
+            source_folder_id,
+        )
+        .await
+        .ok()
+        .flatten()
+        .map(|folder| folder.parent_id.unwrap_or(folder.id)),
+        None => None,
+    };
+    target.filter(|id| *id != worktree_folder_id)
+}
+
+async fn converge_removed_worktree_folder(
+    db: &AppDatabase,
+    emitter: &EventEmitter,
+    worktree_folder_id: i32,
+    project_folder_id: i32,
+    worktree_path: &str,
+) -> u32 {
+    use crate::db::service::{conversation_service, tab_service, work_task_service};
+
+    let moved = conversation_service::reparent_folder_conversations(
+        &db.conn,
+        worktree_folder_id,
+        project_folder_id,
+        worktree_path,
+    )
+    .await
+    .unwrap_or(0) as u32;
+
+    match tab_service::delete_folder_tabs_and_bump(&db.conn, worktree_folder_id).await {
+        Ok(invalidation) => {
+            if let Some(tabs) = invalidation.emit {
+                crate::web::event_bridge::emit_event(
+                    emitter,
+                    crate::web::event_bridge::TABS_CHANGED_EVENT,
+                    crate::web::event_bridge::TabsChanged {
+                        version: invalidation.version,
+                        origin: "server".to_string(),
+                        tabs,
+                    },
+                );
+            }
+        }
+        Err(error) => tracing::warn!(
+            "[folders] tab cleanup failed for folder {worktree_folder_id}: {error}"
+        ),
+    }
+
+    let folder_gone = match folder_service::soft_delete_folder(&db.conn, worktree_folder_id).await {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(
+                "[folders] worktree folder {worktree_folder_id} soft-delete failed: {error}"
+            );
+            false
+        }
+    };
+    let detached = work_task_service::clear_worktree_by_folder(&db.conn, worktree_folder_id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                "[folders] task detach failed for folder {worktree_folder_id}: {error}"
+            );
+            Vec::new()
+        });
+
+    crate::web::event_bridge::emit_event(
+        emitter,
+        crate::web::event_bridge::CONVERSATIONS_BULK_CHANGED_EVENT,
+        crate::web::event_bridge::ConversationsBulkChanged {
+            imported: 0,
+            updated: moved,
+            folder_ids: vec![project_folder_id],
+        },
+    );
+    if folder_gone {
+        emit_folder_deleted(emitter, worktree_folder_id);
+    }
+    for task_id in detached {
+        crate::web::event_bridge::emit_event(
+            emitter,
+            crate::web::event_bridge::WORK_TASK_CHANGED_EVENT,
+            crate::web::event_bridge::WorkTaskChange::Upsert { id: task_id },
+        );
+    }
+    crate::office_watch::stop_office_watches_under_root(worktree_path);
+    moved
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -3883,10 +3899,14 @@ const FILE_TREE_IGNORED_DIRS: &[&str] = &[".git", "__pycache__"];
 
 /// Hard limit: refuse to open files larger than 50 MB in the text editor.
 const FILE_OPEN_HARD_LIMIT: usize = 50_000_000;
+
 /// Save limit: refuse to save content larger than 50 MB.
 const FILE_SAVE_HARD_LIMIT: usize = 50_000_000;
+
 const FILE_BASE64_DEFAULT_MAX_BYTES: usize = 20_000_000;
+
 const FILE_BASE64_MAX_BYTES: usize = 100_000_000;
+
 const FILE_IO_MAX_CONCURRENT_OPS: usize = 8;
 
 static FILE_IO_SEMAPHORE: LazyLock<Semaphore> =
@@ -6415,10 +6435,904 @@ async fn get_unpushed_hashes(
     Ok((Some(hashes), has_upstream))
 }
 
+// Symlink confinement that `read_workspace_file_base64` relies on. Unix-only
+// because it uses real filesystem symlinks.
+#[cfg(all(test, unix))]
+mod workspace_confinement_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[tokio::test]
+    async fn reads_in_root_file() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::write(root.path().join("a.txt"), b"hello").expect("write");
+        let b64 = read_workspace_file_base64(
+            root.path().to_string_lossy().into_owned(),
+            "a.txt".to_string(),
+            None,
+        )
+        .await
+        .expect("should read in-root file");
+        assert_eq!(b64, "aGVsbG8="); // base64("hello")
+    }
+
+    #[tokio::test]
+    async fn rejects_symlink_escaping_root() {
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::write(outside.path().join("secret"), b"top").expect("write");
+        symlink(outside.path().join("secret"), root.path().join("link")).expect("symlink");
+        // The canonical target resolves outside the root, so the read is denied
+        // even though `root/link` is lexically inside the workspace.
+        let res = read_workspace_file_base64(
+            root.path().to_string_lossy().into_owned(),
+            "link".to_string(),
+            None,
+        )
+        .await;
+        assert!(
+            res.is_err(),
+            "symlink escaping the workspace must be rejected"
+        );
+    }
+
+    /// The strict predicate, applied the way the guarded call sites apply it:
+    /// canonicalize both ends, then ask whether the target is reachable.
+    fn strictly_within(root: &Path, target: &Path) -> bool {
+        let Ok(canonical_root) = std::fs::canonicalize(root) else {
+            return false;
+        };
+        let Ok(canonical_target) = std::fs::canonicalize(target) else {
+            return false;
+        };
+        is_within_workspace(&canonical_root, &canonical_target)
+    }
+
+    #[test]
+    fn strict_guard_rejects_symlink() {
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, b"x").expect("write");
+        let link = root.path().join("asset.txt");
+        symlink(&secret, &link).expect("symlink");
+        assert!(!strictly_within(root.path(), &link));
+    }
+
+    #[tokio::test]
+    async fn move_file_tree_entry_does_not_clobber_dangling_symlink() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::write(root.path().join("a.txt"), b"real").expect("write");
+        std::fs::create_dir(root.path().join("sub")).expect("mkdir");
+        // A dangling symlink occupies the destination name. `Path::exists()`
+        // follows it and reports `false`, so the collision check must instead
+        // use `symlink_metadata` or `fs::rename` would destroy the link.
+        symlink(
+            root.path().join("nonexistent-target"),
+            root.path().join("sub/a.txt"),
+        )
+        .expect("symlink");
+
+        let res = move_file_tree_entry(
+            root.path().to_string_lossy().into_owned(),
+            "a.txt".to_string(),
+            "sub".to_string(),
+        )
+        .await;
+        assert!(res.is_err(), "must not clobber a dangling destination symlink");
+        assert!(
+            std::fs::symlink_metadata(root.path().join("sub/a.txt")).is_ok(),
+            "dangling symlink must remain intact",
+        );
+        assert!(root.path().join("a.txt").exists(), "source untouched");
+    }
+
+    #[tokio::test]
+    async fn move_file_tree_entry_moves_a_symlink_entry() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::write(root.path().join("target.txt"), b"x").expect("write");
+        symlink(
+            root.path().join("target.txt"),
+            root.path().join("link.txt"),
+        )
+        .expect("symlink");
+        std::fs::create_dir(root.path().join("sub")).expect("mkdir");
+
+        let new_rel = move_file_tree_entry(
+            root.path().to_string_lossy().into_owned(),
+            "link.txt".to_string(),
+            "sub".to_string(),
+        )
+        .await
+        .expect("move symlink");
+        assert_eq!(new_rel.replace('\\', "/"), "sub/link.txt");
+        // The moved entry is still a symlink (the link itself moved, not its target).
+        let meta = std::fs::symlink_metadata(root.path().join("sub/link.txt"))
+            .expect("moved link exists");
+        assert!(meta.file_type().is_symlink(), "entry stays a symlink");
+        assert!(!root.path().join("link.txt").exists(), "old link gone");
+    }
+    #[tokio::test]
+    async fn file_tree_walks_into_an_authorized_link_only() {
+        let root = tempfile::tempdir().expect("root");
+        let linked = tempfile::tempdir().expect("linked");
+        let stray = tempfile::tempdir().expect("stray");
+        std::fs::write(root.path().join("own.txt"), b"x").expect("write");
+        std::fs::write(linked.path().join("inside.txt"), b"x").expect("write");
+        std::fs::create_dir(linked.path().join("src")).expect("mkdir");
+        std::fs::write(linked.path().join("src/deep.ts"), b"x").expect("write");
+        std::fs::write(stray.path().join("secret.txt"), b"x").expect("write");
+        symlink(linked.path(), root.path().join("api")).expect("symlink");
+        symlink(stray.path(), root.path().join("evil")).expect("symlink");
+
+        // Only `api` is registered, mimicking a user-created link; `evil` is the
+        // kind of symlink a cloned repo could ship.
+        let canonical_target = std::fs::canonicalize(linked.path()).expect("canon");
+        crate::folder_links::register(root.path(), &canonical_target);
+
+        let nodes = get_file_tree(root.path().to_string_lossy().into_owned(), None)
+            .await
+            .expect("tree");
+
+        let api = nodes
+            .iter()
+            .find(|n| matches!(n, FileTreeNode::Dir { name, .. } if name == "api"))
+            .expect("authorized link renders as a directory");
+        match api {
+            FileTreeNode::Dir { children, path, .. } => {
+                assert_eq!(path, "api");
+                assert!(
+                    children.iter().any(
+                        |c| matches!(c, FileTreeNode::File { path, .. } if path == "api/inside.txt")
+                    ),
+                    "the linked directory's contents are grafted in: {children:?}"
+                );
+                // Nested paths must be re-anchored too, or the panel would
+                // resolve them against the workspace root instead of the link.
+                let src = children
+                    .iter()
+                    .find(|c| matches!(c, FileTreeNode::Dir { name, .. } if name == "src"))
+                    .expect("nested directory is present");
+                match src {
+                    FileTreeNode::Dir { path, children, .. } => {
+                        assert_eq!(path, "api/src");
+                        assert!(
+                            children.iter().any(|c| matches!(
+                                c,
+                                FileTreeNode::File { path, .. } if path == "api/src/deep.ts"
+                            )),
+                            "deep paths are prefixed once: {children:?}"
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => unreachable!(),
+        }
+
+        // Both links are flagged so the panel can badge them.
+        assert!(
+            matches!(api, FileTreeNode::Dir { symlink: true, .. }),
+            "an authorized link is still a symlink on disk: {api:?}"
+        );
+
+        // The unregistered symlink is a *directory* — rendering it as a file
+        // was issue #430 — but it is not walked into: empty children, which the
+        // panel lazy-loads on expand.
+        let evil = nodes
+            .iter()
+            .find(|n| matches!(n, FileTreeNode::Dir { name, .. } if name == "evil"))
+            .expect("an unauthorized symlinked directory still renders as a directory");
+        match evil {
+            FileTreeNode::Dir {
+                children,
+                path,
+                symlink,
+                ..
+            } => {
+                assert_eq!(path, "evil");
+                assert!(symlink, "flagged so the row gets the link badge");
+                assert!(
+                    children.is_empty(),
+                    "an unauthorized symlink must not be walked into: {children:?}"
+                );
+            }
+            _ => unreachable!(),
+        }
+
+        // Same answer at the depth the panel actually renders
+        // (`WORKSPACE_TREE_MAX_DEPTH`), which is the snapshot the workspace
+        // broadcaster ships.
+        let shallow = get_file_tree(root.path().to_string_lossy().into_owned(), Some(2))
+            .await
+            .expect("depth-2 tree");
+        assert!(
+            shallow.iter().any(
+                |n| matches!(n, FileTreeNode::Dir { name, symlink: true, .. } if name == "evil")
+            ),
+            "the stray link is a flagged directory in the broadcast snapshot too: {shallow:?}"
+        );
+
+        crate::folder_links::unregister(root.path(), &canonical_target);
+    }
+
+    /// A link pointing at an ancestor gives the workspace root a second name
+    /// (`up/<root name>`), and expanding symlinked directories (issue #430) put
+    /// that name one click away. The lexical `target == root` guard these three
+    /// commands used did not see it, so deleting the alias ran `remove_dir_all`
+    /// over the workspace itself — verified before the fix: the call returned
+    /// `Ok(())` and took the workspace's files with it.
+    #[tokio::test]
+    async fn ancestor_link_cannot_be_used_to_destroy_the_workspace_root() {
+        let parent = tempfile::tempdir().expect("parent");
+        let root = parent.path().join("workspace");
+        std::fs::create_dir(&root).expect("mkdir root");
+        std::fs::write(root.join("precious.txt"), b"data").expect("write");
+        symlink(parent.path(), root.join("up")).expect("symlink");
+        let root_arg = root.to_string_lossy().into_owned();
+        let alias = "up/workspace".to_string();
+
+        assert!(
+            delete_file_tree_entry(root_arg.clone(), alias.clone())
+                .await
+                .is_err(),
+            "deleting the root under an alias must be refused"
+        );
+        assert!(
+            rename_file_tree_entry(root_arg.clone(), alias.clone(), "renamed".to_string())
+                .await
+                .is_err(),
+            "renaming the root under an alias must be refused"
+        );
+        std::fs::create_dir(root.join("dest")).expect("mkdir dest");
+        assert!(
+            move_file_tree_entry(root_arg.clone(), alias, "dest".to_string())
+                .await
+                .is_err(),
+            "moving the root under an alias must be refused"
+        );
+
+        assert!(
+            root.join("precious.txt").exists(),
+            "the workspace survived every attempt"
+        );
+
+        // The link entry itself lives directly in the workspace, so it stays
+        // removable — these commands act on the link, never on its target.
+        delete_file_tree_entry(root_arg, "up".to_string())
+            .await
+            .expect("unlink the ancestor link");
+        assert!(
+            std::fs::symlink_metadata(root.join("up")).is_err(),
+            "the link is gone"
+        );
+        assert!(
+            parent.path().join("workspace").exists(),
+            "and its target is untouched"
+        );
+    }
+
+    /// Destroying content *through* an unauthorized symlink needs explicit
+    /// authorization: the tree makes such a folder browsable and its files
+    /// open and save (issue #430), but `delete`/`rename`/`move` resolve outside
+    /// the workspace and are refused. Registering the link — what the "link
+    /// folder" dialog does — restores full mutability, which is the point of a
+    /// multi-folder workspace.
+    #[tokio::test]
+    async fn destructive_ops_through_a_link_require_authorization() {
+        let root = tempfile::tempdir().expect("root");
+        let stray = tempfile::tempdir().expect("stray");
+        std::fs::create_dir(stray.path().join("sub")).expect("mkdir");
+        std::fs::write(stray.path().join("sub/note.md"), b"x").expect("write");
+        symlink(stray.path(), root.path().join("kb")).expect("symlink");
+        let root_arg = root.path().to_string_lossy().into_owned();
+
+        assert!(
+            delete_file_tree_entry(root_arg.clone(), "kb/sub".to_string())
+                .await
+                .is_err(),
+            "an unauthorized link is not a licence to delete outside the workspace"
+        );
+        assert!(stray.path().join("sub/note.md").exists(), "untouched");
+
+        // Reading and saving through the same link still work — that is the
+        // relaxation issue #430 asked for, and it is unaffected.
+        read_file_for_edit(root_arg.clone(), "kb/sub/note.md".to_string())
+            .await
+            .expect("files inside the link still open");
+
+        // The link entry itself lives in the workspace, so it stays removable.
+        let canonical_target = std::fs::canonicalize(stray.path()).expect("canon");
+        crate::folder_links::register(root.path(), &canonical_target);
+        delete_file_tree_entry(root_arg, "kb/sub".to_string())
+            .await
+            .expect("an authorized link is fully mutable");
+        assert!(!stray.path().join("sub").exists(), "it really went away");
+        crate::folder_links::unregister(root.path(), &canonical_target);
+    }
+
+    /// A workspace root is stored verbatim (`folder_service::add_folder` never
+    /// canonicalizes), so the root itself can be a symlink. Reaching that link
+    /// under an alias must not let the tree unlink it: the contents would
+    /// survive but the configured workspace would point at nothing. Verified
+    /// before the fix — the delete returned `Ok(())` and the root link was gone.
+    #[tokio::test]
+    async fn a_symlinked_workspace_root_cannot_be_unlinked_through_an_alias() {
+        let base = tempfile::tempdir().expect("base");
+        let parent = base.path().join("parent");
+        std::fs::create_dir(&parent).expect("mkdir parent");
+        let actual = base.path().join("actual");
+        std::fs::create_dir(&actual).expect("mkdir actual");
+        std::fs::write(actual.join("precious.txt"), b"data").expect("write");
+        // The configured root is a symlink, and inside it a link back up to the
+        // directory that holds that symlink.
+        let root = parent.join("workspace");
+        symlink(&actual, &root).expect("root symlink");
+        symlink(&parent, actual.join("up")).expect("up symlink");
+        let root_arg = root.to_string_lossy().into_owned();
+        let alias = "up/workspace".to_string();
+
+        assert!(
+            delete_file_tree_entry(root_arg.clone(), alias.clone())
+                .await
+                .is_err(),
+            "unlinking the root symlink under an alias must be refused"
+        );
+        assert!(
+            rename_file_tree_entry(root_arg.clone(), alias.clone(), "renamed".to_string())
+                .await
+                .is_err(),
+            "renaming the root symlink under an alias must be refused"
+        );
+        std::fs::create_dir(actual.join("dest")).expect("mkdir dest");
+        assert!(
+            move_file_tree_entry(root_arg.clone(), alias, "dest".to_string())
+                .await
+                .is_err(),
+            "moving the root symlink under an alias must be refused"
+        );
+        assert!(
+            std::fs::symlink_metadata(&root).is_ok(),
+            "the root symlink is still there"
+        );
+        assert!(actual.join("precious.txt").exists(), "contents intact");
+
+        // The `up` link is not part of the root path, so it stays removable.
+        delete_file_tree_entry(root_arg, "up".to_string())
+            .await
+            .expect("an ordinary link inside the workspace is still unlinkable");
+        assert!(std::fs::symlink_metadata(actual.join("up")).is_err());
+        assert!(std::fs::symlink_metadata(&root).is_ok(), "root untouched");
+    }
+
+    /// The third alias shape review found: an intermediate link in the root's
+    /// own resolution chain. `workspace -> ../hop`, `hop -> actual`, and a link
+    /// back up inside — removing `hop` would leave the workspace dangling even
+    /// though `hop` is nowhere in the root's *lexical* path. Confining the
+    /// entry's parent to the canonical root closes this without knowing about
+    /// the shape at all.
+    #[tokio::test]
+    async fn a_link_in_the_roots_resolution_chain_cannot_be_removed() {
+        let base = tempfile::tempdir().expect("base");
+        let actual = base.path().join("actual");
+        std::fs::create_dir(&actual).expect("mkdir actual");
+        std::fs::write(actual.join("precious.txt"), b"data").expect("write");
+        let hop = base.path().join("hop");
+        symlink(&actual, &hop).expect("hop");
+        let root = base.path().join("workspace");
+        symlink(&hop, &root).expect("root -> hop -> actual");
+        symlink(base.path(), actual.join("up")).expect("up");
+        let root_arg = root.to_string_lossy().into_owned();
+
+        for path in ["up/hop", "up/workspace"] {
+            assert!(
+                delete_file_tree_entry(root_arg.clone(), path.to_string())
+                    .await
+                    .is_err(),
+                "{path} resolves outside the workspace and must be refused"
+            );
+        }
+        assert!(std::fs::symlink_metadata(&hop).is_ok(), "hop survives");
+        assert!(std::fs::symlink_metadata(&root).is_ok(), "root survives");
+        assert!(actual.join("precious.txt").exists(), "contents intact");
+    }
+
+    /// A genuinely relative path naming `target`, built by walking out of the
+    /// process working directory and back down. Lets a test exercise the
+    /// relative-root path without `set_current_dir`, which is process-global
+    /// and would race the rest of the suite.
+    fn relative_from_cwd(target: &Path) -> PathBuf {
+        let cwd = std::env::current_dir().expect("cwd");
+        let mut relative = PathBuf::new();
+        for _ in cwd
+            .components()
+            .filter(|c| matches!(c, Component::Normal(_)))
+        {
+            relative.push("..");
+        }
+        for component in target.components() {
+            if let Component::Normal(name) = component {
+                relative.push(name);
+            }
+        }
+        relative
+    }
+
+    /// Workspace roots are stored verbatim, so nothing guarantees they are
+    /// absolute or canonical. A relative root has to be anchored to the working
+    /// directory before its resolution is walked: building the walk's path up
+    /// from empty would pop a leading `..` into nothing and stat a different
+    /// path entirely, silently protecting no links at all.
+    #[tokio::test]
+    async fn a_relative_workspace_root_protects_its_links() {
+        let base = tempfile::tempdir().expect("base");
+        let actual = base.path().join("actual");
+        std::fs::create_dir(&actual).expect("mkdir actual");
+        std::fs::write(actual.join("precious.txt"), b"data").expect("write");
+        let hop = actual.join("hop");
+        symlink(Path::new("."), &hop).expect("hop -> .");
+
+        // `<cwd-relative>/…/actual/hop`, i.e. a leading run of `..`.
+        let relative_root = relative_from_cwd(&hop);
+        assert!(!relative_root.is_absolute(), "the test root is relative");
+        assert!(
+            relative_root.is_dir(),
+            "and it names the same directory: {relative_root:?}"
+        );
+        let root_arg = relative_root.to_string_lossy().into_owned();
+
+        // It must protect exactly what the absolute spelling protects.
+        assert_eq!(
+            root_resolution_links(&relative_root),
+            root_resolution_links(&hop),
+            "a relative root resolves to the same protected links"
+        );
+
+        assert!(
+            delete_file_tree_entry(root_arg.clone(), "hop".to_string())
+                .await
+                .is_err(),
+            "deleting the root's own link through a relative root must be refused"
+        );
+        assert!(
+            rename_file_tree_entry(root_arg.clone(), "hop".to_string(), "x".to_string())
+                .await
+                .is_err(),
+            "renaming it must be refused"
+        );
+        std::fs::create_dir(actual.join("dest")).expect("mkdir dest");
+        assert!(
+            move_file_tree_entry(root_arg.clone(), "hop".to_string(), "dest".to_string())
+                .await
+                .is_err(),
+            "moving it must be refused"
+        );
+        assert!(std::fs::symlink_metadata(&hop).is_ok(), "the link survives");
+
+        // Ordinary work through the same relative root still succeeds.
+        delete_file_tree_entry(root_arg, "precious.txt".to_string())
+            .await
+            .expect("in-root work is unaffected by a relative root");
+    }
+
+    /// The same, for a root carrying a leading `./`. Anchoring runs before any
+    /// component is looked at, so this shares a code path with the test above
+    /// rather than isolating a literal `./hop` — isolating that would need the
+    /// fixture to sit inside the working directory, i.e. inside the source
+    /// tree, which is not worth it for a path the anchor already subsumes.
+    #[tokio::test]
+    async fn a_dot_prefixed_relative_root_protects_its_links() {
+        let base = tempfile::tempdir().expect("base");
+        let actual = base.path().join("actual");
+        std::fs::create_dir(&actual).expect("mkdir actual");
+        let hop = actual.join("hop");
+        symlink(Path::new("."), &hop).expect("hop -> .");
+
+        let dotted = Path::new(".").join(relative_from_cwd(&hop));
+        assert!(!dotted.is_absolute(), "still relative");
+        assert_eq!(
+            root_resolution_links(&dotted),
+            root_resolution_links(&hop),
+            "a `./`-prefixed root protects the same links"
+        );
+
+        assert!(
+            delete_file_tree_entry(dotted.to_string_lossy().into_owned(), "hop".to_string())
+                .await
+                .is_err(),
+            "the root's own link stays protected"
+        );
+        assert!(std::fs::symlink_metadata(&hop).is_ok(), "the link survives");
+    }
+
+    /// The root symlink can live *inside* its own canonical target
+    /// (`actual/workspace -> .`, opened as `actual/workspace`). Then it is an
+    /// ordinary entry of the workspace — parent inside the root, so the
+    /// outward boundary has nothing to say — yet unlinking it leaves the
+    /// configured folder pointing at nothing while every file survives.
+    #[tokio::test]
+    async fn the_roots_own_link_cannot_be_destroyed_from_inside() {
+        let base = tempfile::tempdir().expect("base");
+        let actual = base.path().join("actual");
+        std::fs::create_dir(&actual).expect("mkdir actual");
+        std::fs::write(actual.join("precious.txt"), b"data").expect("write");
+        let root = actual.join("workspace");
+        symlink(Path::new("."), &root).expect("workspace -> .");
+        let root_arg = root.to_string_lossy().into_owned();
+
+        assert!(
+            delete_file_tree_entry(root_arg.clone(), "workspace".to_string())
+                .await
+                .is_err(),
+            "unlinking the root's own link must be refused"
+        );
+        assert!(
+            rename_file_tree_entry(root_arg.clone(), "workspace".to_string(), "x".to_string())
+                .await
+                .is_err(),
+            "renaming it must be refused"
+        );
+        std::fs::create_dir(actual.join("dest")).expect("mkdir dest");
+        assert!(
+            move_file_tree_entry(root_arg, "workspace".to_string(), "dest".to_string())
+                .await
+                .is_err(),
+            "moving it must be refused"
+        );
+        assert!(
+            std::fs::symlink_metadata(&root).is_ok(),
+            "root link survives"
+        );
+        assert!(actual.join("precious.txt").exists(), "contents intact");
+    }
+
+    /// The guard identifies root-path links by *position*, never by "resolves
+    /// to the root" — that would refuse an unrelated `self -> .` the root does
+    /// not depend on, turning a legitimate action into an error. An ordinary
+    /// root with links pointing back at it stays fully mutable.
+    #[tokio::test]
+    async fn links_pointing_at_an_ordinary_root_stay_mutable() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::write(root.path().join("keep.txt"), b"data").expect("write");
+        std::fs::create_dir(root.path().join("dest")).expect("mkdir");
+        for name in ["self", "here", "again"] {
+            symlink(Path::new("."), root.path().join(name)).expect("self link");
+        }
+        let root_arg = root.path().to_string_lossy().into_owned();
+
+        delete_file_tree_entry(root_arg.clone(), "self".to_string())
+            .await
+            .expect("a link pointing at the root is deletable");
+        rename_file_tree_entry(root_arg.clone(), "here".to_string(), "renamed".to_string())
+            .await
+            .expect("...renamable");
+        move_file_tree_entry(root_arg, "again".to_string(), "dest".to_string())
+            .await
+            .expect("...movable");
+
+        assert!(std::fs::symlink_metadata(root.path().join("self")).is_err());
+        assert!(std::fs::symlink_metadata(root.path().join("renamed")).is_ok());
+        assert!(std::fs::symlink_metadata(root.path().join("dest/again")).is_ok());
+        assert!(root.path().join("keep.txt").exists(), "contents intact");
+    }
+
+    /// A root with components *after* a link (`actual/sub/hop -> ..` opened as
+    /// `actual/sub/hop/sub`) resolves that link to something other than the
+    /// canonical root, so "resolves to the root" does not recognise it.
+    /// Following the root's resolution and recording what it passes through
+    /// does.
+    #[tokio::test]
+    async fn a_root_link_with_a_suffix_after_it_cannot_be_destroyed() {
+        let base = tempfile::tempdir().expect("base");
+        let sub = base.path().join("actual/sub");
+        std::fs::create_dir_all(&sub).expect("mkdir");
+        std::fs::write(sub.join("precious.txt"), b"data").expect("write");
+        let hop = sub.join("hop");
+        symlink(Path::new(".."), &hop).expect("hop -> ..");
+        // The configured root walks through `hop` and then back down into `sub`.
+        let root = hop.join("sub");
+        let root_arg = root.to_string_lossy().into_owned();
+
+        assert!(
+            delete_file_tree_entry(root_arg.clone(), "hop".to_string())
+                .await
+                .is_err(),
+            "deleting the link the root walks through must be refused"
+        );
+        assert!(
+            rename_file_tree_entry(root_arg.clone(), "hop".to_string(), "x".to_string())
+                .await
+                .is_err(),
+            "renaming it must be refused"
+        );
+        std::fs::create_dir(sub.join("dest")).expect("mkdir dest");
+        assert!(
+            move_file_tree_entry(root_arg, "hop".to_string(), "dest".to_string())
+                .await
+                .is_err(),
+            "moving it must be refused"
+        );
+        assert!(std::fs::symlink_metadata(&hop).is_ok(), "the link survives");
+        assert!(sub.join("precious.txt").exists(), "contents intact");
+    }
+
+    /// A link that sits inside *another link's target* is still one the root is
+    /// resolved through: `actual/hop -> .` reached through a root
+    /// `workspace -> actual/hop`. `hop` is nowhere in the root's own component
+    /// list, and it resolves to `actual` rather than to the root, so only
+    /// following the resolution the way the kernel does recognises it.
+    #[tokio::test]
+    async fn a_link_inside_the_root_links_target_cannot_be_destroyed() {
+        let base = tempfile::tempdir().expect("base");
+        let actual = base.path().join("actual");
+        std::fs::create_dir(&actual).expect("mkdir actual");
+        std::fs::write(actual.join("precious.txt"), b"data").expect("write");
+        let hop = actual.join("hop");
+        symlink(Path::new("."), &hop).expect("hop -> .");
+        let root = base.path().join("workspace");
+        symlink(&hop, &root).expect("workspace -> actual/hop");
+        let root_arg = root.to_string_lossy().into_owned();
+
+        assert!(
+            delete_file_tree_entry(root_arg.clone(), "hop".to_string())
+                .await
+                .is_err(),
+            "a link inside the root link's target must be refused"
+        );
+        assert!(
+            rename_file_tree_entry(root_arg.clone(), "hop".to_string(), "x".to_string())
+                .await
+                .is_err(),
+            "renaming it must be refused"
+        );
+        std::fs::create_dir(actual.join("dest")).expect("mkdir dest");
+        assert!(
+            move_file_tree_entry(root_arg, "hop".to_string(), "dest".to_string())
+                .await
+                .is_err(),
+            "moving it must be refused"
+        );
+        assert!(std::fs::symlink_metadata(&hop).is_ok(), "hop survives");
+        assert!(std::fs::symlink_metadata(&root).is_ok(), "root survives");
+        assert!(actual.join("precious.txt").exists(), "contents intact");
+    }
+
+    /// A link cycle in the root's resolution must not hang or recurse without
+    /// bound — the hop budget ends it and the outward boundary still applies.
+    #[tokio::test]
+    async fn a_link_cycle_in_the_root_terminates() {
+        let base = tempfile::tempdir().expect("base");
+        let a = base.path().join("a");
+        let b = base.path().join("b");
+        symlink(&b, &a).expect("a -> b");
+        symlink(&a, &b).expect("b -> a");
+        // Resolving this root never finishes; the walk must still return.
+        assert!(
+            root_resolution_links(&a).len() <= 64,
+            "bounded, and returned"
+        );
+
+        // A real workspace alongside the cycle keeps working.
+        let root = base.path().join("workspace");
+        std::fs::create_dir(&root).expect("mkdir");
+        std::fs::write(root.join("keep.txt"), b"x").expect("write");
+        delete_file_tree_entry(root.to_string_lossy().into_owned(), "keep.txt".to_string())
+            .await
+            .expect("unrelated work is unaffected");
+    }
+
+    /// The contract the panel's lazy expand depends on: re-rooting the walk at
+    /// the link itself resolves it (`WalkDir::follow_root_links`), so the empty
+    /// child list `get_file_tree` returns for a symlinked directory can be
+    /// filled in one level at a time — no descent through links needed in the
+    /// bulk walk, and no way for a link loop to run away.
+    #[tokio::test]
+    async fn file_tree_rooted_at_a_stray_symlink_lists_its_contents() {
+        let root = tempfile::tempdir().expect("root");
+        let stray = tempfile::tempdir().expect("stray");
+        std::fs::write(stray.path().join("note.md"), b"x").expect("write");
+        std::fs::create_dir(stray.path().join("sub")).expect("mkdir");
+        symlink(stray.path(), root.path().join("evil")).expect("symlink");
+
+        let nodes = get_file_tree(
+            root.path().join("evil").to_string_lossy().into_owned(),
+            Some(1),
+        )
+        .await
+        .expect("tree rooted at the link");
+
+        assert!(
+            nodes
+                .iter()
+                .any(|n| matches!(n, FileTreeNode::File { path, .. } if path == "note.md")),
+            "the link's own contents are listed: {nodes:?}"
+        );
+        assert!(
+            nodes
+                .iter()
+                .any(|n| matches!(n, FileTreeNode::Dir { path, .. } if path == "sub")),
+            "nested directories come back expandable: {nodes:?}"
+        );
+    }
+
+    /// A link to a file, and a link that resolves to nothing, have no contents
+    /// to expand — a leaf file is the honest rendering for both.
+    #[tokio::test]
+    async fn file_tree_keeps_file_and_dangling_symlinks_as_leaves() {
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::write(outside.path().join("real.txt"), b"x").expect("write");
+        symlink(outside.path().join("real.txt"), root.path().join("to-file")).expect("symlink");
+        symlink(outside.path().join("gone"), root.path().join("dangling")).expect("symlink");
+
+        let nodes = get_file_tree(root.path().to_string_lossy().into_owned(), None)
+            .await
+            .expect("tree");
+
+        for name in ["to-file", "dangling"] {
+            assert!(
+                nodes
+                    .iter()
+                    .any(|n| matches!(n, FileTreeNode::File { name: n, .. } if n == name)),
+                "{name} stays a leaf file: {nodes:?}"
+            );
+        }
+    }
+
+    /// Search reports the link as a directory (so `@`-mention and the search
+    /// dialog show the right icon) without pulling its contents into the index
+    /// — walking every stray link would mean pnpm symlink farms and loops.
+    #[tokio::test]
+    async fn workspace_search_reports_a_stray_symlink_as_a_dir_without_descending() {
+        let root = tempfile::tempdir().expect("root");
+        let stray = tempfile::tempdir().expect("stray");
+        std::fs::write(stray.path().join("secret.txt"), b"x").expect("write");
+        symlink(stray.path(), root.path().join("evil")).expect("symlink");
+
+        let entries = list_workspace_files(root.path().to_string_lossy().into_owned())
+            .await
+            .expect("list");
+
+        let evil = entries
+            .iter()
+            .find(|e| e.path == "evil")
+            .expect("the link is listed");
+        assert_eq!(evil.kind, WorkspaceEntryKind::Dir);
+        assert!(
+            !entries.iter().any(|e| e.path.starts_with("evil/")),
+            "an unauthorized link's contents stay out of the index: {entries:?}"
+        );
+    }
+
+    /// Issue #430's second half: once the tree lets you into a symlinked
+    /// folder, the files inside it have to actually open. The path is
+    /// user-navigated (`..`-free, relative), which is the boundary
+    /// `ensure_user_navigable_path` draws — the same one `rename`/`move`/
+    /// `delete` have always drawn.
+    #[tokio::test]
+    async fn user_navigated_reads_reach_into_a_stray_symlinked_directory() {
+        let root = tempfile::tempdir().expect("root");
+        let stray = tempfile::tempdir().expect("stray");
+        std::fs::write(stray.path().join("note.md"), b"hello").expect("write");
+        symlink(stray.path(), root.path().join("kb")).expect("symlink");
+        let root_arg = root.path().to_string_lossy().into_owned();
+
+        let preview = read_file_preview(root_arg.clone(), "kb/note.md".to_string())
+            .await
+            .expect("preview a file inside a symlinked folder");
+        assert_eq!(preview.content, "hello");
+
+        let edit = read_file_for_edit(root_arg.clone(), "kb/note.md".to_string())
+            .await
+            .expect("open a file inside a symlinked folder for edit");
+        assert_eq!(edit.content, "hello");
+
+        save_file_content(
+            root_arg.clone(),
+            "kb/note.md".to_string(),
+            "bye".to_string(),
+            Some(edit.etag),
+        )
+        .await
+        .expect("save through the link");
+        assert_eq!(
+            std::fs::read_to_string(stray.path().join("note.md")).expect("read back"),
+            "bye"
+        );
+
+        // The lexical boundary is still enforced: `..` never resolves.
+        assert!(
+            read_file_for_edit(root_arg, "../escape.md".to_string())
+                .await
+                .is_err(),
+            "'..' must stay rejected"
+        );
+    }
+
+    /// The HTML preview inlines paths named by the *markup*, not by a click, so
+    /// its guard must stay strict even though user navigation was relaxed.
+    #[tokio::test]
+    async fn html_preview_inlining_still_refuses_a_stray_symlinked_directory() {
+        let root = tempfile::tempdir().expect("root");
+        let stray = tempfile::tempdir().expect("stray");
+        std::fs::write(stray.path().join("id_rsa"), b"key").expect("write");
+        symlink(stray.path(), root.path().join("secrets")).expect("symlink");
+
+        let res = read_workspace_file_base64(
+            root.path().to_string_lossy().into_owned(),
+            "secrets/id_rsa".to_string(),
+            None,
+        )
+        .await;
+        assert!(
+            res.is_err(),
+            "sub-resource inlining must not follow a stray link"
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_search_lists_files_inside_an_authorized_link() {
+        let root = tempfile::tempdir().expect("root");
+        let linked = tempfile::tempdir().expect("linked");
+        std::fs::create_dir(linked.path().join("src")).expect("mkdir");
+        std::fs::write(linked.path().join("src/deep.ts"), b"x").expect("write");
+        symlink(linked.path(), root.path().join("api")).expect("symlink");
+        let canonical_target = std::fs::canonicalize(linked.path()).expect("canon");
+        crate::folder_links::register(root.path(), &canonical_target);
+
+        let entries = list_workspace_files(root.path().to_string_lossy().into_owned())
+            .await
+            .expect("list");
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"api"), "link itself is listed: {paths:?}");
+        assert!(
+            paths.contains(&"api/src/deep.ts"),
+            "linked content is reachable by fuzzy search: {paths:?}"
+        );
+
+        crate::folder_links::unregister(root.path(), &canonical_target);
+    }
+
+    /// The strict rule now guards only the non-user-driven surfaces (HTML
+    /// preview sub-resource inlining, the web upload chain) — see
+    /// `is_within_workspace`. User-navigated reads go through
+    /// `ensure_user_navigable_path` and are covered separately.
+    #[test]
+    fn strict_guard_allows_a_registered_link_but_not_a_stray_symlink() {
+        let root = tempfile::tempdir().expect("root");
+        let linked = tempfile::tempdir().expect("linked");
+        let stray = tempfile::tempdir().expect("stray");
+        std::fs::write(linked.path().join("ok.txt"), b"x").expect("write");
+        std::fs::write(stray.path().join("secret.txt"), b"x").expect("write");
+        symlink(linked.path(), root.path().join("api")).expect("symlink");
+        symlink(stray.path(), root.path().join("evil")).expect("symlink");
+
+        let canonical_target = std::fs::canonicalize(linked.path()).expect("canon");
+        crate::folder_links::register(root.path(), &canonical_target);
+
+        assert!(
+            strictly_within(root.path(), &root.path().join("api/ok.txt")),
+            "a file inside a user-authorized link is in the workspace"
+        );
+        assert!(
+            !strictly_within(root.path(), &root.path().join("evil/secret.txt")),
+            "an unregistered symlink still cannot escape the root"
+        );
+
+        crate::folder_links::unregister(root.path(), &canonical_target);
+        assert!(
+            !strictly_within(root.path(), &root.path().join("api/ok.txt")),
+            "revoking the link revokes access"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::db::test_helpers::fresh_in_memory_db;
+
     use crate::models::agent::AgentType;
 
     /// The frontend reads `symlink` as an optional boolean, and the tree
@@ -7290,6 +8204,23 @@ mod tests {
         );
         let all = list_all_folder_details_core(&db).await.expect("all list");
         assert!(all.iter().any(|f| f.id == entry.id));
+    }
+
+    /// Two callers making the row of one new path at once — the runs of a
+    /// `houhub-cli -a x -a y` in a new workspace, delegations into a new cwd —
+    /// both get it: the one that lost the insert reads the winner's.
+    #[tokio::test]
+    async fn ensure_folder_for_path_made_twice_at_once_is_one_row() {
+        let db = fresh_in_memory_db().await;
+        let path = "/tmp/houhub-ensure-race";
+        let (a, b) = tokio::join!(
+            folder_service::ensure_folder_for_path(&db.conn, path),
+            folder_service::ensure_folder_for_path(&db.conn, path),
+        );
+        let (a, b) = (a.expect("first"), b.expect("second"));
+        assert_eq!(a.id, b.id);
+        let all = list_all_folder_details_core(&db).await.expect("all list");
+        assert_eq!(all.iter().filter(|f| f.path == path).count(), 1);
     }
 
     /// The overwhelmingly common case: the child runs in the same folder as its
@@ -8239,897 +9170,5 @@ branch refs/heads/main";
         )
         .await;
         assert!(res.is_err(), "dest containing '..' must be rejected");
-    }
-}
-
-// Symlink confinement that `read_workspace_file_base64` relies on. Unix-only
-// because it uses real filesystem symlinks.
-#[cfg(all(test, unix))]
-mod workspace_confinement_tests {
-    use super::*;
-    use std::os::unix::fs::symlink;
-
-    #[tokio::test]
-    async fn reads_in_root_file() {
-        let root = tempfile::tempdir().expect("root");
-        std::fs::write(root.path().join("a.txt"), b"hello").expect("write");
-        let b64 = read_workspace_file_base64(
-            root.path().to_string_lossy().into_owned(),
-            "a.txt".to_string(),
-            None,
-        )
-        .await
-        .expect("should read in-root file");
-        assert_eq!(b64, "aGVsbG8="); // base64("hello")
-    }
-
-    #[tokio::test]
-    async fn rejects_symlink_escaping_root() {
-        let root = tempfile::tempdir().expect("root");
-        let outside = tempfile::tempdir().expect("outside");
-        std::fs::write(outside.path().join("secret"), b"top").expect("write");
-        symlink(outside.path().join("secret"), root.path().join("link")).expect("symlink");
-        // The canonical target resolves outside the root, so the read is denied
-        // even though `root/link` is lexically inside the workspace.
-        let res = read_workspace_file_base64(
-            root.path().to_string_lossy().into_owned(),
-            "link".to_string(),
-            None,
-        )
-        .await;
-        assert!(
-            res.is_err(),
-            "symlink escaping the workspace must be rejected"
-        );
-    }
-
-    /// The strict predicate, applied the way the guarded call sites apply it:
-    /// canonicalize both ends, then ask whether the target is reachable.
-    fn strictly_within(root: &Path, target: &Path) -> bool {
-        let Ok(canonical_root) = std::fs::canonicalize(root) else {
-            return false;
-        };
-        let Ok(canonical_target) = std::fs::canonicalize(target) else {
-            return false;
-        };
-        is_within_workspace(&canonical_root, &canonical_target)
-    }
-
-    #[test]
-    fn strict_guard_rejects_symlink() {
-        let root = tempfile::tempdir().expect("root");
-        let outside = tempfile::tempdir().expect("outside");
-        let secret = outside.path().join("secret.txt");
-        std::fs::write(&secret, b"x").expect("write");
-        let link = root.path().join("asset.txt");
-        symlink(&secret, &link).expect("symlink");
-        assert!(!strictly_within(root.path(), &link));
-    }
-
-    #[tokio::test]
-    async fn move_file_tree_entry_does_not_clobber_dangling_symlink() {
-        let root = tempfile::tempdir().expect("root");
-        std::fs::write(root.path().join("a.txt"), b"real").expect("write");
-        std::fs::create_dir(root.path().join("sub")).expect("mkdir");
-        // A dangling symlink occupies the destination name. `Path::exists()`
-        // follows it and reports `false`, so the collision check must instead
-        // use `symlink_metadata` or `fs::rename` would destroy the link.
-        symlink(
-            root.path().join("nonexistent-target"),
-            root.path().join("sub/a.txt"),
-        )
-        .expect("symlink");
-
-        let res = move_file_tree_entry(
-            root.path().to_string_lossy().into_owned(),
-            "a.txt".to_string(),
-            "sub".to_string(),
-        )
-        .await;
-        assert!(res.is_err(), "must not clobber a dangling destination symlink");
-        assert!(
-            std::fs::symlink_metadata(root.path().join("sub/a.txt")).is_ok(),
-            "dangling symlink must remain intact",
-        );
-        assert!(root.path().join("a.txt").exists(), "source untouched");
-    }
-
-    #[tokio::test]
-    async fn move_file_tree_entry_moves_a_symlink_entry() {
-        let root = tempfile::tempdir().expect("root");
-        std::fs::write(root.path().join("target.txt"), b"x").expect("write");
-        symlink(
-            root.path().join("target.txt"),
-            root.path().join("link.txt"),
-        )
-        .expect("symlink");
-        std::fs::create_dir(root.path().join("sub")).expect("mkdir");
-
-        let new_rel = move_file_tree_entry(
-            root.path().to_string_lossy().into_owned(),
-            "link.txt".to_string(),
-            "sub".to_string(),
-        )
-        .await
-        .expect("move symlink");
-        assert_eq!(new_rel.replace('\\', "/"), "sub/link.txt");
-        // The moved entry is still a symlink (the link itself moved, not its target).
-        let meta = std::fs::symlink_metadata(root.path().join("sub/link.txt"))
-            .expect("moved link exists");
-        assert!(meta.file_type().is_symlink(), "entry stays a symlink");
-        assert!(!root.path().join("link.txt").exists(), "old link gone");
-    }
-    #[tokio::test]
-    async fn file_tree_walks_into_an_authorized_link_only() {
-        let root = tempfile::tempdir().expect("root");
-        let linked = tempfile::tempdir().expect("linked");
-        let stray = tempfile::tempdir().expect("stray");
-        std::fs::write(root.path().join("own.txt"), b"x").expect("write");
-        std::fs::write(linked.path().join("inside.txt"), b"x").expect("write");
-        std::fs::create_dir(linked.path().join("src")).expect("mkdir");
-        std::fs::write(linked.path().join("src/deep.ts"), b"x").expect("write");
-        std::fs::write(stray.path().join("secret.txt"), b"x").expect("write");
-        symlink(linked.path(), root.path().join("api")).expect("symlink");
-        symlink(stray.path(), root.path().join("evil")).expect("symlink");
-
-        // Only `api` is registered, mimicking a user-created link; `evil` is the
-        // kind of symlink a cloned repo could ship.
-        let canonical_target = std::fs::canonicalize(linked.path()).expect("canon");
-        crate::folder_links::register(root.path(), &canonical_target);
-
-        let nodes = get_file_tree(root.path().to_string_lossy().into_owned(), None)
-            .await
-            .expect("tree");
-
-        let api = nodes
-            .iter()
-            .find(|n| matches!(n, FileTreeNode::Dir { name, .. } if name == "api"))
-            .expect("authorized link renders as a directory");
-        match api {
-            FileTreeNode::Dir { children, path, .. } => {
-                assert_eq!(path, "api");
-                assert!(
-                    children.iter().any(
-                        |c| matches!(c, FileTreeNode::File { path, .. } if path == "api/inside.txt")
-                    ),
-                    "the linked directory's contents are grafted in: {children:?}"
-                );
-                // Nested paths must be re-anchored too, or the panel would
-                // resolve them against the workspace root instead of the link.
-                let src = children
-                    .iter()
-                    .find(|c| matches!(c, FileTreeNode::Dir { name, .. } if name == "src"))
-                    .expect("nested directory is present");
-                match src {
-                    FileTreeNode::Dir { path, children, .. } => {
-                        assert_eq!(path, "api/src");
-                        assert!(
-                            children.iter().any(|c| matches!(
-                                c,
-                                FileTreeNode::File { path, .. } if path == "api/src/deep.ts"
-                            )),
-                            "deep paths are prefixed once: {children:?}"
-                        );
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            _ => unreachable!(),
-        }
-
-        // Both links are flagged so the panel can badge them.
-        assert!(
-            matches!(api, FileTreeNode::Dir { symlink: true, .. }),
-            "an authorized link is still a symlink on disk: {api:?}"
-        );
-
-        // The unregistered symlink is a *directory* — rendering it as a file
-        // was issue #430 — but it is not walked into: empty children, which the
-        // panel lazy-loads on expand.
-        let evil = nodes
-            .iter()
-            .find(|n| matches!(n, FileTreeNode::Dir { name, .. } if name == "evil"))
-            .expect("an unauthorized symlinked directory still renders as a directory");
-        match evil {
-            FileTreeNode::Dir {
-                children,
-                path,
-                symlink,
-                ..
-            } => {
-                assert_eq!(path, "evil");
-                assert!(symlink, "flagged so the row gets the link badge");
-                assert!(
-                    children.is_empty(),
-                    "an unauthorized symlink must not be walked into: {children:?}"
-                );
-            }
-            _ => unreachable!(),
-        }
-
-        // Same answer at the depth the panel actually renders
-        // (`WORKSPACE_TREE_MAX_DEPTH`), which is the snapshot the workspace
-        // broadcaster ships.
-        let shallow = get_file_tree(root.path().to_string_lossy().into_owned(), Some(2))
-            .await
-            .expect("depth-2 tree");
-        assert!(
-            shallow.iter().any(
-                |n| matches!(n, FileTreeNode::Dir { name, symlink: true, .. } if name == "evil")
-            ),
-            "the stray link is a flagged directory in the broadcast snapshot too: {shallow:?}"
-        );
-
-        crate::folder_links::unregister(root.path(), &canonical_target);
-    }
-
-    /// A link pointing at an ancestor gives the workspace root a second name
-    /// (`up/<root name>`), and expanding symlinked directories (issue #430) put
-    /// that name one click away. The lexical `target == root` guard these three
-    /// commands used did not see it, so deleting the alias ran `remove_dir_all`
-    /// over the workspace itself — verified before the fix: the call returned
-    /// `Ok(())` and took the workspace's files with it.
-    #[tokio::test]
-    async fn ancestor_link_cannot_be_used_to_destroy_the_workspace_root() {
-        let parent = tempfile::tempdir().expect("parent");
-        let root = parent.path().join("workspace");
-        std::fs::create_dir(&root).expect("mkdir root");
-        std::fs::write(root.join("precious.txt"), b"data").expect("write");
-        symlink(parent.path(), root.join("up")).expect("symlink");
-        let root_arg = root.to_string_lossy().into_owned();
-        let alias = "up/workspace".to_string();
-
-        assert!(
-            delete_file_tree_entry(root_arg.clone(), alias.clone())
-                .await
-                .is_err(),
-            "deleting the root under an alias must be refused"
-        );
-        assert!(
-            rename_file_tree_entry(root_arg.clone(), alias.clone(), "renamed".to_string())
-                .await
-                .is_err(),
-            "renaming the root under an alias must be refused"
-        );
-        std::fs::create_dir(root.join("dest")).expect("mkdir dest");
-        assert!(
-            move_file_tree_entry(root_arg.clone(), alias, "dest".to_string())
-                .await
-                .is_err(),
-            "moving the root under an alias must be refused"
-        );
-
-        assert!(
-            root.join("precious.txt").exists(),
-            "the workspace survived every attempt"
-        );
-
-        // The link entry itself lives directly in the workspace, so it stays
-        // removable — these commands act on the link, never on its target.
-        delete_file_tree_entry(root_arg, "up".to_string())
-            .await
-            .expect("unlink the ancestor link");
-        assert!(
-            std::fs::symlink_metadata(root.join("up")).is_err(),
-            "the link is gone"
-        );
-        assert!(
-            parent.path().join("workspace").exists(),
-            "and its target is untouched"
-        );
-    }
-
-    /// Destroying content *through* an unauthorized symlink needs explicit
-    /// authorization: the tree makes such a folder browsable and its files
-    /// open and save (issue #430), but `delete`/`rename`/`move` resolve outside
-    /// the workspace and are refused. Registering the link — what the "link
-    /// folder" dialog does — restores full mutability, which is the point of a
-    /// multi-folder workspace.
-    #[tokio::test]
-    async fn destructive_ops_through_a_link_require_authorization() {
-        let root = tempfile::tempdir().expect("root");
-        let stray = tempfile::tempdir().expect("stray");
-        std::fs::create_dir(stray.path().join("sub")).expect("mkdir");
-        std::fs::write(stray.path().join("sub/note.md"), b"x").expect("write");
-        symlink(stray.path(), root.path().join("kb")).expect("symlink");
-        let root_arg = root.path().to_string_lossy().into_owned();
-
-        assert!(
-            delete_file_tree_entry(root_arg.clone(), "kb/sub".to_string())
-                .await
-                .is_err(),
-            "an unauthorized link is not a licence to delete outside the workspace"
-        );
-        assert!(stray.path().join("sub/note.md").exists(), "untouched");
-
-        // Reading and saving through the same link still work — that is the
-        // relaxation issue #430 asked for, and it is unaffected.
-        read_file_for_edit(root_arg.clone(), "kb/sub/note.md".to_string())
-            .await
-            .expect("files inside the link still open");
-
-        // The link entry itself lives in the workspace, so it stays removable.
-        let canonical_target = std::fs::canonicalize(stray.path()).expect("canon");
-        crate::folder_links::register(root.path(), &canonical_target);
-        delete_file_tree_entry(root_arg, "kb/sub".to_string())
-            .await
-            .expect("an authorized link is fully mutable");
-        assert!(!stray.path().join("sub").exists(), "it really went away");
-        crate::folder_links::unregister(root.path(), &canonical_target);
-    }
-
-    /// A workspace root is stored verbatim (`folder_service::add_folder` never
-    /// canonicalizes), so the root itself can be a symlink. Reaching that link
-    /// under an alias must not let the tree unlink it: the contents would
-    /// survive but the configured workspace would point at nothing. Verified
-    /// before the fix — the delete returned `Ok(())` and the root link was gone.
-    #[tokio::test]
-    async fn a_symlinked_workspace_root_cannot_be_unlinked_through_an_alias() {
-        let base = tempfile::tempdir().expect("base");
-        let parent = base.path().join("parent");
-        std::fs::create_dir(&parent).expect("mkdir parent");
-        let actual = base.path().join("actual");
-        std::fs::create_dir(&actual).expect("mkdir actual");
-        std::fs::write(actual.join("precious.txt"), b"data").expect("write");
-        // The configured root is a symlink, and inside it a link back up to the
-        // directory that holds that symlink.
-        let root = parent.join("workspace");
-        symlink(&actual, &root).expect("root symlink");
-        symlink(&parent, actual.join("up")).expect("up symlink");
-        let root_arg = root.to_string_lossy().into_owned();
-        let alias = "up/workspace".to_string();
-
-        assert!(
-            delete_file_tree_entry(root_arg.clone(), alias.clone())
-                .await
-                .is_err(),
-            "unlinking the root symlink under an alias must be refused"
-        );
-        assert!(
-            rename_file_tree_entry(root_arg.clone(), alias.clone(), "renamed".to_string())
-                .await
-                .is_err(),
-            "renaming the root symlink under an alias must be refused"
-        );
-        std::fs::create_dir(actual.join("dest")).expect("mkdir dest");
-        assert!(
-            move_file_tree_entry(root_arg.clone(), alias, "dest".to_string())
-                .await
-                .is_err(),
-            "moving the root symlink under an alias must be refused"
-        );
-        assert!(
-            std::fs::symlink_metadata(&root).is_ok(),
-            "the root symlink is still there"
-        );
-        assert!(actual.join("precious.txt").exists(), "contents intact");
-
-        // The `up` link is not part of the root path, so it stays removable.
-        delete_file_tree_entry(root_arg, "up".to_string())
-            .await
-            .expect("an ordinary link inside the workspace is still unlinkable");
-        assert!(std::fs::symlink_metadata(actual.join("up")).is_err());
-        assert!(std::fs::symlink_metadata(&root).is_ok(), "root untouched");
-    }
-
-    /// The third alias shape review found: an intermediate link in the root's
-    /// own resolution chain. `workspace -> ../hop`, `hop -> actual`, and a link
-    /// back up inside — removing `hop` would leave the workspace dangling even
-    /// though `hop` is nowhere in the root's *lexical* path. Confining the
-    /// entry's parent to the canonical root closes this without knowing about
-    /// the shape at all.
-    #[tokio::test]
-    async fn a_link_in_the_roots_resolution_chain_cannot_be_removed() {
-        let base = tempfile::tempdir().expect("base");
-        let actual = base.path().join("actual");
-        std::fs::create_dir(&actual).expect("mkdir actual");
-        std::fs::write(actual.join("precious.txt"), b"data").expect("write");
-        let hop = base.path().join("hop");
-        symlink(&actual, &hop).expect("hop");
-        let root = base.path().join("workspace");
-        symlink(&hop, &root).expect("root -> hop -> actual");
-        symlink(base.path(), actual.join("up")).expect("up");
-        let root_arg = root.to_string_lossy().into_owned();
-
-        for path in ["up/hop", "up/workspace"] {
-            assert!(
-                delete_file_tree_entry(root_arg.clone(), path.to_string())
-                    .await
-                    .is_err(),
-                "{path} resolves outside the workspace and must be refused"
-            );
-        }
-        assert!(std::fs::symlink_metadata(&hop).is_ok(), "hop survives");
-        assert!(std::fs::symlink_metadata(&root).is_ok(), "root survives");
-        assert!(actual.join("precious.txt").exists(), "contents intact");
-    }
-
-    /// A genuinely relative path naming `target`, built by walking out of the
-    /// process working directory and back down. Lets a test exercise the
-    /// relative-root path without `set_current_dir`, which is process-global
-    /// and would race the rest of the suite.
-    fn relative_from_cwd(target: &Path) -> PathBuf {
-        let cwd = std::env::current_dir().expect("cwd");
-        let mut relative = PathBuf::new();
-        for _ in cwd
-            .components()
-            .filter(|c| matches!(c, Component::Normal(_)))
-        {
-            relative.push("..");
-        }
-        for component in target.components() {
-            if let Component::Normal(name) = component {
-                relative.push(name);
-            }
-        }
-        relative
-    }
-
-    /// Workspace roots are stored verbatim, so nothing guarantees they are
-    /// absolute or canonical. A relative root has to be anchored to the working
-    /// directory before its resolution is walked: building the walk's path up
-    /// from empty would pop a leading `..` into nothing and stat a different
-    /// path entirely, silently protecting no links at all.
-    #[tokio::test]
-    async fn a_relative_workspace_root_protects_its_links() {
-        let base = tempfile::tempdir().expect("base");
-        let actual = base.path().join("actual");
-        std::fs::create_dir(&actual).expect("mkdir actual");
-        std::fs::write(actual.join("precious.txt"), b"data").expect("write");
-        let hop = actual.join("hop");
-        symlink(Path::new("."), &hop).expect("hop -> .");
-
-        // `<cwd-relative>/…/actual/hop`, i.e. a leading run of `..`.
-        let relative_root = relative_from_cwd(&hop);
-        assert!(!relative_root.is_absolute(), "the test root is relative");
-        assert!(
-            relative_root.is_dir(),
-            "and it names the same directory: {relative_root:?}"
-        );
-        let root_arg = relative_root.to_string_lossy().into_owned();
-
-        // It must protect exactly what the absolute spelling protects.
-        assert_eq!(
-            root_resolution_links(&relative_root),
-            root_resolution_links(&hop),
-            "a relative root resolves to the same protected links"
-        );
-
-        assert!(
-            delete_file_tree_entry(root_arg.clone(), "hop".to_string())
-                .await
-                .is_err(),
-            "deleting the root's own link through a relative root must be refused"
-        );
-        assert!(
-            rename_file_tree_entry(root_arg.clone(), "hop".to_string(), "x".to_string())
-                .await
-                .is_err(),
-            "renaming it must be refused"
-        );
-        std::fs::create_dir(actual.join("dest")).expect("mkdir dest");
-        assert!(
-            move_file_tree_entry(root_arg.clone(), "hop".to_string(), "dest".to_string())
-                .await
-                .is_err(),
-            "moving it must be refused"
-        );
-        assert!(std::fs::symlink_metadata(&hop).is_ok(), "the link survives");
-
-        // Ordinary work through the same relative root still succeeds.
-        delete_file_tree_entry(root_arg, "precious.txt".to_string())
-            .await
-            .expect("in-root work is unaffected by a relative root");
-    }
-
-    /// The same, for a root carrying a leading `./`. Anchoring runs before any
-    /// component is looked at, so this shares a code path with the test above
-    /// rather than isolating a literal `./hop` — isolating that would need the
-    /// fixture to sit inside the working directory, i.e. inside the source
-    /// tree, which is not worth it for a path the anchor already subsumes.
-    #[tokio::test]
-    async fn a_dot_prefixed_relative_root_protects_its_links() {
-        let base = tempfile::tempdir().expect("base");
-        let actual = base.path().join("actual");
-        std::fs::create_dir(&actual).expect("mkdir actual");
-        let hop = actual.join("hop");
-        symlink(Path::new("."), &hop).expect("hop -> .");
-
-        let dotted = Path::new(".").join(relative_from_cwd(&hop));
-        assert!(!dotted.is_absolute(), "still relative");
-        assert_eq!(
-            root_resolution_links(&dotted),
-            root_resolution_links(&hop),
-            "a `./`-prefixed root protects the same links"
-        );
-
-        assert!(
-            delete_file_tree_entry(dotted.to_string_lossy().into_owned(), "hop".to_string())
-                .await
-                .is_err(),
-            "the root's own link stays protected"
-        );
-        assert!(std::fs::symlink_metadata(&hop).is_ok(), "the link survives");
-    }
-
-    /// The root symlink can live *inside* its own canonical target
-    /// (`actual/workspace -> .`, opened as `actual/workspace`). Then it is an
-    /// ordinary entry of the workspace — parent inside the root, so the
-    /// outward boundary has nothing to say — yet unlinking it leaves the
-    /// configured folder pointing at nothing while every file survives.
-    #[tokio::test]
-    async fn the_roots_own_link_cannot_be_destroyed_from_inside() {
-        let base = tempfile::tempdir().expect("base");
-        let actual = base.path().join("actual");
-        std::fs::create_dir(&actual).expect("mkdir actual");
-        std::fs::write(actual.join("precious.txt"), b"data").expect("write");
-        let root = actual.join("workspace");
-        symlink(Path::new("."), &root).expect("workspace -> .");
-        let root_arg = root.to_string_lossy().into_owned();
-
-        assert!(
-            delete_file_tree_entry(root_arg.clone(), "workspace".to_string())
-                .await
-                .is_err(),
-            "unlinking the root's own link must be refused"
-        );
-        assert!(
-            rename_file_tree_entry(root_arg.clone(), "workspace".to_string(), "x".to_string())
-                .await
-                .is_err(),
-            "renaming it must be refused"
-        );
-        std::fs::create_dir(actual.join("dest")).expect("mkdir dest");
-        assert!(
-            move_file_tree_entry(root_arg, "workspace".to_string(), "dest".to_string())
-                .await
-                .is_err(),
-            "moving it must be refused"
-        );
-        assert!(
-            std::fs::symlink_metadata(&root).is_ok(),
-            "root link survives"
-        );
-        assert!(actual.join("precious.txt").exists(), "contents intact");
-    }
-
-    /// The guard identifies root-path links by *position*, never by "resolves
-    /// to the root" — that would refuse an unrelated `self -> .` the root does
-    /// not depend on, turning a legitimate action into an error. An ordinary
-    /// root with links pointing back at it stays fully mutable.
-    #[tokio::test]
-    async fn links_pointing_at_an_ordinary_root_stay_mutable() {
-        let root = tempfile::tempdir().expect("root");
-        std::fs::write(root.path().join("keep.txt"), b"data").expect("write");
-        std::fs::create_dir(root.path().join("dest")).expect("mkdir");
-        for name in ["self", "here", "again"] {
-            symlink(Path::new("."), root.path().join(name)).expect("self link");
-        }
-        let root_arg = root.path().to_string_lossy().into_owned();
-
-        delete_file_tree_entry(root_arg.clone(), "self".to_string())
-            .await
-            .expect("a link pointing at the root is deletable");
-        rename_file_tree_entry(root_arg.clone(), "here".to_string(), "renamed".to_string())
-            .await
-            .expect("...renamable");
-        move_file_tree_entry(root_arg, "again".to_string(), "dest".to_string())
-            .await
-            .expect("...movable");
-
-        assert!(std::fs::symlink_metadata(root.path().join("self")).is_err());
-        assert!(std::fs::symlink_metadata(root.path().join("renamed")).is_ok());
-        assert!(std::fs::symlink_metadata(root.path().join("dest/again")).is_ok());
-        assert!(root.path().join("keep.txt").exists(), "contents intact");
-    }
-
-    /// A root with components *after* a link (`actual/sub/hop -> ..` opened as
-    /// `actual/sub/hop/sub`) resolves that link to something other than the
-    /// canonical root, so "resolves to the root" does not recognise it.
-    /// Following the root's resolution and recording what it passes through
-    /// does.
-    #[tokio::test]
-    async fn a_root_link_with_a_suffix_after_it_cannot_be_destroyed() {
-        let base = tempfile::tempdir().expect("base");
-        let sub = base.path().join("actual/sub");
-        std::fs::create_dir_all(&sub).expect("mkdir");
-        std::fs::write(sub.join("precious.txt"), b"data").expect("write");
-        let hop = sub.join("hop");
-        symlink(Path::new(".."), &hop).expect("hop -> ..");
-        // The configured root walks through `hop` and then back down into `sub`.
-        let root = hop.join("sub");
-        let root_arg = root.to_string_lossy().into_owned();
-
-        assert!(
-            delete_file_tree_entry(root_arg.clone(), "hop".to_string())
-                .await
-                .is_err(),
-            "deleting the link the root walks through must be refused"
-        );
-        assert!(
-            rename_file_tree_entry(root_arg.clone(), "hop".to_string(), "x".to_string())
-                .await
-                .is_err(),
-            "renaming it must be refused"
-        );
-        std::fs::create_dir(sub.join("dest")).expect("mkdir dest");
-        assert!(
-            move_file_tree_entry(root_arg, "hop".to_string(), "dest".to_string())
-                .await
-                .is_err(),
-            "moving it must be refused"
-        );
-        assert!(std::fs::symlink_metadata(&hop).is_ok(), "the link survives");
-        assert!(sub.join("precious.txt").exists(), "contents intact");
-    }
-
-    /// A link that sits inside *another link's target* is still one the root is
-    /// resolved through: `actual/hop -> .` reached through a root
-    /// `workspace -> actual/hop`. `hop` is nowhere in the root's own component
-    /// list, and it resolves to `actual` rather than to the root, so only
-    /// following the resolution the way the kernel does recognises it.
-    #[tokio::test]
-    async fn a_link_inside_the_root_links_target_cannot_be_destroyed() {
-        let base = tempfile::tempdir().expect("base");
-        let actual = base.path().join("actual");
-        std::fs::create_dir(&actual).expect("mkdir actual");
-        std::fs::write(actual.join("precious.txt"), b"data").expect("write");
-        let hop = actual.join("hop");
-        symlink(Path::new("."), &hop).expect("hop -> .");
-        let root = base.path().join("workspace");
-        symlink(&hop, &root).expect("workspace -> actual/hop");
-        let root_arg = root.to_string_lossy().into_owned();
-
-        assert!(
-            delete_file_tree_entry(root_arg.clone(), "hop".to_string())
-                .await
-                .is_err(),
-            "a link inside the root link's target must be refused"
-        );
-        assert!(
-            rename_file_tree_entry(root_arg.clone(), "hop".to_string(), "x".to_string())
-                .await
-                .is_err(),
-            "renaming it must be refused"
-        );
-        std::fs::create_dir(actual.join("dest")).expect("mkdir dest");
-        assert!(
-            move_file_tree_entry(root_arg, "hop".to_string(), "dest".to_string())
-                .await
-                .is_err(),
-            "moving it must be refused"
-        );
-        assert!(std::fs::symlink_metadata(&hop).is_ok(), "hop survives");
-        assert!(std::fs::symlink_metadata(&root).is_ok(), "root survives");
-        assert!(actual.join("precious.txt").exists(), "contents intact");
-    }
-
-    /// A link cycle in the root's resolution must not hang or recurse without
-    /// bound — the hop budget ends it and the outward boundary still applies.
-    #[tokio::test]
-    async fn a_link_cycle_in_the_root_terminates() {
-        let base = tempfile::tempdir().expect("base");
-        let a = base.path().join("a");
-        let b = base.path().join("b");
-        symlink(&b, &a).expect("a -> b");
-        symlink(&a, &b).expect("b -> a");
-        // Resolving this root never finishes; the walk must still return.
-        assert!(
-            root_resolution_links(&a).len() <= 64,
-            "bounded, and returned"
-        );
-
-        // A real workspace alongside the cycle keeps working.
-        let root = base.path().join("workspace");
-        std::fs::create_dir(&root).expect("mkdir");
-        std::fs::write(root.join("keep.txt"), b"x").expect("write");
-        delete_file_tree_entry(root.to_string_lossy().into_owned(), "keep.txt".to_string())
-            .await
-            .expect("unrelated work is unaffected");
-    }
-
-    /// The contract the panel's lazy expand depends on: re-rooting the walk at
-    /// the link itself resolves it (`WalkDir::follow_root_links`), so the empty
-    /// child list `get_file_tree` returns for a symlinked directory can be
-    /// filled in one level at a time — no descent through links needed in the
-    /// bulk walk, and no way for a link loop to run away.
-    #[tokio::test]
-    async fn file_tree_rooted_at_a_stray_symlink_lists_its_contents() {
-        let root = tempfile::tempdir().expect("root");
-        let stray = tempfile::tempdir().expect("stray");
-        std::fs::write(stray.path().join("note.md"), b"x").expect("write");
-        std::fs::create_dir(stray.path().join("sub")).expect("mkdir");
-        symlink(stray.path(), root.path().join("evil")).expect("symlink");
-
-        let nodes = get_file_tree(
-            root.path().join("evil").to_string_lossy().into_owned(),
-            Some(1),
-        )
-        .await
-        .expect("tree rooted at the link");
-
-        assert!(
-            nodes
-                .iter()
-                .any(|n| matches!(n, FileTreeNode::File { path, .. } if path == "note.md")),
-            "the link's own contents are listed: {nodes:?}"
-        );
-        assert!(
-            nodes
-                .iter()
-                .any(|n| matches!(n, FileTreeNode::Dir { path, .. } if path == "sub")),
-            "nested directories come back expandable: {nodes:?}"
-        );
-    }
-
-    /// A link to a file, and a link that resolves to nothing, have no contents
-    /// to expand — a leaf file is the honest rendering for both.
-    #[tokio::test]
-    async fn file_tree_keeps_file_and_dangling_symlinks_as_leaves() {
-        let root = tempfile::tempdir().expect("root");
-        let outside = tempfile::tempdir().expect("outside");
-        std::fs::write(outside.path().join("real.txt"), b"x").expect("write");
-        symlink(outside.path().join("real.txt"), root.path().join("to-file")).expect("symlink");
-        symlink(outside.path().join("gone"), root.path().join("dangling")).expect("symlink");
-
-        let nodes = get_file_tree(root.path().to_string_lossy().into_owned(), None)
-            .await
-            .expect("tree");
-
-        for name in ["to-file", "dangling"] {
-            assert!(
-                nodes
-                    .iter()
-                    .any(|n| matches!(n, FileTreeNode::File { name: n, .. } if n == name)),
-                "{name} stays a leaf file: {nodes:?}"
-            );
-        }
-    }
-
-    /// Search reports the link as a directory (so `@`-mention and the search
-    /// dialog show the right icon) without pulling its contents into the index
-    /// — walking every stray link would mean pnpm symlink farms and loops.
-    #[tokio::test]
-    async fn workspace_search_reports_a_stray_symlink_as_a_dir_without_descending() {
-        let root = tempfile::tempdir().expect("root");
-        let stray = tempfile::tempdir().expect("stray");
-        std::fs::write(stray.path().join("secret.txt"), b"x").expect("write");
-        symlink(stray.path(), root.path().join("evil")).expect("symlink");
-
-        let entries = list_workspace_files(root.path().to_string_lossy().into_owned())
-            .await
-            .expect("list");
-
-        let evil = entries
-            .iter()
-            .find(|e| e.path == "evil")
-            .expect("the link is listed");
-        assert_eq!(evil.kind, WorkspaceEntryKind::Dir);
-        assert!(
-            !entries.iter().any(|e| e.path.starts_with("evil/")),
-            "an unauthorized link's contents stay out of the index: {entries:?}"
-        );
-    }
-
-    /// Issue #430's second half: once the tree lets you into a symlinked
-    /// folder, the files inside it have to actually open. The path is
-    /// user-navigated (`..`-free, relative), which is the boundary
-    /// `ensure_user_navigable_path` draws — the same one `rename`/`move`/
-    /// `delete` have always drawn.
-    #[tokio::test]
-    async fn user_navigated_reads_reach_into_a_stray_symlinked_directory() {
-        let root = tempfile::tempdir().expect("root");
-        let stray = tempfile::tempdir().expect("stray");
-        std::fs::write(stray.path().join("note.md"), b"hello").expect("write");
-        symlink(stray.path(), root.path().join("kb")).expect("symlink");
-        let root_arg = root.path().to_string_lossy().into_owned();
-
-        let preview = read_file_preview(root_arg.clone(), "kb/note.md".to_string())
-            .await
-            .expect("preview a file inside a symlinked folder");
-        assert_eq!(preview.content, "hello");
-
-        let edit = read_file_for_edit(root_arg.clone(), "kb/note.md".to_string())
-            .await
-            .expect("open a file inside a symlinked folder for edit");
-        assert_eq!(edit.content, "hello");
-
-        save_file_content(
-            root_arg.clone(),
-            "kb/note.md".to_string(),
-            "bye".to_string(),
-            Some(edit.etag),
-        )
-        .await
-        .expect("save through the link");
-        assert_eq!(
-            std::fs::read_to_string(stray.path().join("note.md")).expect("read back"),
-            "bye"
-        );
-
-        // The lexical boundary is still enforced: `..` never resolves.
-        assert!(
-            read_file_for_edit(root_arg, "../escape.md".to_string())
-                .await
-                .is_err(),
-            "'..' must stay rejected"
-        );
-    }
-
-    /// The HTML preview inlines paths named by the *markup*, not by a click, so
-    /// its guard must stay strict even though user navigation was relaxed.
-    #[tokio::test]
-    async fn html_preview_inlining_still_refuses_a_stray_symlinked_directory() {
-        let root = tempfile::tempdir().expect("root");
-        let stray = tempfile::tempdir().expect("stray");
-        std::fs::write(stray.path().join("id_rsa"), b"key").expect("write");
-        symlink(stray.path(), root.path().join("secrets")).expect("symlink");
-
-        let res = read_workspace_file_base64(
-            root.path().to_string_lossy().into_owned(),
-            "secrets/id_rsa".to_string(),
-            None,
-        )
-        .await;
-        assert!(
-            res.is_err(),
-            "sub-resource inlining must not follow a stray link"
-        );
-    }
-
-    #[tokio::test]
-    async fn workspace_search_lists_files_inside_an_authorized_link() {
-        let root = tempfile::tempdir().expect("root");
-        let linked = tempfile::tempdir().expect("linked");
-        std::fs::create_dir(linked.path().join("src")).expect("mkdir");
-        std::fs::write(linked.path().join("src/deep.ts"), b"x").expect("write");
-        symlink(linked.path(), root.path().join("api")).expect("symlink");
-        let canonical_target = std::fs::canonicalize(linked.path()).expect("canon");
-        crate::folder_links::register(root.path(), &canonical_target);
-
-        let entries = list_workspace_files(root.path().to_string_lossy().into_owned())
-            .await
-            .expect("list");
-        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
-        assert!(paths.contains(&"api"), "link itself is listed: {paths:?}");
-        assert!(
-            paths.contains(&"api/src/deep.ts"),
-            "linked content is reachable by fuzzy search: {paths:?}"
-        );
-
-        crate::folder_links::unregister(root.path(), &canonical_target);
-    }
-
-    /// The strict rule now guards only the non-user-driven surfaces (HTML
-    /// preview sub-resource inlining, the web upload chain) — see
-    /// `is_within_workspace`. User-navigated reads go through
-    /// `ensure_user_navigable_path` and are covered separately.
-    #[test]
-    fn strict_guard_allows_a_registered_link_but_not_a_stray_symlink() {
-        let root = tempfile::tempdir().expect("root");
-        let linked = tempfile::tempdir().expect("linked");
-        let stray = tempfile::tempdir().expect("stray");
-        std::fs::write(linked.path().join("ok.txt"), b"x").expect("write");
-        std::fs::write(stray.path().join("secret.txt"), b"x").expect("write");
-        symlink(linked.path(), root.path().join("api")).expect("symlink");
-        symlink(stray.path(), root.path().join("evil")).expect("symlink");
-
-        let canonical_target = std::fs::canonicalize(linked.path()).expect("canon");
-        crate::folder_links::register(root.path(), &canonical_target);
-
-        assert!(
-            strictly_within(root.path(), &root.path().join("api/ok.txt")),
-            "a file inside a user-authorized link is in the workspace"
-        );
-        assert!(
-            !strictly_within(root.path(), &root.path().join("evil/secret.txt")),
-            "an unregistered symlink still cannot escape the root"
-        );
-
-        crate::folder_links::unregister(root.path(), &canonical_target);
-        assert!(
-            !strictly_within(root.path(), &root.path().join("api/ok.txt")),
-            "revoking the link revokes access"
-        );
     }
 }

@@ -18,15 +18,21 @@
 //! `status` kind to avoid a redundant rebuild.
 
 use std::future::Future;
+
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
+
 use tokio::sync::broadcast;
 
 use crate::acp::manager::ConnectionManager;
+
 use crate::acp::types::AcpEvent;
+
 use crate::acp::InternalEventBus;
+
 use crate::commands::pet::pet_list_active_sessions_core;
+
 use crate::web::event_bridge::{
     emit_event, EventEmitter, WebEvent, WebEventBroadcaster, CONVERSATION_CHANGED_EVENT,
 };
@@ -164,6 +170,8 @@ mod tests {
             },
             AcpEvent::PermissionResolved {
                 request_id: "r1".into(),
+                option_id: None,
+                origin: None,
             },
             AcpEvent::TurnComplete {
                 session_id: "s".into(),

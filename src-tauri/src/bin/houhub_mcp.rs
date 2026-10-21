@@ -1,11 +1,14 @@
 //! `houhub-mcp` — the per-launch stdio MCP companion that an agent CLI runs
-//! to surface houhub's tools to its LLM: the multi-agent delegation tools
+//! to surface HouHub's tools to its LLM: the multi-agent delegation tools
 //! (`delegate_to_agent` etc.), `check_user_feedback` (pull the user's mid-turn
 //! steering notes), `ask_user_question` (block on a multiple-choice card), and
-//! `get_session_info` (resolve a referenced session by id), gated by the
-//! `--features` groups (`delegation` / `feedback` / `ask` / `sessions`).
+//! `get_session_info` (resolve a referenced session by id), plus the
+//! chat-authoring tools (`create_automation` / `create_work_task`) and the
+//! `submit_result` of a `houhub-cli --output-schema` run, gated by the
+//! `--features` groups (`delegation` / `feedback` / `ask` / `sessions` /
+//! `tasks` / `result` / `automations` / `taskboard`).
 //!
-//! The agent's MCP config (injected by houhub via `load_mcp_servers_for_agent`)
+//! The agent's MCP config (injected by HouHub via `load_mcp_servers_for_agent`)
 //! spawns this binary with three required flags:
 //!
 //!   houhub-mcp \
@@ -47,7 +50,7 @@ struct Args {
     parent_connection_id: String,
     socket_path: String,
     token: String,
-    /// Optional PID of the houhub / houhub-server process that owns this
+    /// Optional PID of the HouHub / houhub-server process that owns this
     /// session. When set, houhub-mcp exits as soon as the parent is gone so
     /// orphaned companions don't keep the binary file locked (Windows
     /// upgrade failure) or hold open a UDS / pipe nobody will ever read
@@ -125,7 +128,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "houhub-mcp --parent-connection-id <uuid> --socket-path <path> --token <secret> [--parent-pid <pid>] [--features delegation,feedback,ask,sessions] [--custom-agents custom:<id>,...] [--disabled-agents <agent>,...]"
+                    "houhub-mcp --parent-connection-id <uuid> --socket-path <path> --token <secret> [--parent-pid <pid>] [--features delegation,feedback,ask,sessions,tasks,result] [--custom-agents custom:<id>,...] [--disabled-agents <agent>,...]"
                 );
                 std::process::exit(0);
             }
@@ -192,6 +195,7 @@ async fn main() -> ExitCode {
         custom_agents: parse_csv(args.custom_agents.as_deref()),
         disabled_agents: parse_csv(args.disabled_agents.as_deref()),
         assistant_support: Default::default(),
+        result_schema: Default::default(),
     };
 
     let stdin = tokio::io::stdin();
@@ -220,10 +224,10 @@ async fn main() -> ExitCode {
                 // Best-effort: cancel every in-flight delegation BEFORE we
                 // hard-exit so the broker doesn't park each pending row
                 // on `rx.await` waiting for a TurnComplete it can never
-                // deliver. cancel_by_parent on the houhub main side is the
+                // deliver. cancel_by_parent on the HouHub main side is the
                 // ultimate backstop, but firing the explicit cancels here
                 // closes the window between MCP shutdown and parent ACP
-                // disconnect detection on the houhub side.
+                // disconnect detection on the HouHub side.
                 drain_and_cancel_all(&ctx, &inflight, "parent process exited").await;
                 let _ = writeln!(
                     std::io::stderr(),

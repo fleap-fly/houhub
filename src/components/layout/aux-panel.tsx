@@ -63,9 +63,10 @@ const TAB_ICONS: Record<AuxPanelTab, LucideIcon> = {
   git_log: GitCommit,
   runtime_logs: ScrollText,
 }
-// The three folder-scoped tabs share one label namespace (Folder.auxPanel.tabs);
-// session details resolves from its own (Folder.sessionDetails.menuLabel). The
-// value type is the literal key union so next-intl's typed `t()` accepts it.
+// The three folder-content tabs share one label namespace (Folder.auxPanel.tabs);
+// session details resolves from its own (Folder.sessionDetails.menuLabel), and
+// the work tabs are named exactly as the pages they mirror. The value type is
+// the literal key union so next-intl's typed `t()` accepts it.
 const FOLDER_TAB_LABEL_KEY: Record<
   Exclude<
     AuxPanelTab,
@@ -445,3 +446,6 @@ export function AuxPanel() {
     </aside>
   )
 }
+
+/** One tab of the mobile drawer's row. A tap on the tab already showing
+ *  closes the drawer, as a click does on the desktop rail. */

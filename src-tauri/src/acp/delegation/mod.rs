@@ -79,3 +79,65 @@ pub const STATUS_TOOL_REWRITE_TITLE: &str = "houhub-mcp__get_delegation_status";
 pub const CANCEL_TOOL_REWRITE_TITLE: &str = "houhub-mcp__cancel_delegation";
 
 pub const RESUME_TOOL_REWRITE_TITLE: &str = "houhub-mcp__resume_delegation";
+
+/// Whether a host's name for a tool is houhub-mcp's own `tool`, in whatever
+/// spelling the host composed it — `mcp__houhub-mcp__ask_user_question` from
+/// claude-agent-acp, `houhub-mcp__ask_user_question`, `houhub-mcp/…`,
+/// `houhub-mcp: …`, `mcp.houhub-mcp.…`, any case. The name is cut at the first
+/// separator between server and tool (`__`, `/`, `:` or `.`, after an optional
+/// leading `mcp`), and each half must be exactly houhub-mcp's and the tool's: a
+/// server named `other-houhub-mcp` or `houhub` (whose `mcp_submit_result` would
+/// read the same with the boundary gone), or a tool named
+/// `ask_user_question_twice`, is someone else's. It decides auto-approvals, so a
+/// near miss keeps its approval card.
+pub fn is_houhub_mcp_tool(name: &str, tool: &str) -> bool {
+    const BOUNDARIES: [&str; 4] = ["__", "/", ":", "."];
+    let name = name.trim().to_ascii_lowercase();
+    let name = BOUNDARIES
+        .iter()
+        .find_map(|sep| name.strip_prefix(&format!("mcp{sep}")))
+        .unwrap_or(&name);
+    let Some((at, sep)) = BOUNDARIES
+        .iter()
+        .filter_map(|sep| name.find(sep).map(|at| (at, *sep)))
+        .min_by_key(|(at, _)| *at)
+    else {
+        return false;
+    };
+    let (server, named_tool) = (name[..at].trim(), name[at + sep.len()..].trim());
+    matches!(server, "houhub-mcp" | "houhub_mcp") && named_tool == tool
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_houhub_mcp_tool;
+
+    #[test]
+    fn a_houhub_mcp_tool_is_known_by_its_whole_name_only() {
+        for name in [
+            "mcp__houhub-mcp__submit_result",
+            "houhub-mcp__submit_result",
+            "houhub-mcp/submit_result",
+            "houhub-mcp: submit_result",
+            "mcp.houhub-mcp.submit_result",
+            "  MCP__HouHub-MCP__Submit_Result  ",
+        ] {
+            assert!(is_houhub_mcp_tool(name, "submit_result"), "{name}");
+        }
+        for name in [
+            "mcp__other-houhub-mcp__submit_result",
+            "mcp__houhub-mcp-x__submit_result",
+            "mcp__houhub-mcp__submit_result_twice",
+            "mcp__houhub-mcp__ask_user_question",
+            // A server named `houhub` with a tool `mcp_submit_result`: the same
+            // words, another boundary.
+            "mcp__houhub__mcp_submit_result",
+            "houhub/mcp_submit_result",
+            "submit_result",
+            "houhub-mcp",
+            "",
+        ] {
+            assert!(!is_houhub_mcp_tool(name, "submit_result"), "{name}");
+        }
+    }
+}

@@ -46,11 +46,15 @@
 //! this screen.
 
 use std::collections::BTreeSet;
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
 use std::sync::Arc;
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+
 #[cfg(feature = "tauri-runtime")]
 use tauri::{AppHandle, Manager};
 
@@ -75,36 +79,51 @@ use crate::acp::computer_tools::{
     SCREEN_RULES_CHANGED_NOTE, SCREEN_STALE_CAPTURE_NOTE, SECRET_FIELD_NOTE, SESSION_CHORD_NOTE,
     STOPPED_NOTE,
 };
+
 use crate::app_error::AppCommandError;
+
 use crate::computer::agent::{
     grantable, visible_title, ActivityOutcome, Blocklist, ComputerAction, ComputerActivityPayload,
     ComputerGrantPayload, GrantChange, GrantLevel, GrantScope, NotGrantable, SelfIdentity,
 };
+
 use crate::computer::backend::{
     ActRefusal, BackendError, BackendStatus, ComputerBackend, SnapshotOptions,
 };
+
 use crate::computer::driver_admin::{DriverAdmin, DriverInfo, DriverTask};
+
 use crate::computer::events::ComputerEvents;
+
 #[cfg(feature = "tauri-runtime")]
 use crate::computer::indicator::{Indicator, Strip};
+
 use crate::computer::local::LocalBackend;
+
 #[cfg(feature = "tauri-runtime")]
 use crate::computer::marker::Marker;
+
 use crate::computer::procinfo::process_start;
+
 use crate::computer::protocol::{
     ClipboardUse, OsPermission, PermissionAsked, PermissionReport, RawAct, ScreenRules,
 };
+
 #[cfg(feature = "tauri-runtime")]
 use crate::computer::stop_key::StopKey;
+
 use crate::computer::stop_shortcut::StopKeyStatus;
+
 use crate::computer::targets::{
     ActDenied, Aim, AppChange, AppTarget, ReadMark, ReadRefusal, ReadTicket, ShareError, SharedApp,
     SharedScreen, SharedWindow, Staleness, TargetTable, WindowIdentity, SCREEN_TARGET_ID,
 };
+
 use crate::computer::types::{
     ActDelivery, ActReport, AgentAppRef, AgentAppSummary, AgentScreen, ComputerActRequest, Rect,
     VerifyOutcome, VerifyRequest, WindowCapture, WindowSnapshot, MAX_HOLD_MS, MAX_KEY_REPEAT,
 };
+
 use crate::web::event_bridge::{EventEmitter, WebEventBroadcaster};
 
 /// How often lapsed grants are swept, so the panel shows a window as no
@@ -2193,6 +2212,7 @@ struct LaterPress {
 /// before it repeats, then at the rate it repeats — as fast as the
 /// presses go through, and no faster.
 const HOLD_DELAY: Duration = Duration::from_millis(500);
+
 const HOLD_INTERVAL: Duration = Duration::from_millis(50);
 
 /// How many times an action goes out: once; `repeat` times back to back for
@@ -2996,6 +3016,34 @@ mod tests {
             value: "x".into(),
         };
         assert_eq!(on_linux(&set, Some(Foreground), &off), Ok(Background));
+    }
+
+    /// A menu command can bring its application, or a window of it, to the
+    /// front — on Linux always, on macOS where the application is the one in
+    /// front — so on both it goes only where the person allows the front,
+    /// whatever was asked, and is refused where they do not.
+    #[test]
+    fn a_menu_command_goes_only_where_the_front_is_allowed() {
+        use crate::computer::keys::Platform;
+        use crate::computer::types::ActDelivery::{Background, Foreground};
+        let menu = ComputerActRequest::InvokeMenu {
+            path: vec!["File".into(), "Export".into()],
+        };
+        let allowed = ComputerToolsConfig::default();
+        let off = ComputerToolsConfig {
+            allow_foreground: false,
+            ..Default::default()
+        };
+        for platform in [Platform::Mac, Platform::Linux] {
+            assert_eq!(
+                delivery_on(&menu, Some(Background), &allowed, platform).map_err(|r| r.slug),
+                Ok(Foreground),
+                "{platform:?}"
+            );
+            let refused = delivery_on(&menu, None, &off, platform).unwrap_err();
+            assert_eq!(refused.slug, ERROR_FOREGROUND_NOT_ALLOWED);
+            assert_eq!(refused.note, MENU_NEEDS_FRONT_NOTE);
+        }
     }
 
     /// Only a refusal from the background is ended with what the settings

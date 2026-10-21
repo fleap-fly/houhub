@@ -5,17 +5,24 @@
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
+
 use chrono_tz::Tz;
+
 use cron::Schedule;
+
 use sea_orm::sea_query::Expr;
+
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
     IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
 };
 
 use crate::db::entities::automation::{IsolationMode, TriggerKind};
+
 use crate::db::entities::{automation, automation_run};
+
 use crate::db::error::DbError;
+
 use crate::models::{
     AutomationConfig, AutomationDraft, AutomationInfo, AutomationRunInfo, AutomationRunStatus,
 };
@@ -268,6 +275,17 @@ pub async fn list_runs(
         .all(conn)
         .await?;
     Ok(rows.into_iter().map(run_to_info).collect())
+}
+
+/// One run, by id (`houhub-cli automations run --wait` follows it).
+pub async fn get_run(
+    conn: &DatabaseConnection,
+    run_id: i32,
+) -> Result<Option<AutomationRunInfo>, DbError> {
+    Ok(automation_run::Entity::find_by_id(run_id)
+        .one(conn)
+        .await?
+        .map(run_to_info))
 }
 
 pub async fn create(

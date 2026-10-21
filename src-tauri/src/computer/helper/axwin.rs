@@ -23,17 +23,25 @@
 use std::collections::{BTreeSet, HashMap};
 
 use super::ops::AppWindows;
+
 use std::sync::OnceLock;
 
 use core_foundation::array::CFArray;
+
 use core_foundation::base::{CFGetTypeID, CFType, CFTypeID, CFTypeRef, TCFType};
+
 use core_foundation::boolean::CFBoolean;
+
 use core_foundation::number::CFNumber;
+
 use core_foundation::string::{CFString, CFStringRef};
 
 type AXError = i32;
+
 const AX_SUCCESS: AXError = 0;
+
 const AX_FAILURE: AXError = -25200;
+
 const AX_NO_VALUE: AXError = -25212;
 
 /// How long one question to an application may take before it counts as no
@@ -145,13 +153,14 @@ pub async fn focused_and_main(pid: u32) -> (Option<u64>, Option<u64>) {
 /// What Accessibility says of a menu command before it is chosen: where its
 /// first title sits on the menu bar — `0` is the Apple menu, `1` the
 /// application menu — whether every title on the way was found, once each,
-/// and the command's keyboard shortcut, as a key and the menu's modifier
-/// mask, when it has one.
+/// the command's keyboard shortcut, as a key and the menu's modifier mask,
+/// when it has one, and whether it is turned on, when it says.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MenuTarget {
     pub bar_index: Option<usize>,
     pub reached: bool,
     pub shortcut: Option<(String, i64)>,
+    pub enabled: Option<bool>,
 }
 
 /// The longest the walk through an application's menus may take, however
@@ -226,6 +235,7 @@ fn menu_target_now(pid: u32, path: &[String]) -> MenuTarget {
         return out;
     }
     out.reached = true;
+    out.enabled = flag(&current, "AXEnabled");
     let key = attribute(&current, "AXMenuItemCmdChar")
         .ok()
         .and_then(|v| v.downcast_into::<CFString>())

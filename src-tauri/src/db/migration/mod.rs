@@ -104,6 +104,8 @@ mod m20261016_000001_assistant;
 
 mod m20261016_000002_conversation_assistant;
 
+mod m20261017_000002_conversation_source;
+
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -162,6 +164,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261015_000001_work_task_deferred_at::Migration),
             Box::new(m20261016_000001_assistant::Migration),
             Box::new(m20261016_000002_conversation_assistant::Migration),
+            Box::new(m20261017_000002_conversation_source::Migration),
         ]
     }
 }

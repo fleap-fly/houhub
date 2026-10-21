@@ -244,6 +244,12 @@ export interface ComposerInjectContent {
 
 interface MessageInputProps {
   onSend: (draft: PromptDraft, modeId?: string | null) => void
+  /**
+   * Accepted for the composer host's API parity (upstream 0.38 renders it as a
+   * suggestion chip). This fork has no suggestion surface yet, so the value is
+   * deliberately unused here.
+   */
+  promptSuggestion?: string | null
   placeholder?: string
   defaultPath?: string
   disabled?: boolean
