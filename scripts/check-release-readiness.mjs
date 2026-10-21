@@ -186,6 +186,16 @@ function checkBrandHygiene() {
 
   for (const file of listTrackedFiles()) {
     if (!shouldScan(file)) continue
+    // A file *named* after upstream leaks just as much as one that says it: the
+    // 0.38 sync dropped `codeg_cli.rs` and `codeg-mcp-tool.test.ts` into the tree
+    // because the merge copies upstream paths verbatim.
+    for (const needle of needles) {
+      const named =
+        needle instanceof RegExp
+          ? needle.test(file)
+          : file.toLowerCase().includes(needle.toLowerCase())
+      if (named) hits.push(`${file} is named after an upstream/contact marker`)
+    }
     const absolute = path.join(root, file)
     if (!fs.existsSync(absolute)) continue
     const buffer = fs.readFileSync(absolute)

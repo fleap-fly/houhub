@@ -37,7 +37,9 @@ vi.mock("@/contexts/workbench-route-context", () => ({
 vi.mock("@/stores/aux-panel-store", () => ({
   useAuxPanelStore: Object.assign(
     (selector?: (state: { setOpen: typeof scene.setOpen }) => unknown) =>
-      selector ? selector({ setOpen: scene.setOpen }) : { setOpen: scene.setOpen },
+      selector
+        ? selector({ setOpen: scene.setOpen })
+        : { setOpen: scene.setOpen },
     { getState: () => ({ setOpen: scene.setOpen }) }
   ),
 }))
