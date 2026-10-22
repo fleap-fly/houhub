@@ -471,7 +471,10 @@ mod tests {
         let (started, retry) = try_begin(&h, &e);
         assert!(started);
         assert!(retry.error_info.is_none());
-        assert!(serde_json::to_value(&retry).unwrap().get("errorInfo").is_none());
+        assert!(serde_json::to_value(&retry)
+            .unwrap()
+            .get("errorInfo")
+            .is_none());
     }
 
     #[test]
@@ -503,10 +506,7 @@ mod tests {
         set_ready(&h, &e, None, None, None, None);
         // Staged: the claim succeeds and flips to Restarting…
         assert!(try_claim_restart(&h, &e));
-        assert_eq!(
-            snapshot(&h).status,
-            AppUpdateLifecycle::Restarting
-        );
+        assert_eq!(snapshot(&h).status, AppUpdateLifecycle::Restarting);
         // …and a second (concurrent) restart click can no longer claim it.
         assert!(!try_claim_restart(&h, &e));
     }

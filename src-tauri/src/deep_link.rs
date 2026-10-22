@@ -185,18 +185,21 @@ pub async fn resolve_deep_link(
             conversation_id,
             agent,
         } => {
-            let Some(summary) =
-                conversation_service::find_live_by_session_ref(&db.conn, &conversation_id.to_string())
-                    .await?
+            let Some(summary) = conversation_service::find_live_by_session_ref(
+                &db.conn,
+                &conversation_id.to_string(),
+            )
+            .await?
             else {
                 return Ok(None);
             };
             if folder_id.is_some_and(|id| id != summary.folder_id) {
                 return Ok(None);
             }
-            if agent.as_ref().is_some_and(|wanted| {
-                wanted != summary.agent_type.as_wire().as_ref()
-            }) {
+            if agent
+                .as_ref()
+                .is_some_and(|wanted| wanted != summary.agent_type.as_wire().as_ref())
+            {
                 return Ok(None);
             }
             Ok(Some(FocusTarget::from_summary(summary)))
@@ -335,7 +338,9 @@ pub async fn startup_workspace_path(db: &AppDatabase, urls: &[String]) -> String
         }
         match resolve_deep_link(db, &link).await {
             Ok(Some(target)) => return target.workspace_path(),
-            Ok(None) => tracing::info!("[deep-link] startup url did not match a live session: {raw}"),
+            Ok(None) => {
+                tracing::info!("[deep-link] startup url did not match a live session: {raw}")
+            }
             Err(err) => tracing::warn!("[deep-link] startup {raw}: {err}"),
         }
     }
@@ -447,7 +452,10 @@ mod tests {
             "houhub://session/12",
             "--flag",
         ];
-        assert_eq!(urls_from_argv(&argv), vec!["houhub://session/12".to_string()]);
+        assert_eq!(
+            urls_from_argv(&argv),
+            vec!["houhub://session/12".to_string()]
+        );
     }
 
     #[tokio::test]

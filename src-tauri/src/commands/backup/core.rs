@@ -19,6 +19,7 @@ use crate::db::migration::Migrator;
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 use super::archive::ArchiveBuilder;
+use super::cancelled_error;
 use super::crypto;
 use super::external;
 use super::manifest::{
@@ -26,7 +27,6 @@ use super::manifest::{
     BACKUP_PROGRESS_EVENT,
 };
 use super::sections::{self, LiveRoots, SectionKind};
-use super::cancelled_error;
 
 /// Options that shape a backup.
 #[derive(Debug, Clone, Default)]
@@ -116,55 +116,58 @@ pub(crate) async fn create_backup_core(
         Some(total_estimate),
         None,
     );
-    let manifest = tokio::task::spawn_blocking(move || -> Result<BackupManifest, AppCommandError> {
-        let mut builder = ArchiveBuilder::create(&zip_tmp_c)?;
-        let mut prog = |path: &str, processed: u64| {
-            emit(
-                &emitter_c,
-                &op_id_c,
-                BackupPhase::Archiving,
-                processed,
-                Some(total_estimate.max(processed)),
-                Some(path.to_string()),
-            );
-        };
-        builder.add_file("db/houhub.db", &db_snapshot_c, &cancel_c, &mut prog)?;
-        // Every houhub-owned section, straight off the shared table — see
-        // `sections.rs` for why this must not be re-hardcoded here.
-        let exclude = |rel: &Path| sections::is_excluded_section_entry(rel);
-        for section in sections::MANAGED_SECTIONS {
-            let Some(live) = live_roots.path(section.id) else {
-                continue;
+    let manifest =
+        tokio::task::spawn_blocking(move || -> Result<BackupManifest, AppCommandError> {
+            let mut builder = ArchiveBuilder::create(&zip_tmp_c)?;
+            let mut prog = |path: &str, processed: u64| {
+                emit(
+                    &emitter_c,
+                    &op_id_c,
+                    BackupPhase::Archiving,
+                    processed,
+                    Some(total_estimate.max(processed)),
+                    Some(path.to_string()),
+                );
             };
-            match section.kind {
-                SectionKind::Dir => {
-                    builder.add_dir(section.id, live, &exclude, &cancel_c, &mut prog)?
-                }
-                SectionKind::File => {
-                    if live.is_file() {
-                        builder.add_file(section.id, live, &cancel_c, &mut prog)?;
+            builder.add_file("db/houhub.db", &db_snapshot_c, &cancel_c, &mut prog)?;
+            // Every houhub-owned section, straight off the shared table — see
+            // `sections.rs` for why this must not be re-hardcoded here.
+            let exclude = |rel: &Path| sections::is_excluded_section_entry(rel);
+            for section in sections::MANAGED_SECTIONS {
+                let Some(live) = live_roots.path(section.id) else {
+                    continue;
+                };
+                match section.kind {
+                    SectionKind::Dir => {
+                        builder.add_dir(section.id, live, &exclude, &cancel_c, &mut prog)?
+                    }
+                    SectionKind::File => {
+                        if live.is_file() {
+                            builder.add_file(section.id, live, &cancel_c, &mut prog)?;
+                        }
                     }
                 }
             }
-        }
-        let mut manifest = manifest_template;
-        if include_external {
-            let pack = external::add_external_sources(
-                &mut builder,
-                &external_scratch,
-                &cancel_c,
-                &mut prog,
-            )?;
-            manifest.includes_external_transcripts = pack.packed;
-            // A store that could not be snapshotted cleanly must reach the UI;
-            // a `tracing::warn!` would let a degraded backup be reported as a
-            // clean one.
-            manifest.degraded_sqlite = pack.degraded;
-        }
-        builder.finish(manifest)
-    })
-    .await
-    .map_err(|e| AppCommandError::task_execution_failed("Archive task failed").with_detail(e.to_string()))??;
+            let mut manifest = manifest_template;
+            if include_external {
+                let pack = external::add_external_sources(
+                    &mut builder,
+                    &external_scratch,
+                    &cancel_c,
+                    &mut prog,
+                )?;
+                manifest.includes_external_transcripts = pack.packed;
+                // A store that could not be snapshotted cleanly must reach the UI;
+                // a `tracing::warn!` would let a degraded backup be reported as a
+                // clean one.
+                manifest.degraded_sqlite = pack.degraded;
+            }
+            builder.finish(manifest)
+        })
+        .await
+        .map_err(|e| {
+            AppCommandError::task_execution_failed("Archive task failed").with_detail(e.to_string())
+        })??;
 
     // ── Phase 3: deliver (encrypt or copy) into dest_path atomically ─────
     let part = with_part_suffix(dest_path);
@@ -240,7 +243,11 @@ pub(crate) async fn snapshot_db_to(
 
 /// Plaintext bytes the archive is about to hold, so the progress bar is not
 /// stuck in the indeterminate state for the whole run. Stat-only.
-fn total_plaintext_bytes(live_roots: &LiveRoots, db_snapshot: &Path, include_external: bool) -> u64 {
+fn total_plaintext_bytes(
+    live_roots: &LiveRoots,
+    db_snapshot: &Path,
+    include_external: bool,
+) -> u64 {
     fn dir_bytes(root: &Path, exclude: &dyn Fn(&Path) -> bool) -> u64 {
         walkdir::WalkDir::new(root)
             .follow_links(false)
@@ -487,9 +494,10 @@ mod tests {
         );
 
         // Correct passphrase → manifest readable + compatible.
-        let unlocked = super::super::source::prepare_source_core(&dest, dir.path(), Some("s3cret"), false)
-            .await
-            .unwrap();
+        let unlocked =
+            super::super::source::prepare_source_core(&dest, dir.path(), Some("s3cret"), false)
+                .await
+                .unwrap();
         assert!(unlocked.source_id.is_some());
         assert!(unlocked.preview.manifest.is_some());
         assert!(unlocked.preview.compatible);
@@ -498,8 +506,7 @@ mod tests {
     #[tokio::test]
     async fn backup_then_stage_then_apply_roundtrip() {
         use super::super::restore::{
-            apply_pending_restore_with_paths, stage_restore_core, RestoreApplied,
-            PENDING_MARKER,
+            apply_pending_restore_with_paths, stage_restore_core, RestoreApplied, PENDING_MARKER,
         };
 
         let src_dir = tempfile::tempdir().unwrap();
@@ -531,7 +538,7 @@ mod tests {
         let staged = stage_restore_core(
             &dest,
             restore_dir.path(),
-                        &EventEmitter::Noop,
+            &EventEmitter::Noop,
             "r1",
             &cancel,
         )
@@ -545,8 +552,7 @@ mod tests {
         // Apply on "startup" → live DB carries the two seeded folders. Inject
         // temp section roots so the test never touches ~/.houhub.
         let restore_live = LiveRoots::rooted_at(&restore_dir.path().join("live"));
-        let applied =
-            apply_pending_restore_with_paths(restore_dir.path(), &restore_live).unwrap();
+        let applied = apply_pending_restore_with_paths(restore_dir.path(), &restore_live).unwrap();
         assert!(matches!(applied, RestoreApplied::Applied { .. }));
         let db_name = crate::db::database_file_name();
         assert_eq!(count_folders(&restore_dir.path().join(db_name)).await, 2);
@@ -558,9 +564,7 @@ mod tests {
         // A backup whose uploads section is empty must REPLACE (clear) live
         // uploads, not merge — the prior file survives only in the safety
         // snapshot.
-        use super::super::restore::{
-            apply_pending_restore_with_paths, stage_restore_core,
-        };
+        use super::super::restore::{apply_pending_restore_with_paths, stage_restore_core};
         let src_dir = tempfile::tempdir().unwrap();
         let db = fresh_disk_db(src_dir.path()).await;
         let live = src_dir.path().join("live");
@@ -582,7 +586,7 @@ mod tests {
         stage_restore_core(
             &dest,
             restore_dir.path(),
-                        &EventEmitter::Noop,
+            &EventEmitter::Noop,
             "e2",
             &cancel,
         )
@@ -611,9 +615,7 @@ mod tests {
     /// vanishing from users' backups.
     #[tokio::test]
     async fn every_section_is_packed_and_swapped() {
-        use super::super::restore::{
-            apply_pending_restore_with_paths, stage_restore_core,
-        };
+        use super::super::restore::{apply_pending_restore_with_paths, stage_restore_core};
         use super::super::sections::{SectionKind, MANAGED_SECTIONS};
 
         let src_dir = tempfile::tempdir().unwrap();
@@ -681,7 +683,7 @@ mod tests {
         stage_restore_core(
             &dest,
             restore_dir.path(),
-                        &EventEmitter::Noop,
+            &EventEmitter::Noop,
             "sec2",
             &cancel,
         )
@@ -711,9 +713,7 @@ mod tests {
     /// every message while keeping the conversation row.
     #[tokio::test]
     async fn custom_agent_transcript_survives_roundtrip() {
-        use super::super::restore::{
-            apply_pending_restore_with_paths, stage_restore_core,
-        };
+        use super::super::restore::{apply_pending_restore_with_paths, stage_restore_core};
         let src_dir = tempfile::tempdir().unwrap();
         let db = fresh_disk_db(src_dir.path()).await;
         let live = src_dir.path().join("live");
@@ -738,7 +738,7 @@ mod tests {
         stage_restore_core(
             &dest,
             restore_dir.path(),
-                        &EventEmitter::Noop,
+            &EventEmitter::Noop,
             "d1b",
             &cancel,
         )

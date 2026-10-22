@@ -72,7 +72,9 @@ pub enum TerminalRuntimeError {
 impl TerminalRuntimeError {
     pub fn into_rpc_error(self) -> agent_client_protocol::Error {
         match self {
-            Self::InvalidParams(message) => agent_client_protocol::Error::invalid_params().data(message),
+            Self::InvalidParams(message) => {
+                agent_client_protocol::Error::invalid_params().data(message)
+            }
             Self::Internal(message) => agent_client_protocol::util::internal_error(message),
         }
     }
@@ -221,10 +223,7 @@ impl TerminalInstance {
     }
 
     async fn kill_command(&self) -> Result<(), TerminalRuntimeError> {
-        if matches!(
-            *self.completion.borrow(),
-            TerminalCompletion::Exited(_)
-        ) {
+        if matches!(*self.completion.borrow(), TerminalCompletion::Exited(_)) {
             return Ok(());
         }
 
@@ -538,10 +537,7 @@ impl TerminalRuntime {
     /// Use a shared General Settings shell value for ACP terminal fallbacks.
     /// The config is read at command creation time so existing connections pick
     /// up setting changes without being restarted.
-    pub fn with_default_shell_config(
-        mut self,
-        default_shell: TerminalShellRuntimeConfig,
-    ) -> Self {
+    pub fn with_default_shell_config(mut self, default_shell: TerminalShellRuntimeConfig) -> Self {
         self.default_shell = default_shell;
         self
     }
@@ -586,6 +582,9 @@ impl TerminalRuntime {
         for env_var in &request.env {
             command.env(&env_var.name, &env_var.value);
         }
+        // The base env's PATH is built from houhub's own: an AppImage's
+        // launcher put the image in it (see `crate::appimage_env`).
+        crate::appimage_env::restore_tokio(command);
     }
 
     pub async fn create_terminal(
@@ -1185,7 +1184,9 @@ mod shell_config_tests {
 mod tests {
     use super::*;
 
-    use agent_client_protocol::schema::v1::{EnvVariable, SessionId, TerminalId, WaitForTerminalExitRequest};
+    use agent_client_protocol::schema::v1::{
+        EnvVariable, SessionId, TerminalId, WaitForTerminalExitRequest,
+    };
 
     /// Regression: when an ACP agent calls `terminal/create` (e.g. to run
     /// `git push`), the runtime's base env — populated by the connection
@@ -1400,9 +1401,7 @@ mod tests {
         let config = TerminalShellRuntimeConfig::new();
         let runtime = TerminalRuntime::with_base_env(BTreeMap::new())
             .with_default_shell_config(config.clone());
-        config
-            .set(Some(shell.to_string_lossy().to_string()))
-            .await;
+        config.set(Some(shell.to_string_lossy().to_string())).await;
 
         let session_id = SessionId::new("selected-shell".to_string());
         let request = CreateTerminalRequest::new(
@@ -1504,8 +1503,7 @@ mod tests {
 
         // Genuine shell operators must evaluate, not be passed as literal args.
         let session_id = SessionId::new("shell-ops".to_string());
-        let request =
-            CreateTerminalRequest::new(session_id.clone(), "true && echo OK".to_string());
+        let request = CreateTerminalRequest::new(session_id.clone(), "true && echo OK".to_string());
         let output = run_and_capture(&runtime, &session_id, request).await;
         assert!(
             output.contains("OK"),
@@ -1526,8 +1524,7 @@ mod tests {
 
         let session_id = SessionId::new("overlong-cmd".to_string());
         let marker = "x".repeat(5000);
-        let request =
-            CreateTerminalRequest::new(session_id.clone(), format!("echo {marker}"));
+        let request = CreateTerminalRequest::new(session_id.clone(), format!("echo {marker}"));
         let output = run_and_capture(&runtime, &session_id, request).await;
         assert!(
             output.contains(&marker),
@@ -1563,8 +1560,7 @@ mod tests {
         let runtime = TerminalRuntime::with_base_env(BTreeMap::new());
 
         let session_id = SessionId::new("direct-exec".to_string());
-        let mut request =
-            CreateTerminalRequest::new(session_id.clone(), "/bin/echo".to_string());
+        let mut request = CreateTerminalRequest::new(session_id.clone(), "/bin/echo".to_string());
         request.args = vec!["hello world".into()];
         let output = run_and_capture(&runtime, &session_id, request).await;
         assert!(
@@ -1772,7 +1768,8 @@ mod tests {
             async move {
                 runtime
                     .wait_for_terminal_exit(WaitForTerminalExitRequest::new(
-                        session_id, terminal_id,
+                        session_id,
+                        terminal_id,
                     ))
                     .await
             }
@@ -1824,7 +1821,8 @@ mod tests {
                 tokio::spawn(async move {
                     runtime
                         .wait_for_terminal_exit(WaitForTerminalExitRequest::new(
-                            session_id, terminal_id,
+                            session_id,
+                            terminal_id,
                         ))
                         .await
                 })

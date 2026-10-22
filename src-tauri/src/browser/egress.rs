@@ -207,7 +207,8 @@ where
     let mut methods = vec![0u8; head[1] as usize];
     conn.read_exact(&mut methods).await?;
     if !methods.contains(&NO_AUTH) {
-        conn.write_all(&[SOCKS_VERSION, NO_ACCEPTABLE_METHOD]).await?;
+        conn.write_all(&[SOCKS_VERSION, NO_ACCEPTABLE_METHOD])
+            .await?;
         return Err(SocksError::Unsupported);
     }
     conn.write_all(&[SOCKS_VERSION, NO_AUTH]).await?;
@@ -218,7 +219,8 @@ where
         return Err(SocksError::Unsupported);
     }
     if request[1] != CMD_CONNECT {
-        conn.write_all(&socks_reply(reply::COMMAND_NOT_SUPPORTED)).await?;
+        conn.write_all(&socks_reply(reply::COMMAND_NOT_SUPPORTED))
+            .await?;
         return Err(SocksError::Unsupported);
     }
     let host = match request[3] {
@@ -235,7 +237,8 @@ where
             match String::from_utf8(name) {
                 Ok(name) if !name.is_empty() => name,
                 _ => {
-                    conn.write_all(&socks_reply(reply::ADDRESS_NOT_SUPPORTED)).await?;
+                    conn.write_all(&socks_reply(reply::ADDRESS_NOT_SUPPORTED))
+                        .await?;
                     return Err(SocksError::Unsupported);
                 }
             }
@@ -246,13 +249,17 @@ where
             std::net::Ipv6Addr::from(ip).to_string()
         }
         _ => {
-            conn.write_all(&socks_reply(reply::ADDRESS_NOT_SUPPORTED)).await?;
+            conn.write_all(&socks_reply(reply::ADDRESS_NOT_SUPPORTED))
+                .await?;
             return Err(SocksError::Unsupported);
         }
     };
     let mut port = [0u8; 2];
     conn.read_exact(&mut port).await?;
-    Ok(SocksTarget { host, port: u16::from_be_bytes(port) })
+    Ok(SocksTarget {
+        host,
+        port: u16::from_be_bytes(port),
+    })
 }
 
 // ─── Status ─────────────────────────────────────────────────────────────
@@ -267,7 +274,9 @@ pub enum EgressStatus {
     Ready,
     /// The WebSocket dropped or could not be opened; the next connection a
     /// tab makes tries again.
-    Down { reason: String },
+    Down {
+        reason: String,
+    },
     /// The remote houhub-server has no tunnel (an older version).
     Unsupported,
     /// The remote houhub-server's tunnel is switched off.
@@ -350,8 +359,11 @@ fn names_this_machine(host: &str) -> bool {
 fn probe_nonce(path: &str) -> Option<&str> {
     let rest = path.strip_prefix(PROBE_PATH)?;
     let nonce = rest.split(['/', '?']).next()?;
-    (!nonce.is_empty() && nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
-        .then_some(nonce)
+    (!nonce.is_empty()
+        && nonce
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+    .then_some(nonce)
 }
 
 /// The page a probe loads. It reports itself by arriving; then it addresses
@@ -395,7 +407,10 @@ impl Session {
     }
 
     fn forget(&self, id: u32) {
-        self.streams.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+        self.streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
     }
 
     /// Route a frame from the server to its stream.
@@ -576,7 +591,10 @@ impl Egress {
         // rather than surviving the reset.
         let mut current = self.session.lock().await;
         *self.last_failure.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        self.failures.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         if let Some(session) = current.take() {
             session.shut();
         }
@@ -605,7 +623,10 @@ impl Egress {
     /// The probe page's address for `nonce` on host `host` (`localhost`, or
     /// the `*.localhost` alias WebKit is sent to).
     pub fn probe_url(&self, host: &str, nonce: &str) -> String {
-        format!("http://{host}:{}{PROBE_PATH}{nonce}", self.socks_addr.port())
+        format!(
+            "http://{host}:{}{PROBE_PATH}{nonce}",
+            self.socks_addr.port()
+        )
     }
 
     /// Wait until the probe `nonce` has proven the page and its WebSocket
@@ -744,7 +765,9 @@ impl Egress {
 
     async fn serve(self: Arc<Self>, mut conn: TcpStream) {
         let _ = conn.set_nodelay(true);
-        let Ok(handshake) = tokio::time::timeout(HANDSHAKE_TIMEOUT, socks_handshake(&mut conn)).await else {
+        let Ok(handshake) =
+            tokio::time::timeout(HANDSHAKE_TIMEOUT, socks_handshake(&mut conn)).await
+        else {
             return;
         };
         let target = match handshake {
@@ -767,13 +790,17 @@ impl Egress {
             Ok(session) => session,
             Err(_) => {
                 self.note_failure(&target, StreamFailure::TunnelDown);
-                let _ = conn.write_all(&socks_reply(reply::NETWORK_UNREACHABLE)).await;
+                let _ = conn
+                    .write_all(&socks_reply(reply::NETWORK_UNREACHABLE))
+                    .await;
                 return;
             }
         };
         let id = session.next_id.fetch_add(1, Ordering::Relaxed);
         let Some(open) = Frame::open(id, &target.host, target.port) else {
-            let _ = conn.write_all(&socks_reply(reply::ADDRESS_NOT_SUPPORTED)).await;
+            let _ = conn
+                .write_all(&socks_reply(reply::ADDRESS_NOT_SUPPORTED))
+                .await;
             return;
         };
         let (events_tx, events) = mpsc::unbounded_channel();
@@ -785,25 +812,43 @@ impl Egress {
             if !session.is_open() {
                 drop(streams);
                 self.note_failure(&target, StreamFailure::TunnelDown);
-                let _ = conn.write_all(&socks_reply(reply::NETWORK_UNREACHABLE)).await;
+                let _ = conn
+                    .write_all(&socks_reply(reply::NETWORK_UNREACHABLE))
+                    .await;
                 return;
             }
-            streams.insert(id, Slot { events: events_tx, opened: Some(opened_tx) });
+            streams.insert(
+                id,
+                Slot {
+                    events: events_tx,
+                    opened: Some(opened_tx),
+                },
+            );
         }
         if session.frames.send(open).await.is_err() {
             session.forget(id);
             self.note_failure(&target, StreamFailure::TunnelDown);
-            let _ = conn.write_all(&socks_reply(reply::NETWORK_UNREACHABLE)).await;
+            let _ = conn
+                .write_all(&socks_reply(reply::NETWORK_UNREACHABLE))
+                .await;
             return;
         }
         match tokio::time::timeout(OPEN_TIMEOUT, opened).await {
             Ok(Ok(Ok(()))) => {
                 // What went wrong before at this destination is over.
                 self.clear_failure(&target);
-                if conn.write_all(&socks_reply(reply::SUCCEEDED)).await.is_err() {
+                if conn
+                    .write_all(&socks_reply(reply::SUCCEEDED))
+                    .await
+                    .is_err()
+                {
                     let _ = session
                         .frames
-                        .send(Frame::Close { stream: id, code: CloseCode::Normal, message: String::new() })
+                        .send(Frame::Close {
+                            stream: id,
+                            code: CloseCode::Normal,
+                            message: String::new(),
+                        })
                         .await;
                     session.forget(id);
                     return;
@@ -831,13 +876,19 @@ impl Egress {
             // The session went away while the OPEN was out.
             Ok(Err(_)) => {
                 self.note_failure(&target, StreamFailure::TunnelDown);
-                let _ = conn.write_all(&socks_reply(reply::NETWORK_UNREACHABLE)).await;
+                let _ = conn
+                    .write_all(&socks_reply(reply::NETWORK_UNREACHABLE))
+                    .await;
             }
             Err(_) => {
                 self.note_failure(&target, StreamFailure::Timeout);
                 let _ = session
                     .frames
-                    .send(Frame::Close { stream: id, code: CloseCode::Timeout, message: String::new() })
+                    .send(Frame::Close {
+                        stream: id,
+                        code: CloseCode::Timeout,
+                        message: String::new(),
+                    })
                     .await;
                 session.forget(id);
                 let _ = conn.write_all(&socks_reply(reply::TTL_EXPIRED)).await;
@@ -853,7 +904,11 @@ impl Egress {
     }
 
     async fn serve_probe(&self, mut conn: TcpStream) {
-        if conn.write_all(&socks_reply(reply::SUCCEEDED)).await.is_err() {
+        if conn
+            .write_all(&socks_reply(reply::SUCCEEDED))
+            .await
+            .is_err()
+        {
             return;
         }
         let Some(head) = read_request_head(&mut conn, Vec::new()).await else {
@@ -861,7 +916,9 @@ impl Egress {
         };
         tracing::debug!("[browser-egress] {} came through the proxy", head.path());
         let Some(nonce) = probe_nonce(head.path()).map(str::to_string) else {
-            let _ = conn.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n").await;
+            let _ = conn
+                .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+                .await;
             return;
         };
         if let Some(key) = head.websocket_key() {
@@ -901,7 +958,9 @@ impl Egress {
                 self.probes.note(nonce, |visit| visit.bypassed = true);
             }
         }
-        let _ = conn.write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n").await;
+        let _ = conn
+            .write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n")
+            .await;
     }
 }
 
@@ -912,7 +971,9 @@ async fn accept_loop(listener: TcpListener, egress: Weak<Egress>) {
             tokio::time::sleep(Duration::from_millis(100)).await;
             continue;
         };
-        let Some(egress) = egress.upgrade() else { return };
+        let Some(egress) = egress.upgrade() else {
+            return;
+        };
         tokio::spawn(egress.serve(conn));
     }
 }
@@ -922,14 +983,20 @@ struct RequestHead(String);
 
 impl RequestHead {
     fn path(&self) -> &str {
-        self.0.lines().next().and_then(|line| line.split(' ').nth(1)).unwrap_or("")
+        self.0
+            .lines()
+            .next()
+            .and_then(|line| line.split(' ').nth(1))
+            .unwrap_or("")
     }
 
     fn websocket_key(&self) -> Option<String> {
         let mut upgrade = false;
         let mut key = None;
         for line in self.0.lines().skip(1) {
-            let Some((name, value)) = line.split_once(':') else { continue };
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
             let (name, value) = (name.trim().to_ascii_lowercase(), value.trim());
             if name == "upgrade" && value.eq_ignore_ascii_case("websocket") {
                 upgrade = true;
@@ -1042,19 +1109,40 @@ mod tests {
 
     #[tokio::test]
     async fn a_connect_by_name_ipv4_or_ipv6_is_read() {
-        let (target, answer) =
-            handshake(&[5, 1, 0, 5, 1, 0, 3, 9, b'l', b'o', b'c', b'a', b'l', b'h', b'o', b's', b't', 0x0b, 0xb8]).await;
-        assert_eq!(target.unwrap(), SocksTarget { host: "localhost".into(), port: 3000 });
+        let (target, answer) = handshake(&[
+            5, 1, 0, 5, 1, 0, 3, 9, b'l', b'o', b'c', b'a', b'l', b'h', b'o', b's', b't', 0x0b,
+            0xb8,
+        ])
+        .await;
+        assert_eq!(
+            target.unwrap(),
+            SocksTarget {
+                host: "localhost".into(),
+                port: 3000
+            }
+        );
         assert_eq!(answer, [5, 0], "only the greeting is answered here");
 
         let (target, _) = handshake(&[5, 1, 0, 5, 1, 0, 1, 127, 0, 0, 1, 0, 80]).await;
-        assert_eq!(target.unwrap(), SocksTarget { host: "127.0.0.1".into(), port: 80 });
+        assert_eq!(
+            target.unwrap(),
+            SocksTarget {
+                host: "127.0.0.1".into(),
+                port: 80
+            }
+        );
 
         let mut v6 = vec![5, 1, 0, 5, 1, 0, 4];
         v6.extend_from_slice(&std::net::Ipv6Addr::LOCALHOST.octets());
         v6.extend_from_slice(&[0x01, 0xbb]);
         let (target, _) = handshake(&v6).await;
-        assert_eq!(target.unwrap(), SocksTarget { host: "::1".into(), port: 443 });
+        assert_eq!(
+            target.unwrap(),
+            SocksTarget {
+                host: "::1".into(),
+                port: 443
+            }
+        );
     }
 
     #[tokio::test]
@@ -1076,7 +1164,9 @@ mod tests {
     #[tokio::test]
     async fn plain_http_is_told_apart_from_socks() {
         let (result, _) = handshake(b"GET /x HTTP/1.1\r\n\r\n").await;
-        let Err(SocksError::NotSocks(first)) = result else { panic!("read as SOCKS") };
+        let Err(SocksError::NotSocks(first)) = result else {
+            panic!("read as SOCKS")
+        };
         assert_eq!(first, b"GE");
     }
 
@@ -1101,41 +1191,76 @@ mod tests {
 
     #[test]
     fn only_names_of_this_machine_address_the_listener_itself() {
-        for own in ["localhost", "LOCALHOST.", "remote.localhost", "127.0.0.1", "::1", "::ffff:127.0.0.1"] {
+        for own in [
+            "localhost",
+            "LOCALHOST.",
+            "remote.localhost",
+            "127.0.0.1",
+            "::1",
+            "::ffff:127.0.0.1",
+        ] {
             assert!(names_this_machine(own), "{own}");
         }
-        for other in ["example.com", "localhost.example.com", "10.0.0.1", "0.0.0.0"] {
+        for other in [
+            "example.com",
+            "localhost.example.com",
+            "10.0.0.1",
+            "0.0.0.0",
+        ] {
             assert!(!names_this_machine(other), "{other}");
         }
     }
 
     #[tokio::test]
     async fn a_failure_is_remembered_for_its_own_destination_only() {
-        let egress = Egress::start(Arc::new(|| Box::pin(async { Err::<TunnelTarget, _>("unused".to_string()) })))
-            .await
-            .unwrap();
-        let target = |host: &str, port| SocksTarget { host: host.into(), port };
+        let egress = Egress::start(Arc::new(|| {
+            Box::pin(async { Err::<TunnelTarget, _>("unused".to_string()) })
+        }))
+        .await
+        .unwrap();
+        let target = |host: &str, port| SocksTarget {
+            host: host.into(),
+            port,
+        };
         egress.note_failure(&target("remote.localhost", 3000), StreamFailure::Refused);
         egress.note_failure(&target("::1", 8080), StreamFailure::Timeout);
-        assert_eq!(egress.recent_failure("remote.localhost", 3000), Some(StreamFailure::Refused));
-        assert_eq!(egress.recent_failure("REMOTE.localhost", 3000), Some(StreamFailure::Refused));
+        assert_eq!(
+            egress.recent_failure("remote.localhost", 3000),
+            Some(StreamFailure::Refused)
+        );
+        assert_eq!(
+            egress.recent_failure("REMOTE.localhost", 3000),
+            Some(StreamFailure::Refused)
+        );
         // A URL writes an IPv6 host in brackets; SOCKS does not.
-        assert_eq!(egress.recent_failure("[::1]", 8080), Some(StreamFailure::Timeout));
+        assert_eq!(
+            egress.recent_failure("[::1]", 8080),
+            Some(StreamFailure::Timeout)
+        );
         assert_eq!(egress.recent_failure("remote.localhost", 3001), None);
         assert_eq!(egress.recent_failure("localhost", 3000), None);
         // The newest word on a destination is the one that counts.
         egress.note_failure(&target("remote.localhost", 3000), StreamFailure::TunnelDown);
-        assert_eq!(egress.recent_failure("remote.localhost", 3000), Some(StreamFailure::TunnelDown));
+        assert_eq!(
+            egress.recent_failure("remote.localhost", 3000),
+            Some(StreamFailure::TunnelDown)
+        );
         // A connection that got through ends the story: a later failure of
         // the page is not this one.
         egress.clear_failure(&target("remote.localhost", 3000));
         assert_eq!(egress.recent_failure("remote.localhost", 3000), None);
-        assert_eq!(egress.recent_failure("[::1]", 8080), Some(StreamFailure::Timeout));
+        assert_eq!(
+            egress.recent_failure("[::1]", 8080),
+            Some(StreamFailure::Timeout)
+        );
     }
 
     #[test]
     fn the_websocket_accept_matches_rfc_6455() {
         // The worked example of RFC 6455 §1.3.
-        assert_eq!(websocket_accept("dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+        assert_eq!(
+            websocket_accept("dGhlIHNhbXBsZSBub25jZQ=="),
+            "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        );
     }
 }

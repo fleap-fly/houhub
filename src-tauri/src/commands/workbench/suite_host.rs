@@ -409,7 +409,10 @@ mod tests {
             )),
         )
         .expect("valid suite request");
-        assert_eq!(validated.canonical_url.host_str(), Some("project.example.test"));
+        assert_eq!(
+            validated.canonical_url.host_str(),
+            Some("project.example.test")
+        );
         assert_eq!(validated.project_id, "project_1");
         assert_eq!(validated.suite_code, "creative_design_studio");
         assert_eq!(validated.window_label, "workbench-suite-wbcc_1");

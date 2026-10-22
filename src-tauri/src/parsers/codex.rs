@@ -22,9 +22,8 @@ use crate::models::*;
 
 use crate::parsers::codex_code_mode::{
     extract_chunk_ids, extract_shell_session_ids, is_code_mode_call, parse_code_mode_script,
-    script_card_input,
-    split_code_mode_output, with_note, CodeModeCall, CodeModeOutput, CodeModeScript, ScriptStatus,
-    Separator, CODEX_SCRIPT_TOOL_NAME,
+    script_card_input, split_code_mode_output, with_note, CodeModeCall, CodeModeOutput,
+    CodeModeScript, ScriptStatus, Separator, CODEX_SCRIPT_TOOL_NAME,
 };
 
 use crate::parsers::{
@@ -423,10 +422,7 @@ impl CodexParser {
         titles
     }
 
-    fn parse_jsonl_summary(
-        &self,
-        path: &Path,
-    ) -> Result<Option<ConversationSummary>, ParseError> {
+    fn parse_jsonl_summary(&self, path: &Path) -> Result<Option<ConversationSummary>, ParseError> {
         let lines = self.rollout_lines(path)?;
 
         let mut conversation_id: Option<String> = None;
@@ -759,9 +755,7 @@ impl CodexParser {
                                         pending_promotions.push((
                                             is_user,
                                             is_user
-                                                .then(|| {
-                                                    extract_codex_title_candidate(&text, true)
-                                                })
+                                                .then(|| extract_codex_title_candidate(&text, true))
                                                 .flatten(),
                                         ));
                                     }
@@ -1731,13 +1725,12 @@ fn completed_mcp_call(payload: &serde_json::Value) -> Option<CompletedMcpCall> {
     let stated_is_error = result
         .and_then(|result| result.get("isError"))
         .and_then(serde_json::Value::as_bool);
-    let claimed_failed =
-        stated_is_error == Some(true)
-            || stated_error.is_some()
-            || item
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(is_failed_status);
+    let claimed_failed = stated_is_error == Some(true)
+        || stated_error.is_some()
+        || item
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(is_failed_status);
     let claimed_ok = stated_is_error == Some(false)
         || item.get("status").and_then(serde_json::Value::as_str) == Some("completed");
     Some(CompletedMcpCall {
@@ -3546,7 +3539,7 @@ impl CodexParser {
                                     duration_ms: None,
                                     model: None,
                                     completed_at: Some(timestamp),
-                                agent_message_id: None,
+                                    agent_message_id: None,
                                 });
                             }
                             "agent_message" => {
@@ -3584,7 +3577,7 @@ impl CodexParser {
                                     duration_ms: None,
                                     model: None,
                                     completed_at: Some(timestamp),
-                                agent_message_id: None,
+                                    agent_message_id: None,
                                 });
                             }
                             "thread_goal_updated" => {
@@ -3664,7 +3657,7 @@ impl CodexParser {
                                         duration_ms: None,
                                         model: None,
                                         completed_at: Some(timestamp),
-                                    agent_message_id: None,
+                                        agent_message_id: None,
                                     });
                                 }
                             }
@@ -3747,10 +3740,7 @@ impl CodexParser {
                                     } else {
                                         continue;
                                     };
-                                    completed_mcp_by_exec
-                                        .entry(exec_id)
-                                        .or_default()
-                                        .push(call);
+                                    completed_mcp_by_exec.entry(exec_id).or_default().push(call);
                                     continue;
                                 }
                                 // Plan mode's finished plan document. This is the
@@ -3805,10 +3795,8 @@ impl CodexParser {
                                 // ONE 思考 card (live parity) instead of one card per
                                 // section, and if no grouped summary arrives
                                 // (interrupted/older rollouts) nothing is lost.
-                                let text = payload
-                                    .get("text")
-                                    .and_then(|t| t.as_str())
-                                    .unwrap_or("");
+                                let text =
+                                    payload.get("text").and_then(|t| t.as_str()).unwrap_or("");
                                 if !text.trim().is_empty() {
                                     pending_reasoning.push(text.to_string());
                                     pending_reasoning_ts = Some(timestamp);
@@ -3861,7 +3849,7 @@ impl CodexParser {
                                     duration_ms: None,
                                     model: None,
                                     completed_at: Some(timestamp),
-                                agent_message_id: None,
+                                    agent_message_id: None,
                                 });
                                 if !call_id.is_empty() {
                                     emitted_image_ids.insert(call_id);
@@ -4063,8 +4051,7 @@ impl CodexParser {
                                     codex_inter_agent_final_answer(payload)
                                 {
                                     if let Some(thread_id) = agent_path_to_thread_id.get(author) {
-                                        agent_fallback_results
-                                            .insert(thread_id.clone(), body);
+                                        agent_fallback_results.insert(thread_id.clone(), body);
                                     }
                                 }
                             }
@@ -4213,7 +4200,7 @@ impl CodexParser {
                                             duration_ms: None,
                                             model: None,
                                             completed_at: Some(timestamp),
-                                        agent_message_id: None,
+                                            agent_message_id: None,
                                         });
                                     }
                                     "wait_agent" => {
@@ -4281,7 +4268,7 @@ impl CodexParser {
                                             duration_ms: None,
                                             model: None,
                                             completed_at: Some(timestamp),
-                                        agent_message_id: None,
+                                            agent_message_id: None,
                                         });
                                     }
                                     _ => {
@@ -4355,7 +4342,7 @@ impl CodexParser {
                                             duration_ms: None,
                                             model: None,
                                             completed_at: Some(timestamp),
-                                        agent_message_id: None,
+                                            agent_message_id: None,
                                         });
                                     }
                                 }
@@ -4407,9 +4394,7 @@ impl CodexParser {
                                         note: collected.note,
                                     };
                                     let semantic = (parsed.status == ScriptStatus::Completed)
-                                        .then(|| {
-                                            completed_mcp_by_exec.remove(&deferred.call_id)
-                                        })
+                                        .then(|| completed_mcp_by_exec.remove(&deferred.call_id))
                                         .flatten();
                                     let (uses, results) = semantic
                                         .and_then(|calls| {
@@ -4490,7 +4475,7 @@ impl CodexParser {
                                         duration_ms: None,
                                         model: None,
                                         completed_at: Some(timestamp),
-                                    agent_message_id: None,
+                                        agent_message_id: None,
                                     });
                                 } else if is_spawn {
                                     if let Some(output_obj) = parse_codex_json_output(payload) {
@@ -4517,7 +4502,7 @@ impl CodexParser {
                                         duration_ms: None,
                                         model: None,
                                         completed_at: Some(timestamp),
-                                    agent_message_id: None,
+                                        agent_message_id: None,
                                     });
                                 } else if is_wait || is_list {
                                     // Emit one `collab_agent` capsule per wait or
@@ -4532,12 +4517,14 @@ impl CodexParser {
                                     // spawn capsule's own result on the strength
                                     // of a `list_agents` the model happened to
                                     // call would lose the report entirely.
-                                    let capsule = parse_codex_json_output(payload).and_then(
-                                        |output_obj| {
+                                    let capsule =
+                                        parse_codex_json_output(payload).and_then(|output_obj| {
                                             if is_list {
                                                 return build_collab_list_input(&output_obj);
                                             }
-                                            match output_obj.get("status").and_then(|s| s.as_object())
+                                            match output_obj
+                                                .get("status")
+                                                .and_then(|s| s.as_object())
                                             {
                                                 Some(status) => {
                                                     // Mark returned agents so the spawn
@@ -4558,8 +4545,7 @@ impl CodexParser {
                                                 }
                                                 None => native_team_wait_input(&output_obj),
                                             }
-                                        },
-                                    );
+                                        });
                                     if let Some((collab_input, is_error)) = capsule {
                                         messages.push(UnifiedMessage {
                                             id: format!("tool-{}", messages.len()),
@@ -4576,7 +4562,7 @@ impl CodexParser {
                                             duration_ms: None,
                                             model: None,
                                             completed_at: Some(timestamp),
-                                        agent_message_id: None,
+                                            agent_message_id: None,
                                         });
                                         messages.push(UnifiedMessage {
                                             id: format!("tool-result-{}", messages.len()),
@@ -4593,7 +4579,7 @@ impl CodexParser {
                                             duration_ms: None,
                                             model: None,
                                             completed_at: Some(timestamp),
-                                        agent_message_id: None,
+                                            agent_message_id: None,
                                         });
                                     }
                                 } else if is_close {
@@ -4659,21 +4645,21 @@ impl CodexParser {
                                             &mut shell_sessions,
                                         );
                                     }
-                                    let (raw_output, envelope_error) =
-                                        if envelope.status != ScriptStatus::Unknown
-                                            || output_value.is_some_and(|v| v.is_array())
-                                        {
-                                            (
-                                                with_note(
-                                                    Some(envelope.joined()),
-                                                    envelope.note.as_deref(),
-                                                )
-                                                .filter(|s| !s.is_empty()),
-                                                envelope.is_error(),
+                                    let (raw_output, envelope_error) = if envelope.status
+                                        != ScriptStatus::Unknown
+                                        || output_value.is_some_and(|v| v.is_array())
+                                    {
+                                        (
+                                            with_note(
+                                                Some(envelope.joined()),
+                                                envelope.note.as_deref(),
                                             )
-                                        } else {
-                                            (value_to_preview(output_value), false)
-                                        };
+                                            .filter(|s| !s.is_empty()),
+                                            envelope.is_error(),
+                                        )
+                                    } else {
+                                        (value_to_preview(output_value), false)
+                                    };
                                     // A poll about to be folded into the card of
                                     // the command it is collecting for: its
                                     // envelope has to go, and an envelope that
@@ -4712,7 +4698,7 @@ impl CodexParser {
                                         duration_ms: None,
                                         model: None,
                                         completed_at: Some(timestamp),
-                                    agent_message_id: None,
+                                        agent_message_id: None,
                                     });
                                 }
                             }
@@ -4751,7 +4737,7 @@ impl CodexParser {
                                             duration_ms: None,
                                             model: None,
                                             completed_at: Some(timestamp),
-                                        agent_message_id: None,
+                                            agent_message_id: None,
                                         });
                                         continue;
                                     }
@@ -4812,7 +4798,10 @@ impl CodexParser {
                                             Some(existing) => existing.content = blocks,
                                             None => {
                                                 messages.push(UnifiedMessage {
-                                                    id: format!("assistant-plan-{}", messages.len()),
+                                                    id: format!(
+                                                        "assistant-plan-{}",
+                                                        messages.len()
+                                                    ),
                                                     role: MessageRole::Assistant,
                                                     content: blocks,
                                                     timestamp,
@@ -4908,7 +4897,7 @@ impl CodexParser {
                                     duration_ms: None,
                                     model: None,
                                     completed_at: Some(timestamp),
-                                agent_message_id: None,
+                                    agent_message_id: None,
                                 });
                                 if !id.is_empty() {
                                     emitted_image_ids.insert(id);
@@ -5145,7 +5134,7 @@ impl CodexParser {
                     duration_ms: None,
                     model: None,
                     completed_at: Some(pending.timestamp),
-                agent_message_id: None,
+                    agent_message_id: None,
                 })
                 .collect();
             messages.splice(insert_at..insert_at, group);
@@ -5201,7 +5190,7 @@ impl CodexParser {
                         duration_ms: None,
                         model: None,
                         completed_at: first_timestamp,
-                    agent_message_id: None,
+                        agent_message_id: None,
                     },
                 );
             }
@@ -5424,7 +5413,9 @@ fn reconcile_turn_usage(turns: &mut [MessageTurn], recorded: &TurnUsage) {
         .fold(TurnUsage::default(), |acc, u| codex_usage_add(&acc, u));
 
     let missing = TurnUsage {
-        input_tokens: recorded.input_tokens.saturating_sub(attributed.input_tokens),
+        input_tokens: recorded
+            .input_tokens
+            .saturating_sub(attributed.input_tokens),
         output_tokens: recorded
             .output_tokens
             .saturating_sub(attributed.output_tokens),
@@ -5442,14 +5433,11 @@ fn reconcile_turn_usage(turns: &mut [MessageTurn], recorded: &TurnUsage) {
     // Prefer a turn that already reports usage — it is one the transcript
     // itself tied to a model call, so the recovered tokens land beside spend
     // that really happened rather than on an unrelated bubble.
-    let target = turns
-        .iter()
-        .rposition(|t| t.usage.is_some())
-        .or_else(|| {
-            turns.iter().rposition(|t| {
-                matches!(t.role, TurnRole::Assistant) && !is_codex_compaction_divider(&t.blocks)
-            })
-        });
+    let target = turns.iter().rposition(|t| t.usage.is_some()).or_else(|| {
+        turns.iter().rposition(|t| {
+            matches!(t.role, TurnRole::Assistant) && !is_codex_compaction_divider(&t.blocks)
+        })
+    });
     if let Some(turn) = target.and_then(|i| turns.get_mut(i)) {
         turn.usage = Some(match turn.usage {
             Some(ref existing) => codex_usage_add(existing, &missing),
@@ -5649,7 +5637,7 @@ fn flush_pending_reasoning(
         duration_ms: None,
         model: None,
         completed_at: Some(timestamp),
-    agent_message_id: None,
+        agent_message_id: None,
     });
 }
 
@@ -6801,7 +6789,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
             i += 1;
         } else if matches!(msg.role, MessageRole::System) {
@@ -6814,7 +6802,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
             i += 1;
         } else {
@@ -6855,7 +6843,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms,
                 model: turn_model,
                 completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
         }
     }
@@ -8114,9 +8102,9 @@ mod tests {
                 ),
             ];
             fs::write(
-                temp_dir
-                    .path()
-                    .join(format!("rollout-2026-08-28T10-00-00-{conversation_id}.jsonl")),
+                temp_dir.path().join(format!(
+                    "rollout-2026-08-28T10-00-00-{conversation_id}.jsonl"
+                )),
                 format!("{}\n", lines.join("\n")),
             )
             .expect("write rollout");
@@ -8817,7 +8805,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: Some(now),
-        agent_message_id: None,
+            agent_message_id: None,
         }];
 
         assert!(should_skip_duplicate_user_message(
@@ -9213,7 +9201,12 @@ mod tests {
             )
         };
         let searched_report = |ts: &str| {
-            usage_count_line(ts, [522_480, 450_432, 7_798], [579_422, 501_952, 8_158], WINDOW)
+            usage_count_line(
+                ts,
+                [522_480, 450_432, 7_798],
+                [579_422, 501_952, 8_158],
+                WINDOW,
+            )
         };
         let first_turn = vec![
             rollout_line(
@@ -9249,14 +9242,22 @@ mod tests {
             ),
         ];
         let reading = |lines: &[String], tag: &str| {
-            let stats = parse_lines(lines, tag).session_stats.expect("session stats");
-            (stats.context_window_used_tokens, stats.context_window_usage_percent)
+            let stats = parse_lines(lines, tag)
+                .session_stats
+                .expect("session stats");
+            (
+                stats.context_window_used_tokens,
+                stats.context_window_usage_percent,
+            )
         };
 
         let (used, percent) = reading(&first_turn, "ws-846-searched");
         assert_eq!(used, Some(57_302), "the reading before the search stands");
         let percent = percent.expect("percent");
-        assert!((percent - 57_302.0 / WINDOW as f64 * 100.0).abs() < 1e-9, "{percent}");
+        assert!(
+            (percent - 57_302.0 / WINDOW as f64 * 100.0).abs() < 1e-9,
+            "{percent}"
+        );
 
         // Older codex restates the latest report as the next request opens; a
         // restatement of the report set aside is set aside with it.
@@ -9372,13 +9373,19 @@ mod tests {
             .iter()
             .filter_map(|t| t.usage.as_ref())
             .map(|u| {
-                u.input_tokens + u.output_tokens + u.cache_creation_input_tokens
+                u.input_tokens
+                    + u.output_tokens
+                    + u.cache_creation_input_tokens
                     + u.cache_read_input_tokens
             })
             .sum()
     }
 
-    fn parse_rollout(label: &str, content: &str, session_id: &str) -> crate::models::ConversationDetail {
+    fn parse_rollout(
+        label: &str,
+        content: &str,
+        session_id: &str,
+    ) -> crate::models::ConversationDetail {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
@@ -9498,7 +9505,10 @@ mod tests {
         );
         let detail = parse_rollout("toolonly", content, "toolonly-1");
         assert!(
-            !detail.turns.iter().any(|t| matches!(t.role, TurnRole::Assistant)),
+            !detail
+                .turns
+                .iter()
+                .any(|t| matches!(t.role, TurnRole::Assistant)),
             "precondition: this rollout has no assistant turn"
         );
         let total = detail
@@ -11494,7 +11504,10 @@ mod tests {
         lines.extend(announced_reasoning(
             "2026-09-24T07:21:02Z",
             "rs_1",
-            &["**Checking directory usage**", "**Checking repository changes**"],
+            &[
+                "**Checking directory usage**",
+                "**Checking repository changes**",
+            ],
         ));
         lines.extend(announced_reasoning(
             "2026-09-24T07:21:12Z",
@@ -11506,7 +11519,10 @@ mod tests {
         lines.extend(announced_reasoning(
             "2026-09-24T07:21:20Z",
             "rs_4",
-            &["**Reviewing disk usage snapshot**", "**Measuring temporary storage usage**"],
+            &[
+                "**Reviewing disk usage snapshot**",
+                "**Measuring temporary storage usage**",
+            ],
         ));
         // A tool call is visible and ends the run; its own announcement follows.
         lines.extend([
@@ -11663,7 +11679,9 @@ mod tests {
 
         assert_eq!(
             thinking_texts(&detail),
-            vec!["**Assessing execution capabilities**\n\n**Determining the next step**".to_string()]
+            vec![
+                "**Assessing execution capabilities**\n\n**Determining the next step**".to_string()
+            ]
         );
 
         let _ = fs::remove_file(path);
@@ -12305,7 +12323,9 @@ mod tests {
         // 0.147 emits no wait/close capsule, so this card stands for the LAUNCH
         // only and must say so rather than read as "the sub-agent finished".
         assert_eq!(
-            parsed.get(CODEX_SUBAGENT_LAUNCH_KEY).and_then(|v| v.as_bool()),
+            parsed
+                .get(CODEX_SUBAGENT_LAUNCH_KEY)
+                .and_then(|v| v.as_bool()),
             Some(true)
         );
 
@@ -12421,7 +12441,10 @@ mod tests {
         // stream showed vanished on reload and nothing could resolve the
         // child's own rollout.
         let sealed = format!("gAAAAAB{}", "qgWsi0g7gOInVU3UTzqL".repeat(30));
-        let path = write_temp_rollout("nativeteam0153", &native_team_0153_lines("MESSAGE", &sealed));
+        let path = write_temp_rollout(
+            "nativeteam0153",
+            &native_team_0153_lines("MESSAGE", &sealed),
+        );
         let detail = CodexParser::new()
             .parse_conversation_detail(&path, "parent")
             .expect("parse ok");
@@ -12577,7 +12600,10 @@ mod tests {
             })
             .expect("roster renders as a collab capsule, not a generic tool card");
         let parsed: serde_json::Value = serde_json::from_str(input).expect("collab input is JSON");
-        assert_eq!(parsed.get(COLLAB_OP_KEY).and_then(|v| v.as_str()), Some("list"));
+        assert_eq!(
+            parsed.get(COLLAB_OP_KEY).and_then(|v| v.as_str()),
+            Some("list")
+        );
         let states = parsed
             .get("agentsStates")
             .and_then(|v| v.as_object())
@@ -12710,7 +12736,10 @@ mod tests {
             })
             .expect("spawn Agent capsule present");
         let parsed: serde_json::Value = serde_json::from_str(input).expect("JSON");
-        assert_eq!(parsed.get("subagent_type").and_then(|v| v.as_str()), Some("worker"));
+        assert_eq!(
+            parsed.get("subagent_type").and_then(|v| v.as_str()),
+            Some("worker")
+        );
         assert_eq!(parsed.get("prompt").and_then(|v| v.as_str()), Some("do it"));
         assert!(parsed.get(CODEX_SUBAGENT_LAUNCH_KEY).is_none());
 
@@ -12773,7 +12802,10 @@ mod tests {
     fn redaction_leaves_ordinary_arguments_untouched() {
         let mut args = serde_json::json!({"cmd":"pnpm build","timeout_ms":3600000});
         assert!(!redact_encrypted_args(&mut args));
-        assert_eq!(args, serde_json::json!({"cmd":"pnpm build","timeout_ms":3600000}));
+        assert_eq!(
+            args,
+            serde_json::json!({"cmd":"pnpm build","timeout_ms":3600000})
+        );
         // Nested and array positions are reached.
         let sealed = format!("gAAAAAB{}", "0g7gOInVU3UTzqL".repeat(10));
         let mut nested = serde_json::json!({"outer":{"list":[sealed.clone(),"keep me"]}});
@@ -12856,14 +12888,17 @@ mod tests {
             })
             .expect("wait capsule present");
         let parsed: serde_json::Value = serde_json::from_str(input).expect("JSON");
-        assert_eq!(parsed.get(COLLAB_OP_KEY).and_then(|v| v.as_str()), Some("wait"));
-        assert_eq!(parsed.get("status").and_then(|v| v.as_str()), Some("completed"));
+        assert_eq!(
+            parsed.get(COLLAB_OP_KEY).and_then(|v| v.as_str()),
+            Some("wait")
+        );
+        assert_eq!(
+            parsed.get("status").and_then(|v| v.as_str()),
+            Some("completed")
+        );
         // No agents and no prompt — the card renders as a bare pill, exactly
         // what the live `collabAgentToolCall` produces for this output.
-        assert_eq!(
-            parsed.get("agentsStates"),
-            Some(&serde_json::json!({}))
-        );
+        assert_eq!(parsed.get("agentsStates"), Some(&serde_json::json!({})));
         let errored = detail
             .turns
             .iter()
@@ -12877,7 +12912,9 @@ mod tests {
     #[test]
     fn native_team_wait_shape_gate_and_timeout() {
         // `timed_out` is the shape gate: only the native-team output has it.
-        assert!(native_team_wait_input(&serde_json::json!({"message":"Wait completed."})).is_none());
+        assert!(
+            native_team_wait_input(&serde_json::json!({"message":"Wait completed."})).is_none()
+        );
         assert!(native_team_wait_input(&serde_json::json!({})).is_none());
         // A timeout is a real outcome — flag the capsule failed.
         let (input, is_error) =
@@ -12885,7 +12922,10 @@ mod tests {
                 .expect("native shape");
         assert!(is_error);
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("JSON");
-        assert_eq!(parsed.get("status").and_then(|v| v.as_str()), Some("failed"));
+        assert_eq!(
+            parsed.get("status").and_then(|v| v.as_str()),
+            Some("failed")
+        );
     }
 
     #[test]
@@ -13213,12 +13253,9 @@ mod tests {
                 {"type":"input_text","text":"{\"a\":{},\"b\":{}}"},
             ]),
         );
-        for (offset, (id, task_id, task)) in [
-            ("exec-b", "task-b", "B"),
-            ("exec-a", "task-a", "A"),
-        ]
-        .into_iter()
-        .enumerate()
+        for (offset, (id, task_id, task)) in [("exec-b", "task-b", "B"), ("exec-a", "task-a", "A")]
+            .into_iter()
+            .enumerate()
         {
             lines.insert(
                 2 + offset,
@@ -13273,8 +13310,14 @@ mod tests {
                 .map(|(id, output, _)| (id, output))
                 .collect::<Vec<_>>(),
             vec![
-                ("exec-b".into(), Some("Delegation successful. task_id=task-b.".into())),
-                ("exec-a".into(), Some("Delegation successful. task_id=task-a.".into())),
+                (
+                    "exec-b".into(),
+                    Some("Delegation successful. task_id=task-b.".into())
+                ),
+                (
+                    "exec-a".into(),
+                    Some("Delegation successful. task_id=task-a.".into())
+                ),
             ]
         );
     }
@@ -13482,7 +13525,9 @@ mod tests {
 
         let (native_input, native_result) = spawn_capsule(&detail);
         assert_eq!(
-            native_input.get("agent_id").and_then(|value| value.as_str()),
+            native_input
+                .get("agent_id")
+                .and_then(|value| value.as_str()),
             Some("01a07fc2-db62-78b3-9762-9cb2540216c2"),
             "native activity must keep its own child session id"
         );
@@ -13659,7 +13704,8 @@ mod tests {
     /// the script card used to show the run.
     #[test]
     fn a_textless_semantic_result_still_says_something() {
-        let script = "const shot=await tools.mcp__shot_srv__capture({url:target});text(\"captured\");";
+        let script =
+            "const shot=await tools.mcp__shot_srv__capture({url:target});text(\"captured\");";
         let mut lines = code_mode_rollout(
             script,
             serde_json::json!([
@@ -13746,7 +13792,11 @@ mod tests {
             }
             let detail = parse_lines(
                 &lines,
-                if item { "mixed-with-item" } else { "mixed-baseline" },
+                if item {
+                    "mixed-with-item"
+                } else {
+                    "mixed-baseline"
+                },
             );
             (tool_uses(&detail), tool_results(&detail))
         };
@@ -13832,7 +13882,10 @@ mod tests {
             buf: Vec::new(),
             budget: 8,
         };
-        assert!(sink.write_all(&[b'x'; 5]).is_ok(), "room for the first write");
+        assert!(
+            sink.write_all(&[b'x'; 5]).is_ok(),
+            "room for the first write"
+        );
         assert!(
             sink.write_all(&[b'x'; 100]).is_err(),
             "a write past the budget must fail so serialization aborts"
@@ -13849,7 +13902,10 @@ mod tests {
     #[test]
     fn a_budgeted_preview_reads_exactly_like_an_unbounded_one() {
         for (name, value) in [
-            ("a small object", serde_json::json!({"a": 1, "b": [true, null]})),
+            (
+                "a small object",
+                serde_json::json!({"a": 1, "b": [true, null]}),
+            ),
             ("empty", serde_json::json!({})),
             ("exactly the cap", serde_json::json!("x".repeat(3998))),
             ("one past the cap", serde_json::json!("x".repeat(3999))),
@@ -15225,11 +15281,11 @@ mod tests {
         let detail = parse_lines(&lines, "deferred-semantic-mcp");
         assert_eq!(
             tool_uses(&detail),
-            vec![ (
+            vec![(
                 "mcp-deferred-status".into(),
                 "mcp__houhub_mcp__get_delegation_status".into(),
                 Some(r#"{"task_ids":["t1"],"wait_ms":60000}"#.into()),
-            ) ],
+            )],
             "the completed semantic item replaces the parked script card"
         );
         assert_eq!(
@@ -15497,20 +15553,35 @@ mod tests {
     fn a_labelled_fanout_splits_a_collapsed_blob_per_command() {
         let detail = code_mode_detail(
             &labelled_fanout(&["query-entry", "formula-service", "factor-full"]),
-            labelled_blob(6, &[
-                ("query-entry", "one"),
-                ("formula-service", "two"),
-                ("factor-full", "three"),
-            ]),
+            labelled_blob(
+                6,
+                &[
+                    ("query-entry", "one"),
+                    ("formula-service", "two"),
+                    ("factor-full", "three"),
+                ],
+            ),
             "code-mode-labelled",
         );
 
         assert_eq!(
             tool_uses(&detail),
             vec![
-                ("call_1#0".into(), "exec_command".into(), Some("echo 0".into())),
-                ("call_1#1".into(), "exec_command".into(), Some("echo 1".into())),
-                ("call_1#2".into(), "exec_command".into(), Some("echo 2".into())),
+                (
+                    "call_1#0".into(),
+                    "exec_command".into(),
+                    Some("echo 0".into())
+                ),
+                (
+                    "call_1#1".into(),
+                    "exec_command".into(),
+                    Some("echo 1".into())
+                ),
+                (
+                    "call_1#2".into(),
+                    "exec_command".into(),
+                    Some("echo 2".into())
+                ),
             ]
         );
         assert_eq!(
@@ -15534,12 +15605,21 @@ mod tests {
     #[test]
     fn a_truncated_separator_leaves_its_command_without_output() {
         let detail = code_mode_detail(
-            &labelled_fanout(&["query-entry", "formula-service", "vo", "formula-splice", "factor-full"]),
-            labelled_blob(20, &[
-                ("query-entry", "first"),
-                ("formula-service", "second\nvo-output\nsplice-output"),
-                ("factor-full", "last"),
+            &labelled_fanout(&[
+                "query-entry",
+                "formula-service",
+                "vo",
+                "formula-splice",
+                "factor-full",
             ]),
+            labelled_blob(
+                20,
+                &[
+                    ("query-entry", "first"),
+                    ("formula-service", "second\nvo-output\nsplice-output"),
+                    ("factor-full", "last"),
+                ],
+            ),
             "code-mode-labelled-partial",
         );
 
@@ -15547,7 +15627,11 @@ mod tests {
             tool_results(&detail),
             vec![
                 ("call_1#0".into(), Some("first".into()), false),
-                ("call_1#1".into(), Some("second\nvo-output\nsplice-output".into()), false),
+                (
+                    "call_1#1".into(),
+                    Some("second\nvo-output\nsplice-output".into()),
+                    false
+                ),
                 ("call_1#2".into(), None, false),
                 ("call_1#3".into(), None, false),
                 ("call_1#4".into(), Some("last".into()), false),
@@ -15555,7 +15639,10 @@ mod tests {
         );
 
         let metas = tool_metas(&detail);
-        assert_eq!(metas[1]["sharedWith"], serde_json::json!(["vo", "formula-splice"]));
+        assert_eq!(
+            metas[1]["sharedWith"],
+            serde_json::json!(["vo", "formula-splice"])
+        );
         assert_eq!(metas[2]["outputMissing"], true);
         assert_eq!(metas[3]["outputMissing"], true);
         assert!(metas[0].get("sharedWith").is_none());
@@ -15569,10 +15656,7 @@ mod tests {
     fn a_repeated_separator_line_keeps_the_script_card() {
         let detail = code_mode_detail(
             &labelled_fanout(&["alpha", "beta"]),
-            labelled_blob(8, &[
-                ("alpha", "one\n===== beta ====="),
-                ("beta", "two"),
-            ]),
+            labelled_blob(8, &[("alpha", "one\n===== beta ====="), ("beta", "two")]),
             "code-mode-labelled-dup",
         );
 
@@ -15588,11 +15672,14 @@ mod tests {
     fn a_repeated_output_line_still_splits() {
         let detail = code_mode_detail(
             &labelled_fanout(&["alpha", "beta", "gamma"]),
-            labelled_blob(8, &[
-                ("alpha", "shared line\none"),
-                ("beta", "shared line\ntwo"),
-                ("gamma", "three"),
-            ]),
+            labelled_blob(
+                8,
+                &[
+                    ("alpha", "shared line\none"),
+                    ("beta", "shared line\ntwo"),
+                    ("gamma", "three"),
+                ],
+            ),
             "code-mode-labelled-repeat",
         );
 
@@ -15677,7 +15764,9 @@ mod tests {
     /// want. Tool-only turns come back with `None`. The role is stringified
     /// because `TurnRole` is not `PartialEq` and a production model should not
     /// grow a derive to serve a test.
-    fn turn_texts(detail: &crate::models::ConversationDetail) -> Vec<(&'static str, Option<String>)> {
+    fn turn_texts(
+        detail: &crate::models::ConversationDetail,
+    ) -> Vec<(&'static str, Option<String>)> {
         detail
             .turns
             .iter()
@@ -16087,22 +16176,58 @@ mod tests {
     #[test]
     fn a_compaction_draws_the_live_divider_and_opens_onto_its_handoff() {
         let content = jsonl(&[
-            record("2026-09-29T00:00:00Z", "session_meta", serde_json::json!({"id": "cmp-2", "cwd": "/tmp/demo", "cli_version": "0.156.1"})),
-            record("2026-09-29T00:00:01Z", "event_msg", serde_json::json!({"type": "task_started", "turn_id": "t1"})),
-            record("2026-09-29T00:00:02Z", "response_item", serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "look at /private/tmp"}]})),
+            record(
+                "2026-09-29T00:00:00Z",
+                "session_meta",
+                serde_json::json!({"id": "cmp-2", "cwd": "/tmp/demo", "cli_version": "0.156.1"}),
+            ),
+            record(
+                "2026-09-29T00:00:01Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-09-29T00:00:02Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "look at /private/tmp"}]}),
+            ),
             assistant_item("2026-09-29T00:00:03Z", "It holds 40 stale folders."),
             token_count("2026-09-29T00:00:04Z", 1000, 100),
-            record("2026-09-29T00:00:05Z", "event_msg", serde_json::json!({"type": "task_complete", "turn_id": "t1"})),
-            record("2026-09-29T00:01:00Z", "event_msg", serde_json::json!({"type": "task_started", "turn_id": "t2"})),
+            record(
+                "2026-09-29T00:00:05Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-09-29T00:01:00Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t2"}),
+            ),
             token_count("2026-09-29T00:01:01Z", 1000, 100),
             assistant_item("2026-09-29T00:01:40Z", HANDOFF),
-            record("2026-09-29T00:01:40.100Z", "token_usage_record", serde_json::json!({"thread_id": "cmp-2", "turn_id": "t2"})),
+            record(
+                "2026-09-29T00:01:40.100Z",
+                "token_usage_record",
+                serde_json::json!({"thread_id": "cmp-2", "turn_id": "t2"}),
+            ),
             token_count("2026-09-29T00:01:40.200Z", 2400, 180),
             compacted("2026-09-29T00:01:40.300Z", HANDOFF),
-            record("2026-09-29T00:01:40.400Z", "event_msg", serde_json::json!({"type": "thread_settings_applied"})),
+            record(
+                "2026-09-29T00:01:40.400Z",
+                "event_msg",
+                serde_json::json!({"type": "thread_settings_applied"}),
+            ),
             token_count("2026-09-29T00:01:40.500Z", 2400, 180),
-            record("2026-09-29T00:01:40.600Z", "event_msg", serde_json::json!({"type": "item_completed", "turn_id": "t2", "item": {"type": "ContextCompaction", "id": "01a0eaed-d00a-7480"}})),
-            record("2026-09-29T00:01:41Z", "event_msg", serde_json::json!({"type": "task_complete", "turn_id": "t2"})),
+            record(
+                "2026-09-29T00:01:40.600Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t2", "item": {"type": "ContextCompaction", "id": "01a0eaed-d00a-7480"}}),
+            ),
+            record(
+                "2026-09-29T00:01:41Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t2"}),
+            ),
         ]);
         let detail = parse_rollout("compaction-handoff", &content, "cmp-2");
 
@@ -16125,7 +16250,10 @@ mod tests {
         assert_eq!(turn_usage_total(&detail), 2580);
         // The sidebar entry counts what the conversation renders: the prompt
         // and the reply, not the handoff.
-        assert_eq!(summary_of("compaction-handoff-sum", &content).message_count, 2);
+        assert_eq!(
+            summary_of("compaction-handoff-sum", &content).message_count,
+            2
+        );
     }
 
     /// An automatic compaction mid-turn. The compaction's own model call thinks
@@ -16136,29 +16264,93 @@ mod tests {
     #[test]
     fn a_mid_turn_compaction_keeps_its_own_thinking_out_of_the_reply() {
         let content = jsonl(&[
-            record("2026-09-29T00:00:00Z", "session_meta", serde_json::json!({"id": "cmp-3", "cwd": "/tmp/demo", "cli_version": "0.153.4"})),
-            record("2026-09-29T00:00:01Z", "event_msg", serde_json::json!({"type": "task_started", "turn_id": "t1"})),
-            record("2026-09-29T00:00:02Z", "response_item", serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "fix the race"}]})),
-            record("2026-09-29T00:00:03Z", "event_msg", serde_json::json!({"type": "item_completed", "item": {"type": "Reasoning", "id": "rs_1", "summary_text": ["**Looking at the lock**"]}})),
-            record("2026-09-29T00:00:03.100Z", "response_item", serde_json::json!({"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "**Looking at the lock**"}]})),
-            record("2026-09-29T00:00:04Z", "response_item", serde_json::json!({"type": "function_call", "name": "shell", "call_id": "c1", "arguments": "{\"command\":[\"rg\",\"lock\"]}"})),
-            record("2026-09-29T00:00:05Z", "response_item", serde_json::json!({"type": "function_call_output", "call_id": "c1", "output": "src/lock.rs:1"})),
-            record("2026-09-29T00:00:05.100Z", "token_usage_record", serde_json::json!({"turn_id": "t1"})),
+            record(
+                "2026-09-29T00:00:00Z",
+                "session_meta",
+                serde_json::json!({"id": "cmp-3", "cwd": "/tmp/demo", "cli_version": "0.153.4"}),
+            ),
+            record(
+                "2026-09-29T00:00:01Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-09-29T00:00:02Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "fix the race"}]}),
+            ),
+            record(
+                "2026-09-29T00:00:03Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "item": {"type": "Reasoning", "id": "rs_1", "summary_text": ["**Looking at the lock**"]}}),
+            ),
+            record(
+                "2026-09-29T00:00:03.100Z",
+                "response_item",
+                serde_json::json!({"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "**Looking at the lock**"}]}),
+            ),
+            record(
+                "2026-09-29T00:00:04Z",
+                "response_item",
+                serde_json::json!({"type": "function_call", "name": "shell", "call_id": "c1", "arguments": "{\"command\":[\"rg\",\"lock\"]}"}),
+            ),
+            record(
+                "2026-09-29T00:00:05Z",
+                "response_item",
+                serde_json::json!({"type": "function_call_output", "call_id": "c1", "output": "src/lock.rs:1"}),
+            ),
+            record(
+                "2026-09-29T00:00:05.100Z",
+                "token_usage_record",
+                serde_json::json!({"turn_id": "t1"}),
+            ),
             token_count("2026-09-29T00:00:05.200Z", 1000, 100),
             // The compaction's model call: its thinking, then its handoff.
-            record("2026-09-29T00:00:30Z", "response_item", serde_json::json!({"type": "reasoning", "id": "rs_c", "summary": [{"type": "summary_text", "text": "**Preparing concise handoff summary**"}]})),
+            record(
+                "2026-09-29T00:00:30Z",
+                "response_item",
+                serde_json::json!({"type": "reasoning", "id": "rs_c", "summary": [{"type": "summary_text", "text": "**Preparing concise handoff summary**"}]}),
+            ),
             assistant_item("2026-09-29T00:00:40Z", HANDOFF),
-            record("2026-09-29T00:00:40.100Z", "token_usage_record", serde_json::json!({"turn_id": "t1"})),
+            record(
+                "2026-09-29T00:00:40.100Z",
+                "token_usage_record",
+                serde_json::json!({"turn_id": "t1"}),
+            ),
             token_count("2026-09-29T00:00:40.200Z", 2400, 180),
             compacted("2026-09-29T00:00:40.300Z", HANDOFF),
-            record("2026-09-29T00:00:40.400Z", "world_state", serde_json::json!({"full": true})),
-            record("2026-09-29T00:00:40.500Z", "turn_context", serde_json::json!({"turn_id": "t1", "model": "gpt-6"})),
-            record("2026-09-29T00:00:40.700Z", "event_msg", serde_json::json!({"type": "item_completed", "item": {"type": "ContextCompaction", "id": "cmp-item"}})),
-            record("2026-09-29T00:00:50Z", "event_msg", serde_json::json!({"type": "item_completed", "item": {"type": "Reasoning", "id": "rs_2", "summary_text": ["**Resuming the fix**"]}})),
-            record("2026-09-29T00:00:50.100Z", "response_item", serde_json::json!({"type": "reasoning", "id": "rs_2", "summary": [{"type": "summary_text", "text": "**Resuming the fix**"}]})),
+            record(
+                "2026-09-29T00:00:40.400Z",
+                "world_state",
+                serde_json::json!({"full": true}),
+            ),
+            record(
+                "2026-09-29T00:00:40.500Z",
+                "turn_context",
+                serde_json::json!({"turn_id": "t1", "model": "gpt-6"}),
+            ),
+            record(
+                "2026-09-29T00:00:40.700Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "item": {"type": "ContextCompaction", "id": "cmp-item"}}),
+            ),
+            record(
+                "2026-09-29T00:00:50Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "item": {"type": "Reasoning", "id": "rs_2", "summary_text": ["**Resuming the fix**"]}}),
+            ),
+            record(
+                "2026-09-29T00:00:50.100Z",
+                "response_item",
+                serde_json::json!({"type": "reasoning", "id": "rs_2", "summary": [{"type": "summary_text", "text": "**Resuming the fix**"}]}),
+            ),
             assistant_item("2026-09-29T00:01:00Z", "Fixed the race."),
             token_count("2026-09-29T00:01:00.100Z", 3500, 260),
-            record("2026-09-29T00:01:01Z", "event_msg", serde_json::json!({"type": "task_complete", "turn_id": "t1"})),
+            record(
+                "2026-09-29T00:01:01Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t1"}),
+            ),
         ]);
         let detail = parse_rollout("compaction-midturn", &content, "cmp-3");
 
@@ -16194,8 +16386,13 @@ mod tests {
             .blocks
             .iter()
             .any(|block| matches!(block, ContentBlock::ToolUse { tool_use_id: Some(id), .. } if id == "c1"))));
-        assert_eq!(texts.last(), Some(&("assistant", Some("Fixed the race.".into()))));
-        assert!(!texts.iter().any(|(_, text)| text.as_deref() == Some(HANDOFF)));
+        assert_eq!(
+            texts.last(),
+            Some(&("assistant", Some("Fixed the race.".into())))
+        );
+        assert!(!texts
+            .iter()
+            .any(|(_, text)| text.as_deref() == Some(HANDOFF)));
         // The thinking card that went away had the compaction's round billed
         // to it; that spend stays in the conversation, on the reply before.
         assert_eq!(turn_usage_total(&detail), 3760);
@@ -16204,7 +16401,10 @@ mod tests {
             .filter_map(|turn| turn.usage.as_ref())
             .map(|usage| usage.input_tokens + usage.output_tokens)
             .sum();
-        assert_eq!(before_divider, 2580, "both rounds before the divider stay there");
+        assert_eq!(
+            before_divider, 2580,
+            "both rounds before the divider stay there"
+        );
     }
 
     /// Codex before ~0.137 wrote no handoff record at all: the summary exists
@@ -16213,14 +16413,42 @@ mod tests {
     #[test]
     fn an_older_compaction_opens_onto_the_summary_its_record_restates() {
         let content = jsonl(&[
-            record("2026-05-31T10:00:00Z", "session_meta", serde_json::json!({"id": "cmp-4", "cwd": "/tmp/demo", "cli_version": "0.133.0"})),
-            record("2026-05-31T10:00:01Z", "event_msg", serde_json::json!({"type": "user_message", "message": "run the tests"})),
-            record("2026-05-31T10:00:02Z", "event_msg", serde_json::json!({"type": "agent_message", "message": "Running them."})),
-            record("2026-05-31T10:00:03Z", "response_item", serde_json::json!({"type": "function_call", "name": "shell", "call_id": "c1", "arguments": "{\"command\":[\"make\",\"test\"]}"})),
-            record("2026-05-31T10:00:04Z", "response_item", serde_json::json!({"type": "function_call_output", "call_id": "c1", "output": "ok"})),
+            record(
+                "2026-05-31T10:00:00Z",
+                "session_meta",
+                serde_json::json!({"id": "cmp-4", "cwd": "/tmp/demo", "cli_version": "0.133.0"}),
+            ),
+            record(
+                "2026-05-31T10:00:01Z",
+                "event_msg",
+                serde_json::json!({"type": "user_message", "message": "run the tests"}),
+            ),
+            record(
+                "2026-05-31T10:00:02Z",
+                "event_msg",
+                serde_json::json!({"type": "agent_message", "message": "Running them."}),
+            ),
+            record(
+                "2026-05-31T10:00:03Z",
+                "response_item",
+                serde_json::json!({"type": "function_call", "name": "shell", "call_id": "c1", "arguments": "{\"command\":[\"make\",\"test\"]}"}),
+            ),
+            record(
+                "2026-05-31T10:00:04Z",
+                "response_item",
+                serde_json::json!({"type": "function_call_output", "call_id": "c1", "output": "ok"}),
+            ),
             compacted("2026-05-31T10:00:05Z", HANDOFF),
-            record("2026-05-31T10:00:06Z", "event_msg", serde_json::json!({"type": "context_compacted"})),
-            record("2026-05-31T10:00:07Z", "event_msg", serde_json::json!({"type": "agent_message", "message": "All green."})),
+            record(
+                "2026-05-31T10:00:06Z",
+                "event_msg",
+                serde_json::json!({"type": "context_compacted"}),
+            ),
+            record(
+                "2026-05-31T10:00:07Z",
+                "event_msg",
+                serde_json::json!({"type": "agent_message", "message": "All green."}),
+            ),
         ]);
         let detail = parse_rollout("compaction-legacy", &content, "cmp-4");
 
@@ -16230,7 +16458,10 @@ mod tests {
         );
         let texts = turn_texts(&detail);
         assert_eq!(texts.first(), Some(&("user", Some("run the tests".into()))));
-        assert_eq!(texts.last(), Some(&("assistant", Some("All green.".into()))));
+        assert_eq!(
+            texts.last(),
+            Some(&("assistant", Some("All green.".into())))
+        );
     }
 
     /// The text fallback only looks at what was written since the previous
@@ -16240,14 +16471,34 @@ mod tests {
     fn the_text_fallback_never_reaches_past_the_previous_compaction() {
         let call = |ts: &str, id: &str| {
             [
-                record(ts, "response_item", serde_json::json!({"type": "function_call", "name": "shell", "call_id": id, "arguments": "{\"command\":[\"ls\"]}"})),
-                record(ts, "response_item", serde_json::json!({"type": "function_call_output", "call_id": id, "output": "ok"})),
+                record(
+                    ts,
+                    "response_item",
+                    serde_json::json!({"type": "function_call", "name": "shell", "call_id": id, "arguments": "{\"command\":[\"ls\"]}"}),
+                ),
+                record(
+                    ts,
+                    "response_item",
+                    serde_json::json!({"type": "function_call_output", "call_id": id, "output": "ok"}),
+                ),
             ]
         };
         let mut records = vec![
-            record("2026-09-29T00:00:00Z", "session_meta", serde_json::json!({"id": "cmp-6", "cwd": "/tmp/demo"})),
-            record("2026-09-29T00:00:01Z", "event_msg", serde_json::json!({"type": "task_started", "turn_id": "t1"})),
-            record("2026-09-29T00:00:02Z", "response_item", serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "q1"}]})),
+            record(
+                "2026-09-29T00:00:00Z",
+                "session_meta",
+                serde_json::json!({"id": "cmp-6", "cwd": "/tmp/demo"}),
+            ),
+            record(
+                "2026-09-29T00:00:01Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-09-29T00:00:02Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "q1"}]}),
+            ),
             // A real reply that happens to read exactly like a later summary.
             assistant_item("2026-09-29T00:00:03Z", HANDOFF),
         ];
@@ -16291,14 +16542,38 @@ mod tests {
     #[test]
     fn the_handoff_is_recognized_by_its_text_when_adjacency_breaks() {
         let content = jsonl(&[
-            record("2026-09-29T00:00:00Z", "session_meta", serde_json::json!({"id": "cmp-5", "cwd": "/tmp/demo"})),
-            record("2026-09-29T00:00:01Z", "event_msg", serde_json::json!({"type": "task_started", "turn_id": "t1"})),
-            record("2026-09-29T00:00:02Z", "response_item", serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]})),
+            record(
+                "2026-09-29T00:00:00Z",
+                "session_meta",
+                serde_json::json!({"id": "cmp-5", "cwd": "/tmp/demo"}),
+            ),
+            record(
+                "2026-09-29T00:00:01Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-09-29T00:00:02Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}),
+            ),
             assistant_item("2026-09-29T00:00:03Z", "Hello."),
-            record("2026-09-29T00:00:04Z", "event_msg", serde_json::json!({"type": "task_complete", "turn_id": "t1"})),
-            record("2026-09-29T00:01:00Z", "event_msg", serde_json::json!({"type": "task_started", "turn_id": "t2"})),
+            record(
+                "2026-09-29T00:00:04Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-09-29T00:01:00Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t2"}),
+            ),
             assistant_item("2026-09-29T00:01:40Z", HANDOFF),
-            record("2026-09-29T00:01:40.100Z", "some_future_accounting", serde_json::json!({"turn_id": "t2"})),
+            record(
+                "2026-09-29T00:01:40.100Z",
+                "some_future_accounting",
+                serde_json::json!({"turn_id": "t2"}),
+            ),
             compacted("2026-09-29T00:01:40.300Z", HANDOFF),
         ]);
         let detail = parse_rollout("compaction-text", &content, "cmp-5");
@@ -16446,7 +16721,8 @@ mod tests {
         // ("如果你希望调整…" is codex's habit). Rendering the announcement and
         // dropping the record would silently lose that prose, so the record
         // takes the announcement's message over rather than adding a second.
-        let record = "<proposed_plan>\n# Plan\n\n- step one\n</proposed_plan>\n\n如果你希望调整，告诉我。";
+        let record =
+            "<proposed_plan>\n# Plan\n\n- step one\n</proposed_plan>\n\n如果你希望调整，告诉我。";
         let content = plan_turn(true, Some(record));
         let detail = parse_rollout("plan-prose", &content, "plan-1");
 

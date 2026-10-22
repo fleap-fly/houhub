@@ -216,9 +216,10 @@ pub async fn acp_preflight(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpPreflightParams>,
 ) -> Result<Json<PreflightResult>, AppCommandError> {
-    let result = acp_commands::acp_preflight_core(&state.db, params.agent_type, params.force_refresh)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    let result =
+        acp_commands::acp_preflight_core(&state.db, params.agent_type, params.force_refresh)
+            .await
+            .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
 }
 
@@ -1528,10 +1529,13 @@ pub struct AcpTestModelProviderParams {
 pub async fn acp_test_model_provider(
     Json(params): Json<AcpTestModelProviderParams>,
 ) -> Result<Json<acp_commands::ModelProviderTestOutcome>, AppCommandError> {
-    let outcome =
-        acp_commands::acp_test_model_provider_core(&params.base_url, &params.api_key, &params.model)
-            .await
-            .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    let outcome = acp_commands::acp_test_model_provider_core(
+        &params.base_url,
+        &params.api_key,
+        &params.model,
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(outcome))
 }
 

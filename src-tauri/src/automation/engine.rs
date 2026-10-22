@@ -434,9 +434,10 @@ impl AutomationEngine {
         };
         // The command core (not the bare service) so the task board gets its
         // `task://changed` broadcast and the work-task pump its nudge for free.
-        let info = crate::commands::work_task::work_task_create_core(&self.emitter, &self.db, draft)
-            .await
-            .map_err(|e| e.to_string())?;
+        let info =
+            crate::commands::work_task::work_task_create_core(&self.emitter, &self.db, draft)
+                .await
+                .map_err(|e| e.to_string())?;
 
         let settled = automation_service::settle_run(
             &self.db.conn,

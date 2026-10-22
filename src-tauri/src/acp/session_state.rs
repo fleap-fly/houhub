@@ -63,8 +63,12 @@ pub enum LiveContentBlock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent_tool_use_id: Option<String>,
     },
-    ToolCallRef { tool_call_id: String },
-    Plan { entries: serde_json::Value },
+    ToolCallRef {
+        tool_call_id: String,
+    },
+    Plan {
+        entries: serde_json::Value,
+    },
 }
 
 /// 工具调用的运行态。turn 完成时统一 clear。
@@ -462,6 +466,12 @@ pub struct SessionState {
     ///
     /// Backend-internal — not serialized, not carried on `to_snapshot()`.
     pub trae_pat_sign_in: bool,
+    /// Pi's native `enabledModels` scope for this launch. The ACP adapter
+    /// advertises every authenticated model, so the connection layer applies
+    /// this Pi-only preference before publishing the model selector.
+    ///
+    /// Backend-internal — not serialized, not carried on `to_snapshot()`.
+    pub pi_enabled_model_patterns: Option<Vec<String>>,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub fork_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
@@ -864,6 +874,7 @@ impl SessionState {
             agent_chosen_config_values: BTreeMap::new(),
             env_pinned_config_option_ids: Vec::new(),
             trae_pat_sign_in: false,
+            pi_enabled_model_patterns: None,
             prompt_capabilities: None,
             fork_supported: false,
             available_commands: Vec::new(),
@@ -2235,12 +2246,10 @@ impl SessionState {
         // Both halves, because the question the early return answers is
         // "would shipping this whole be over budget", and the image bytes are
         // part of what ships either way.
-        let total = ordered
-            .iter()
-            .fold(0usize, |acc, (_, id, bytes)| {
-                acc.saturating_add(*bytes)
-                    .saturating_add(images_slice_size(&self.active_tool_calls[*id].images))
-            });
+        let total = ordered.iter().fold(0usize, |acc, (_, id, bytes)| {
+            acc.saturating_add(*bytes)
+                .saturating_add(images_slice_size(&self.active_tool_calls[*id].images))
+        });
         if total <= MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES {
             // The ordinary turn: nothing to trim, wire shape byte-identical.
             return self.active_tool_calls.values().cloned().collect();
@@ -2352,6 +2361,9 @@ impl SessionState {
 /// (owner [`CLI_OWNER_LABEL`](crate::cli_run::service::CLI_OWNER_LABEL)), whose
 /// prompts arrive from a schedule, a messaging app or a command line — and a
 /// `houhub-cli` run lets its connection go as soon as its one turn has ended.
+/// Nor a one-shot generation (owner
+/// [`OWNER_LABEL`](crate::acp::one_shot::OWNER_LABEL)), which has no
+/// conversation to continue at all.
 /// For them a prediction would only be paid for.
 /// Everything else is a person's window, a work task (its session takes
 /// follow-ups once the task stops), or a delegated child (which inherits its
@@ -2359,6 +2371,7 @@ impl SessionState {
 pub(crate) fn owner_composes_prompts(owner_window_label: &str) -> bool {
     owner_window_label != "automation"
         && owner_window_label != crate::cli_run::service::CLI_OWNER_LABEL
+        && !crate::acp::one_shot::is_one_shot_owner(owner_window_label)
         && !owner_window_label.starts_with("chat_channel:")
 }
 
@@ -2865,7 +2878,10 @@ mod tests {
         assert_eq!(row.task_type, "shell");
         assert_eq!(row.last_tool_name.as_deref(), Some("Bash"));
         assert_eq!(row.usage.as_ref().unwrap().total_tokens, 1200);
-        assert_eq!(row.output_file_path.as_deref(), Some("/tmp/tasks/t1.output"));
+        assert_eq!(
+            row.output_file_path.as_deref(),
+            Some("/tmp/tasks/t1.output")
+        );
 
         // The adapter revises a task AFTER it settles — correcting a
         // best-effort `stopped` into the real outcome, or attaching a late
@@ -2995,7 +3011,10 @@ mod tests {
             parent_tool_use_id: None,
         });
         assert!(s.begin_agent_initiated_turn());
-        assert!(s.live_message.is_none(), "the turn starts from a clean slate");
+        assert!(
+            s.live_message.is_none(),
+            "the turn starts from a clean slate"
+        );
         s.apply_event(&AcpEvent::StatusChanged {
             status: ConnectionStatus::Prompting,
         });
@@ -3096,7 +3115,12 @@ mod tests {
             }
         }
         let mut s = fresh_state();
-        s.apply_event(&failure("t1:error", 5, "warning", "Reconnecting, attempt 5 of 5."));
+        s.apply_event(&failure(
+            "t1:error",
+            5,
+            "warning",
+            "Reconnecting, attempt 5 of 5.",
+        ));
 
         // A cancelled/failed/empty exit is NOT recovery — the incident (e.g.
         // reconnect attempts with the network still down) must stay active
@@ -3587,6 +3611,7 @@ mod tests {
         for owner in [
             "automation",
             crate::cli_run::service::CLI_OWNER_LABEL,
+            crate::acp::one_shot::OWNER_LABEL,
             "chat_channel:4:wx-user",
             "chat_channel:4:tg-user:thread:9",
         ] {
@@ -3714,7 +3739,10 @@ mod tests {
             text: "Answer ".into(),
             parent_tool_use_id: None,
         });
-        s.apply_event(&AcpEvent::Thinking { text: "hmm".into(), parent_tool_use_id: None });
+        s.apply_event(&AcpEvent::Thinking {
+            text: "hmm".into(),
+            parent_tool_use_id: None,
+        });
         s.apply_event(&AcpEvent::ContentDelta {
             text: "continues here".into(),
             parent_tool_use_id: None,
@@ -3910,9 +3938,18 @@ mod tests {
     #[test]
     fn thinking_delta_creates_separate_block_from_text() {
         let mut s = fresh_state();
-        s.apply_event(&AcpEvent::ContentDelta { text: "T".into(), parent_tool_use_id: None });
-        s.apply_event(&AcpEvent::Thinking { text: "X".into(), parent_tool_use_id: None });
-        s.apply_event(&AcpEvent::ContentDelta { text: "Y".into(), parent_tool_use_id: None });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "T".into(),
+            parent_tool_use_id: None,
+        });
+        s.apply_event(&AcpEvent::Thinking {
+            text: "X".into(),
+            parent_tool_use_id: None,
+        });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "Y".into(),
+            parent_tool_use_id: None,
+        });
         let live = s.live_message.as_ref().unwrap();
         assert_eq!(live.content.len(), 3);
         match &live.content[0] {
@@ -4316,7 +4353,9 @@ mod tests {
         // The running call keeps its partial output at any size — nothing else
         // has it. So does the newest finished one.
         assert!(by_id["tc-running"].output.is_some());
-        assert!(by_id[format!("tc-{:04}", CALLS - 1).as_str()].output.is_some());
+        assert!(by_id[format!("tc-{:04}", CALLS - 1).as_str()]
+            .output
+            .is_some());
 
         // The oldest finished calls ship without the payload, but keep every
         // field that identifies the card.
@@ -4355,7 +4394,12 @@ mod tests {
         for i in 0..200 {
             run_tool_call(&mut s, &format!("tc-{i:04}"), 16 * 1024, true);
         }
-        run_tool_call(&mut s, "tc-huge", MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES + 1024, false);
+        run_tool_call(
+            &mut s,
+            "tc-huge",
+            MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES + 1024,
+            false,
+        );
 
         let snap = s.to_snapshot();
         let huge = snap
@@ -4530,7 +4574,10 @@ mod tests {
     #[test]
     fn turn_complete_clears_live_and_tool_calls_and_pending_permission() {
         let mut s = fresh_state();
-        s.apply_event(&AcpEvent::ContentDelta { text: "hi".into(), parent_tool_use_id: None });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "hi".into(),
+            parent_tool_use_id: None,
+        });
         s.apply_event(&AcpEvent::ToolCall {
             tool_call_id: "tc-1".into(),
             title: "x".into(),
@@ -4903,7 +4950,10 @@ mod tests {
             text: String::new(),
             parent_tool_use_id: None,
         });
-        assert!(s.live_message.is_none(), "empty chunk opens no live message");
+        assert!(
+            s.live_message.is_none(),
+            "empty chunk opens no live message"
+        );
         s.apply_event(&AcpEvent::TurnComplete {
             session_id: "ext".into(),
             stop_reason: "end_turn".into(),
@@ -4987,7 +5037,10 @@ mod tests {
         s.apply_event(&AcpEvent::PermissionQueueDepth { depth: 2 });
         let p = s.pending_permission.as_ref().expect("card still up");
         assert_eq!(p.queued, 2);
-        assert_eq!(p.request_id, "p-1", "depth must not change which card is up");
+        assert_eq!(
+            p.request_id, "p-1",
+            "depth must not change which card is up"
+        );
     }
 
     #[test]
@@ -5591,7 +5644,10 @@ mod tests {
     fn plan_update_appends_at_end_replacing_existing() {
         use crate::acp::types::PlanEntryInfo;
         let mut s = fresh_state();
-        s.apply_event(&AcpEvent::ContentDelta { text: "A".into(), parent_tool_use_id: None });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "A".into(),
+            parent_tool_use_id: None,
+        });
         s.apply_event(&AcpEvent::PlanUpdate {
             entries: vec![PlanEntryInfo {
                 content: "step v1".into(),
@@ -5599,7 +5655,10 @@ mod tests {
                 status: "pending".into(),
             }],
         });
-        s.apply_event(&AcpEvent::ContentDelta { text: "B".into(), parent_tool_use_id: None });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "B".into(),
+            parent_tool_use_id: None,
+        });
         s.apply_event(&AcpEvent::PlanUpdate {
             entries: vec![PlanEntryInfo {
                 content: "step v2".into(),
@@ -5661,7 +5720,10 @@ mod tests {
     fn turn_complete_clears_plan_and_tool_refs() {
         use crate::acp::types::PlanEntryInfo;
         let mut s = fresh_state();
-        s.apply_event(&AcpEvent::ContentDelta { text: "x".into(), parent_tool_use_id: None });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "x".into(),
+            parent_tool_use_id: None,
+        });
         s.apply_event(&tool_call_event("tc-1", "ls"));
         s.apply_event(&AcpEvent::PlanUpdate {
             entries: vec![PlanEntryInfo {
@@ -5691,7 +5753,10 @@ mod tests {
         let env = EventEnvelope {
             seq: 7,
             connection_id: "conn-x".into(),
-            payload: AcpEvent::ContentDelta { text: "abc".into(), parent_tool_use_id: None },
+            payload: AcpEvent::ContentDelta {
+                text: "abc".into(),
+                parent_tool_use_id: None,
+            },
         };
         let json = serde_json::to_string(&env).unwrap();
         let back: EventEnvelope = serde_json::from_str(&json).unwrap();

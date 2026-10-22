@@ -1523,8 +1523,9 @@ mod tests {
     /// identifier — rather than the executable inside it.
     #[test]
     fn the_helper_app_is_what_is_revealed() {
-        let copy = Path::new("/Users/u/Library/Application Support/com.houflow.houhub/computer-helper")
-            .join(HELPER_APP);
+        let copy =
+            Path::new("/Users/u/Library/Application Support/com.houflow.houhub/computer-helper")
+                .join(HELPER_APP);
         assert_eq!(
             app_of(copy.join("Contents/MacOS").join(helper_file_name())),
             copy
@@ -1564,7 +1565,8 @@ mod tests {
     #[test]
     fn the_copy_runs_only_in_an_app_of_its_own() {
         let exe = |app: &Path| app.join("Contents/MacOS").join(helper_file_name());
-        let home = Path::new("/Users/u/Library/Application Support/com.houflow.houhub/computer-helper");
+        let home =
+            Path::new("/Users/u/Library/Application Support/com.houflow.houhub/computer-helper");
         assert!(alone_in_its_app(&exe(&home.join(HELPER_APP))));
         for wrong in [
             exe(&Path::new("/Applications/houhub.app/Contents/Helpers").join(HELPER_APP)),

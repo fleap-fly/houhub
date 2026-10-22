@@ -12,6 +12,8 @@ pub mod handlers;
 
 pub mod port_probe;
 
+pub mod proxy_auth;
+
 pub mod router;
 
 pub mod shutdown;
@@ -700,7 +702,11 @@ pub fn describe_ports(ports: &[u16]) -> String {
     let contiguous = ports.windows(2).all(|w| w[1] == w[0] + 1);
     match (ports.first(), ports.last()) {
         (Some(first), Some(last)) if contiguous && ports.len() > 2 => format!("{first}-{last}"),
-        _ => ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", "),
+        _ => ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
     }
 }
 

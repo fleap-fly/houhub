@@ -30,6 +30,8 @@ const ACP_TRANSCRIPTS_DIR_NAME: &str = "acp-transcripts";
 
 const BACKGROUNDS_DIR_NAME: &str = "backgrounds";
 
+const TEXT_GENERATION_DIR_NAME: &str = "text-generation";
+
 /// `$HOUHUB_HOME` if set (and non-empty), else `~/.houhub/`.
 ///
 /// Returns the relative `.houhub` path when no home directory is available;
@@ -202,6 +204,28 @@ pub fn houhub_acp_transcripts_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(HOUHUB_DIR_NAME).join(ACP_TRANSCRIPTS_DIR_NAME))
 }
 
+/// Working directory of the throwaway sessions houhub starts to have an agent
+/// write a piece of text for it (see `crate::acp::one_shot`). Kept empty: the
+/// agent gets everything it needs in the prompt, and running here rather than
+/// in the user's repository keeps those sessions out of the repository's own
+/// resume lists, its project instructions and its project MCP servers.
+///
+/// Resolution mirrors [`houhub_acp_transcripts_root`]:
+/// 1. `$HOUHUB_HOME/text-generation`
+/// 2. `$HOUHUB_DATA_DIR/text-generation` (the data directory, see the module docs)
+/// 3. `~/.houhub/text-generation` (neither set)
+pub fn houhub_text_generation_root() -> PathBuf {
+    if let Some(custom) = std::env::var_os("HOUHUB_HOME").filter(|s| !s.is_empty()) {
+        return PathBuf::from(custom).join(TEXT_GENERATION_DIR_NAME);
+    }
+    if let Some(data) = std::env::var_os("HOUHUB_DATA_DIR").filter(|s| !s.is_empty()) {
+        return PathBuf::from(data).join(TEXT_GENERATION_DIR_NAME);
+    }
+    dirs::home_dir()
+        .map(|h| h.join(HOUHUB_DIR_NAME).join(TEXT_GENERATION_DIR_NAME))
+        .unwrap_or_else(|| PathBuf::from(HOUHUB_DIR_NAME).join(TEXT_GENERATION_DIR_NAME))
+}
+
 /// The data directory the desktop app exports as `HOUHUB_DATA_DIR` at the top
 /// of `run()`, before the logging init or anything else reads it: a preset
 /// `HOUHUB_DATA_DIR` (the operator's, or inherited from the houhub that launched
@@ -326,12 +350,20 @@ mod tests {
             Some(platform.join("com.houflow.houhub"))
         );
         assert_eq!(
-            desktop_data_dir(Some(std::ffi::OsStr::new("")), Some(&platform), "com.houflow.houhub"),
+            desktop_data_dir(
+                Some(std::ffi::OsStr::new("")),
+                Some(&platform),
+                "com.houflow.houhub"
+            ),
             Some(platform.join("com.houflow.houhub")),
             "an empty preset is no preset"
         );
         assert_eq!(
-            desktop_data_dir(Some(preset.as_os_str()), Some(&platform), "com.houflow.houhub"),
+            desktop_data_dir(
+                Some(preset.as_os_str()),
+                Some(&platform),
+                "com.houflow.houhub"
+            ),
             Some(preset.clone())
         );
         assert_eq!(
@@ -339,8 +371,12 @@ mod tests {
             Some(preset)
         );
         assert_eq!(desktop_data_dir(None, None, "com.houflow.houhub"), None);
-        let relative = desktop_data_dir(Some(std::ffi::OsStr::new("data")), None, "com.houflow.houhub")
-            .expect("a relative preset");
+        let relative = desktop_data_dir(
+            Some(std::ffi::OsStr::new("data")),
+            None,
+            "com.houflow.houhub",
+        )
+        .expect("a relative preset");
         assert!(relative.is_absolute(), "{}", relative.display());
         assert!(relative.ends_with("data"));
     }

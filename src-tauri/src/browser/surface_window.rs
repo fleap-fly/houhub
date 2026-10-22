@@ -14,7 +14,9 @@ use tauri::webview::PageLoadEvent;
 #[cfg(not(target_os = "linux"))]
 use tauri::webview::DownloadEvent;
 
-use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+    AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
 
 #[cfg(not(target_os = "linux"))]
 use super::downloads;
@@ -64,14 +66,24 @@ pub fn create(
         );
         platform::run_on_main(app, move || {
             build(
-                &app_handle, &owner, &tab_id, &label, &title, background, devtools, &profile, None,
+                &app_handle,
+                &owner,
+                &tab_id,
+                &label,
+                &title,
+                background,
+                devtools,
+                &profile,
+                None,
             )
         })
         .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?
     }
     #[cfg(not(target_os = "linux"))]
     {
-        build(app, owner, tab_id, label, title, background, devtools, profile, None)
+        build(
+            app, owner, tab_id, label, title, background, devtools, profile, None,
+        )
     }
 }
 
@@ -98,7 +110,8 @@ fn in_profile<'a>(
     let builder = builder
         .data_directory(profile::directory(profile))
         .additional_browser_args(
-            &profile::windows_args_for(profile).map_err(|e| tauri::Error::Io(std::io::Error::other(e)))?,
+            &profile::windows_args_for(profile)
+                .map_err(|e| tauri::Error::Io(std::io::Error::other(e)))?,
         );
     #[cfg(target_os = "linux")]
     let builder = builder.with_related_view(
@@ -137,10 +150,18 @@ fn in_profile<'a>(
 /// exactly as they are. None of a tab's hooks: the page is the listener's own
 /// and goes nowhere else.
 #[cfg_attr(
-    any(target_os = "macos", all(target_os = "windows", feature = "browser-child")),
+    any(
+        target_os = "macos",
+        all(target_os = "windows", feature = "browser-child")
+    ),
     allow(dead_code)
 )]
-pub fn open_probe(app: &AppHandle, label: &str, profile: &str, url: Url) -> tauri::Result<WebviewWindow> {
+pub fn open_probe(
+    app: &AppHandle,
+    label: &str,
+    profile: &str,
+    url: Url,
+) -> tauri::Result<WebviewWindow> {
     #[cfg(target_os = "linux")]
     {
         let handle = app.clone();
@@ -154,7 +175,12 @@ pub fn open_probe(app: &AppHandle, label: &str, profile: &str, url: Url) -> taur
     }
 }
 
-fn build_probe(app: &AppHandle, label: &str, profile: &str, url: Url) -> tauri::Result<WebviewWindow> {
+fn build_probe(
+    app: &AppHandle,
+    label: &str,
+    profile: &str,
+    url: Url,
+) -> tauri::Result<WebviewWindow> {
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
         .title("houhub")
         .visible(false)
@@ -203,7 +229,12 @@ fn build(
                     // one, because a page must not be able to put `data:` in
                     // the address bar by asking for it as a navigation.
                     if policy::report_scheme_denial(url, true) {
-                        hooks::navigation_blocked(&app, &tab_id, url.as_str(), NavigationBlockReason::Scheme);
+                        hooks::navigation_blocked(
+                            &app,
+                            &tab_id,
+                            url.as_str(),
+                            NavigationBlockReason::Scheme,
+                        );
                     }
                     return false;
                 }
@@ -211,7 +242,12 @@ fn build(
                     .try_state::<BrowserPolicy>()
                     .is_some_and(|policy| policy.blocked(url))
                 {
-                    hooks::navigation_blocked(&app, &tab_id, url.as_str(), NavigationBlockReason::HostRule);
+                    hooks::navigation_blocked(
+                        &app,
+                        &tab_id,
+                        url.as_str(),
+                        NavigationBlockReason::HostRule,
+                    );
                     return false;
                 }
                 // Allowed, and this is the last moment before the request is
@@ -239,22 +275,23 @@ fn build(
         });
     #[cfg(not(target_os = "linux"))]
     let builder = builder.on_download({
-            let app = app.clone();
-            let tab_id = tab_id.to_string();
-            move |_webview, event| match event {
-                DownloadEvent::Requested { url, destination } => {
-                    downloads::requested(&app, &tab_id, url.as_str(), destination)
-                }
-                DownloadEvent::Finished { url, path, success } => {
-                    downloads::finished(&app, url.as_str(), path, success);
-                    true
-                }
-                // `DownloadEvent` is non-exhaustive: a variant added upstream
-                // must not silently become "allowed".
-                _ => false,
+        let app = app.clone();
+        let tab_id = tab_id.to_string();
+        move |_webview, event| match event {
+            DownloadEvent::Requested { url, destination } => {
+                downloads::requested(&app, &tab_id, url.as_str(), destination)
             }
-        });
-    let builder = builder.disable_drag_drop_handler()
+            DownloadEvent::Finished { url, path, success } => {
+                downloads::finished(&app, url.as_str(), path, success);
+                true
+            }
+            // `DownloadEvent` is non-exhaustive: a variant added upstream
+            // must not silently become "allowed".
+            _ => false,
+        }
+    });
+    let builder = builder
+        .disable_drag_drop_handler()
         .zoom_hotkeys_enabled(true)
         .browser_extensions_enabled(false);
     // The same identity the embedded tabs start with. An owned window keeps it
@@ -336,10 +373,10 @@ mod platform {
     use super::super::registry::{BrowserRegistry, BrowserTab};
     use super::super::shim::linux as shim;
     use super::super::surface::{BrowserSurface, SurfaceError};
+    use super::super::tab_label;
     use super::super::types::{
         BrowserPopupPayload, BrowserTabState, ChannelKind, PopupPresentation, SurfaceKind, TabKind,
     };
-    use super::super::tab_label;
 
     /// The opener a new window must be built from: WebKitGTK refuses to open
     /// one for a page unless the webview it is given is RELATED to the webview
@@ -442,8 +479,13 @@ mod platform {
             // the allocator can hand out again, so it is let go of here rather
             // than left to be inherited by whoever lands on that address.
             let replaced = WEBVIEWS.with(|live| {
-                live.borrow_mut()
-                    .insert(held, Live { webview, tab_id: tab })
+                live.borrow_mut().insert(
+                    held,
+                    Live {
+                        webview,
+                        tab_id: tab,
+                    },
+                )
             });
             if let Some(replaced) = replaced {
                 shim::forget(&replaced.webview);
@@ -478,7 +520,9 @@ mod platform {
     /// profile-removal command has closed all of their tabs.
     pub fn forget_profile_context(app: &AppHandle, profile: &str) -> Result<(), SurfaceError> {
         let profile = profile.to_string();
-        run_on_main(app, move || super::super::shim::linux_context::forget(&profile))
+        run_on_main(app, move || {
+            super::super::shim::linux_context::forget(&profile)
+        })
     }
 
     /// Build the new window from the one that asked for it.

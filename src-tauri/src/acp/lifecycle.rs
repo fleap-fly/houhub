@@ -442,13 +442,9 @@ pub(crate) async fn handle_event(
                     return Ok(());
                 };
                 let continues: Vec<String> = current.external_id.into_iter().collect();
-                let preserved = conversation_service::bind_external_id(
-                    db_conn,
-                    cid,
-                    transcript_id,
-                    &continues,
-                )
-                .await?;
+                let preserved =
+                    conversation_service::bind_external_id(db_conn, cid, transcript_id, &continues)
+                        .await?;
                 crate::commands::conversations::emit_conversation_upsert(&emitter, db_conn, cid)
                     .await;
                 crate::commands::conversations::emit_preserved_conversation(
@@ -995,9 +991,7 @@ mod delegation_title_tests {
             assert_eq!(key.task, "review");
         }
         // An invalid id is no key at all (the listener refuses the call).
-        assert!(
-            extract_delegation_match_key(Some(r#"{"assistant_id":0,"task":"x"}"#)).is_none()
-        );
+        assert!(extract_delegation_match_key(Some(r#"{"assistant_id":0,"task":"x"}"#)).is_none());
     }
 
     #[test]
@@ -2777,7 +2771,10 @@ mod tests {
         let env = EventEnvelope {
             seq: 1,
             connection_id: "c1".to_string(),
-            payload: AcpEvent::ContentDelta { text: "hi".into(), parent_tool_use_id: None },
+            payload: AcpEvent::ContentDelta {
+                text: "hi".into(),
+                parent_tool_use_id: None,
+            },
         };
         handle_event(&db.conn, &mgr, &env, None).await.unwrap();
 

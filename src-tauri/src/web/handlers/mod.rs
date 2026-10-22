@@ -26,6 +26,8 @@ pub mod chat_authoring;
 
 pub mod chat_channel;
 
+pub mod commit_message;
+
 pub mod config_sync;
 
 pub mod conversation_tags;

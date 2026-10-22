@@ -248,7 +248,8 @@ mod tests {
                         message_count, title_locked, created_at, updated_at, external_id) VALUES ";
     const SETTING: &str = "INSERT INTO agent_setting (agent_type, registry_id, enabled, \
                            sort_order, installed_version, env_json, created_at, updated_at) VALUES ";
-    const DELEGATION: &str = "INSERT INTO app_metadata (key, value, created_at, updated_at) VALUES ";
+    const DELEGATION: &str =
+        "INSERT INTO app_metadata (key, value, created_at, updated_at) VALUES ";
 
     /// The delegation defaults after the migration, parsed.
     async fn delegation_defaults(conn: &DatabaseConnection) -> serde_json::Value {

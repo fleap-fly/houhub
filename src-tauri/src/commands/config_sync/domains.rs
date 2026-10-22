@@ -249,7 +249,10 @@ fn encode<T: Serialize>(rows: Vec<T>) -> Result<Value, AppCommandError> {
     })
 }
 
-fn decode_rows<T: DeserializeOwned>(domain: &str, value: &Value) -> Result<Vec<T>, AppCommandError> {
+fn decode_rows<T: DeserializeOwned>(
+    domain: &str,
+    value: &Value,
+) -> Result<Vec<T>, AppCommandError> {
     // A domain missing from an older snapshot is not an error; it simply
     // carries nothing.
     if value.is_null() {
@@ -1097,7 +1100,10 @@ mod tests {
         mixed.insert(portable.to_string(), Value::from("kept"));
         // Not on the allowlist: refused on the way in, so it must not be
         // counted on the way out.
-        mixed.insert("definitely_not_portable".to_string(), Value::from("dropped"));
+        mixed.insert(
+            "definitely_not_portable".to_string(),
+            Value::from("dropped"),
+        );
         // On the allowlist but not a string — preferences are stored as text,
         // and the applier skips anything else rather than stringifying it.
         mixed.insert("appearance_zoom_level".to_string(), Value::from(7));

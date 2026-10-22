@@ -262,7 +262,10 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
                     surface,
-                    devtools: cmd.get("devtools").and_then(Value::as_bool).unwrap_or(false),
+                    devtools: cmd
+                        .get("devtools")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                     profile,
                     zoom: cmd.get("zoom").and_then(Value::as_f64),
                 },
@@ -285,11 +288,16 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
             Ok(json!(connection.id))
         }
         "browser_egress_status" => {
-            let connection_id = cmd.get("connection_id").and_then(Value::as_i64).ok_or("missing connection_id")?;
+            let connection_id = cmd
+                .get("connection_id")
+                .and_then(Value::as_i64)
+                .ok_or("missing connection_id")?;
             let connection_id = i32::try_from(connection_id).map_err(err_string)?;
             let egresses = app.state::<crate::browser::egress::EgressRegistry>();
             Ok(match egresses.get(connection_id) {
-                Some(egress) => json!({ "status": egress.status(), "socks": egress.socks_addr().to_string() }),
+                Some(egress) => {
+                    json!({ "status": egress.status(), "socks": egress.socks_addr().to_string() })
+                }
                 None => Value::Null,
             })
         }
@@ -310,7 +318,10 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
                         .get("background")
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
-                    devtools: cmd.get("devtools").and_then(Value::as_bool).unwrap_or(false),
+                    devtools: cmd
+                        .get("devtools")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                 },
             )
             .map_err(err_string)?;
@@ -358,8 +369,12 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
                 }
                 _ => None,
             };
-            browser_commands::set_window_viewport_core(&registry, &str_arg(cmd, "tab_id")?, viewport)
-                .map_err(err_string)?;
+            browser_commands::set_window_viewport_core(
+                &registry,
+                &str_arg(cmd, "tab_id")?,
+                viewport,
+            )
+            .map_err(err_string)?;
             Ok(Value::Null)
         }
         "browser_set_visible" => {
@@ -404,7 +419,10 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
         }
         "browser_capabilities" => {
             let policy = app.state::<crate::browser::policy::BrowserPolicy>();
-            Ok(serde_json::to_value(browser_commands::capabilities(&policy)).map_err(err_string)?)
+            Ok(
+                serde_json::to_value(browser_commands::capabilities(&policy))
+                    .map_err(err_string)?,
+            )
         }
         "browser_navigate" => {
             let state = browser_commands::navigate_core(
@@ -447,7 +465,9 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
         // `control`), the same one the frontend sends.
         "browser_agent_grant" => {
             let level = serde_json::from_value(
-                cmd.get("level").cloned().unwrap_or(Value::String("none".into())),
+                cmd.get("level")
+                    .cloned()
+                    .unwrap_or(Value::String("none".into())),
             )
             .map_err(err_string)?;
             let state = browser_commands::set_agent_grant_core(
@@ -481,10 +501,9 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
         // (`{generation, ref?, action: {kind, …}}`), the same shape the MCP
         // tools build.
         "browser_agent_act" => {
-            let request: crate::browser::agent::ActionRequest = serde_json::from_value(
-                cmd.get("request").cloned().ok_or("request required")?,
-            )
-            .map_err(err_string)?;
+            let request: crate::browser::agent::ActionRequest =
+                serde_json::from_value(cmd.get("request").cloned().ok_or("request required")?)
+                    .map_err(err_string)?;
             let outcome = browser_commands::agent_act_core(
                 app,
                 &registry,
@@ -541,8 +560,9 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
                 code: str_arg(cmd, "code")?,
             };
             if let Some(answer) = cmd.get("answer").and_then(Value::as_bool) {
-                let after =
-                    Duration::from_millis(cmd.get("after_ms").and_then(Value::as_u64).unwrap_or(600));
+                let after = Duration::from_millis(
+                    cmd.get("after_ms").and_then(Value::as_u64).unwrap_or(600),
+                );
                 let window = main_window()?;
                 let slot = if answer { "action" } else { "cancel" };
                 tauri::async_runtime::spawn(async move {
@@ -618,14 +638,16 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
             Ok(json!(true))
         }
         "browser_page_capture" => {
-            let handoff =
-                browser_commands::capture_page_core(&registry, &str_arg(cmd, "tab_id")?)
-                    .await
-                    .map_err(err_string)?;
+            let handoff = browser_commands::capture_page_core(&registry, &str_arg(cmd, "tab_id")?)
+                .await
+                .map_err(err_string)?;
             Ok(json!(handoff))
         }
         "browser_page_console" => {
-            let errors_only = cmd.get("errors_only").and_then(Value::as_bool).unwrap_or(true);
+            let errors_only = cmd
+                .get("errors_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
             let handoff = browser_commands::page_console_core(
                 &registry,
                 &str_arg(cmd, "tab_id")?,
@@ -651,7 +673,11 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
                     let _ = tx.send(value);
                 })
                 .map_err(err_string)?;
-            let timeout = Duration::from_millis(cmd.get("timeout_ms").and_then(Value::as_u64).unwrap_or(8000));
+            let timeout = Duration::from_millis(
+                cmd.get("timeout_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(8000),
+            );
             let value = tokio::task::spawn_blocking(move || rx.recv_timeout(timeout))
                 .await
                 .map_err(err_string)?
@@ -669,7 +695,11 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
                     let _ = tx.send(value);
                 })
                 .map_err(err_string)?;
-            let timeout = Duration::from_millis(cmd.get("timeout_ms").and_then(Value::as_u64).unwrap_or(8000));
+            let timeout = Duration::from_millis(
+                cmd.get("timeout_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(8000),
+            );
             let value = tokio::task::spawn_blocking(move || rx.recv_timeout(timeout))
                 .await
                 .map_err(err_string)?
@@ -695,15 +725,18 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
             Ok(json!({ "path": path, "bytes": png.len() }))
         }
         "browser_back" => {
-            browser_commands::go_back_core(&registry, &str_arg(cmd, "tab_id")?).map_err(err_string)?;
+            browser_commands::go_back_core(&registry, &str_arg(cmd, "tab_id")?)
+                .map_err(err_string)?;
             Ok(Value::Null)
         }
         "browser_forward" => {
-            browser_commands::go_forward_core(&registry, &str_arg(cmd, "tab_id")?).map_err(err_string)?;
+            browser_commands::go_forward_core(&registry, &str_arg(cmd, "tab_id")?)
+                .map_err(err_string)?;
             Ok(Value::Null)
         }
         "browser_stop" => {
-            browser_commands::stop_core(app, &registry, &str_arg(cmd, "tab_id")?).map_err(err_string)?;
+            browser_commands::stop_core(app, &registry, &str_arg(cmd, "tab_id")?)
+                .map_err(err_string)?;
             Ok(Value::Null)
         }
         "browser_gestures" => {
@@ -834,8 +867,14 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
                     source: "smoke".to_string(),
                     activate: cmd.get("activate").and_then(Value::as_bool).unwrap_or(true),
                     owner_window: cmd.get("owner").and_then(Value::as_str).map(str::to_string),
-                    opener_tab_id: cmd.get("opener").and_then(Value::as_str).map(str::to_string),
-                    profile: cmd.get("profile").and_then(Value::as_str).map(str::to_string),
+                    opener_tab_id: cmd
+                        .get("opener")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    profile: cmd
+                        .get("profile")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                     request_id: None,
                 },
             );
@@ -856,7 +895,11 @@ async fn execute(app: &AppHandle, cmd: &Value) -> Result<Value, String> {
                 let _ = tx.send(value);
             })
             .map_err(err_string)?;
-            let timeout = Duration::from_millis(cmd.get("timeout_ms").and_then(Value::as_u64).unwrap_or(8000));
+            let timeout = Duration::from_millis(
+                cmd.get("timeout_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(8000),
+            );
             let value = tokio::task::spawn_blocking(move || rx.recv_timeout(timeout))
                 .await
                 .map_err(err_string)?

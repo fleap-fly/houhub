@@ -41,8 +41,8 @@ use crate::parsers::claude::group_into_turns;
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, is_safe_subagent_id, merge_context_window_stats,
-    relocate_orphaned_tool_results, title_from_user_text, with_reported_context_percent,
-    AgentEnv, AgentParser, ParseError,
+    relocate_orphaned_tool_results, title_from_user_text, with_reported_context_percent, AgentEnv,
+    AgentParser, ParseError,
 };
 
 /// `KIRO_HOME` if set (and non-empty), else `~/.kiro`.
@@ -1103,7 +1103,9 @@ mod tests {
         let env = AgentEnv::with_overrides(&[("KIRO_HOME", "/relocated/kiro")]);
         assert_eq!(
             KiroParser::for_env(&env).sessions_dir,
-            PathBuf::from("/relocated/kiro").join("sessions").join("cli")
+            PathBuf::from("/relocated/kiro")
+                .join("sessions")
+                .join("cli")
         );
     }
 

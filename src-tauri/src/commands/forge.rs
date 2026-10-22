@@ -41,6 +41,13 @@ pub struct ForgeRemote {
     pub server_host: String,
     pub owner_repo: String,
     pub remote_url: String,
+    /// The instance's web root (see `HostProfile::web_origin`): where the
+    /// panel's "open repository" link points when `remote_url` is SSH, which
+    /// no browser can open. It comes from the account the API reads this host
+    /// with instead of being assumed `https://`, because a self-hosted
+    /// instance served over plain http, on its own port or under a mount path
+    /// is only reachable where that account says it is.
+    pub web_origin: String,
     /// Which forge this host is, decided HERE (see `forge::provider_for_host`)
     /// and handed to the client for display and for building the reverse-lookup
     /// keys. The client never picks it: that choice selects a credential.
@@ -196,7 +203,11 @@ impl ForgeScenario {
             return Err(AppCommandError::invalid_input(format!(
                 "scenario \"{}\" does not apply to {} — refresh the workbench and try again",
                 scenario.as_str(),
-                if is_pr { "a proposed change" } else { "an issue" }
+                if is_pr {
+                    "a proposed change"
+                } else {
+                    "an issue"
+                }
             )));
         }
         Ok(scenario)
@@ -547,6 +558,9 @@ pub async fn folder_forge_remote_core(
         // Redacted, not raw: a remote URL can carry `user:token@` from
         // whatever configured it, and this value crosses to the client.
         remote_url: redact_userinfo(&url),
+        // Same treatment: it is whatever was typed as the account's server
+        // URL, and it crosses to the client the same way.
+        web_origin: redact_userinfo(&profile.web_origin),
         provider: profile.provider,
         supported: profile.recognized,
     }))
@@ -595,8 +609,7 @@ pub async fn forge_list_issues_core(
     folder_id: i32,
     filters: ListFilters,
 ) -> Result<ForgeIssueList, AppCommandError> {
-    let (remote, auth) =
-        resolve_folder_repo(db, folder_id, filters.account_id.as_deref()).await?;
+    let (remote, auth) = resolve_folder_repo(db, folder_id, filters.account_id.as_deref()).await?;
     // The repository is an ARGUMENT here, never a field of `filters`: it is
     // derived from the folder's own remote, so there is nothing for a client to
     // claim. Paging is clamped inside each client (`ListIssuesRequest::clamped`)
@@ -964,8 +977,7 @@ pub async fn create_forge_task(
     let source = &draft.source;
     let item_kind = ForgeItemKind::parse(&source.kind).map_err(AppCommandError::from)?;
     let is_pr = item_kind == ForgeItemKind::Change;
-    let claimed_provider =
-        ForgeProvider::parse(&source.provider).map_err(AppCommandError::from)?;
+    let claimed_provider = ForgeProvider::parse(&source.provider).map_err(AppCommandError::from)?;
 
     let server_host = source.server_host.trim().to_ascii_lowercase();
     let owner_repo = forge::normalize_repo(&source.owner_repo).ok_or_else(|| {
@@ -998,9 +1010,13 @@ pub async fn create_forge_task(
 
     // Account resolution pins the identity the task will keep using (writeback
     // and delivery read it from source_meta — never "the current default").
-    let auth =
-        forge::resolve_forge_auth(&db.conn, provider, &server_host, source.account_id.as_deref())
-            .await?;
+    let auth = forge::resolve_forge_auth(
+        &db.conn,
+        provider,
+        &server_host,
+        source.account_id.as_deref(),
+    )
+    .await?;
 
     // A proposed change has to be hydrated before a card can exist: the list
     // rows carry no refs at all, and without head/base there is nothing to
@@ -1061,6 +1077,7 @@ pub async fn create_forge_task(
         head_sha: pull.as_ref().map(|p| p.head_sha.clone()),
         head_repo: pull.as_ref().map(|p| p.head_repo.clone()),
         result_pr: None,
+        pushed_onto: None,
         // Always stamped explicitly, both answers: the engine reads it as the
         // user's decision, and an absent field there means "an older row that
         // never had the choice" — a meaning a fresh task must not borrow.
@@ -1161,9 +1178,7 @@ pub async fn create_forge_task(
             crate::commands::work_task::nudge_pump(task.folder_id);
             Ok(ForgeCreateResult::Created { task })
         }
-        ForgeCreateOutcome::Duplicate(existing) => {
-            Ok(ForgeCreateResult::Duplicate { existing })
-        }
+        ForgeCreateOutcome::Duplicate(existing) => Ok(ForgeCreateResult::Duplicate { existing }),
     }
 }
 
@@ -1550,7 +1565,10 @@ mod tests {
                     !text.contains("task_progress") && !text.contains("task_complete"),
                     "{s:?} duplicates the engine's reporting instructions"
                 );
-                assert!(text.contains("#7") && text.contains(URL), "{s:?} lost its anchor");
+                assert!(
+                    text.contains("#7") && text.contains(URL),
+                    "{s:?} lost its anchor"
+                );
                 assert!(
                     text.contains("fenced external content"),
                     "{s:?} must point at the envelope"
@@ -1588,11 +1606,15 @@ mod tests {
                     "{s:?} leaves the check optional"
                 );
 
-                let gate = text.find("Judge whether the report holds up").expect("the gate");
+                let gate = text
+                    .find("Judge whether the report holds up")
+                    .expect("the gate");
                 let branch = text
                     .find("If the report does not hold")
                     .unwrap_or_else(|| panic!("{s:?} has no failure branch"));
-                let work = text.find("Once the report holds up").expect("the work paragraph");
+                let work = text
+                    .find("Once the report holds up")
+                    .expect("the work paragraph");
                 // Before the work, not after it: an instruction that arrives
                 // once the fix is written is a retraction, not a gate.
                 assert!(gate < branch && branch < work, "{s:?} judges after acting");
@@ -1635,7 +1657,10 @@ mod tests {
                     "{s:?} does not say what must not happen"
                 );
                 // Not only the fix it was asked for: the extras it found too.
-                assert!(outcome.contains("not even"), "{s:?} still lets extras through");
+                assert!(
+                    outcome.contains("not even"),
+                    "{s:?} still lets extras through"
+                );
                 let lower = outcome.to_lowercase();
                 assert!(lower.contains("stop there"), "{s:?} never ends the task");
                 assert!(
@@ -1715,7 +1740,9 @@ mod tests {
             let noun = provider.change_noun();
             let text = forge_instruction(ForgeScenario::ReviewFix, provider, 7, URL);
             assert!(
-                text.starts_with(&format!("Review {noun} #7 ({URL}): judge its approach first")),
+                text.starts_with(&format!(
+                    "Review {noun} #7 ({URL}): judge its approach first"
+                )),
                 "{provider:?}: the anchor does not put the judgement first"
             );
             assert!(
@@ -1727,14 +1754,22 @@ mod tests {
             let branch = text
                 .find("If the approach does not hold")
                 .unwrap_or_else(|| panic!("{provider:?} has no failure branch"));
-            let work = text.find("Once the approach holds up").expect("the fixing paragraph");
+            let work = text
+                .find("Once the approach holds up")
+                .expect("the fixing paragraph");
             // Before the work, not after it: an instruction that arrives once
             // the fixes are written is a retraction, not a gate.
-            assert!(gate < branch && branch < work, "{provider:?} judges after fixing");
+            assert!(
+                gate < branch && branch < work,
+                "{provider:?} judges after fixing"
+            );
             let first_fix = text
                 .find("fix the problems that are worth fixing")
                 .expect("the licence to fix");
-            assert!(work < first_fix, "{provider:?} licenses fixes before the judgement");
+            assert!(
+                work < first_fix,
+                "{provider:?} licenses fixes before the judgement"
+            );
             // Doubt is the user's call, not a reason to go ahead.
             assert!(
                 text[gate..branch].contains("treat it as not holding"),
@@ -1751,8 +1786,14 @@ mod tests {
                 outcome.contains("not even the small fixes"),
                 "{provider:?} still lets the reviewer polish the wrong design"
             );
-            assert!(outcome.contains("worktree clean"), "{provider:?} leaves a dirty tree");
-            assert!(outcome.contains("stop there"), "{provider:?} never ends the task");
+            assert!(
+                outcome.contains("worktree clean"),
+                "{provider:?} leaves a dirty tree"
+            );
+            assert!(
+                outcome.contains("stop there"),
+                "{provider:?} never ends the task"
+            );
             // The user gets the decision, and the ways forward from it.
             assert!(
                 outcome.contains("send this task back to have you fix it in place anyway"),
@@ -1842,7 +1883,10 @@ mod tests {
         for provider in [ForgeProvider::GitHub, ForgeProvider::GitLab] {
             for s in [ForgeScenario::ReviewFix, ForgeScenario::ReviewOnly] {
                 let text = forge_instruction(s, provider, 7, URL);
-                assert!(text.contains("Judge the approach, not just the diff"), "{s:?}");
+                assert!(
+                    text.contains("Judge the approach, not just the diff"),
+                    "{s:?}"
+                );
                 assert!(text.contains("warranted at all"), "{s:?}");
                 assert!(text.contains("best way to solve it"), "{s:?}");
                 assert!(text.contains("production-ready as it stands"), "{s:?}");
@@ -1869,7 +1913,10 @@ mod tests {
         for s in all_scenarios() {
             for provider in [ForgeProvider::GitHub, ForgeProvider::GitLab] {
                 let text = forge_instruction(s, provider, 7, URL);
-                assert!(text.contains("\n\n"), "{s:?} runs together as one paragraph");
+                assert!(
+                    text.contains("\n\n"),
+                    "{s:?} runs together as one paragraph"
+                );
                 assert!(
                     !text.replace("\n\n", "").contains('\n'),
                     "{s:?} still breaks a paragraph with a bare newline"
@@ -1903,7 +1950,10 @@ mod tests {
             None,
             Some("  also update the docs  "),
         );
-        assert_eq!(noted, format!("{plain}\n\n{USER_NOTE_HEADER}\nalso update the docs"));
+        assert_eq!(
+            noted,
+            format!("{plain}\n\n{USER_NOTE_HEADER}\nalso update the docs")
+        );
         // A blank line before the header, and the note on its own line under
         // it — the two breaks the old wording was missing.
         assert!(noted.contains(&format!("\n\n{USER_NOTE_HEADER}\n")));
@@ -1917,9 +1967,18 @@ mod tests {
         let gh = ForgeProvider::GitHub;
         let plain = instruction_block(ForgeScenario::ReviewFix, gh, 7, URL, None, None);
 
-        let standing =
-            instruction_block(ForgeScenario::ReviewFix, gh, 7, URL, Some("  Reply in zh.  "), None);
-        assert_eq!(standing, format!("{plain}\n\n{STANDING_HEADER}\nReply in zh."));
+        let standing = instruction_block(
+            ForgeScenario::ReviewFix,
+            gh,
+            7,
+            URL,
+            Some("  Reply in zh.  "),
+            None,
+        );
+        assert_eq!(
+            standing,
+            format!("{plain}\n\n{STANDING_HEADER}\nReply in zh.")
+        );
 
         let both = instruction_block(
             ForgeScenario::ReviewFix,
@@ -1938,7 +1997,10 @@ mod tests {
         );
         let standing_at = both.find(STANDING_HEADER).expect("standing section");
         let note_at = both.find(USER_NOTE_HEADER).expect("note section");
-        assert!(standing_at < note_at, "the per-item note must have the last word");
+        assert!(
+            standing_at < note_at,
+            "the per-item note must have the last word"
+        );
     }
 
     /// The envelope is a separate prompt block appended right after the
@@ -1964,8 +2026,15 @@ mod tests {
             },
         );
         let glued = format!("{instruction}{envelope}");
-        let note_line = glued.lines().find(|l| l.contains("do X")).expect("the note's line");
-        assert_eq!(note_line.trim(), "do X", "the envelope ran onto the user's note");
+        let note_line = glued
+            .lines()
+            .find(|l| l.contains("do X"))
+            .expect("the note's line");
+        assert_eq!(
+            note_line.trim(),
+            "do X",
+            "the envelope ran onto the user's note"
+        );
     }
 
     /// The settings blob keys its standing instructions by SCENARIO WIRE NAME
@@ -2046,12 +2115,17 @@ mod tests {
                 head_sha: None,
                 head_repo: None,
                 result_pr: None,
+                pushed_onto: None,
                 writeback: stored,
             };
             let round: ForgeSourceMeta =
                 serde_json::from_str(&serde_json::to_string(&meta).expect("encode"))
                     .expect("decode");
-            assert_eq!(round.writeback.unwrap_or(false), expected, "gate flipped for {sent}");
+            assert_eq!(
+                round.writeback.unwrap_or(false),
+                expected,
+                "gate flipped for {sent}"
+            );
         }
     }
 
@@ -2099,5 +2173,71 @@ mod tests {
             let expect = matches!(s, ForgeScenario::PlanFirst | ForgeScenario::ReviewOnly);
             assert_eq!(s.is_report(), expect, "{s:?}");
         }
+    }
+
+    /// A GitLab served over plain http only, its account registered at that
+    /// `http://` URL, and a folder whose origin is the scp-style SSH address
+    /// (#997). The remote names no scheme at all, so the panel's link to the
+    /// repository has to be handed the origin the account registered — it
+    /// used to assume `https://` and open a port nothing listens on. No token
+    /// and no network: a declared forge is never probed.
+    #[tokio::test]
+    async fn an_ssh_remote_carries_the_web_origin_its_hosts_account_registered() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let settings = crate::models::GitHubAccountsSettings {
+            accounts: vec![crate::models::GitHubAccount {
+                id: "acc-gl".into(),
+                server_url: "http://gitlab.example.com/".into(),
+                username: "dev".into(),
+                scopes: vec!["api".into()],
+                avatar_url: None,
+                is_default: true,
+                created_at: "2026-10-20T00:00:00Z".into(),
+                provider: Some("gitlab".into()),
+            }],
+        };
+        crate::db::service::app_metadata_service::upsert_value(
+            &db.conn,
+            "github_accounts",
+            &serde_json::to_string(&settings).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let repo = tempfile::tempdir().expect("tempdir");
+        for args in [
+            vec!["init", "-q"],
+            vec![
+                "remote",
+                "add",
+                "origin",
+                "git@gitlab.example.com:group/repo.git",
+            ],
+        ] {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(&args)
+                .status()
+                .expect("git runs");
+            assert!(status.success(), "git {args:?}");
+        }
+        let folder = crate::db::service::folder_service::add_folder(
+            &db.conn,
+            &repo.path().to_string_lossy(),
+        )
+        .await
+        .expect("folder");
+
+        let remote = folder_forge_remote_core(&db, folder.id)
+            .await
+            .unwrap()
+            .expect("a forge remote");
+        assert_eq!(remote.remote_url, "git@gitlab.example.com:group/repo.git");
+        assert_eq!(remote.server_host, "gitlab.example.com");
+        assert_eq!(remote.owner_repo, "group/repo");
+        assert_eq!(remote.web_origin, "http://gitlab.example.com");
+        assert_eq!(remote.provider, ForgeProvider::GitLab);
+        assert!(remote.supported);
     }
 }

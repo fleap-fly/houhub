@@ -96,8 +96,10 @@ fn agent_reference_regex() -> &'static Regex {
     // limited to ASCII alphanumeric, `-`, `_`, and `.`. Requiring a visible
     // label keeps this in lockstep with the frontend reference tokenizer.
     static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\[(?:\\.|[^\]\\\r\n])+\]\(houhub://agent/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\)")
-            .expect("agent reference regex is valid")
+        Regex::new(
+            r"\[(?:\\.|[^\]\\\r\n])+\]\(houhub://agent/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\)",
+        )
+        .expect("agent reference regex is valid")
     });
     &PATTERN
 }
@@ -320,10 +322,7 @@ fn visible_assistant_reference_ids(blocks: &[PromptInputBlock]) -> Vec<i32> {
             continue;
         };
         for capture in assistant_reference_regex().captures_iter(text) {
-            let Some(id) = capture
-                .get(1)
-                .and_then(|m| m.as_str().parse::<i32>().ok())
-            else {
+            let Some(id) = capture.get(1).and_then(|m| m.as_str().parse::<i32>().ok()) else {
                 // Ten digits can exceed i32 — no assistant has such an id.
                 continue;
             };
@@ -348,7 +347,10 @@ fn visible_assistant_reference_ids(blocks: &[PromptInputBlock]) -> Vec<i32> {
 /// route, and past [`MAX_ASSISTANT_ROUTES_PER_FRAME`] the routes continue in
 /// another frame of the same kind — each one complete and individually
 /// strippable.
-pub(crate) fn append_assistant_routes(blocks: &mut Vec<PromptInputBlock>, delegation_enabled: bool) {
+pub(crate) fn append_assistant_routes(
+    blocks: &mut Vec<PromptInputBlock>,
+    delegation_enabled: bool,
+) {
     if !delegation_enabled {
         return;
     }
@@ -372,8 +374,7 @@ pub(crate) fn append_assistant_routes(blocks: &mut Vec<PromptInputBlock>, delega
 /// wording orphans every frame already in a transcript, so it must bump
 /// [`ASSISTANT_ROUTE_FRAME_VERSION`] (pinned by a test).
 fn render_assistant_routes_body(descriptor: &FrameDescriptor, routes: &[AssistantRoute]) -> String {
-    let descriptor =
-        serde_json::to_string(descriptor).expect("frame descriptor is serializable");
+    let descriptor = serde_json::to_string(descriptor).expect("frame descriptor is serializable");
     let routes = serde_json::to_string(routes).expect("assistant routes are serializable");
     format!(
         "{descriptor}\n\
@@ -446,15 +447,16 @@ pub(crate) fn render_assistant_brief(name: &str, instructions: &str) -> Option<S
         );
         return None;
     }
-    Some(format!("{ROUTE_FRAME_SEPARATOR}{body}{ROUTE_FRAME_SEPARATOR}"))
+    Some(format!(
+        "{ROUTE_FRAME_SEPARATOR}{body}{ROUTE_FRAME_SEPARATOR}"
+    ))
 }
 
 /// Exactly three newline-terminated lines. Editing the wording orphans every
 /// brief already in a transcript, so it must bump
 /// [`ASSISTANT_BRIEF_FRAME_VERSION`] (pinned by a test).
 fn render_assistant_brief_body(descriptor: &FrameDescriptor, profile: &AssistantProfile) -> String {
-    let descriptor =
-        serde_json::to_string(descriptor).expect("frame descriptor is serializable");
+    let descriptor = serde_json::to_string(descriptor).expect("frame descriptor is serializable");
     let profile = serde_json::to_string(profile).expect("assistant profile is serializable");
     format!(
         "{descriptor}\n\
@@ -718,7 +720,11 @@ pub(crate) fn cut_at_route_frame_marker(text: &mut String) {
     let Some(cut) = text
         .find(ROUTE_FRAME_SEPARATOR)
         .into_iter()
-        .chain(FRAME_KINDS.iter().filter_map(|kind| text.find(kind.body_prefix())))
+        .chain(
+            FRAME_KINDS
+                .iter()
+                .filter_map(|kind| text.find(kind.body_prefix())),
+        )
         .chain(find_halved_body_prefix(text))
         .min()
     else {
@@ -1021,7 +1027,9 @@ mod tests {
     fn the_route_cap_counts_distinct_agents_and_keeps_the_frame_parseable() {
         let mut prompt = String::from("ask ");
         for index in 0..(MAX_AGENT_ROUTES + 4) {
-            prompt.push_str(&format!("[@A{index}](houhub://agent/custom:agent-{index}) "));
+            prompt.push_str(&format!(
+                "[@A{index}](houhub://agent/custom:agent-{index}) "
+            ));
         }
         let mut blocks = vec![PromptInputBlock::Text { text: prompt }];
         append_agent_routes(&mut blocks, true);
@@ -1165,7 +1173,8 @@ mod tests {
     #[test]
     fn a_title_is_cut_at_whichever_frame_marker_comes_first() {
         // Separator intact: the cut lands on it, as it always has.
-        let mut separated = String::from("hi \u{001e}{\"kind\":\"houhub_internal_agent_routes\",\"ve");
+        let mut separated =
+            String::from("hi \u{001e}{\"kind\":\"houhub_internal_agent_routes\",\"ve");
         cut_at_route_frame_marker(&mut separated);
         assert_eq!(separated, "hi");
 
@@ -1282,7 +1291,12 @@ then [@Reviewer](houhub://assistant/3) again",
         assert_eq!(blocks.len(), 3);
         assert!(text(&blocks[1]).contains(r#"{"agentType":"codex"}"#));
         assert!(text(&blocks[2]).contains(r#"{"assistantId":3}"#));
-        let joined = format!("{}\n{}\n{}", text(&blocks[0]), text(&blocks[1]), text(&blocks[2]));
+        let joined = format!(
+            "{}\n{}\n{}",
+            text(&blocks[0]),
+            text(&blocks[1]),
+            text(&blocks[2])
+        );
         assert_eq!(strip_internal_frames(&joined), visible);
         assert!(contains_only_internal_frames(&format!(
             "{}{}",
@@ -1320,7 +1334,11 @@ then [@Reviewer](houhub://assistant/3) again",
             .sum();
         assert_eq!(routed_ids, total, "every assistant is routed");
         for frame in &blocks[1..] {
-            assert_eq!(strip_internal_frames(text(frame)), "", "each frame strips alone");
+            assert_eq!(
+                strip_internal_frames(text(frame)),
+                "",
+                "each frame strips alone"
+            );
         }
     }
 
@@ -1344,7 +1362,9 @@ then [@Reviewer](houhub://assistant/3) again",
         for frame in [text(&routes[1]), brief.as_str()] {
             let body = frame.trim_matches(ROUTE_FRAME_SEPARATOR);
             assert!(
-                FRAME_KINDS.iter().any(|kind| body.starts_with(kind.body_prefix())),
+                FRAME_KINDS
+                    .iter()
+                    .any(|kind| body.starts_with(kind.body_prefix())),
                 "the descriptor must open with its kind"
             );
         }
@@ -1355,7 +1375,11 @@ then [@Reviewer](houhub://assistant/3) again",
         let instructions = "你是一名严谨的代码审查员。\n- 只指出能落地的问题\t\"引号\" \\ 反斜杠";
         let brief = render_assistant_brief("代码审查员", instructions).expect("brief");
         let body = brief.trim_matches(ROUTE_FRAME_SEPARATOR);
-        assert_eq!(body.matches('\n').count(), 3, "three lines, instructions escaped");
+        assert_eq!(
+            body.matches('\n').count(),
+            3,
+            "three lines, instructions escaped"
+        );
         let profile = parse_assistant_brief_body(body).expect("round-trips");
         assert_eq!(profile.name, "代码审查员");
         assert_eq!(profile.instructions, instructions);
@@ -1365,7 +1389,11 @@ then [@Reviewer](houhub://assistant/3) again",
         assert_eq!(strip_internal_frames(&joined), task);
         assert!(contains_only_internal_frames(&brief));
 
-        assert_eq!(render_assistant_brief("Reviewer", "  \n "), None, "no brief without instructions");
+        assert_eq!(
+            render_assistant_brief("Reviewer", "  \n "),
+            None,
+            "no brief without instructions"
+        );
     }
 
     #[test]
@@ -1388,10 +1416,7 @@ then [@Reviewer](houhub://assistant/3) again",
         let brief = render_assistant_brief("Reviewer", "Cite line numbers.").unwrap();
         let reworded = brief.replace("task above.", "task above!");
         assert_eq!(strip_internal_frames(&reworded), reworded);
-        let extra_field = brief.replace(
-            "{\"name\":\"Reviewer\"",
-            "{\"name\":\"Reviewer\",\"x\":1",
-        );
+        let extra_field = brief.replace("{\"name\":\"Reviewer\"", "{\"name\":\"Reviewer\",\"x\":1");
         assert_eq!(strip_internal_frames(&extra_field), extra_field);
 
         let routes = routed("[@Reviewer](houhub://assistant/3)");
@@ -1407,7 +1432,10 @@ then [@Reviewer](houhub://assistant/3) again",
 
     #[test]
     fn a_title_is_cut_at_any_kind_of_frame_marker() {
-        for prefix in [ASSISTANT_ROUTE_FRAME_BODY_PREFIX, ASSISTANT_BRIEF_FRAME_BODY_PREFIX] {
+        for prefix in [
+            ASSISTANT_ROUTE_FRAME_BODY_PREFIX,
+            ASSISTANT_BRIEF_FRAME_BODY_PREFIX,
+        ] {
             let mut bare = format!("review this  {prefix},\"ver");
             cut_at_route_frame_marker(&mut bare);
             assert_eq!(bare, "review this");

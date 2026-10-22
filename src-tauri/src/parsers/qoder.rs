@@ -37,7 +37,7 @@ use crate::parsers::{
 /// sessions vanish from the list, and skills install where nothing loads them:
 ///
 /// ```js
-/// function homeRoot(){ return firstEnv(QODER_CLI_HOME, GEMINI_CLI_HOME) || os.homedir() }
+/// function homeRoot(){ return firstEnv(QODER_CLI_HOME) || os.homedir() }
 /// function getGlobalConfigDir(){
 ///   let e = /* --config-dir flag */, t = firstEnv(QODER_CONFIG_DIR)
 ///   if (e) A = e
@@ -55,10 +55,15 @@ use crate::parsers::{
 /// at 1.1.33, then `Zn`/`MYA`/`FYA`/`UYA` at 1.1.40–1.1.41, then
 /// `qn`/`A7A`/`t7A`/`n7A` at 1.1.44, then `Ai`/`d7A`/`g7A`/`f7A` at 1.1.45),
 /// so a grep written against the old names returns zero hits and reads as
-/// "the resolver is gone" when nothing moved. `GEMINI_CLI_HOME` really is a
-/// second key on the home lookup: qodercli carries its ancestry.
-/// Re-checked against the pinned 1.1.45 bundle: same precedence, same keys,
-/// same `.qoder` config-dir name.)
+/// "the resolver is gone" when nothing moved. Re-checked against the pinned
+/// 1.1.45 bundle: same precedence, same keys, same `.qoder` config-dir name.)
+///
+/// Up to 1.1.74 the home lookup also fell back to `GEMINI_CLI_HOME`, a leftover
+/// of qodercli's Gemini CLI ancestry. 1.1.75 dropped that key, so with only
+/// `GEMINI_CLI_HOME` set the CLI keeps its config dir and transcripts under
+/// the OS home, and so does this resolver. A `qoder` older than 1.1.75 that
+/// houhub finds on PATH still follows the key, and with it set, houhub looks for
+/// that CLI's sessions in the wrong place.
 ///
 /// Not mirrored, deliberately: the `--config-dir` FLAG, which houhub never
 /// passes, and the `QODERCN_*` twin, which belongs to the separate `.qoder-cn`
@@ -71,8 +76,7 @@ pub(crate) fn resolve_qoder_config_dir() -> PathBuf {
 pub(crate) fn resolve_qoder_config_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_qoder_config_dir_from(
         env.var_os("QODER_CONFIG_DIR"),
-        env.var_os("QODER_CLI_HOME")
-            .or_else(|| env.var_os("GEMINI_CLI_HOME")),
+        env.var_os("QODER_CLI_HOME"),
         env.var_os("QODER_CONFIG_DIR_NAME"),
         dirs::home_dir(),
     )
@@ -86,8 +90,12 @@ pub(crate) fn resolve_qoder_config_dir_for_env(env: &AgentEnv) -> PathBuf {
 /// `getGlobalAgentsDir(){ return join(pa(), ".agents") }`, and
 /// `getUserAgentSkillsDir()` joins `skills` onto that.
 pub(crate) fn resolve_qoder_home() -> PathBuf {
-    std::env::var_os("QODER_CLI_HOME")
-        .or_else(|| std::env::var_os("GEMINI_CLI_HOME"))
+    resolve_qoder_home_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_qoder_home`] for the Qoder launched with `env`.
+fn resolve_qoder_home_for_env(env: &AgentEnv) -> PathBuf {
+    env.var_os("QODER_CLI_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(dirs::home_dir)
@@ -545,8 +553,7 @@ fn active_branch(records: &[Value]) -> Vec<usize> {
                     .get("logicalParentUuid")
                     .and_then(Value::as_str)
                     .filter(|parent| !parent.is_empty())
-            })
-        {
+            }) {
             // `null`, absent or empty on BOTH: this record starts the session.
             None => {
                 reached_root = true;
@@ -786,7 +793,7 @@ fn parse_transcript(bytes: &[u8]) -> Transcript {
                     duration_ms: None,
                     model: None,
                     completed_at: Some(timestamp),
-                agent_message_id: None,
+                    agent_message_id: None,
                 });
                 pending_assistant_chat_id = None;
             }
@@ -877,7 +884,7 @@ fn parse_transcript(bytes: &[u8]) -> Transcript {
                         duration_ms: None,
                         model: entry_model,
                         completed_at: Some(timestamp),
-                    agent_message_id: None,
+                        agent_message_id: None,
                     });
                 }
                 pending_assistant_chat_id = message_id;
@@ -1242,7 +1249,7 @@ pub(crate) fn qoder_ask_envelope_from_recorded(recorded: &Value) -> Option<Strin
 /// The start and end of the sentence Qoder's `AskUserQuestion` returns once
 /// questions are answered (deobfuscated from the 1.1.67 bundle; the same
 /// strings ship in every release from 1.1.23 through 1.1.69, and again in
-/// 1.1.72 and 1.1.73).
+/// 1.1.72 through 1.1.75).
 const QODER_ANSWERED_PREFIX: &str = "Your questions have been answered: ";
 
 const QODER_ANSWERED_SUFFIX: &str = ". You can now continue with these answers in mind.";
@@ -1407,7 +1414,11 @@ fn parse_detail(path: &Path, conversation_id: &str) -> Result<ConversationDetail
     // (`qfmodel`) that the table cannot match at all.
     let max_tokens = transcript
         .reported_context_window
-        .or_else(|| transcript.reported_context.and_then(ReportedContext::window))
+        .or_else(|| {
+            transcript
+                .reported_context
+                .and_then(ReportedContext::window)
+        })
         .or_else(|| infer_context_window_max_tokens(transcript.model.as_deref()));
     // The stated occupancy goes on LAST, over whatever the used/max division
     // produced: for a session recorded before `QODER_EXPOSE_TOKEN_USAGE` there
@@ -1550,10 +1561,8 @@ fn attach_subagent_tool_calls(turns: &mut [MessageTurn], session_path: &Path) {
             else {
                 continue;
             };
-            let transcript = path.with_file_name(format!(
-                "{}.jsonl",
-                name.trim_end_matches(".meta.json")
-            ));
+            let transcript =
+                path.with_file_name(format!("{}.jsonl", name.trim_end_matches(".meta.json")));
             if transcript.exists() {
                 agents.push((
                     parent.to_string(),
@@ -1781,7 +1790,8 @@ mod tests {
     const TOOL_RESULT_LINE: &str = r#"{"type":"user","uuid":"u2","timestamp":"2026-08-16T15:45:33.200Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"1\tthe secret number is 42\n2\t"}]},"sourceToolAssistantUUID":"a2","promptId":"s1","toolUseResult":{"type":"text","file":{"filePath":"NOTES.md","content":"the secret number is 42\n","numLines":2,"startLine":1,"totalLines":2}},"parentUuid":"a2","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"cli","version":"1.1.23","gitBranch":"main"}"#;
     const ANSWER_LINE: &str = r#"{"type":"assistant","uuid":"a3","timestamp":"2026-08-16T15:45:34.000Z","message":{"id":"chatcmpl-1","type":"message","role":"assistant","model":"qmodel_38max","stop_reason":"end_turn","content":[{"type":"text","text":"42","citations":null}],"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":5,"output_tokens":2,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0}}},"parentUuid":"u2","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"cli","version":"1.1.23","gitBranch":"main"}"#;
     const ACTIVE_LEAF_LINE: &str = r#"{"type":"active-leaf","sessionId":"s1","leafUuid":"a3","explicit":false,"timestamp":1786895133089}"#;
-    const LAST_PROMPT_LINE: &str = r#"{"type":"last-prompt","sessionId":"s1","lastPrompt":"read NOTES.md and reply"}"#;
+    const LAST_PROMPT_LINE: &str =
+        r#"{"type":"last-prompt","sessionId":"s1","lastPrompt":"read NOTES.md and reply"}"#;
     const SIDECHAIN_LINE: &str = r#"{"type":"assistant","uuid":"sc1","timestamp":"2026-08-16T15:45:35.000Z","message":{"role":"assistant","model":"qmodel_38max","content":[{"type":"text","text":"sub-agent internal output"}]},"parentUuid":null,"isSidechain":true,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"cli","version":"1.1.23","gitBranch":"main"}"#;
 
     // The shape a REAL ACP-entrypoint session writes (captured from
@@ -1869,7 +1879,11 @@ mod tests {
     fn summary_model_ignores_a_blank_later_model() {
         let tmp = tempfile::tempdir().unwrap();
         const BLANK_MODEL_LINE: &str = r#"{"type":"assistant","uuid":"b2","timestamp":"2026-08-16T15:47:00.000Z","message":{"id":"chatcmpl-3","type":"message","role":"assistant","model":"","stop_reason":"end_turn","content":[{"type":"text","text":"third","citations":null}],"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}},"parentUuid":"a3","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"cli","version":"1.1.45","gitBranch":"main"}"#;
-        write_session(tmp.path(), "s1", &[USER_LINE, ANSWER_LINE, BLANK_MODEL_LINE]);
+        write_session(
+            tmp.path(),
+            "s1",
+            &[USER_LINE, ANSWER_LINE, BLANK_MODEL_LINE],
+        );
 
         let summaries = parser_in(tmp.path()).list_conversations().unwrap();
         assert_eq!(summaries[0].model.as_deref(), Some("qmodel_38max"));
@@ -1975,10 +1989,7 @@ mod tests {
         // The details dialog's total is the sum of the turns, sub-agent spend
         // included — one number for the dialog and the Token board.
         let stats = detail.session_stats.expect("session stats");
-        assert_eq!(
-            stats.total_tokens,
-            Some(5 + 2 + 5 + 1_000 + 34_000 + 300)
-        );
+        assert_eq!(stats.total_tokens, Some(5 + 2 + 5 + 1_000 + 34_000 + 300));
         // The board's side of that number: its per-turn facts are built from
         // turn usage, which is why the fold lands there and not only in the
         // session total.
@@ -2116,11 +2127,7 @@ mod tests {
     #[test]
     fn sub_agent_usage_does_not_touch_the_context_window() {
         let tmp = tempfile::tempdir().unwrap();
-        write_session(
-            tmp.path(),
-            "s1",
-            &[RUNTIME_CONFIG, USER_LINE, ANSWER_LINE],
-        );
+        write_session(tmp.path(), "s1", &[RUNTIME_CONFIG, USER_LINE, ANSWER_LINE]);
         // Control parse: no `subagents/` directory at all.
         let baseline = parser_in(tmp.path()).get_conversation("s1").unwrap();
         let baseline_stats = baseline.session_stats.clone().expect("baseline stats");
@@ -2148,7 +2155,11 @@ mod tests {
         let agent_use = r#"{"type":"assistant","uuid":"a9","timestamp":"2026-08-16T15:45:33.100Z","message":{"role":"assistant","model":"qmodel","stop_reason":"tool_use","content":[{"type":"tool_use","id":"call_agent1","name":"Agent","input":{"description":"读文件","subagent_type":"Explore"}}]},"parentUuid":"u1","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.67","gitBranch":"main"}"#;
         let agent_result = r#"{"type":"user","uuid":"u9","timestamp":"2026-08-16T15:45:39.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_agent1","content":"以下是文件前 60 行…"}]},"sourceToolAssistantUUID":"a9","promptId":"s1","toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"aExplore-abc123","description":"读文件"},"parentUuid":"a9","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.67","gitBranch":"main"}"#;
         let active_leaf = r#"{"type":"active-leaf","sessionId":"s1","leafUuid":"u9","explicit":false,"timestamp":1786895139000}"#;
-        let path = write_session(tmp.path(), "s1", &[USER_LINE, agent_use, agent_result, active_leaf]);
+        let path = write_session(
+            tmp.path(),
+            "s1",
+            &[USER_LINE, agent_use, agent_result, active_leaf],
+        );
 
         let sub = path.with_extension("").join("subagents");
         std::fs::create_dir_all(&sub).unwrap();
@@ -2213,7 +2224,11 @@ mod tests {
         let agent_use = r#"{"type":"assistant","uuid":"a9","timestamp":"2026-08-16T15:45:33.100Z","message":{"role":"assistant","model":"qmodel","stop_reason":"tool_use","content":[{"type":"tool_use","id":"call_agent1","name":"Agent","input":{"description":"调研","subagent_type":"Explore"}}]},"parentUuid":"u1","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.67","gitBranch":"main"}"#;
         let agent_result = r#"{"type":"user","uuid":"u9","timestamp":"2026-08-16T15:45:39.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_agent1","is_error":true,"content":"Error: tool execution produced no result"}]},"sourceToolAssistantUUID":"a9","promptId":"s1","toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"aExplore-abc123","description":"调研"},"parentUuid":"a9","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.67","gitBranch":"main"}"#;
         let active_leaf = r#"{"type":"active-leaf","sessionId":"s1","leafUuid":"u9","explicit":false,"timestamp":1786895139000}"#;
-        let path = write_session(tmp.path(), "s1", &[USER_LINE, agent_use, agent_result, active_leaf]);
+        let path = write_session(
+            tmp.path(),
+            "s1",
+            &[USER_LINE, agent_use, agent_result, active_leaf],
+        );
 
         let sub = path.with_extension("").join("subagents");
         std::fs::create_dir_all(&sub).unwrap();
@@ -2277,7 +2292,11 @@ mod tests {
         let agent_use = r#"{"type":"assistant","uuid":"a9","timestamp":"2026-08-16T15:45:33.100Z","message":{"role":"assistant","model":"qmodel","stop_reason":"tool_use","content":[{"type":"tool_use","id":"call_agent1","name":"Agent","input":{"description":"调研","subagent_type":"Explore"}}]},"parentUuid":"u1","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.67","gitBranch":"main"}"#;
         let agent_result = r#"{"type":"user","uuid":"u9","timestamp":"2026-08-16T15:45:39.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_agent1","content":"以下是文件前 60 行…"}]},"sourceToolAssistantUUID":"a9","promptId":"s1","toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"aExplore-abc123","description":"调研"},"parentUuid":"a9","isSidechain":false,"cwd":"/private/tmp/probe","sessionId":"s1","userType":"external","entrypoint":"acp","version":"1.1.67","gitBranch":"main"}"#;
         let active_leaf = r#"{"type":"active-leaf","sessionId":"s1","leafUuid":"u9","explicit":false,"timestamp":1786895139000}"#;
-        let path = write_session(tmp.path(), "s1", &[USER_LINE, agent_use, agent_result, active_leaf]);
+        let path = write_session(
+            tmp.path(),
+            "s1",
+            &[USER_LINE, agent_use, agent_result, active_leaf],
+        );
 
         let sub = path.with_extension("").join("subagents");
         std::fs::create_dir_all(&sub).unwrap();
@@ -2457,7 +2476,10 @@ mod tests {
         // paired tool result is absorbed, and the end-turn answer (which lands
         // after that tool-result boundary) forms the next turn.
         assert_eq!(detail.turns.len(), 3);
-        assert!(matches!(detail.turns[0].role, crate::models::TurnRole::User));
+        assert!(matches!(
+            detail.turns[0].role,
+            crate::models::TurnRole::User
+        ));
         assert!(matches!(
             detail.turns[1].role,
             crate::models::TurnRole::Assistant
@@ -2652,8 +2674,12 @@ mod tests {
             "the absolute override wins over both of the other two"
         );
         // Empty is the same as unset, everywhere — never an empty path segment.
-        let resolved =
-            resolve_qoder_config_dir_from(Some("".into()), Some("".into()), Some("".into()), home());
+        let resolved = resolve_qoder_config_dir_from(
+            Some("".into()),
+            Some("".into()),
+            Some("".into()),
+            home(),
+        );
         assert_eq!(resolved, PathBuf::from("/Users/default/.qoder"));
         let resolved = resolve_qoder_config_dir_from(None, None, None, home());
         assert_eq!(resolved, PathBuf::from("/Users/default/.qoder"));
@@ -2662,7 +2688,8 @@ mod tests {
             resolve_qoder_config_dir_from(None, Some("/sandbox/home".into()), None, home());
         assert_eq!(resolved, PathBuf::from("/sandbox/home/.qoder"));
         // …and `QODER_CONFIG_DIR_NAME` renames the dir itself, independently.
-        let resolved = resolve_qoder_config_dir_from(None, None, Some(".qoder-work".into()), home());
+        let resolved =
+            resolve_qoder_config_dir_from(None, None, Some(".qoder-work".into()), home());
         assert_eq!(resolved, PathBuf::from("/Users/default/.qoder-work"));
         let resolved = resolve_qoder_config_dir_from(
             None,
@@ -2719,7 +2746,84 @@ mod tests {
             r#"{"type":"active-leaf","sessionId":"s1","explicit":true,"timestamp":1786895140000}"#;
         write_session(tmp.path(), "s2", &[USER_LINE, ANSWER_LINE, malformed]);
         let detail = parser_in(tmp.path()).get_conversation("s2").unwrap();
-        assert!(!detail.turns.is_empty(), "missing key is not an empty branch");
+        assert!(
+            !detail.turns.is_empty(),
+            "missing key is not an empty branch"
+        );
+    }
+
+    // Since 1.1.74, `session/new` writes the transcript straight away, so a
+    // session nobody prompted (a draft houhub opened and left) is a file of null
+    // `active-leaf` markers and workspace metadata. The lines are a real
+    // never-prompted 1.1.74 session, ids and paths trimmed. It is not a
+    // conversation yet and must stay out of the scan. Once the user prompts,
+    // those markers sit BEFORE every content record, so the turns that follow
+    // must read exactly as they would without them.
+    #[test]
+    fn a_session_written_before_its_first_prompt_is_not_a_conversation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let empty_leaf = r#"{"type":"active-leaf","sessionId":"s1","leafUuid":null,"explicit":true,"timestamp":1792504551292}"#;
+        let workspace = r#"{"type":"workspace-directories","sessionId":"s1","directories":["/private/tmp/probe"]}"#;
+        let worktree = r#"{"type":"worktree-state","sessionId":"s1","worktreeSession":null}"#;
+        let unprompted = [empty_leaf, workspace, empty_leaf, worktree, workspace];
+        let path = write_session(tmp.path(), "s1", &unprompted);
+
+        assert!(parse_summary(&path).is_none());
+        assert!(parser_in(tmp.path())
+            .list_conversations()
+            .unwrap()
+            .is_empty());
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        assert!(detail.turns.is_empty());
+
+        let turn = [
+            USER_LINE,
+            THINKING_LINE,
+            TOOL_USE_LINE,
+            TOOL_RESULT_LINE,
+            ANSWER_LINE,
+            ACTIVE_LEAF_LINE,
+        ];
+        let prompted: Vec<&str> = unprompted.iter().chain(turn.iter()).copied().collect();
+        write_session(tmp.path(), "s2", &prompted);
+        write_session(tmp.path(), "s3", &turn);
+        let parser = parser_in(tmp.path());
+        let with_markers = parser.get_conversation("s2").unwrap();
+        let without = parser.get_conversation("s3").unwrap();
+        assert!(!with_markers.turns.is_empty());
+        assert_eq!(
+            serde_json::to_value(&with_markers.turns).unwrap(),
+            serde_json::to_value(&without.turns).unwrap()
+        );
+        assert_eq!(with_markers.summary.title, without.summary.title);
+        assert_eq!(
+            with_markers.summary.message_count,
+            without.summary.message_count
+        );
+
+        // Until Qoder records the turn's leaf, the newest marker is one of the
+        // leading null ones. It predates every message, so it must not blank
+        // them: a turn cut off before its leaf was written still shows.
+        let unfinished: Vec<&str> = unprompted
+            .iter()
+            .chain(turn[..turn.len() - 1].iter())
+            .copied()
+            .collect();
+        write_session(tmp.path(), "s4", &unfinished);
+        let cut_off = parser.get_conversation("s4").unwrap();
+        assert_eq!(
+            serde_json::to_value(&cut_off.turns).unwrap(),
+            serde_json::to_value(&without.turns).unwrap()
+        );
+
+        let listed: Vec<String> = parser
+            .list_conversations()
+            .unwrap()
+            .into_iter()
+            .map(|summary| summary.id)
+            .collect();
+        assert_eq!(listed.len(), 3, "{listed:?}");
+        assert!(!listed.contains(&"s1".to_string()), "{listed:?}");
     }
 
     // The ACP entrypoint — the one houhub itself drives — writes the human
@@ -2738,10 +2842,16 @@ mod tests {
 
         let detail = parser_in(tmp.path()).get_conversation("s2").unwrap();
         assert_eq!(detail.turns.len(), 2);
-        assert!(matches!(detail.turns[0].role, crate::models::TurnRole::User));
+        assert!(matches!(
+            detail.turns[0].role,
+            crate::models::TurnRole::User
+        ));
         assert_eq!(text_of(&detail.turns[0]), "hi");
         assert!(
-            !detail.turns.iter().any(|t| text_of(t).contains("pricingUrl")),
+            !detail
+                .turns
+                .iter()
+                .any(|t| text_of(t).contains("pricingUrl")),
             "a failed API turn must not render as the assistant's answer"
         );
         // It closes the round as the failure line instead.
@@ -2768,11 +2878,9 @@ mod tests {
 
         let detail = parser_in(tmp.path()).get_conversation("s3").unwrap();
         assert_eq!(detail.turns.len(), 1);
-        assert!(detail
-            .turns[0]
-            .blocks
-            .iter()
-            .any(|b| matches!(b, ContentBlock::Image { mime_type, .. } if mime_type == "image/png")));
+        assert!(detail.turns[0].blocks.iter().any(
+            |b| matches!(b, ContentBlock::Image { mime_type, .. } if mime_type == "image/png")
+        ));
         assert_eq!(detail.summary.title.as_deref(), Some("what is this"));
     }
 
@@ -2793,7 +2901,10 @@ mod tests {
                 .any(|t| text_of(t).contains("Continue from where")),
             "meta injections are addressed to the model"
         );
-        assert_eq!(detail.summary.title.as_deref(), Some("read NOTES.md and reply"));
+        assert_eq!(
+            detail.summary.title.as_deref(),
+            Some("read NOTES.md and reply")
+        );
     }
 
     // A rewind leaves the abandoned branch in the file forever. Replaying in
@@ -2976,10 +3087,7 @@ mod tests {
             .iter()
             .find(|t| text_of(t).contains("SUMMARY OF EARLIER WORK"))
             .expect("summary rendered");
-        assert!(matches!(
-            summary_turn.role,
-            crate::models::TurnRole::System
-        ));
+        assert!(matches!(summary_turn.role, crate::models::TurnRole::System));
         assert_eq!(
             detail.summary.title.as_deref(),
             Some("read NOTES.md and reply")
@@ -3069,7 +3177,10 @@ mod tests {
         assert_eq!(s.context_window_used_tokens, Some(2803));
         assert_eq!(s.context_window_max_tokens, Some(180_000));
         let percent = s.context_window_usage_percent.expect("percent");
-        assert!((percent - 1.557_222_222_222_222_2).abs() < 1e-9, "{percent}");
+        assert!(
+            (percent - 1.557_222_222_222_222_2).abs() < 1e-9,
+            "{percent}"
+        );
     }
 
     // Occupancy is a level, not a sum: the newest response describes the
@@ -3090,7 +3201,10 @@ mod tests {
         let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
         let s = detail.session_stats.expect("session stats");
         let percent = s.context_window_usage_percent.expect("percent");
-        assert!((percent - 1.557_222_222_222_222_2).abs() < 1e-9, "{percent}");
+        assert!(
+            (percent - 1.557_222_222_222_222_2).abs() < 1e-9,
+            "{percent}"
+        );
     }
 
     // A rewound branch describes a context that no longer exists. `a8` stays in
@@ -3113,7 +3227,10 @@ mod tests {
         let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
         let s = detail.session_stats.expect("session stats");
         let percent = s.context_window_usage_percent.expect("percent");
-        assert!((percent - 1.557_222_222_222_222_2).abs() < 1e-9, "{percent}");
+        assert!(
+            (percent - 1.557_222_222_222_222_2).abs() < 1e-9,
+            "{percent}"
+        );
         assert_eq!(s.context_window_max_tokens, Some(180_000));
     }
 
@@ -3137,7 +3254,10 @@ mod tests {
         assert_eq!(s.context_window_max_tokens, Some(262_144));
         // ...but the percentage is still Qoder's own, not 2803/262144.
         let percent = s.context_window_usage_percent.expect("percent");
-        assert!((percent - 1.557_222_222_222_222_2).abs() < 1e-9, "{percent}");
+        assert!(
+            (percent - 1.557_222_222_222_222_2).abs() < 1e-9,
+            "{percent}"
+        );
     }
 
     // A ratio Qoder clamped to 1.0 means "full or overflowing"; inverting it
@@ -3182,10 +3302,16 @@ mod tests {
         // the very numerator Qoder divided to get its ratio.
         assert_eq!(s.context_window_used_tokens, Some(2803));
         let percent = s.context_window_usage_percent.expect("percent");
-        assert!((percent - 1.557_222_222_222_222_2).abs() < 1e-9, "{percent}");
+        assert!(
+            (percent - 1.557_222_222_222_222_2).abs() < 1e-9,
+            "{percent}"
+        );
         // The stated percentage and the used/max pair now tell the same story.
         let recomputed = 2803.0 / 180_000.0 * 100.0;
-        assert!((percent - recomputed).abs() < 1e-6, "{percent} vs {recomputed}");
+        assert!(
+            (percent - recomputed).abs() < 1e-6,
+            "{percent} vs {recomputed}"
+        );
 
         // The split is a re-labelling, not a deduction: the turn's own counters
         // still add back up to the prompt Qoder charged for.
@@ -3194,9 +3320,7 @@ mod tests {
         assert_eq!(usage.cache_read_input_tokens, 900);
         assert_eq!(usage.cache_creation_input_tokens, 100);
         assert_eq!(
-            usage.input_tokens
-                + usage.cache_read_input_tokens
-                + usage.cache_creation_input_tokens,
+            usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens,
             2803
         );
     }
@@ -3235,7 +3359,10 @@ mod tests {
         assert_eq!(s.context_window_used_tokens, Some(10));
         assert_eq!(s.context_window_max_tokens, Some(262_144));
         let percent = s.context_window_usage_percent.expect("percent");
-        assert!((percent - (10.0 / 262_144.0) * 100.0).abs() < 1e-9, "{percent}");
+        assert!(
+            (percent - (10.0 / 262_144.0) * 100.0).abs() < 1e-9,
+            "{percent}"
+        );
     }
 
     // An `AskUserQuestion` round captured from a real qodercli 1.1.67 ACP
@@ -3512,7 +3639,7 @@ mod tests {
             PathBuf::from("/relocated/qoder").join("projects")
         );
 
-        // No config-dir override: the home keys, in order, and the dir name.
+        // No config-dir override: the home key and the dir name.
         let env = AgentEnv::with_overrides(&[
             ("QODER_CONFIG_DIR", ""),
             ("QODER_CLI_HOME", "/relocated/qoder-home"),
@@ -3525,6 +3652,15 @@ mod tests {
                 .join(".qoder-alt")
                 .join("projects")
         );
+    }
+
+    // Up to 1.1.74 Qoder fell back to `GEMINI_CLI_HOME` for its home, so a
+    // Gemini CLI relocation in the launch env moved Qoder's config dir and its
+    // shared `.agents` store with it. 1.1.75 reads `QODER_CLI_HOME` alone and
+    // keeps both under the OS home.
+    #[test]
+    fn gemini_cli_home_does_not_move_qoder() {
+        let home = dirs::home_dir().unwrap_or_default();
         let env = AgentEnv::with_overrides(&[
             ("QODER_CONFIG_DIR", ""),
             ("QODER_CLI_HOME", ""),
@@ -3533,9 +3669,17 @@ mod tests {
         ]);
         assert_eq!(
             QoderParser::for_env(&env).base_dir,
-            PathBuf::from("/relocated/gemini-home")
-                .join(".qoder")
-                .join("projects")
+            home.join(".qoder").join("projects")
+        );
+        assert_eq!(resolve_qoder_home_for_env(&env), home);
+
+        let env = AgentEnv::with_overrides(&[
+            ("QODER_CLI_HOME", "/relocated/qoder-home"),
+            ("GEMINI_CLI_HOME", "/relocated/gemini-home"),
+        ]);
+        assert_eq!(
+            resolve_qoder_home_for_env(&env),
+            PathBuf::from("/relocated/qoder-home")
         );
     }
 }

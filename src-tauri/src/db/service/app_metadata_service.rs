@@ -1,9 +1,13 @@
 use chrono::Utc;
+
 use sea_orm::sea_query::OnConflict;
+
 use sea_orm::{ActiveValue::NotSet, ColumnTrait, EntityTrait, QueryFilter, Set};
+
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::db::entities::app_metadata;
+
 use crate::db::error::DbError;
 
 pub async fn upsert_value<C: ConnectionTrait>(
@@ -34,6 +38,15 @@ pub async fn upsert_value<C: ConnectionTrait>(
 
 pub async fn get_value(conn: &DatabaseConnection, key: &str) -> Result<Option<String>, DbError> {
     get_value_conn(conn, key).await
+}
+
+/// Remove `key`; a key that is not there is not an error.
+pub async fn delete_value(conn: &DatabaseConnection, key: &str) -> Result<(), DbError> {
+    app_metadata::Entity::delete_many()
+        .filter(app_metadata::Column::Key.eq(key))
+        .exec(conn)
+        .await?;
+    Ok(())
 }
 
 /// Generic-over-connection variant of [`get_value`] so callers can read a value

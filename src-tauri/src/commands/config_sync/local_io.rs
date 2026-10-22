@@ -376,9 +376,10 @@ mod tests {
 
         let target = fresh_in_memory_db().await;
         let rollbacks = tempfile::tempdir().expect("tempdir");
-        let result = import_from_file_core(&target.conn, &EventEmitter::Noop, &dest, rollbacks.path())
-            .await
-            .expect("import");
+        let result =
+            import_from_file_core(&target.conn, &EventEmitter::Noop, &dest, rollbacks.path())
+                .await
+                .expect("import");
         assert!(result.applied.total >= 1);
         assert_eq!(
             quick_message::Entity::find()
@@ -440,9 +441,10 @@ mod tests {
 
         let target = fresh_in_memory_db().await;
         let rollbacks = tempfile::tempdir().expect("tempdir");
-        let result = import_bytes_core(&target.conn, &EventEmitter::Noop, &sealed, rollbacks.path())
-            .await
-            .expect("import");
+        let result =
+            import_bytes_core(&target.conn, &EventEmitter::Noop, &sealed, rollbacks.path())
+                .await
+                .expect("import");
         assert!(result.applied.total >= 1);
         credentials::store(SNAPSHOT_PASSPHRASE, "").expect("clear");
     }
@@ -500,7 +502,9 @@ mod tests {
     async fn a_reformatted_export_still_imports() {
         let source = fresh_in_memory_db().await;
         seed_message(&source.conn, "Reformatted").await;
-        let export = build_export_core(&source.conn, "1.0.0").await.expect("build");
+        let export = build_export_core(&source.conn, "1.0.0")
+            .await
+            .expect("build");
 
         let compact = serde_json::to_vec(&export).expect("compact bytes");
         let dir = tempfile::tempdir().expect("tempdir");
@@ -541,9 +545,10 @@ mod tests {
         let target = fresh_in_memory_db().await;
         seed_message(&target.conn, "Imported").await;
 
-        let result = apply_rollback_core(&target.conn, &EventEmitter::Noop, dir.path(), &listed[0].id)
-            .await
-            .expect("apply rollback");
+        let result =
+            apply_rollback_core(&target.conn, &EventEmitter::Noop, dir.path(), &listed[0].id)
+                .await
+                .expect("apply rollback");
         assert!(result.applied.total >= 1);
 
         let titles: Vec<String> = quick_message::Entity::find()
@@ -557,11 +562,14 @@ mod tests {
 
         // An id that is not on this machine is a plain "gone", not a panic and
         // not a path.
-        assert!(
-            apply_rollback_core(&target.conn, &EventEmitter::Noop, dir.path(), "../../etc/passwd")
-                .await
-                .is_err()
-        );
+        assert!(apply_rollback_core(
+            &target.conn,
+            &EventEmitter::Noop,
+            dir.path(),
+            "../../etc/passwd"
+        )
+        .await
+        .is_err());
 
         // And the undo left its own undo point in the SAME directory it reads
         // from — see the next test for why that is not automatic.
@@ -580,7 +588,9 @@ mod tests {
         let rollbacks = tempfile::tempdir().expect("tempdir");
         let source = fresh_in_memory_db().await;
         seed_message(&source.conn, "Incoming").await;
-        let export = build_export_core(&source.conn, "9.9.9").await.expect("export");
+        let export = build_export_core(&source.conn, "9.9.9")
+            .await
+            .expect("export");
         let bytes = serde_json::to_vec(&export).expect("bytes");
 
         let target = fresh_in_memory_db().await;

@@ -599,7 +599,10 @@ pub fn expand_home_prefix(value: &str, home_dir: Option<&PathBuf>) -> PathBuf {
     if value == "~" {
         return home.clone();
     }
-    if let Some(rest) = value.strip_prefix("~/").or_else(|| value.strip_prefix("~\\")) {
+    if let Some(rest) = value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    {
         return home.join(rest);
     }
     PathBuf::from(value)
@@ -692,7 +695,10 @@ fn is_markdown_whitespace(c: char) -> bool {
 /// lets a backslash escape whitespace, so `\` + whitespace ENDS (not extends) a
 /// label/destination scan — only `\` + a non-whitespace char is a real escape.
 fn reference_escapes_next(chars: &[char], k: usize) -> bool {
-    chars.get(k) == Some(&'\\') && chars.get(k + 1).is_some_and(|c| !is_markdown_whitespace(*c))
+    chars.get(k) == Some(&'\\')
+        && chars
+            .get(k + 1)
+            .is_some_and(|c| !is_markdown_whitespace(*c))
 }
 
 /// If a well-formed `(destination)` begins at `start`, return the index just
@@ -1868,7 +1874,7 @@ mod route_sanitizer_tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-        agent_message_id: None,
+            agent_message_id: None,
         }
     }
 
@@ -2023,7 +2029,10 @@ mod route_sanitizer_tests {
         let frame = routing_frame("antigravity");
         // ` ` block join + each separator rewritten to ` `.
         let persisted = format!("{visible} {}", frame.replace('\u{001e}', " "));
-        assert!(!persisted.contains('\u{001e}'), "fixture must lose its separators");
+        assert!(
+            !persisted.contains('\u{001e}'),
+            "fixture must lose its separators"
+        );
 
         // The title the parser hands over: folded, then capped mid-frame — the
         // cap is 100 chars and the body alone runs past 500.
@@ -2050,7 +2059,10 @@ mod route_sanitizer_tests {
     /// exists for the agents that rewrite the separators away.
     #[test]
     fn a_title_capped_halfway_through_the_marker_still_leaks_nothing() {
-        let prose = format!("{} ask [@A](houhub://agent/antigravity) to help", "x".repeat(66));
+        let prose = format!(
+            "{} ask [@A](houhub://agent/antigravity) to help",
+            "x".repeat(66)
+        );
         let frame = routing_frame("antigravity");
         let persisted = format!("{prose} {}", frame.replace('\u{001e}', " "));
 
@@ -2271,7 +2283,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: Some(base + chrono::Duration::seconds(end_s)),
-        agent_message_id: None,
+            agent_message_id: None,
         }
     }
 
@@ -2650,7 +2662,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
-            agent_message_id: None,
+                agent_message_id: None,
             },
             MessageTurn {
                 id: "turn-1".to_string(),
@@ -2666,7 +2678,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
-            agent_message_id: None,
+                agent_message_id: None,
             },
         ];
 

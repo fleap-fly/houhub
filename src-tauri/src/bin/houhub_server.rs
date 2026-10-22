@@ -100,7 +100,13 @@ fn main() -> ExitCode {
     // (`cli_run::shim`): the matching one, whatever else is on their PATH.
     if let Some(cli) = houhub_lib::update::runtime::self_exe()
         .parent()
-        .map(|dir| dir.join(if cfg!(windows) { "houhub-cli.exe" } else { "houhub-cli" }))
+        .map(|dir| {
+            dir.join(if cfg!(windows) {
+                "houhub-cli.exe"
+            } else {
+                "houhub-cli"
+            })
+        })
         .filter(|p| p.metadata().is_ok_and(|m| m.is_file() && m.len() > 0))
     {
         std::env::set_var(houhub_lib::cli_run::shim::CLI_ENV, cli);
@@ -143,6 +149,17 @@ fn main() -> ExitCode {
         // flushes the non-blocking file appender before the process ends.
         return ExitCode::from(2);
     }
+
+    // The opt-in proxy-JWT authentication is all-or-nothing: a half-set or
+    // misspelled configuration aborts here rather than serving with an
+    // authentication the operator did not mean (see `web::proxy_auth`).
+    let proxy_auth_config = match houhub_lib::web::proxy_auth::ProxyAuthConfig::from_env() {
+        Ok(config) => config,
+        Err(err) => {
+            tracing::error!("[AUTH][FATAL] {err}; aborting startup.");
+            return ExitCode::from(2);
+        }
+    };
 
     // Before anything opens the database (see `runtime_lock`): every server
     // shares the data directory, and waits while a `houhub-cli --standalone`
@@ -209,10 +226,12 @@ fn main() -> ExitCode {
         .enable_all()
         .build()
         .expect("Failed to build tokio runtime")
-        .block_on(async_main())
+        .block_on(async_main(proxy_auth_config))
 }
 
-async fn async_main() -> ExitCode {
+async fn async_main(
+    proxy_auth_config: Option<houhub_lib::web::proxy_auth::ProxyAuthConfig>,
+) -> ExitCode {
     // Sweep stale ACP binary cache trash (rename-aside fallback artifacts).
     // Detached OS thread: cannot block startup, panics are caught and dropped,
     // errors are silenced, no subprocesses spawned.
@@ -296,9 +315,7 @@ async fn async_main() -> ExitCode {
         // bearer credential and must never enter the durable log files or the
         // in-app log viewer. `eprintln!` bypasses the tracing sinks (file +
         // ring buffer); only the local terminal / Docker stderr sees it.
-        eprintln!(
-            "[SERVER] No HOUHUB_TOKEN set; generated an access token (persisted): {token}"
-        );
+        eprintln!("[SERVER] No HOUHUB_TOKEN set; generated an access token (persisted): {token}");
         eprintln!("[SERVER] Pin your own by setting the HOUHUB_TOKEN environment variable.");
     }
 
@@ -518,11 +535,13 @@ async fn async_main() -> ExitCode {
             Arc::new(houhub_lib::acp::manager::ConnectionManagerQuestionLookup {
                 manager: Arc::new(state.connection_manager.clone_ref()),
             }),
-            Arc::new(houhub_lib::commands::session_info::DbSessionInfoLookup::new(
-                Arc::new(houhub_lib::db::AppDatabase {
-                    conn: state.db.conn.clone(),
-                }),
-            )),
+            Arc::new(
+                houhub_lib::commands::session_info::DbSessionInfoLookup::new(Arc::new(
+                    houhub_lib::db::AppDatabase {
+                        conn: state.db.conn.clone(),
+                    },
+                )),
+            ),
             Arc::new(houhub_lib::work_task::EngineWorkTaskTools),
             Arc::new(houhub_lib::commands::chat_authoring::DbChatAuthoring::new(
                 Arc::new(houhub_lib::db::AppDatabase {
@@ -544,9 +563,11 @@ async fn async_main() -> ExitCode {
                     as Arc<dyn houhub_lib::acp::computer_tools::ComputerToolAccess>,
                 None => Arc::new(houhub_lib::acp::computer_tools::NoComputerDesktop),
             },
-            Arc::new(houhub_lib::acp::result_tool::ConnectionManagerResultLookup {
-                manager: Arc::new(state.connection_manager.clone_ref()),
-            }),
+            Arc::new(
+                houhub_lib::acp::result_tool::ConnectionManagerResultLookup {
+                    manager: Arc::new(state.connection_manager.clone_ref()),
+                },
+            ),
         );
         // Bind through the service handle rather than a bare `listener.run`
         // spawn: it keeps the bind error and the accept-loop handle around, so
@@ -736,8 +757,8 @@ async fn async_main() -> ExitCode {
         };
         let emitter = state.emitter.clone();
         tokio::spawn(async move {
-            let n =
-                houhub_lib::commands::folders::backfill_worktree_folder_aliases(&emitter, &db).await;
+            let n = houhub_lib::commands::folders::backfill_worktree_folder_aliases(&emitter, &db)
+                .await;
             if n > 0 {
                 tracing::info!("[folders] labeled {n} worktree folder(s) by branch");
             }
@@ -751,10 +772,33 @@ async fn async_main() -> ExitCode {
     houhub_lib::web::handlers::files::purge_upload_staging().await;
 
     // Build router
+    let proxy_auth = match proxy_auth_config {
+        None => None,
+        Some(config) => match houhub_lib::web::proxy_auth::ProxyJwtAuth::new(config) {
+            Ok(auth) => {
+                let config = auth.config();
+                tracing::info!(
+                    "[AUTH] proxy-jwt on: header {}, issuer {}, audience {}, keys from {}",
+                    config.header,
+                    config.issuer,
+                    config.audience,
+                    config.jwks_url
+                );
+                auth.prime().await;
+                Some(Arc::new(auth))
+            }
+            Err(err) => {
+                tracing::error!("[AUTH][FATAL] proxy-jwt key client: {err}; aborting startup.");
+                return ExitCode::from(1);
+            }
+        },
+    };
+
     let shutdown_signal = state.web_server_state.shutdown_signal();
-    let router = houhub_lib::web::router::build_router(
+    let router = houhub_lib::web::router::build_router_with_proxy_auth(
         state.clone(),
         token.clone(),
+        proxy_auth,
         static_dir,
         shutdown_signal,
     );
@@ -789,9 +833,11 @@ async fn async_main() -> ExitCode {
     // Publish runtime state so the settings page (served by us) shows
     // the truth — running on `actual_port` with this token — instead of
     // the placeholder "stopped" that triggers the stale-port banner.
-    state
-        .web_server_state
-        .mark_externally_running(advertised_host.clone(), actual_port, token.clone());
+    state.web_server_state.mark_externally_running(
+        advertised_host.clone(),
+        actual_port,
+        token.clone(),
+    );
     let addresses = addresses_for_bind(&advertised_host, actual_port);
 
     // Token on stderr ONLY (bearer credential — keep it out of the log files

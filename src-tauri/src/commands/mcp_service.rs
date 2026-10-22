@@ -175,8 +175,8 @@ pub async fn houhub_mcp_service_status_core(
         None => Default::default(),
     };
 
-    let binary_path = crate::acp::connection::locate_houhub_mcp_binary()
-        .map(|p| p.to_string_lossy().to_string());
+    let binary_path =
+        crate::acp::connection::locate_houhub_mcp_binary().map(|p| p.to_string_lossy().to_string());
 
     let delegation_cfg = sources.broker.config_snapshot().await;
     let authoring_cfg = sources.authoring.snapshot().await;
@@ -278,8 +278,7 @@ pub async fn set_houhub_mcp_tool_group_core(
 ) -> Result<(), AppCommandError> {
     use crate::commands::chat_authoring::ChatAuthoringFlag;
     use crate::commands::{
-        browser_tools, chat_authoring, computer_tools, delegation, feedback, question,
-        session_info,
+        browser_tools, chat_authoring, computer_tools, delegation, feedback, question, session_info,
     };
 
     match key {

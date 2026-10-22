@@ -352,7 +352,7 @@ impl HermesParser {
                 // Hermes logs rows post-generation; the row timestamp is the best
                 // end-marker available.
                 completed_at: Some(timestamp),
-            agent_message_id: None,
+                agent_message_id: None,
             });
         }
 
@@ -801,7 +801,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
             i += 1;
         } else if matches!(msg.role, MessageRole::System) {
@@ -814,7 +814,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
             i += 1;
         } else {
@@ -852,7 +852,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms,
                 model: turn_model,
                 completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
         }
     }

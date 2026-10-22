@@ -235,12 +235,21 @@ import {
  * the leading invocation badge (serializes to `${prefix}${id}` as the first
  * token).
  */
-export interface ComposerInjectContent {
-  text: string
-  skill?: { id: string; label: string }
-  /** Replace the document (default) or append the text at the caret. */
-  mode?: "replace" | "append"
-}
+export type ComposerInjectContent =
+  | {
+      text: string
+      skill?: { id: string; label: string }
+      /** Replace the document (default) or append the text at the caret. */
+      mode?: "replace" | "append"
+    }
+  | {
+      /**
+       * A message this composer already let go of, as the blocks it was sent
+       * as. Hosts share one queue type with upstream; this composer does not
+       * re-inject them.
+       */
+      handBack: PromptInputBlock[]
+    }
 
 interface MessageInputProps {
   onSend: (draft: PromptDraft, modeId?: string | null) => void
@@ -1111,6 +1120,7 @@ export function MessageInput({
 
   useEffect(() => {
     if (!injectContent || !composerReady) return
+    if (!("text" in injectContent)) return
     const payload = injectContent
     // Defer the editor mutation to the next frame. Inserting the skill badge
     // creates a React NodeView, which @tiptap/react renders with a synchronous

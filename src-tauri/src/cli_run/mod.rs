@@ -20,9 +20,9 @@ pub mod shim;
 pub mod wire;
 pub mod worktree;
 
+pub use listener::{CliAccess, CliAccessStatus};
 pub use output_schema::OutputSchema;
 pub use policy::{CliRunTag, PermissionPolicy, RootSeed};
-pub use listener::{CliAccess, CliAccessStatus};
 pub use service::{CliError, CliRunService, SessionOpener};
 
 /// The variable every agent process, and every command it runs through an ACP

@@ -451,12 +451,18 @@ pub const WORK_TASK_CHANGED_EVENT: &str = "task://changed";
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkTaskChange {
-    Upsert { id: i32 },
-    Deleted { id: i32 },
+    Upsert {
+        id: i32,
+    },
+    Deleted {
+        id: i32,
+    },
     /// Something the folder's tasks INHERIT changed: its task settings, or the
     /// folder's own default agent (the layer below them). Either can change
     /// what an inheriting task runs — and reports — without touching a row.
-    Settings { folder_id: i32 },
+    Settings {
+        folder_id: i32,
+    },
     Refresh,
 }
 
@@ -847,7 +853,11 @@ mod tests {
         assert_eq!(p["kind"], "deleted");
         assert_eq!(p["id"], 3);
 
-        emit_event(&emitter, FOLDER_GROUP_CHANGED_EVENT, FolderGroupChange::Layout);
+        emit_event(
+            &emitter,
+            FOLDER_GROUP_CHANGED_EVENT,
+            FolderGroupChange::Layout,
+        );
         let evt = rx.try_recv().expect("layout nudge should broadcast");
         let p = &*evt.payload;
         assert_eq!(p["kind"], "layout");
@@ -899,7 +909,9 @@ mod tests {
         assert_eq!(p["kind"], "upsert");
         assert_eq!(p["assistant"]["id"], 3);
         assert_eq!(p["assistant"]["revision"], 2);
-        assert!(p["assistant"].get("deleted_at").is_some_and(|v| v.is_null()));
+        assert!(p["assistant"]
+            .get("deleted_at")
+            .is_some_and(|v| v.is_null()));
 
         emit_event(
             &emitter,

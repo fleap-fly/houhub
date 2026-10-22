@@ -58,7 +58,9 @@ pub struct WorkbenchClientSuitesInput {
 pub async fn workbench_list_client_suites(
     Json(input): Json<WorkbenchClientSuitesInput>,
 ) -> Result<Json<Vec<WorkbenchClientSuite>>, AppCommandError> {
-    Ok(Json(workbench_list_client_suites_core(input.project_id).await?))
+    Ok(Json(
+        workbench_list_client_suites_core(input.project_id).await?,
+    ))
 }
 
 pub async fn workbench_list_projects() -> Result<Json<JsonValue>, AppCommandError> {

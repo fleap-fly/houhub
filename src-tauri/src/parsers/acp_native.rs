@@ -127,15 +127,14 @@ impl AgentParser for AcpNativeParser {
         // under the previous session id.
         let transcript = acp_transcript::read_chain_in(&self.root, dir, conversation_id);
         if transcript.header.is_none() && transcript.is_empty() {
-            return Err(ParseError::ConversationNotFound(conversation_id.to_string()));
+            return Err(ParseError::ConversationNotFound(
+                conversation_id.to_string(),
+            ));
         }
         let turns = project_turns(&transcript.entries);
         let (used, size) = latest_context_window(&transcript.entries);
-        let session_stats = crate::parsers::merge_context_window_stats(
-            session_stats(&turns),
-            used,
-            size,
-        );
+        let session_stats =
+            crate::parsers::merge_context_window_stats(session_stats(&turns), used, size);
         Ok(ConversationDetail {
             summary: self.summarize(conversation_id, &transcript),
             turns,
@@ -193,7 +192,9 @@ impl AcpNativeParser {
 }
 
 fn epoch_ms_to_utc(ms: u64) -> DateTime<Utc> {
-    Utc.timestamp_millis_opt(ms as i64).single().unwrap_or_else(Utc::now)
+    Utc.timestamp_millis_opt(ms as i64)
+        .single()
+        .unwrap_or_else(Utc::now)
 }
 
 fn first_prompt_title(entries: &[TranscriptEntry]) -> Option<String> {
@@ -241,8 +242,12 @@ fn prompt_blocks(payload: &serde_json::Value) -> Vec<ContentBlock> {
 /// chunk arrives already deserialized, so it is converted straight across
 /// rather than being serialized back to JSON only to be re-read. Consumes the
 /// block, so an embedded image's base64 moves instead of being copied twice.
-fn prompt_block_from_content(content: agent_client_protocol::schema::v1::ContentBlock) -> Option<PromptInputBlock> {
-    use agent_client_protocol::schema::v1::{ContentBlock as Wire, EmbeddedResourceResource as Res};
+fn prompt_block_from_content(
+    content: agent_client_protocol::schema::v1::ContentBlock,
+) -> Option<PromptInputBlock> {
+    use agent_client_protocol::schema::v1::{
+        ContentBlock as Wire, EmbeddedResourceResource as Res,
+    };
     let non_empty = |s: String| (!s.is_empty()).then_some(s);
     match content {
         Wire::Text(t) => Some(PromptInputBlock::Text {
@@ -270,7 +275,9 @@ fn prompt_block_from_content(content: agent_client_protocol::schema::v1::Content
                 // no bytes this can render.
                 _ => return None,
             };
-            let is_image = mime_type.as_deref().is_some_and(|m| m.starts_with("image/"));
+            let is_image = mime_type
+                .as_deref()
+                .is_some_and(|m| m.starts_with("image/"));
             if uri.is_empty() && !(is_image && blob.is_some()) {
                 return None;
             }
@@ -396,8 +403,9 @@ pub fn is_recorded_update(update: &SessionUpdate) -> bool {
 /// not the per-turn input/output counts `MessageTurn::usage` holds — so it
 /// feeds the session footer's context-window trio, exactly like the built-in
 /// parsers derive it from their own stores, and never a turn's token usage.
-/// (A turn's usage stays `None` for custom agents: ACP has no channel for it,
-/// and inventing one from occupancy deltas would be a guess rendered as fact.)
+/// (A turn's usage comes only from what its turn end records, today ZCode's
+/// per-window reports, see `acp::zcode_turn`; otherwise it stays `None`.
+/// Inventing one from occupancy deltas would be a guess rendered as fact.)
 ///
 /// Matched on the raw payload rather than by deserializing: the answer is
 /// almost always in the last few entries, and a string compare per entry costs
@@ -478,7 +486,7 @@ pub fn project_turns(entries: &[TranscriptEntry]) -> Vec<MessageTurn> {
                     duration_ms: None,
                     model: None,
                     completed_at: None,
-                agent_message_id: None,
+                    agent_message_id: None,
                 });
                 seq += 1;
                 prompt_just_recorded = true;
@@ -569,7 +577,7 @@ fn flush(pending: &mut Option<PendingTurn>, turns: &mut Vec<MessageTurn>, seq: &
             .or_else(|| p.last_at_ms.checked_sub(p.started_at_ms)),
         model: p.model,
         completed_at: Some(epoch_ms_to_utc(p.last_at_ms)),
-    agent_message_id: None,
+        agent_message_id: None,
     });
     *seq += 1;
 }
@@ -606,17 +614,27 @@ fn turn_end_model_and_usage(payload: &serde_json::Value) -> (Option<String>, Opt
 /// Read an ACP usage object. Field names follow the `unstable_session_usage`
 /// shape, with snake_case accepted as well since agents differ.
 fn parse_usage(value: &serde_json::Value) -> Option<TurnUsage> {
-    let get = |camel: &str, snake: &str| -> u64 {
-        value
-            .get(camel)
-            .or_else(|| value.get(snake))
+    let get = |keys: &[&str]| -> u64 {
+        keys.iter()
+            .find_map(|key| value.get(*key))
             .and_then(|v| v.as_u64())
             .unwrap_or(0)
     };
-    let input = get("inputTokens", "input_tokens");
-    let output = get("outputTokens", "output_tokens");
-    let cache_create = get("cacheCreationInputTokens", "cache_creation_input_tokens");
-    let cache_read = get("cacheReadInputTokens", "cache_read_input_tokens");
+    let input = get(&["inputTokens", "input_tokens"]);
+    let output = get(&["outputTokens", "output_tokens"]);
+    // ACP usage is cache-exclusive. Accept its canonical cache names first,
+    // retaining the older spellings for transcripts already on disk. Aliases
+    // name the same bucket; adding them would double-count a cache hit.
+    let cache_create = get(&[
+        "cachedWriteTokens",
+        "cacheCreationInputTokens",
+        "cache_creation_input_tokens",
+    ]);
+    let cache_read = get(&[
+        "cachedReadTokens",
+        "cacheReadInputTokens",
+        "cache_read_input_tokens",
+    ]);
     if input == 0 && output == 0 && cache_create == 0 && cache_read == 0 {
         return None;
     }
@@ -830,7 +848,9 @@ fn content_block_text(block: &agent_client_protocol::schema::v1::ContentBlock) -
         agent_client_protocol::schema::v1::ContentBlock::Text(t) => t.text.clone(),
         agent_client_protocol::schema::v1::ContentBlock::ResourceLink(link) => link.uri.clone(),
         agent_client_protocol::schema::v1::ContentBlock::Resource(res) => match &res.resource {
-            agent_client_protocol::schema::v1::EmbeddedResourceResource::TextResourceContents(t) => t.text.clone(),
+            agent_client_protocol::schema::v1::EmbeddedResourceResource::TextResourceContents(
+                t,
+            ) => t.text.clone(),
             _ => String::new(),
         },
         _ => String::new(),
@@ -1053,6 +1073,97 @@ fn session_stats(turns: &[MessageTurn]) -> Option<SessionStats> {
 #[cfg(test)]
 mod zcode_history_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn zcode_attachment_bytes_survive_recording_echo_and_cold_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = crate::acp::registry::registry_id_for(AgentType::ZCode);
+        let wire = crate::acp::connection::map_prompt_blocks(vec![
+            PromptInputBlock::Text {
+                text: "Read these attachments".into(),
+            },
+            PromptInputBlock::Image {
+                data: "cGl4ZWxz".into(),
+                mime_type: "image/png".into(),
+                uri: None,
+            },
+            PromptInputBlock::Resource {
+                uri: "clipboard:///report.pdf".into(),
+                mime_type: Some("application/pdf".into()),
+                text: None,
+                blob: Some("JVBERi0xLjQ=".into()),
+            },
+        ]);
+        let payload = serde_json::to_value(&wire).unwrap();
+        assert_eq!(payload[1]["data"], "cGl4ZWxz");
+        assert_eq!(payload[2]["resource"]["blob"], "JVBERi0xLjQ=");
+        acp_transcript::record_header_in(
+            dir.path(),
+            agent,
+            &acp_transcript::TranscriptHeader::new("zcode", "attachments", "/workspace", 1),
+        )
+        .await
+        .unwrap();
+        acp_transcript::record_entry_in(
+            dir.path(),
+            agent,
+            "attachments",
+            EntryKind::Prompt,
+            payload.clone(),
+        )
+        .await
+        .unwrap();
+        for content in payload.as_array().unwrap() {
+            acp_transcript::record_entry_in(
+                dir.path(),
+                agent,
+                "attachments",
+                EntryKind::Update,
+                serde_json::json!({"sessionUpdate":"user_message_chunk", "content":content}),
+            )
+            .await
+            .unwrap();
+        }
+        acp_transcript::record_entry_in(
+            dir.path(), agent, "attachments", EntryKind::Update,
+            serde_json::json!({"sessionUpdate":"agent_message_chunk", "content":{"type":"text","text":"Read both"}}),
+        ).await.unwrap();
+        acp_transcript::record_entry_in(
+            dir.path(),
+            agent,
+            "attachments",
+            EntryKind::TurnEnd,
+            serde_json::json!({"stopReason":"end_turn"}),
+        )
+        .await
+        .unwrap();
+        let parser = AcpNativeParser::new_in(AgentType::ZCode, dir.path().to_path_buf());
+        let cold = parser.get_conversation("attachments").unwrap();
+        assert_eq!(
+            cold.turns.len(),
+            2,
+            "the prompt echo must not duplicate attachments"
+        );
+        assert_eq!(cold.turns[0].blocks.len(), 3);
+        assert!(
+            matches!(&cold.turns[0].blocks[1], ContentBlock::Image { data, mime_type, uri }
+            if data == "cGl4ZWxz" && mime_type == "image/png" && uri.is_none())
+        );
+        assert!(
+            matches!(&cold.turns[0].blocks[2], ContentBlock::Text { text }
+            if text.contains("report.pdf") && !text.contains("JVBERi0xLjQ="))
+        );
+        let stored = acp_transcript::read_transcript_in(dir.path(), agent, "attachments");
+        assert_eq!(
+            stored
+                .entries
+                .iter()
+                .find(|e| e.k == EntryKind::Prompt)
+                .unwrap()
+                .p,
+            payload
+        );
+    }
 
     #[tokio::test]
     async fn zcode_history_survives_reopen_and_keeps_tools_usage_and_continuations() {
@@ -2009,7 +2120,11 @@ mod tests {
             .iter()
             .filter(|b| matches!(b, ContentBlock::ToolUse { tool_name, .. } if tool_name == "TodoWrite"))
             .collect();
-        assert_eq!(plan_blocks.len(), 1, "the plan card is replaced, not repeated");
+        assert_eq!(
+            plan_blocks.len(),
+            1,
+            "the plan card is replaced, not repeated"
+        );
         match plan_blocks[0] {
             ContentBlock::ToolUse { input_preview, .. } => {
                 let v: serde_json::Value =
@@ -2357,6 +2472,40 @@ mod tests {
         assert_eq!(stats.total_duration_ms, 42);
     }
 
+    #[test]
+    fn acp_cache_counters_have_precedence_and_are_not_subtracted_twice() {
+        let usage = parse_usage(&serde_json::json!({
+            "inputTokens":180,"outputTokens":350,"cachedReadTokens":900,"cachedWriteTokens":120,
+            "cacheReadInputTokens":9999,"cacheCreationInputTokens":9999,"thoughtTokens":200
+        }))
+        .unwrap();
+        assert_eq!(usage.input_tokens, 180);
+        assert_eq!(usage.output_tokens, 350);
+        assert_eq!(usage.cache_read_input_tokens, 900);
+        assert_eq!(usage.cache_creation_input_tokens, 120);
+        let cache_only = parse_usage(&serde_json::json!({"cachedReadTokens":42})).unwrap();
+        assert_eq!(cache_only.cache_read_input_tokens, 42);
+        assert_eq!(cache_only.input_tokens, 0);
+        let canonical_zero = parse_usage(
+            &serde_json::json!({"outputTokens":1,"cachedReadTokens":0,"cacheReadInputTokens":9999}),
+        )
+        .unwrap();
+        assert_eq!(canonical_zero.cache_read_input_tokens, 0);
+        for legacy in [
+            serde_json::json!({"cacheReadInputTokens":2,"cacheCreationInputTokens":3}),
+            serde_json::json!({"cache_read_input_tokens":2,"cache_creation_input_tokens":3}),
+        ] {
+            let usage = parse_usage(&legacy).unwrap();
+            assert_eq!(
+                (
+                    usage.cache_read_input_tokens,
+                    usage.cache_creation_input_tokens
+                ),
+                (2, 3)
+            );
+        }
+    }
+
     /// The write-side whitelist and the read-side match arms are two
     /// hand-maintained views of one set. This asserts they agree by RUNNING the
     /// projection over each variant rather than by restating either list, so
@@ -2393,8 +2542,8 @@ mod tests {
             let parsed: SessionUpdate = serde_json::from_value(payload.clone())
                 .unwrap_or_else(|e| panic!("sample is not a valid SessionUpdate: {payload} ({e})"));
             let entry = [update(1, payload.clone())];
-            let read = !project_turns(&entry).is_empty()
-                || latest_context_window(&entry) != (None, None);
+            let read =
+                !project_turns(&entry).is_empty() || latest_context_window(&entry) != (None, None);
             assert_eq!(
                 is_recorded_update(&parsed),
                 read,
@@ -2407,9 +2556,15 @@ mod tests {
     fn the_last_usage_update_becomes_the_context_window_footer() {
         let entries = vec![
             prompt(1, "hi"),
-            update(2, serde_json::json!({"sessionUpdate":"usage_update","used":100,"size":1000})),
+            update(
+                2,
+                serde_json::json!({"sessionUpdate":"usage_update","used":100,"size":1000}),
+            ),
             update(3, text_chunk("agent_message_chunk", "ok")),
-            update(4, serde_json::json!({"sessionUpdate":"usage_update","used":250,"size":1000})),
+            update(
+                4,
+                serde_json::json!({"sessionUpdate":"usage_update","used":250,"size":1000}),
+            ),
         ];
         assert_eq!(latest_context_window(&entries), (Some(250), Some(1000)));
         // Occupancy is NOT a turn's token usage: recording it must not put
@@ -2417,7 +2572,10 @@ mod tests {
         assert!(project_turns(&entries).iter().all(|t| t.usage.is_none()));
 
         // A window of zero is an agent reporting nothing, not a reading.
-        let zero = [update(5, serde_json::json!({"sessionUpdate":"usage_update","used":9,"size":0}))];
+        let zero = [update(
+            5,
+            serde_json::json!({"sessionUpdate":"usage_update","used":9,"size":0}),
+        )];
         assert_eq!(latest_context_window(&zero), (None, None));
         assert_eq!(latest_context_window(&[prompt(1, "hi")]), (None, None));
     }

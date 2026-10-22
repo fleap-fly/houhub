@@ -334,9 +334,7 @@ pub fn linux_handlers(app: &AppHandle, tab_id: &str) -> super::shim::linux::Down
     let tab_id = tab_id.to_string();
     let finished_app = app.clone();
     super::shim::linux::DownloadHandlers {
-        started: std::sync::Arc::new(move |url, path| {
-            requested(&started_app, &tab_id, url, path)
-        }),
+        started: std::sync::Arc::new(move |url, path| requested(&started_app, &tab_id, url, path)),
         finished: std::sync::Arc::new(move |url, destination, success| {
             finished(&finished_app, url, Some(destination.to_path_buf()), success)
         }),
@@ -425,6 +423,7 @@ fn reveal_command(path: &Path) -> std::process::Command {
     {
         let mut command = std::process::Command::new("xdg-open");
         command.arg(path.parent().unwrap_or(path));
+        crate::appimage_env::restore(&mut command);
         command
     }
 }
@@ -505,15 +504,23 @@ mod tests {
         downloads.push(record("dl-3", "https://example.com/a"));
 
         let done = downloads
-            .finish("https://example.com/a", true, Some(PathBuf::from("/tmp/z.bin")))
+            .finish(
+                "https://example.com/a",
+                true,
+                Some(PathBuf::from("/tmp/z.bin")),
+            )
             .unwrap();
         assert_eq!(done.id, "dl-1");
         assert_eq!(done.state, DownloadState::Completed);
         assert_eq!(done.file_name, "z.bin");
-        let again = downloads.finish("https://example.com/a", false, None).unwrap();
+        let again = downloads
+            .finish("https://example.com/a", false, None)
+            .unwrap();
         assert_eq!(again.id, "dl-3");
         assert_eq!(again.state, DownloadState::Failed);
-        assert!(downloads.finish("https://example.com/a", true, None).is_none());
+        assert!(downloads
+            .finish("https://example.com/a", true, None)
+            .is_none());
         // A failed download keeps the path it was going to be written to.
         assert_eq!(again.path, "/tmp/dl-3.bin");
 

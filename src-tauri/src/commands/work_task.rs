@@ -22,9 +22,7 @@ use crate::models::{
     WorkTaskInfo, WorkTaskTemplateDraft, WorkTaskTemplateInfo,
 };
 
-use crate::web::event_bridge::{
-    emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT,
-};
+use crate::web::event_bridge::{emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT};
 
 fn engine() -> Result<std::sync::Arc<crate::work_task::TaskEngine>, DbError> {
     crate::work_task::engine()
@@ -510,7 +508,11 @@ pub async fn work_task_schedule_core(
     id: i32,
     scheduled_at: Option<String>,
 ) -> Result<(), DbError> {
-    let at = match scheduled_at.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let at = match scheduled_at
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(raw) => Some(
             chrono::DateTime::parse_from_rfc3339(raw)
                 .map_err(|e| DbError::Validation(format!("invalid scheduled_at: {e}")))?
@@ -587,7 +589,10 @@ pub async fn work_task_cancel_core(
     delete_worktree: bool,
 ) -> Result<(), DbError> {
     let engine = engine()?;
-    engine.cancel(id, reason).await.map_err(DbError::Validation)?;
+    engine
+        .cancel(id, reason)
+        .await
+        .map_err(DbError::Validation)?;
     if delete_worktree {
         if let Err(blocked) = engine.cleanup_task(id).await {
             tracing::warn!(
@@ -735,8 +740,11 @@ pub async fn work_task_cleanup_core(id: i32) -> Result<(), DbError> {
         .map_err(|blocked| DbError::Validation(blocked.message))
 }
 
-/// Diff of the task worktree vs. its recorded base (`base_sha`, so the view is
-/// stable even when the base branch advances). `file = None` → full patch.
+/// Diff of the task worktree vs. the base its branch sits on
+/// ([`crate::work_task::engine::branch_base`]: the recorded `base_sha`, moved
+/// forward only once the branch absorbed base content — so the view stays put
+/// while the base branch advances, and base content the agent merged in is not
+/// shown as the task's change). `file = None` → full patch.
 ///
 /// Uncommitted work is part of it: nothing makes the agent commit before the
 /// task reaches review (the merge generation commits the leftovers itself), so
@@ -754,14 +762,12 @@ pub async fn work_task_diff_core(
     let wt_id = task
         .worktree_folder_id
         .ok_or_else(|| AppCommandError::not_found("task has no worktree"))?;
-    let base = task
-        .base_sha
-        .clone()
-        .or(task.base_branch.clone())
-        .ok_or_else(|| AppCommandError::not_found("task has no recorded base"))?;
     let wt = get_folder_core(db, wt_id)
         .await
         .map_err(AppCommandError::from)?;
+    let base = crate::work_task::engine::branch_base(&wt.path, &task)
+        .await
+        .ok_or_else(|| AppCommandError::not_found("task has no recorded base"))?;
     crate::work_task::git::diff_patch_with_untracked(&wt.path, &base, file.as_deref()).await
 }
 
@@ -778,12 +784,15 @@ pub async fn work_task_changed_files_core(
     let Some(wt_id) = task.worktree_folder_id else {
         return Ok(vec![]);
     };
-    let Some(base) = task.base_sha.clone().or(task.base_branch.clone()) else {
+    if task.base_sha.is_none() && task.base_branch.is_none() {
         return Ok(vec![]);
-    };
+    }
     let wt = get_folder_core(db, wt_id)
         .await
         .map_err(AppCommandError::from)?;
+    let Some(base) = crate::work_task::engine::branch_base(&wt.path, &task).await else {
+        return Ok(vec![]);
+    };
     crate::work_task::git::diff_numstat_with_untracked(&wt.path, &base).await
 }
 
@@ -899,9 +908,7 @@ pub async fn work_task_events(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn work_task_attention_count(
-    db: tauri::State<'_, AppDatabase>,
-) -> Result<u64, DbError> {
+pub async fn work_task_attention_count(db: tauri::State<'_, AppDatabase>) -> Result<u64, DbError> {
     work_task_attention_count_core(&db).await
 }
 
@@ -1275,15 +1282,24 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-        assert!(work_task_service::begin_setup(&db.conn, overridden.id, run_seq)
-            .await
-            .unwrap());
         assert!(
-            work_task_service::mark_running(&db.conn, overridden.id, run_seq, conversation_id, "c1")
+            work_task_service::begin_setup(&db.conn, overridden.id, run_seq)
                 .await
                 .unwrap()
         );
-        assert_eq!(agent_of(&db, overridden.id).await.as_deref(), Some("gemini"));
+        assert!(work_task_service::mark_running(
+            &db.conn,
+            overridden.id,
+            run_seq,
+            conversation_id,
+            "c1"
+        )
+        .await
+        .unwrap());
+        assert_eq!(
+            agent_of(&db, overridden.id).await.as_deref(),
+            Some("gemini")
+        );
 
         // A list stamps every row the same way a get does.
         let listed = work_task_list_core(&db, Some(folder_id)).await.unwrap();

@@ -4,7 +4,9 @@
 //! per-folder git mutex.
 
 use crate::app_error::{AppCommandError, AppErrorCode};
+
 use crate::commands::folders::{detect_conflicts, git_command_error};
+
 use crate::models::WorkTaskChangedFile;
 
 async fn run_git(path: &str, args: &[&str]) -> Result<std::process::Output, AppCommandError> {
@@ -16,10 +18,14 @@ async fn run_git(path: &str, args: &[&str]) -> Result<std::process::Output, AppC
         .map_err(AppCommandError::io)
 }
 
-/// Run git against a throwaway index, leaving the worktree's real index
-/// untouched. Split indexes are disabled so git cannot leave sharedindex files
-/// behind next to the scratch index.
-async fn run_git_with_index(
+/// As [`run_git`], against a git index of our choosing instead of the
+/// worktree's own — see [`ScratchIndex`].
+///
+/// `core.splitIndex=false` because a throwaway index must stay in ONE file:
+/// with splitting on, writing it deposits a fresh `sharedindex.*` beside it in
+/// the git directory, which outlives the scratch (git only prunes those on a
+/// later `gc`).
+pub(crate) async fn run_git_with_index(
     path: &str,
     index: &std::path::Path,
     args: &[&str],
@@ -32,28 +38,6 @@ async fn run_git_with_index(
         .output()
         .await
         .map_err(AppCommandError::io)
-}
-
-/// Add a task worktree from an exact base revision. The general folder command
-/// intentionally keeps its legacy three-argument API; task runs need the
-/// pinned revision so a branch cannot accidentally start from a concurrently
-/// advanced HEAD.
-pub async fn worktree_add_at(
-    path: &str,
-    branch: &str,
-    worktree_path: &str,
-    start_point: &str,
-) -> Result<(), AppCommandError> {
-    let out = run_git(
-        path,
-        &["worktree", "add", "-b", branch, worktree_path, start_point],
-    )
-    .await?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(git_command_error("worktree add", &out.stderr))
-    }
 }
 
 /// A worktree's own git directory (`<repo>/.git/worktrees/<name>` for a linked
@@ -272,6 +256,37 @@ pub async fn commit_present(path: &str, rev: &str) -> Result<bool, AppCommandErr
     Ok(out.status.success())
 }
 
+/// The newest commit under `tip` (and not under `stop`) that carries the same
+/// change as one of `commit`'s own commits — where `commit` ended up after a
+/// rebase gave its changes new parents and new shas. "The same change" is
+/// git's patch-id equivalence (`--cherry-mark`, what `git cherry` and `rebase`
+/// use to skip a commit already applied). `None` when there is no such copy,
+/// and when git can't say.
+pub async fn rebased_copy(path: &str, commit: &str, tip: &str, stop: &str) -> Option<String> {
+    let range = format!("{commit}...{tip}");
+    let not_stop = format!("^{stop}");
+    let out = run_git(
+        path,
+        &[
+            "rev-list",
+            "--cherry-mark",
+            "--right-only",
+            "--no-merges",
+            "--topo-order",
+            &range,
+            &not_stop,
+        ],
+    )
+    .await
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix('=').map(str::to_string))
+}
+
 /// `git fetch <remote> +<remote_ref>:<local_ref>` → the fetched tip.
 ///
 /// Two deliberate choices:
@@ -334,6 +349,20 @@ pub async fn diff_numstat(
     Ok(parse_numstat(&out.stdout))
 }
 
+/// `git diff --numstat <from> <to>` — the change between two commits, with
+/// nothing from the worktree in it.
+pub async fn diff_numstat_between(
+    path: &str,
+    from: &str,
+    to: &str,
+) -> Result<Vec<WorkTaskChangedFile>, AppCommandError> {
+    let out = run_git(path, &["diff", "--numstat", from, to]).await?;
+    if !out.status.success() {
+        return Err(git_command_error("diff --numstat", &out.stderr));
+    }
+    Ok(parse_numstat(&out.stdout))
+}
+
 fn parse_numstat(stdout: &[u8]) -> Vec<WorkTaskChangedFile> {
     let mut files = Vec::new();
     for line in String::from_utf8_lossy(stdout).lines() {
@@ -366,8 +395,12 @@ fn parse_numstat(stdout: &[u8]) -> Vec<WorkTaskChangedFile> {
 /// The worktree's REAL index is never touched — `git add -N` on it would leave
 /// the agent's next round, and any `git stash` / `git commit -a` the user runs,
 /// looking at an index this feature quietly edited.
-struct ScratchIndex {
-    path: std::path::PathBuf,
+///
+/// [`ScratchIndex::copy_of`] is the same throwaway copy without the
+/// intent-to-add pass, for a caller that stages into it what it wants to look
+/// at (the commit message generator's "what would this commit contain").
+pub(crate) struct ScratchIndex {
+    pub(crate) path: std::path::PathBuf,
 }
 
 impl Drop for ScratchIndex {
@@ -389,6 +422,25 @@ impl ScratchIndex {
     /// to prevent. `anchor` is only the fallback seed for a checkout that has
     /// no index to copy at all.
     async fn build(wt_path: &str, anchor: &str) -> Result<Self, AppCommandError> {
+        let scratch = Self::copy_of(wt_path, Some(anchor)).await?;
+        // git runs with the worktree root as its cwd, so a bare `-A` covers the
+        // whole tree; `-N` records names only — nothing is staged, and the
+        // content the diff reports is read from the working tree either way.
+        let add = run_git_with_index(wt_path, &scratch.path, &["add", "-A", "-N"]).await?;
+        if !add.status.success() {
+            return Err(git_command_error("add -A -N", &add.stderr));
+        }
+        Ok(scratch)
+    }
+
+    /// A copy of the worktree's own index and nothing more (see the type docs
+    /// for why a copy). With no index to copy, `anchor` seeds it with
+    /// `read-tree`; without an anchor either it is left EMPTY, which is what a
+    /// repository nothing was ever staged in has.
+    pub(crate) async fn copy_of(
+        wt_path: &str,
+        anchor: Option<&str>,
+    ) -> Result<Self, AppCommandError> {
         // Inside the worktree's own git directory: never visible to
         // `git status`, never committable, and on the same filesystem as the
         // index it copies. The name carries the process id and a counter
@@ -413,18 +465,34 @@ impl ScratchIndex {
         // Git replaces the index by renaming `index.lock` over it, so a copy
         // racing an agent's own `git add` reads one whole version or the
         // other — never a half-written file.
-        if std::fs::copy(git_dir.join("index"), &scratch.path).is_err() {
-            let read = run_git_with_index(wt_path, &scratch.path, &["read-tree", anchor]).await?;
-            if !read.status.success() {
-                return Err(git_command_error("read-tree", &read.stderr));
+        let index = git_dir.join("index");
+        let copied = std::fs::File::open(&index).and_then(|mut source| {
+            let metadata = source.metadata()?;
+            let mut destination = std::fs::File::create(&scratch.path)?;
+            std::io::copy(&mut source, &mut destination)?;
+            destination.set_permissions(metadata.permissions())?;
+            // Git rehashes an entry whose timestamp is at least the index's
+            // timestamp (a "racily clean" entry). A fresh mtime on the copy
+            // would disable that check and hide same-size edits made within
+            // the filesystem's timestamp resolution. Read both the contents
+            // and metadata from one handle, even if git replaces the source.
+            destination.set_modified(metadata.modified()?)
+        });
+        if let Err(e) = copied {
+            match anchor {
+                Some(anchor) => {
+                    let read =
+                        run_git_with_index(wt_path, &scratch.path, &["read-tree", anchor]).await?;
+                    if !read.status.success() {
+                        return Err(git_command_error("read-tree", &read.stderr));
+                    }
+                }
+                // An index that is there but could not be copied is not an
+                // empty one: left empty, the copy would read as every tracked
+                // file deleted.
+                None if index.exists() => return Err(AppCommandError::io(e)),
+                None => {}
             }
-        }
-        // git runs with the worktree root as its cwd, so a bare `-A` covers the
-        // whole tree; `-N` records names only — nothing is staged, and the
-        // content the diff reports is read from the working tree either way.
-        let add = run_git_with_index(wt_path, &scratch.path, &["add", "-A", "-N"]).await?;
-        if !add.status.success() {
-            return Err(git_command_error("add -A -N", &add.stderr));
         }
         Ok(scratch)
     }
@@ -476,7 +544,11 @@ pub async fn local_branch_tip(
     let refname = format!("refs/heads/{branch}");
     let out = run_git(
         repo_path,
-        &["for-each-ref", "--format=%(refname)\t%(objectname)", &refname],
+        &[
+            "for-each-ref",
+            "--format=%(refname)\t%(objectname)",
+            &refname,
+        ],
     )
     .await?;
     if !out.status.success() {
@@ -791,6 +863,66 @@ mod tests {
         }
     }
 
+    /// Copying an index must keep Git's racy-clean check: a same-size edit
+    /// whose stat data still matches the cached entry needs to be rehashed.
+    #[tokio::test]
+    async fn a_copied_index_still_stages_a_racily_clean_edit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root.to_str().expect("utf-8 path");
+        git_run(root, &["init", "-q"]);
+        git_run(root, &["config", "core.trustctime", "false"]);
+        git_run(root, &["config", "core.checkStat", "minimal"]);
+        let file = root.join("Cargo.lock");
+        // Whole seconds model a filesystem whose timestamp resolution cannot
+        // distinguish the two writes, independently of how fast this runs.
+        let timestamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::write(&file, "a\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(timestamp)
+            .unwrap();
+        git_run(root, &["add", "Cargo.lock"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+
+        std::fs::write(&file, "b\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(timestamp)
+            .unwrap();
+        let index = root.join(".git/index");
+        std::fs::File::options()
+            .write(true)
+            .open(&index)
+            .unwrap()
+            .set_modified(timestamp)
+            .unwrap();
+        let original = std::fs::read(&index).unwrap();
+        let original_mtime = std::fs::metadata(&index).unwrap().modified().unwrap();
+
+        let scratch = ScratchIndex::copy_of(path, None).await.unwrap();
+        let add = run_git_with_index(path, &scratch.path, &["add", "--", "Cargo.lock"])
+            .await
+            .unwrap();
+        assert!(add.status.success(), "{:?}", add.stderr);
+        let diff = run_git_with_index(path, &scratch.path, &["diff", "--cached"])
+            .await
+            .unwrap();
+        assert!(diff.status.success(), "{:?}", diff.stderr);
+        let patch = String::from_utf8(diff.stdout).unwrap();
+        assert!(patch.contains("-a\n+b\n"), "same-size edit lost: {patch}");
+        assert_eq!(std::fs::read(&index).unwrap(), original);
+        assert_eq!(
+            std::fs::metadata(&index).unwrap().modified().unwrap(),
+            original_mtime,
+            "the real index's contents and timestamp stay untouched"
+        );
+    }
+
     /// Why removing a task worktree has to consult BOTH probes: each is blind
     /// to exactly what the other sees. `remove_worktree_and_branch` runs
     /// `worktree remove --force` + `branch -D`, so anything either probe would
@@ -868,7 +1000,11 @@ mod tests {
             .await
             .expect("acceptance diff");
         let names: Vec<&str> = seen.iter().map(|f| f.file.as_str()).collect();
-        assert_eq!(names, ["a.txt", "new.txt"], "ignored files stay out: {seen:?}");
+        assert_eq!(
+            names,
+            ["a.txt", "new.txt"],
+            "ignored files stay out: {seen:?}"
+        );
         let new_file = seen.iter().find(|f| f.file == "new.txt").expect("new file");
         assert_eq!(
             (new_file.additions, new_file.deletions),
@@ -902,7 +1038,10 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.starts_with("houhub-diff-index"))
             .collect();
-        assert!(leftovers.is_empty(), "scratch index left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "scratch index left behind: {leftovers:?}"
+        );
     }
 
     /// A file the ignore rules exclude but that is TRACKED anyway (`git add
@@ -1029,7 +1168,10 @@ mod tests {
         git_run(dir.path(), &["commit", "-qm", "more work"]);
         git_run(dir.path(), &["checkout", "-q", "main"]);
         assert!(branch_holds_unlanded_work(path, "task/1", Some("main"), Some(&base_sha)).await);
-        git_run(dir.path(), &["merge", "-q", "--no-ff", "-m", "land", "task/1"]);
+        git_run(
+            dir.path(),
+            &["merge", "-q", "--no-ff", "-m", "land", "task/1"],
+        );
         assert!(!branch_holds_unlanded_work(path, "task/1", Some("main"), Some(&base_sha)).await);
     }
 
@@ -1174,7 +1316,10 @@ mod tests {
         // ── the tip moved: the branch (and its commit) must survive ──
         let moved = dir.path().join("wt-moved");
         let moved_path = moved.to_str().expect("utf-8 path");
-        git_run(&repo, &["worktree", "add", "-q", "-b", "task/moved", moved_path]);
+        git_run(
+            &repo,
+            &["worktree", "add", "-q", "-b", "task/moved", moved_path],
+        );
         std::fs::write(moved.join("a.txt"), "one\ntwo\n").expect("write");
         git_run(&moved, &["commit", "-qam", "published"]);
         let published = rev_parse(moved_path, "HEAD").await.expect("published tip");
@@ -1187,7 +1332,9 @@ mod tests {
             .await
             .expect_err("a branch that outran the published tip is not deletable");
         assert_eq!(
-            rev_parse(repo_path, "refs/heads/task/moved").await.expect("branch alive"),
+            rev_parse(repo_path, "refs/heads/task/moved")
+                .await
+                .expect("branch alive"),
             outran,
             "the commit nobody published is still reachable"
         );
@@ -1195,7 +1342,10 @@ mod tests {
         // ── the tip is exactly what was published: the branch goes ──
         let same = dir.path().join("wt-same");
         let same_path = same.to_str().expect("utf-8 path");
-        git_run(&repo, &["worktree", "add", "-q", "-b", "task/same", same_path]);
+        git_run(
+            &repo,
+            &["worktree", "add", "-q", "-b", "task/same", same_path],
+        );
         std::fs::write(same.join("a.txt"), "one\nagain\n").expect("write");
         git_run(&same, &["commit", "-qam", "published"]);
         let tip = rev_parse(same_path, "HEAD").await.expect("tip");
@@ -1214,7 +1364,10 @@ mod tests {
         // finish rather than flag the same failure forever.
         let gone = dir.path().join("wt-gone");
         let gone_path = gone.to_str().expect("utf-8 path");
-        git_run(&repo, &["worktree", "add", "-q", "-b", "task/gone", gone_path]);
+        git_run(
+            &repo,
+            &["worktree", "add", "-q", "-b", "task/gone", gone_path],
+        );
         let gone_tip = rev_parse(gone_path, "HEAD").await.expect("tip");
         remove_worktree_and_branch(repo_path, gone_path, Some("task/gone"), Some(&gone_tip))
             .await
@@ -1372,10 +1525,7 @@ mod tests {
             "not yours\n",
             "the unrelated checkout keeps its uncommitted work"
         );
-        assert!(
-            elsewhere.join("a.txt").exists(),
-            "and the rest of its tree"
-        );
+        assert!(elsewhere.join("a.txt").exists(), "and the rest of its tree");
         // Asked OF git rather than matched against `worktree list`: that
         // listing prints forward slashes on Windows while the fixture path
         // holds backslashes, and a temp directory can come back short-named,

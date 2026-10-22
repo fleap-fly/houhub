@@ -993,8 +993,14 @@ mod tests {
             strip_bot_mention("/task@HouHub_Bot build", "houhub_bot"),
             "/task build"
         );
-        assert_eq!(strip_bot_mention("/task build", "houhub_bot"), "/task build");
-        assert_eq!(strip_bot_mention("/task@houhub_bot", ""), "/task@houhub_bot");
+        assert_eq!(
+            strip_bot_mention("/task build", "houhub_bot"),
+            "/task build"
+        );
+        assert_eq!(
+            strip_bot_mention("/task@houhub_bot", ""),
+            "/task@houhub_bot"
+        );
     }
 
     /// The long-poll loop runs unattended, and any member of a bound group

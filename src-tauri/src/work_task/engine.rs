@@ -78,9 +78,7 @@ use crate::models::{
     STAGE_PROMPT_ALL,
 };
 
-use crate::web::event_bridge::{
-    emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT,
-};
+use crate::web::event_bridge::{emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT};
 
 use crate::work_task::compact;
 
@@ -693,9 +691,7 @@ impl LaunchMode {
 fn reported_agent_error(payload: &AcpEvent) -> Option<String> {
     match payload {
         AcpEvent::Error { message, .. } => first_nonempty([Some(message.as_str())]),
-        AcpEvent::SessionFailure { record }
-            if record.severity == "error" && !record.resolved =>
-        {
+        AcpEvent::SessionFailure { record } if record.severity == "error" && !record.resolved => {
             first_nonempty([Some(record.title.as_str()), record.details.as_deref()])
         }
         AcpEvent::ToolCall {
@@ -817,8 +813,8 @@ impl TaskEngine {
                     "user",
                 )
                 .await
-                    .map_err(|e| e.to_string())?
-                    .is_some()
+                .map_err(|e| e.to_string())?
+                .is_some()
                 {
                     folder_claimed += 1;
                     self.emit_upsert(id);
@@ -3214,7 +3210,7 @@ impl TaskEngine {
                     .unwrap_or(false)
             }
             // What the agent reported for this turn (a rejected prompt's own
-            // message, houhub's reading of an empty turn) says more than the
+            // message, HouHub's reading of an empty turn) says more than the
             // bare stop reason, which is all a turn that reported nothing has.
             other => work_task_service::fail(
                 &self.db.conn,
@@ -3375,7 +3371,7 @@ impl TaskEngine {
             .map(str::trim)
             .filter(|c| !c.is_empty());
         let (display_name, command_line) = match custom {
-            Some(cmd) => (cmd.to_string(), cmd.to_string()),
+            Some(cmd) => (cmd.to_string(), Ok(cmd.to_string())),
             None => {
                 let Some(command_id) = settings.preflight_command_id else {
                     return;
@@ -3389,7 +3385,14 @@ impl TaskEngine {
                 if command.folder_id != task.folder_id {
                     return;
                 }
-                (command.name, command.command)
+                // One the desktop app runs on its own machine is never run
+                // here, on the folder's host: its light goes red saying so.
+                let line = if command.run_local {
+                    Err("it is set to run on the desktop's own computer".to_string())
+                } else {
+                    Ok(command.command)
+                };
+                (command.name, line)
             }
         };
         let Some(wt_id) = task.worktree_folder_id else {
@@ -3413,7 +3416,11 @@ impl TaskEngine {
             _ => return, // task already moved on
         }
 
-        match run_shell_capture(&command_line, &wt.path).await {
+        let outcome = match command_line {
+            Ok(line) => run_shell_capture(&line, &wt.path).await,
+            Err(why) => Err(why),
+        };
+        match outcome {
             Ok((code, tail)) => {
                 let passed = code == Some(0);
                 light.status = if passed { "passed" } else { "failed" }.to_string();
@@ -4274,7 +4281,7 @@ impl TaskEngine {
                 })?;
             // The push lands in the recorded HEAD repository — the fork, when
             // the pull request comes from one. Resolvability is re-checked
-            // here, before the CAS, so a row whose fork houhub cannot name
+            // here, before the CAS, so a row whose fork HouHub cannot name
             // (written by an older build, or hydrated while the fork was
             // already gone) is refused with the task left exactly as it was.
             pull_push_repo(&meta)?;
@@ -4526,6 +4533,7 @@ impl TaskEngine {
         let attempt = if from_pull {
             self.push_back_to_pull(
                 task_id,
+                run_seq,
                 meta,
                 wt_path,
                 work_branch,
@@ -4647,9 +4655,24 @@ impl TaskEngine {
     /// head OID is deliberately NOT required to equal ours — someone pushing
     /// on top of our work a second later has not undone the delivery, and
     /// demanding equality would bounce a task whose work is safely published.
+    ///
+    /// A push also records what it learned: the head the pull request had
+    /// right before it — under ours, as the push was a fast-forward — as the
+    /// snapshot's `pushed_onto`, and what the push added on top of that head
+    /// over the row's counters. That is exact where the counters a run's
+    /// settle took can only measure from what is local: a pull request
+    /// force-pushed while the task was out, or grown commits of its author's,
+    /// leaves no local commit that says where it ends — until this one. It is
+    /// recorded as soon as the push lands, not at the settle: a settle that
+    /// fails after it leaves a retry that pushes nothing, and the comment that
+    /// retry posts should still say what was pushed; the counters measured
+    /// before that retry (the boot pass) measure from `pushed_onto` too.
+    /// `run_seq` is the delivery's own.
+    #[allow(clippy::too_many_arguments)]
     async fn push_back_to_pull(
         &self,
         task_id: i32,
+        run_seq: i32,
         meta: &ForgeSourceMeta,
         wt_path: &str,
         work_branch: &str,
@@ -4724,6 +4747,29 @@ impl TaskEngine {
                         _ => format!("{where_}: {e}"),
                     }
                 })?;
+
+            if let Some(added) = stats_between(wt_path, &before.head_sha, expected_head).await {
+                let mut pushed = meta.clone();
+                pushed.pushed_onto = Some(before.head_sha.clone());
+                let recorded = match serde_json::to_string(&pushed) {
+                    Ok(meta_json) => work_task_service::record_push_back(
+                        &self.db.conn,
+                        task_id,
+                        run_seq,
+                        added,
+                        &meta_json,
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+                    Err(e) => Err(e.to_string()),
+                };
+                if let Err(e) = recorded {
+                    tracing::warn!(
+                        "[work_task] task {task_id}: could not record what the push added: {e}"
+                    );
+                }
+            }
 
             // Re-read so the settled row links the pull request as it is now
             // (and so a pull request closed during the push is not reported
@@ -6157,15 +6203,12 @@ async fn converge_worktree_removal(
 ///   review-only task that committed nothing would report a full change set,
 ///   the board would offer to push it back (a delivery with nothing in it),
 ///   and "complete" — the acceptance that actually applies — would never
-///   appear. The head comes from the task's source snapshot, which is what the
-///   checkout used; it must still be a commit HERE, since a force-push can
-///   leave the row naming one this repository never had.
+///   appear. Where that head sits in the branch now is
+///   [`pull_head_in_branch`]'s question.
 /// - **The branch absorbing base content** (the agent merged the base branch
 ///   in, or rebased onto it) moves the merge base forward, and everything the
-///   base contributed would otherwise read as this task's work. Taken only
-///   when it moved FORWARD from the recorded base: a base branch that is
-///   behind locally, or a same-name branch of unrelated history, must not drag
-///   the anchor backwards and inflate the count it was meant to correct.
+///   base contributed would otherwise read as this task's work — see
+///   [`branch_base`].
 ///
 /// `wt_path` is the task's worktree — where every ref here is resolved.
 async fn own_work_anchor(
@@ -6173,21 +6216,138 @@ async fn own_work_anchor(
     task: &crate::db::entities::work_task::Model,
 ) -> Option<String> {
     if task.source_kind.as_deref() == Some(SOURCE_KIND_PR) {
-        let head = task
-            .source_meta
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())
-            .and_then(|m| m.head_sha)
-            .filter(|s| !s.trim().is_empty());
-        if let Some(head) = head {
-            if task_git::commit_present(wt_path, &head)
+        if let Some(head) = pull_head_in_branch(wt_path, task).await {
+            return Some(head);
+        }
+    }
+    branch_base(wt_path, task).await
+}
+
+/// Where a pull-request task's pull request ends inside its branch, when the
+/// task's own work can be measured from there. Two points are known: the head
+/// the task was triggered on — the one its source snapshot records and the
+/// checkout used — and, once a push-back went out, the head it went onto
+/// (`pushed_onto`, read from the forge at the time). The latest of them that
+/// is still under the work wins. A recorded head force-pushed away upstream,
+/// with the branch rebased onto the new one, counts through its rebased copy:
+/// the commit itself is still in the object store, but no longer under the
+/// work, and diffing against it would count everything between the old base
+/// and the new one as this task's work.
+///
+/// `None` — no known point usable — hands [`own_work_anchor`] to the
+/// base-branch rule. A point is not usable when:
+///
+/// - it is not a commit here at all (a force-push can leave the row naming one
+///   this repository never had), or the branch holds neither it nor a copy;
+/// - the branch absorbed base content after it (the agent merged the base
+///   branch in, say to settle a conflict, or a later force-push moved the pull
+///   request onto a newer base). No single commit holds "the pull request plus
+///   that base", and measuring from the point would count the whole base as
+///   this task's work; the base's merge base counts the pull request's own
+///   files instead — an overcount the size of the pull request, not of how
+///   far the base moved.
+///
+/// What the author changed beyond a rebase — a rewritten commit, an added one —
+/// cannot be told apart here from the agent's own commits (an agent may amend
+/// the contributor's commit itself), so it counts as the task's: the side that
+/// never lets "complete" strand real work. The delivery measures from the pull
+/// request's real head instead — see [`TaskEngine::push_back_to_pull`].
+async fn pull_head_in_branch(
+    wt_path: &str,
+    task: &crate::db::entities::work_task::Model,
+) -> Option<String> {
+    let meta = task
+        .source_meta
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())?;
+    let base_tip = match task.base_branch.as_deref() {
+        Some(branch) => task_git::local_branch_tip(wt_path, branch)
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    // Every point known to be where the pull request ended below the work:
+    // the head the last push-back went onto, and the head the task was
+    // triggered on (or its rebased copy). Either can be stale — the pull
+    // request may have been force-pushed again since — so each is weighed.
+    let mut known = Vec::new();
+    if let Some(sha) = meta.pushed_onto.filter(|s| !s.trim().is_empty()) {
+        if task_git::is_ancestor(wt_path, &sha, "HEAD")
+            .await
+            .unwrap_or(false)
+        {
+            known.push(sha);
+        }
+    }
+    if let Some(recorded) = meta.head_sha.filter(|s| !s.trim().is_empty()) {
+        if task_git::commit_present(wt_path, &recorded)
+            .await
+            .unwrap_or(false)
+        {
+            if task_git::is_ancestor(wt_path, &recorded, "HEAD")
                 .await
                 .unwrap_or(false)
             {
-                return Some(head);
+                known.push(recorded);
+            } else if let Some(stop) = base_tip.clone().or_else(|| task.base_sha.clone()) {
+                if let Some(copy) = task_git::rebased_copy(wt_path, &recorded, "HEAD", &stop).await
+                {
+                    known.push(copy);
+                }
             }
         }
     }
+    // One the base moved past is no anchor: the branch absorbed base content
+    // after it.
+    let floor = match base_tip {
+        Some(tip) => task_git::merge_base(wt_path, &tip, "HEAD").await.ok(),
+        None => None,
+    };
+    let mut best: Option<String> = None;
+    for head in known {
+        if let Some(floor) = &floor {
+            if !task_git::is_ancestor(wt_path, floor, &head)
+                .await
+                .unwrap_or(false)
+            {
+                continue;
+            }
+        }
+        // The latest wins: the one the other sits under.
+        best = match best {
+            Some(prev)
+                if !task_git::is_ancestor(wt_path, &prev, &head)
+                    .await
+                    .unwrap_or(false) =>
+            {
+                Some(prev)
+            }
+            _ => Some(head),
+        };
+    }
+    best
+}
+
+/// The commit the task's branch sits on in its base branch: the recorded base,
+/// moved forward to the merge base with the local base branch once the branch
+/// absorbed base content (the agent merged the base branch in, or rebased onto
+/// it). Measuring from the recorded base after that would show everything the
+/// base contributed as this task's change.
+///
+/// Taken only when it moved FORWARD from the recorded base: a base branch that
+/// is behind locally, or a same-name branch of unrelated history, must not drag
+/// it backwards and inflate the count it was meant to correct. And it moves
+/// only with the BRANCH, never with the base branch advancing on its own, so
+/// the review diff measured from here stays put while the base moves on.
+///
+/// The own-work counters fall back to it and the review diff is taken from it,
+/// so the drawer's list and the row's counters agree on what the base
+/// contributed.
+pub(crate) async fn branch_base(
+    wt_path: &str,
+    task: &crate::db::entities::work_task::Model,
+) -> Option<String> {
     let recorded = task.base_sha.clone().or_else(|| task.base_branch.clone());
     let Some(base_branch) = task.base_branch.as_deref() else {
         return recorded;
@@ -6209,6 +6369,25 @@ async fn own_work_anchor(
         // measures against its tip and calls the base's own progress a change.
         None => Some(merge_base),
     }
+}
+
+/// `(files, additions, deletions)` from commit `from` to commit `to` — what
+/// pushing `to` adds on top of `from`. `None` unless `from` is a commit here
+/// that `to` descends from.
+async fn stats_between(wt_path: &str, from: &str, to: &str) -> Option<(i32, i32, i32)> {
+    if from.trim().is_empty()
+        || !task_git::is_ancestor(wt_path, from, to)
+            .await
+            .unwrap_or(false)
+    {
+        return None;
+    }
+    let files = task_git::diff_numstat_between(wt_path, from, to)
+        .await
+        .ok()?;
+    let adds: i32 = files.iter().map(|f| f.additions).sum();
+    let dels: i32 = files.iter().map(|f| f.deletions).sum();
+    Some((files.len() as i32, adds, dels))
 }
 
 /// `(files, additions, deletions)` of the worktree against `anchor`,
@@ -6400,7 +6579,7 @@ fn classify_push_refusal(error: &str) -> PushRefusal {
 /// repository recorded at trigger time — the fork, when the pull request comes
 /// from one. A row that recorded none falls back to the source repository:
 /// builds that predate the field refused forks at trigger, so their rows are
-/// same-repo by construction. `Err` is the one head houhub cannot push to ever —
+/// same-repo by construction. `Err` is the one head HouHub cannot push to ever —
 /// a fork it cannot name (GitLab's unresolved `project-{id}` placeholder, or a
 /// fork deleted since GitHub hydrated the row).
 fn pull_push_repo(meta: &ForgeSourceMeta) -> Result<String, String> {
@@ -7811,6 +7990,84 @@ mod tests {
             preflight_command_id: Some(4),
             ..Default::default()
         }));
+    }
+
+    /// A legacy preflight that names a folder command runs it in the worktree —
+    /// unless the desktop app runs that command on its own machine, which this
+    /// host is not.
+    #[tokio::test]
+    async fn a_legacy_preflight_never_runs_a_local_command_on_the_host() {
+        use crate::db::service::folder_command_service;
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+        use sea_orm::{ActiveModelTrait, Set};
+
+        for run_local in [false, true] {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let db = fresh_in_memory_db().await;
+            let project = seed_folder(&db, "/repo").await;
+            let worktree = seed_folder(&db, &dir.path().to_string_lossy()).await;
+            let command = folder_command_service::create(
+                &db.conn,
+                project,
+                "check",
+                "echo ran > ran-here",
+                run_local,
+            )
+            .await
+            .expect("command");
+            work_task_service::settings_set(
+                &db.conn,
+                project,
+                &WorkTaskFolderSettings {
+                    preflight_command_id: Some(command.id),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("settings");
+            let now = chrono::Utc::now();
+            let task_id = crate::db::entities::work_task::ActiveModel {
+                folder_id: Set(project),
+                title: Set("Fix the login flow".to_string()),
+                config: Set("{}".to_string()),
+                status: Set(WorkTaskStatus::Review),
+                run_seq: Set(1),
+                worktree_folder_id: Set(Some(worktree)),
+                sort_order: Set(0),
+                created_at: Set(now),
+                updated_at: Set(now),
+                ..Default::default()
+            }
+            .insert(&db.conn)
+            .await
+            .expect("insert task")
+            .id;
+
+            let engine = test_engine(db);
+            engine.run_preflight(task_id, 1).await;
+
+            let light: WorkTaskPreflight = serde_json::from_str(
+                &work_task_service::get_model(&engine.db.conn, task_id)
+                    .await
+                    .expect("task row")
+                    .preflight
+                    .expect("a light"),
+            )
+            .expect("light json");
+            let ran = dir.path().join("ran-here").exists();
+            if run_local {
+                assert!(!ran, "a local command ran on the host");
+                assert_eq!(light.status, "failed");
+                let tail = light.output_tail.unwrap_or_default();
+                assert!(
+                    tail.ends_with("run on the desktop's own computer"),
+                    "{tail}"
+                );
+            } else {
+                assert!(ran, "the folder command didn't run in the worktree");
+                assert_eq!(light.status, "passed");
+            }
+        }
     }
 
     /// The refusal wordings that mean "lost a race" are skipped silently by
@@ -9456,14 +9713,10 @@ mod tests {
     /// the upstream message, and an empty turn must fail with it.
     #[tokio::test]
     async fn a_session_failure_then_end_turn_fails_with_the_upstream_message() {
-        const MESSAGE: &str =
-            "Assistant tool call function.arguments must be valid JSON.";
+        const MESSAGE: &str = "Assistant tool call function.arguments must be valid JSON.";
         let (engine, task_id) = running_task().await;
         engine
-            .on_event(&env(
-                PARENT_CONN,
-                session_failure("error", MESSAGE, false),
-            ))
+            .on_event(&env(PARENT_CONN, session_failure("error", MESSAGE, false)))
             .await;
         engine
             .on_event(&turn_complete_envelope(PARENT_CONN, 1, "end_turn"))
@@ -9574,8 +9827,7 @@ mod tests {
     /// own, and an empty `end_turn` still fails with that message.
     #[tokio::test]
     async fn a_work_turn_error_after_compaction_still_fails_the_task() {
-        const MESSAGE: &str =
-            "Assistant tool call function.arguments must be valid JSON.";
+        const MESSAGE: &str = "Assistant tool call function.arguments must be valid JSON.";
         let (engine, task_id) = running_task().await;
         engine.turn_signals.lock().await.insert(
             PARENT_CONN.into(),
@@ -9636,8 +9888,7 @@ mod tests {
     /// drop the recorded error.
     #[tokio::test]
     async fn recorded_agent_error_survives_a_missing_settle_snapshot() {
-        const MESSAGE: &str =
-            "Assistant tool call function.arguments must be valid JSON.";
+        const MESSAGE: &str = "Assistant tool call function.arguments must be valid JSON.";
         let (engine, task_id) = running_task().await;
         assert!(
             engine.snapshot_diff_stats(task_id).await.is_none(),
@@ -9675,8 +9926,7 @@ mod tests {
     /// turn added that diff, so the recorded error is kept.
     #[tokio::test]
     async fn recorded_agent_error_survives_a_missing_prompt_snapshot() {
-        const MESSAGE: &str =
-            "Assistant tool call function.arguments must be valid JSON.";
+        const MESSAGE: &str = "Assistant tool call function.arguments must be valid JSON.";
         let (engine, task_id) = running_task().await;
         let repo = tiny_repo().await;
         attach_worktree(&engine, task_id, &repo).await;
@@ -9736,11 +9986,9 @@ mod tests {
     }
 
     async fn attach_worktree(engine: &TaskEngine, task_id: i32, repo: &TinyRepo) {
-        let wt_id = crate::db::test_helpers::seed_folder(
-            &engine.db,
-            repo.path.to_str().expect("utf8"),
-        )
-        .await;
+        let wt_id =
+            crate::db::test_helpers::seed_folder(&engine.db, repo.path.to_str().expect("utf8"))
+                .await;
         let mut update: crate::db::entities::work_task::ActiveModel =
             work_task_service::get_model(&engine.db.conn, task_id)
                 .await
@@ -9753,8 +10001,7 @@ mod tests {
             .expect("attach worktree");
     }
 
-    const UPSTREAM_400: &str =
-        "Assistant tool call function.arguments must be valid JSON.";
+    const UPSTREAM_400: &str = "Assistant tool call function.arguments must be valid JSON.";
 
     async fn fail_turn_with_upstream_error(engine: &Arc<TaskEngine>) {
         engine
@@ -9793,12 +10040,11 @@ mod tests {
                 .expect("task row");
             assert_eq!(task.status, WorkTaskStatus::Failed);
             assert_eq!(task.failure_reason.as_deref(), Some("agent_error"));
-            assert!(
-                task.last_error
-                    .as_deref()
-                    .unwrap_or_default()
-                    .contains("function.arguments must be valid JSON")
-            );
+            assert!(task
+                .last_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("function.arguments must be valid JSON"));
         }
 
         // Changed snapshot: the turn produced a diff, so the error does not
@@ -9809,10 +10055,7 @@ mod tests {
             attach_worktree(&engine, task_id, &repo).await;
             std::fs::write(repo.path.join("b.txt"), "two\n").expect("dirty");
             let stats = engine.snapshot_diff_stats(task_id).await;
-            assert!(
-                stats.is_some_and(|s| s != (0, 0, 0)),
-                "got {stats:?}"
-            );
+            assert!(stats.is_some_and(|s| s != (0, 0, 0)), "got {stats:?}");
             engine.turn_signals.lock().await.insert(
                 PARENT_CONN.into(),
                 TurnSignal {
@@ -9850,11 +10093,7 @@ mod tests {
                 EventEmitter::Noop,
             )
             .await;
-        let state = engine
-            .manager
-            .get_state(PARENT_CONN)
-            .await
-            .expect("state");
+        let state = engine.manager.get_state(PARENT_CONN).await.expect("state");
         state.write().await.last_assistant_text = Some("landed the fix".into());
         engine.turn_signals.lock().await.insert(
             PARENT_CONN.into(),
@@ -9882,17 +10121,15 @@ mod tests {
             .await
             .expect("task row")
             .run_seq;
-        assert!(
-            work_task_service::set_verdict(
-                &engine.db.conn,
-                task_id,
-                run_seq,
-                "blocked",
-                Some("gave up"),
-            )
-            .await
-            .expect("set verdict")
-        );
+        assert!(work_task_service::set_verdict(
+            &engine.db.conn,
+            task_id,
+            run_seq,
+            "blocked",
+            Some("gave up"),
+        )
+        .await
+        .expect("set verdict"));
         fail_turn_with_upstream_error(&engine).await;
         let task = work_task_service::get_model(&engine.db.conn, task_id)
             .await
@@ -10741,7 +10978,7 @@ mod tests {
         comment_error: Option<String>,
         get_pull_error: Option<String>,
         /// What the pull request looks like once the push has happened — how
-        /// a test says "someone closed / retargeted / merged it while houhub
+        /// a test says "someone closed / retargeted / merged it while HouHub
         /// was pushing", which is the whole window the settle check guards.
         after_push: Mutex<Option<ForgePr>>,
         /// A file dropped into the worktree the moment the push runs. Opens
@@ -11792,9 +12029,139 @@ mod tests {
         );
     }
 
+    /// The counters a run's settle recorded can only measure from what is
+    /// local, and a pull request force-pushed — or grown commits of its
+    /// author's — while the task was out leaves nothing local that says where
+    /// it ends. The delivery knows: it reads the pull request right before
+    /// pushing, and as the push is a fast-forward, that head is under ours. So
+    /// the row, and the done comment, carry what the push added.
+    #[tokio::test]
+    async fn a_delivered_pull_request_counts_what_the_push_added() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        // The pull request ends where the task branched; the task's commit adds
+        // one line on top of it.
+        let pr = open_pull(&f.base_sha, "feature", "acme/app");
+        as_pull_request_task(&f, pr.clone()).await;
+        f.forge.existing.lock().await.push(pr);
+        enable_writeback(&f).await;
+        // What a settle that measured from a stale head left behind.
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.files_changed = Set(Some(345));
+        active.additions = Set(Some(31318));
+        active.deletions = Set(Some(5227));
+        active
+            .update(&f.engine.db.conn)
+            .await
+            .expect("stale counters");
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect("push back");
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(
+            (task.files_changed, task.additions, task.deletions),
+            (Some(1), Some(1), Some(0)),
+            "the row carries what the push added"
+        );
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        assert!(
+            comments[0].2.contains("(1 file, +1/-0)"),
+            "{}",
+            comments[0].2
+        );
+    }
+
+    /// What a push-back learns is recorded the moment its push lands. Here the
+    /// author grew the pull request while the task was out, and the task built
+    /// on top: the push measures from the pull request's real head; a settle
+    /// refused after it sends the task back to review; a restart re-measures
+    /// the row from the head the push went onto, not the stale one the task
+    /// was triggered on; and the retry, which finds the pull request already
+    /// at its commit and pushes nothing, still reports what was pushed.
+    #[tokio::test]
+    async fn a_retried_push_back_still_reports_what_the_first_push_added() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // Triggered on the pull request at `base_sha`. Its author then added
+        // the fixture's commit (`f.head`), and the task one of its own on top.
+        let triggered = open_pull(&f.base_sha, "feature", "acme/app");
+        as_pull_request_task(&f, triggered.clone()).await;
+        std::fs::write(f.worktree.join("c.txt"), "the task's own\n").expect("write");
+        git_run(&f.worktree, &["add", "-A"]);
+        git_run(&f.worktree, &["commit", "-qm", "the task's own commit"]);
+        // Grown by its author, and retargeted while the task was out: the push
+        // goes through, the settle refuses.
+        let mut grown = triggered;
+        grown.head_sha = f.head.clone();
+        grown.base_ref = "develop".into();
+        f.forge.existing.lock().await.push(grown);
+        enable_writeback(&f).await;
+        let counters =
+            |t: crate::db::entities::work_task::Model| (t.files_changed, t.additions, t.deletions);
+
+        let refused = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect_err("a retargeted pull request is not settled against");
+        assert!(refused.contains("retargeted"), "{refused}");
+        assert_eq!(
+            counters(row(&f.engine, f.task_id).await),
+            (Some(1), Some(1), Some(0)),
+            "the task's own commit, not the author's"
+        );
+
+        // A restart re-measures what sits in review.
+        f.engine.refresh_review_diff_stats().await;
+        assert_eq!(
+            counters(row(&f.engine, f.task_id).await),
+            (Some(1), Some(1), Some(0)),
+            "measured from the head the push went onto"
+        );
+
+        // Targeted back, and sitting at the commit the first attempt pushed.
+        let pushed = task_git::rev_parse(f.worktree.to_str().unwrap(), "HEAD")
+            .await
+            .expect("pushed head");
+        {
+            let mut existing = f.forge.existing.lock().await;
+            existing[0].base_ref = "main".into();
+            existing[0].head_sha = pushed;
+        }
+        f.engine
+            .deliver_pr(f.task_id, None, false, false)
+            .await
+            .expect("the retry settles");
+        assert_eq!(
+            f.forge.pushes.lock().await.len(),
+            1,
+            "the retry pushed nothing"
+        );
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        assert!(
+            comments[0].2.contains("(1 file, +1/-0)"),
+            "{}",
+            comments[0].2
+        );
+    }
+
     /// Completing a pull-request task that pushed nothing — a review-only
     /// report, or a review that stopped at an unsound approach — must not tell
-    /// the pull request's thread it was "accepted". That is houhub's word for
+    /// the pull request's thread it was "accepted". That is HouHub's word for
     /// signing off on the TASK; on a pull request it reads as approval of the
     /// change, which may be the opposite of what the review found. The thread
     /// hears what happened to its pull request: nothing was pushed to it.
@@ -11822,8 +12189,14 @@ mod tests {
         assert_eq!(comments.len(), 1, "one settle, one comment");
         let (kind, number, body) = &comments[0];
         assert_eq!((*kind, *number), (ForgeItemKind::Change, 7));
-        assert!(body.contains("nothing was pushed to this pull request"), "{body}");
-        assert!(!body.to_lowercase().contains("accept"), "reads as an approval: {body}");
+        assert!(
+            body.contains("nothing was pushed to this pull request"),
+            "{body}"
+        );
+        assert!(
+            !body.to_lowercase().contains("accept"),
+            "reads as an approval: {body}"
+        );
     }
 
     /// The comment is a fact sheet: the link and the counters. Nothing the
@@ -12774,6 +13147,14 @@ mod tests {
                 .expect("landable probe"),
             "…and its own commit is still there to land"
         );
+        // The review drawer measures from the same place, so it does not list
+        // the merged-in base as the task's change either.
+        let listed =
+            crate::commands::work_task::work_task_changed_files_core(&f.engine.db, f.task_id)
+                .await
+                .expect("changed files");
+        let files: Vec<&str> = listed.iter().map(|c| c.file.as_str()).collect();
+        assert_eq!(files, ["a.txt"], "the drawer agrees with the counters");
     }
 
     // ── tasks that ARE a pull request ───────────────────────────────────────
@@ -13156,6 +13537,242 @@ mod tests {
             .has_landable_changes(&task, &wt.path)
             .await
             .expect("landable probe"));
+        drop(home);
+    }
+
+    /// A pull request can be force-pushed while its task is out — its author
+    /// rebased it onto a newer base — and the task's branch rebased onto the
+    /// new head. The head the task was triggered on is still in the object
+    /// store, but no longer under the work: measured from there, everything the
+    /// base gained in between read as this task's work (PR #974's task reported
+    /// 345 files for 37). The pull request now ends at that head's rebased copy.
+    #[tokio::test]
+    async fn a_pull_request_rebased_after_a_force_push_counts_from_its_new_head() {
+        let (engine, task_id, home, pull_head, _branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id)
+            .await
+            .expect("root");
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+        let task = row(&engine, task_id).await;
+        let wt_path = Path::new(&wt.path);
+
+        // The pull request moves onto the base as it is now (`main` has gained
+        // `b.txt`), and the task's branch follows it there.
+        git_run(wt_path, &["rebase", "-q", "main"]);
+        let new_head = task_git::rev_parse(&wt.path, "HEAD")
+            .await
+            .expect("new head");
+        assert_ne!(new_head, pull_head, "the rebase gave the head a new sha");
+        assert!(
+            task_git::commit_present(&wt.path, &pull_head)
+                .await
+                .expect("probe"),
+            "the recorded head is still in the object store"
+        );
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((0, 0, 0)),
+            "following the pull request onto a new base is not work of the task's own"
+        );
+        assert!(!engine
+            .has_landable_changes(&task, &wt.path)
+            .await
+            .expect("landable probe"));
+
+        std::fs::write(wt_path.join("fix.txt"), "the agent's work\n").expect("write");
+        git_run(wt_path, &["add", "-A"]);
+        git_run(wt_path, &["commit", "-qm", "the agent's fix"]);
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((1, 1, 0)),
+            "the agent's file, not the base's `b.txt`"
+        );
+        assert!(engine
+            .has_landable_changes(&task, &wt.path)
+            .await
+            .expect("landable probe"));
+
+        // The review still shows the pull request with the agent's work, from
+        // where the rebased branch now leaves the base.
+        let listed = crate::commands::work_task::work_task_changed_files_core(&engine.db, task_id)
+            .await
+            .expect("changed files");
+        let mut files: Vec<&str> = listed.iter().map(|c| c.file.as_str()).collect();
+        files.sort_unstable();
+        assert_eq!(
+            files,
+            ["feature.txt", "fix.txt"],
+            "the base's own progress is not under review"
+        );
+        drop(home);
+    }
+
+    /// The head a push-back went onto can go stale as well: the pull request
+    /// was force-pushed onto a newer base after it, and the branch followed.
+    /// It is not where the pull request ends any more — the recorded head's
+    /// rebased copy is — and the count must not fall back past that copy.
+    #[tokio::test]
+    async fn a_stale_push_back_head_does_not_shadow_the_rebased_pull_request() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let (engine, task_id, home, _pull_head, branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id)
+            .await
+            .expect("root");
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+        let wt_path = Path::new(&wt.path);
+
+        // An earlier push-back went onto the pull request as it stood at the
+        // branch point…
+        let task = row(&engine, task_id).await;
+        let mut meta: ForgeSourceMeta =
+            serde_json::from_str(task.source_meta.as_deref().expect("meta")).expect("decode");
+        meta.pushed_onto = Some(branch_point.clone());
+        let mut active = task.into_active_model();
+        active.source_meta = Set(Some(serde_json::to_string(&meta).expect("encode")));
+        active.update(&engine.db.conn).await.expect("pushed onto");
+        // …and the pull request has moved onto the newer base (`b.txt`) since,
+        // with the branch following it.
+        git_run(wt_path, &["rebase", "-q", "main"]);
+
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((0, 0, 0)),
+            "following the pull request is not work of the task's own"
+        );
+        std::fs::write(wt_path.join("fix.txt"), "the agent's work\n").expect("write");
+        git_run(wt_path, &["add", "-A"]);
+        git_run(wt_path, &["commit", "-qm", "the agent's fix"]);
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((1, 1, 0)),
+            "the agent's file only"
+        );
+        drop(home);
+    }
+
+    /// Of two known points still under the work, the later one is where the
+    /// pull request ends: measured from the earlier one, the pull request's own
+    /// commits in between would count as the task's.
+    #[tokio::test]
+    async fn the_later_of_two_known_pull_request_heads_wins() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let (engine, task_id, home, _pull_head, branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id)
+            .await
+            .expect("root");
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+        let wt_path = Path::new(&wt.path);
+
+        // A push-back once went onto the pull request rewound to the branch
+        // point; the head the task was triggered on is back on top of it.
+        let task = row(&engine, task_id).await;
+        let mut meta: ForgeSourceMeta =
+            serde_json::from_str(task.source_meta.as_deref().expect("meta")).expect("decode");
+        meta.pushed_onto = Some(branch_point.clone());
+        let mut active = task.into_active_model();
+        active.source_meta = Set(Some(serde_json::to_string(&meta).expect("encode")));
+        active.update(&engine.db.conn).await.expect("pushed onto");
+        std::fs::write(wt_path.join("fix.txt"), "the agent's work\n").expect("write");
+        git_run(wt_path, &["add", "-A"]);
+        git_run(wt_path, &["commit", "-qm", "the agent's fix"]);
+
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((1, 1, 0)),
+            "the agent's file, not the pull request's `feature.txt`"
+        );
+        drop(home);
+    }
+
+    /// A force-push that rewrote the pull request, not just rebased it, leaves
+    /// no copy of the recorded head to find — and nothing local tells the
+    /// author's rewrite from the agent amending the contributor's commit
+    /// itself. The count falls back to the base the branch sits on, as any
+    /// task's does: the rewritten file counts as work (the side that never
+    /// lets "complete" strand real work), the base's progress still does not.
+    /// The delivery's own measure is exact — see
+    /// `a_delivered_pull_request_counts_what_the_push_added`.
+    #[tokio::test]
+    async fn a_rewritten_pull_request_head_falls_back_to_the_branch_base() {
+        let (engine, task_id, home, _pull_head, _branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id)
+            .await
+            .expect("root");
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+        let wt_path = Path::new(&wt.path);
+
+        git_run(wt_path, &["rebase", "-q", "main"]);
+        std::fs::write(wt_path.join("feature.txt"), "the contribution, reworked\n").expect("write");
+        git_run(wt_path, &["commit", "-qa", "--amend", "--no-edit"]);
+
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((1, 1, 0)),
+            "the rewritten file, not the base's `b.txt`"
+        );
+        let task = row(&engine, task_id).await;
+        assert!(engine
+            .has_landable_changes(&task, &wt.path)
+            .await
+            .expect("landable probe"));
+        drop(home);
+    }
+
+    /// The other way base content reaches a pull-request task's branch: the
+    /// agent merges the base branch in, say to settle a conflict. No single
+    /// commit holds "the pull request plus that base", so the count falls back
+    /// to the base the branch now sits on — the pull request's own file is
+    /// counted, everything the base gained is not.
+    #[tokio::test]
+    async fn a_pull_request_task_that_merged_its_base_does_not_count_the_base() {
+        let (engine, task_id, home, _pull_head, _branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id)
+            .await
+            .expect("root");
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+        let wt_path = Path::new(&wt.path);
+
+        // The base gains three more lines, and the agent merges it in on top
+        // of its own fix.
+        let root_path = Path::new(&root.path);
+        std::fs::write(root_path.join("later.txt"), "one\ntwo\nthree\n").expect("write");
+        git_run(root_path, &["add", "-A"]);
+        git_run(root_path, &["commit", "-qm", "the base moves on again"]);
+        std::fs::write(wt_path.join("fix.txt"), "the agent's work\n").expect("write");
+        git_run(wt_path, &["add", "-A"]);
+        git_run(wt_path, &["commit", "-qm", "the agent's fix"]);
+        git_run(wt_path, &["merge", "-q", "--no-edit", "main"]);
+
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((2, 2, 0)),
+            "the pull request's file and the agent's — not `b.txt` or `later.txt`"
+        );
         drop(home);
     }
 
@@ -13672,7 +14289,7 @@ mod tests {
             WorkTaskStatus::Review
         );
 
-        // A fork houhub cannot NAME — GitLab's unresolved `project-{id}`
+        // A fork HouHub cannot NAME — GitLab's unresolved `project-{id}`
         // placeholder — has no push URL, ever. Refused before the CAS.
         let fork = delivery_fixture(FakeForge::default()).await;
         as_pull_request_task(&fork, open_pull("x", "feature", "project-4711")).await;
@@ -14085,7 +14702,7 @@ mod tests {
     }
 
     /// The explicit setting is what gets sent, verbatim — it exists precisely
-    /// for the agents houhub has no default for.
+    /// for the agents HouHub has no default for.
     #[tokio::test]
     async fn the_configured_command_is_sent_verbatim() {
         let mut f = compact_fixture(Some((90_000, 100_000))).await;

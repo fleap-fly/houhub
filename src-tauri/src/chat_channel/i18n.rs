@@ -1639,4 +1639,3 @@ pub fn agent_responding(lang: Lang, agent_label: &str) -> String {
         Lang::En => format!("{agent_label} is responding..."),
     }
 }
-

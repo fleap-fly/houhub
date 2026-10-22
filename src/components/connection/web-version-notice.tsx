@@ -8,7 +8,7 @@ import {
   isOwnServerRestartRunning,
   subscribeOwnServerRestart,
 } from "@/lib/updater"
-import { getWebAuthToken } from "@/lib/transport/web-auth"
+import { hasHouHubCredentials } from "@/lib/transport/web-auth"
 import {
   getWebConnectionServerSnapshot,
   getWebConnectionSnapshot,
@@ -51,9 +51,9 @@ export function WebVersionNotice() {
     // development build is not one, whatever its version says.
     const pageVersion = process.env.HOUHUB_APP_VERSION
     if (!pageVersion || process.env.NODE_ENV !== "production") return
-    // Without a token the request would be refused, and a refusal reads as an
-    // expired session.
-    if (!usesWebTransport() || !getWebAuthToken()) return
+    // Without credentials the request would be refused, and a refusal reads
+    // as an expired session.
+    if (!usesWebTransport() || !hasHouHubCredentials()) return
     let cancelled = false
     void getRunningServerVersion().then((serverVersion) => {
       // An older server does not report its version.

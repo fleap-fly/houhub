@@ -830,7 +830,11 @@ mod tests {
             );
         }
         assert_eq!(
-            grantable(&app(300, None, Some("/applications/HOUHUB.app")), &me, &list),
+            grantable(
+                &app(300, None, Some("/applications/HOUHUB.app")),
+                &me,
+                &list
+            ),
             if cfg!(any(windows, target_os = "macos")) {
                 Err(NotGrantable::HouHub)
             } else {
@@ -966,7 +970,11 @@ mod tests {
             Err(NotGrantable::Unidentified)
         );
         assert_eq!(
-            grantable(&app(1, None, Some("/Applications/TextEdit.app")), &me, &list),
+            grantable(
+                &app(1, None, Some("/Applications/TextEdit.app")),
+                &me,
+                &list
+            ),
             Ok(())
         );
     }

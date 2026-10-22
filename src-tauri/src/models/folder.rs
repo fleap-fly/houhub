@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
+
 use serde::{Deserialize, Serialize};
 
 use super::agent::AgentType;
+
 use crate::db::entities::folder::FolderKind;
 
 #[derive(Debug, Clone, Serialize)]
@@ -115,6 +117,9 @@ pub struct FolderCommandInfo {
     pub name: String,
     pub command: String,
     pub sort_order: i32,
+    /// Run by the desktop app on its own machine, detached, instead of in a
+    /// terminal on the folder's host.
+    pub run_local: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

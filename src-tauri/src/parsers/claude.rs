@@ -345,10 +345,9 @@ enum PendingCommandVerdict {
 /// The stripping requirement excludes the `<local-command-caveat>` the CLI
 /// writes around local commands — same submission, but it instructs nothing.
 fn is_same_submission_injection(value: &serde_json::Value, prompt_id: Option<&str>) -> bool {
-    let (Some(command_prompt_id), Some(record_prompt_id)) = (
-        prompt_id,
-        value.get("promptId").and_then(|p| p.as_str()),
-    ) else {
+    let (Some(command_prompt_id), Some(record_prompt_id)) =
+        (prompt_id, value.get("promptId").and_then(|p| p.as_str()))
+    else {
         return false;
     };
     if command_prompt_id != record_prompt_id || !is_meta_message(value) {
@@ -470,9 +469,9 @@ fn pending_command_verdict(
                 .and_then(|c| c.as_array())
                 .is_some_and(|blocks| {
                     !blocks.is_empty()
-                        && blocks.iter().all(|b| {
-                            b.get("type").and_then(|t| t.as_str()) == Some("tool_result")
-                        })
+                        && blocks
+                            .iter()
+                            .all(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_result"))
                 });
             if tool_results_only || extract_user_content(value).is_empty() {
                 PendingCommandVerdict::Wait
@@ -657,7 +656,7 @@ fn push_goal_marker(messages: &mut Vec<UnifiedMessage>, goal: &PendingGoal) -> O
         duration_ms: None,
         model: None,
         completed_at: Some(goal.timestamp),
-    agent_message_id: None,
+        agent_message_id: None,
     });
     Some(marker.objective)
 }
@@ -1188,9 +1187,8 @@ fn compaction_post_tokens(turn: &MessageTurn) -> Option<u64> {
 /// usage.
 fn latest_claude_context_window_used_tokens(turns: &[MessageTurn]) -> Option<u64> {
     turns.iter().rev().find_map(|turn| {
-        compaction_post_tokens(turn).or_else(|| super::latest_turn_prompt_usage_tokens(
-            std::slice::from_ref(turn),
-        ))
+        compaction_post_tokens(turn)
+            .or_else(|| super::latest_turn_prompt_usage_tokens(std::slice::from_ref(turn)))
     })
 }
 
@@ -2181,7 +2179,7 @@ impl ClaudeRecordAccumulator {
                         duration_ms: None,
                         model: None,
                         completed_at: Some(timestamp),
-                    agent_message_id: None,
+                        agent_message_id: None,
                     },
                     prompt_id,
                 ));
@@ -2354,7 +2352,7 @@ impl ClaudeRecordAccumulator {
                     duration_ms: None,
                     model: None,
                     completed_at: Some(timestamp),
-                agent_message_id: None,
+                    agent_message_id: None,
                 });
             }
             "assistant" => {
@@ -2642,7 +2640,7 @@ impl ClaudeRecordAccumulator {
                         duration_ms: None,
                         model: None,
                         completed_at: Some(timestamp),
-                    agent_message_id: None,
+                        agent_message_id: None,
                     });
                 }
             }
@@ -2763,7 +2761,7 @@ impl ClaudeRecordAccumulator {
                         duration_ms: None,
                         model: None,
                         completed_at: Some(timestamp),
-                    agent_message_id: None,
+                        agent_message_id: None,
                     });
                 }
             }
@@ -3494,6 +3492,11 @@ fn extract_agent_execution_stats(tur: &serde_json::Value) -> AgentExecutionStats
 /// the sub-agent started, so a session running across midnight attributes its
 /// delegated work to the day it actually happened.
 ///
+/// A fork's transcript opens with a copy of what it inherited — the parent's
+/// launching record, or a launching subagent's whole history — whose usage is
+/// already counted where it was spent. [`parse_subagent_tool_calls`] reads a
+/// fork from its directive message on, so only the fork's own calls count.
+///
 /// Runs on turns rather than messages, and deliberately after the context
 /// window has been read: delegated tokens are this session's *spend*, but they
 /// never occupied this session's prompt.
@@ -3557,6 +3560,54 @@ fn attribute_subagent_usage(session_path: &Path, turns: &mut [MessageTurn]) {
 /// the Agent call's own result.
 const TIMELINE_ENTRY_MAX_CHARS: usize = 16_384;
 
+/// How Claude Code opens the directive message of a `subagent_type: "fork"`
+/// child. Same marker as claude-agent-acp 0.94.0's `FORK_BOILERPLATE_OPEN`.
+const FORK_BOILERPLATE_OPEN: &str = "<fork-boilerplate>";
+
+/// Whether a transcript record is the directive message a `subagent_type:
+/// "fork"` child starts its own work from: a `user` record whose content holds
+/// a text block opening with the fork boilerplate, beside a `tool_result` for
+/// each copied `tool_use` ("Fork started — processing in background").
+///
+/// Everything a fork's transcript holds before that message is inherited, not
+/// the child's work. Measured on CLI 2.1.300 (forks behind
+/// `CLAUDE_CODE_FORK_SUBAGENT=1`) and 2.1.303 (where the Agent SDK, and so
+/// every claude-agent-acp ≥0.94.0 session, offers forks by default; the
+/// terminal has since 2.1.232):
+///
+/// * a fork of the main thread starts with a `fork-context-ref` record naming
+///   the parent session, then a COPY of the parent's launching assistant
+///   record — the `Agent` tool_use, with the parent's `message.id` and the
+///   parent's usage, which the parent's own transcript already counts;
+/// * a fork launched by a subagent copies that subagent's history instead
+///   (its prompt, its earlier calls, its launching record), each record with
+///   its original timestamp, `message.id` and usage.
+///
+/// Read whole, the prefix put the parent's own `Agent` call into the fork's
+/// card, counted the copied usage twice in the session's spend, and started
+/// the fork's clock at the copied history.
+///
+/// claude-agent-acp's `stripForkPrefix` cuts at the FIRST such message; a
+/// streaming reader that restarts at each one cuts at the LAST. They agree on
+/// every transcript Claude Code writes — a fork may not spawn subagents, so
+/// a second directive cannot appear — and the last is the right cut if one
+/// ever did, since a copied history would then carry the earlier one.
+fn is_fork_directive_record(value: &serde_json::Value) -> bool {
+    value
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+        .is_some_and(|blocks| {
+            blocks.iter().any(|block| {
+                block.get("type").and_then(|t| t.as_str()) == Some("text")
+                    && block
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .is_some_and(|text| text.starts_with(FORK_BOILERPLATE_OPEN))
+            })
+        })
+}
+
 /// One parsed sub-agent transcript: the tool calls, the mixed timeline,
 /// the deduped usage, the first record's timestamp, and the
 /// first-to-last-timestamped-record span (`None` without a real interval).
@@ -3601,6 +3652,10 @@ pub(crate) type SubagentTranscript = (
 /// transcript left behind by a rewind stays on disk, but the attach passes
 /// only fill Agent calls present in the current branch's turns, so an
 /// abandoned branch's transcript is parsed and then dropped, never rendered.
+///
+/// Fork rule: a `subagent_type: "fork"` child's transcript opens with context
+/// it inherited, and everything up to its directive message is dropped from
+/// all five results (see [`is_fork_directive_record`]).
 pub(crate) fn parse_subagent_tool_calls(path: &PathBuf) -> SubagentTranscript {
     let file = match fs::File::open(path) {
         Ok(f) => f,
@@ -3640,6 +3695,23 @@ pub(crate) fn parse_subagent_tool_calls(path: &PathBuf) -> SubagentTranscript {
 
         let msg_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
+        // A fork child's own work starts at its directive message. Every
+        // record before it is inherited context (see
+        // [`is_fork_directive_record`]), so it is dropped from all five
+        // results — the calls and their results, the timeline, the usage
+        // (the copied launching message carries the parent's `message.id` and
+        // usage), and the clock (a copied subagent history keeps its original
+        // timestamps).
+        let fork_directive = msg_type == "user" && is_fork_directive_record(&value);
+        if fork_directive {
+            calls.clear();
+            results.clear();
+            usage_by_message_id.clear();
+            timeline.clear();
+            started_at = None;
+            last_timestamp = None;
+        }
+
         if value.get("timestamp").is_some() {
             if let Some(ts) = parse_timestamp(&value) {
                 if started_at.is_none() {
@@ -3647,6 +3719,13 @@ pub(crate) fn parse_subagent_tool_calls(path: &PathBuf) -> SubagentTranscript {
                 }
                 last_timestamp = Some(ts);
             }
+        }
+
+        // The directive itself answers only the copied tool_uses, and its text
+        // is the boilerplate around the Agent call's prompt, which the card
+        // already shows from the call's input.
+        if fork_directive {
+            continue;
         }
 
         if msg_type == "assistant" {
@@ -3989,7 +4068,7 @@ pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
             i += 1;
         } else {
@@ -4002,7 +4081,7 @@ pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
             i += 1;
         }
@@ -4120,7 +4199,9 @@ mod tests {
         let text = handback(&[], &["real report", HANDBACK_HEADER, "still the report"]);
         assert_eq!(
             unwrap_handback_frame(&text).as_deref(),
-            Some(&*format!("real report\n{HANDBACK_HEADER}\nstill the report"))
+            Some(&*format!(
+                "real report\n{HANDBACK_HEADER}\nstill the report"
+            ))
         );
     }
 
@@ -4131,7 +4212,10 @@ mod tests {
         assert_eq!(unwrap_handback_frame("  ordinary indented output"), None);
         assert_eq!(unwrap_handback_frame(HANDBACK_HEADER), None);
         let item = json!({"type": "tool_result", "content": "plain result"});
-        assert_eq!(extract_tool_result_text(&item).as_deref(), Some("plain result"));
+        assert_eq!(
+            extract_tool_result_text(&item).as_deref(),
+            Some("plain result")
+        );
     }
 
     #[test]
@@ -4528,7 +4612,10 @@ mod tests {
                     "type": "thinking", "thinking": "Need the file first.", "signature": "s"
                 }),
             ),
-            subagent_record("2026-08-16T15:45:33.189Z", json!({"type": "text", "text": "Checking."})),
+            subagent_record(
+                "2026-08-16T15:45:33.189Z",
+                json!({"type": "text", "text": "Checking."}),
+            ),
             subagent_record(
                 "2026-08-16T15:45:33.289Z",
                 json!({
@@ -4581,7 +4668,11 @@ mod tests {
             let call = &calls[entry.child_index.unwrap()];
             assert_eq!(
                 call.tool_name,
-                if entry.child_index == Some(0) { "Read" } else { "Bash" }
+                if entry.child_index == Some(0) {
+                    "Read"
+                } else {
+                    "Bash"
+                }
             );
         }
         assert_eq!(calls[0].output_preview.as_deref(), Some("1\theader"));
@@ -4718,6 +4809,258 @@ mod tests {
         );
         assert_eq!(stats.timeline[1].child_index, Some(0));
         assert_eq!(stats.tool_calls[0].tool_name, "Read");
+    }
+
+    fn parse_subagent_lines(lines: &[String]) -> SubagentTranscript {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        for line in lines {
+            writeln!(file, "{line}").unwrap();
+        }
+        parse_subagent_tool_calls(&file.path().to_path_buf())
+    }
+
+    fn input_usage(tokens: u64) -> serde_json::Value {
+        json!({
+            "input_tokens": tokens,
+            "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0
+        })
+    }
+
+    /// A fork child's directive message as CLI 2.1.300 / 2.1.303 write it: a
+    /// tool_result for the copied launching `tool_use`, then the boilerplate
+    /// around the Agent call's prompt.
+    fn fork_directive(at: &str, copied_tool_use_id: &str, prompt: &str) -> String {
+        json!({
+            "type": "user",
+            "timestamp": at,
+            "uuid": "fork-directive",
+            "isSidechain": true,
+            "message": {"role": "user", "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": copied_tool_use_id,
+                    "content": "Fork started — processing in background"
+                },
+                {
+                    "type": "text",
+                    "text": format!(
+                        "<fork-boilerplate>\nYou are a worker fork. The transcript above is the \
+                         parent's history — inherited reference, not your situation.\n\
+                         </fork-boilerplate>\n\nYour directive: {prompt}"
+                    )
+                }
+            ]},
+        })
+        .to_string()
+    }
+
+    fn timeline_shape(timeline: &[AgentTimelineEntry]) -> Vec<(&str, Option<usize>, Option<&str>)> {
+        timeline
+            .iter()
+            .map(|e| (e.entry_type.as_str(), e.child_index, e.text.as_deref()))
+            .collect()
+    }
+
+    /// A fork of the main thread, as CLI 2.1.300 wrote it with forks on: a
+    /// `fork-context-ref`, a copy of the parent's launching `Agent` record
+    /// (the parent's message id and usage), the directive, then the fork's
+    /// own work. Read whole, the card listed the parent's `Agent` call with
+    /// "Fork started" as its result, and the copied usage was counted again.
+    #[test]
+    fn a_main_thread_forks_inherited_launch_is_not_its_work_spend_or_clock() {
+        let (calls, timeline, usage, started_at, duration_ms) = parse_subagent_lines(&[
+            json!({
+                "type": "fork-context-ref", "agentId": "af1", "parentSessionId": "p",
+                "parentLastUuid": "u", "contextLength": 10
+            })
+            .to_string(),
+            assistant_block_line(
+                "copy",
+                "msg_parent_launch",
+                "2026-10-20T08:12:23.129Z",
+                json!({
+                    "type": "tool_use", "id": "toolu_fork", "name": "Agent",
+                    "input": {"description": "probe fork", "prompt": "do it", "subagent_type": "fork"}
+                }),
+                input_usage(1_000),
+            ),
+            fork_directive("2026-10-20T08:12:23.132Z", "toolu_fork", "do it"),
+            assistant_block_line(
+                "f1",
+                "msg_fork_1",
+                "2026-10-20T08:12:23.154Z",
+                json!({"type": "thinking", "thinking": "fork child thinks", "signature": "s"}),
+                input_usage(2_000),
+            ),
+            assistant_block_line(
+                "f2",
+                "msg_fork_1",
+                "2026-10-20T08:12:23.155Z",
+                json!({
+                    "type": "tool_use", "id": "toolu_bash", "name": "Bash",
+                    "input": {"command": "echo forked"}
+                }),
+                input_usage(2_000),
+            ),
+            json!({
+                "type": "user",
+                "timestamp": "2026-10-20T08:12:23.179Z",
+                "message": {"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": "toolu_bash", "content": "forked"
+                }]},
+            })
+            .to_string(),
+            assistant_block_line(
+                "f3",
+                "msg_fork_2",
+                "2026-10-20T08:12:24.132Z",
+                json!({"type": "text", "text": "done"}),
+                input_usage(3_000),
+            ),
+        ]);
+
+        assert_eq!(
+            calls
+                .iter()
+                .map(|c| c.tool_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Bash"]
+        );
+        assert_eq!(calls[0].output_preview.as_deref(), Some("forked"));
+        assert_eq!(
+            timeline_shape(&timeline),
+            vec![
+                ("thinking", None, Some("fork child thinks")),
+                ("tool_call", Some(0), None),
+                ("text", None, Some("done")),
+            ]
+        );
+        assert_eq!(usage.map(|u| u.input_tokens), Some(5_000));
+        assert_eq!(
+            started_at,
+            Some("2026-10-20T08:12:23.132Z".parse::<DateTime<Utc>>().unwrap())
+        );
+        assert_eq!(duration_ms, Some(1_000));
+    }
+
+    /// A fork launched by a subagent copies that subagent's history, each
+    /// record with its original timestamp and usage. None of it is the fork's.
+    #[test]
+    fn a_fork_launched_by_a_subagent_drops_the_copied_subagent_history() {
+        let (calls, timeline, usage, started_at, duration_ms) = parse_subagent_lines(&[
+            json!({
+                "type": "user",
+                "timestamp": "2026-10-20T08:00:00.000Z",
+                "message": {"role": "user", "content": "outer task"},
+            })
+            .to_string(),
+            assistant_block_line(
+                "o1",
+                "msg_outer_1",
+                "2026-10-20T08:00:01.000Z",
+                json!({
+                    "type": "tool_use", "id": "toolu_outer_read", "name": "Read",
+                    "input": {"file_path": "/a"}
+                }),
+                input_usage(2_000),
+            ),
+            json!({
+                "type": "user",
+                "timestamp": "2026-10-20T08:00:02.000Z",
+                "message": {"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": "toolu_outer_read", "content": "a"
+                }]},
+            })
+            .to_string(),
+            assistant_block_line(
+                "o2",
+                "msg_outer_2",
+                "2026-10-20T08:05:00.000Z",
+                json!({
+                    "type": "tool_use", "id": "toolu_inner_fork", "name": "Agent",
+                    "input": {"description": "inner fork", "prompt": "inner task", "subagent_type": "fork"}
+                }),
+                input_usage(4_000),
+            ),
+            fork_directive("2026-10-20T08:05:00.010Z", "toolu_inner_fork", "inner task"),
+            assistant_block_line(
+                "i1",
+                "msg_inner_1",
+                "2026-10-20T08:05:01.010Z",
+                json!({"type": "text", "text": "inner done"}),
+                input_usage(6_000),
+            ),
+        ]);
+
+        assert!(calls.is_empty(), "copied calls leaked: {calls:?}");
+        assert_eq!(
+            timeline_shape(&timeline),
+            vec![("text", None, Some("inner done"))]
+        );
+        assert_eq!(usage.map(|u| u.input_tokens), Some(6_000));
+        assert_eq!(
+            started_at,
+            Some("2026-10-20T08:05:00.010Z".parse::<DateTime<Utc>>().unwrap())
+        );
+        assert_eq!(duration_ms, Some(1_000));
+    }
+
+    /// Only a `user` record whose content holds a text BLOCK opening with the
+    /// boilerplate is a directive. A plain subagent's prompt is a string, and a
+    /// block that merely mentions the marker is ordinary text.
+    #[test]
+    fn only_a_text_block_opening_with_the_fork_boilerplate_is_a_fork_directive() {
+        let (calls, timeline, usage, started_at, duration_ms) = parse_subagent_lines(&[
+            json!({
+                "type": "user",
+                "timestamp": "2026-10-20T08:00:00.000Z",
+                "message": {"role": "user", "content": "<fork-boilerplate> quoted in a plain prompt"},
+            })
+            .to_string(),
+            assistant_block_line(
+                "a1",
+                "msg_1",
+                "2026-10-20T08:00:01.000Z",
+                json!({"type": "tool_use", "id": "toolu_r", "name": "Read", "input": {"file_path": "/a"}}),
+                input_usage(1_000),
+            ),
+            json!({
+                "type": "user",
+                "timestamp": "2026-10-20T08:00:02.000Z",
+                "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_r", "content": "a"},
+                    {"type": "text", "text": "see <fork-boilerplate> later"}
+                ]},
+            })
+            .to_string(),
+            assistant_block_line(
+                "a2",
+                "msg_2",
+                "2026-10-20T08:00:03.000Z",
+                json!({"type": "text", "text": "end"}),
+                input_usage(2_000),
+            ),
+        ]);
+
+        assert_eq!(
+            calls
+                .iter()
+                .map(|c| c.tool_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Read"]
+        );
+        assert_eq!(
+            timeline_shape(&timeline),
+            vec![("tool_call", Some(0), None), ("text", None, Some("end"))]
+        );
+        assert_eq!(usage.map(|u| u.input_tokens), Some(3_000));
+        assert_eq!(
+            started_at,
+            Some("2026-10-20T08:00:00.000Z".parse::<DateTime<Utc>>().unwrap())
+        );
+        assert_eq!(duration_ms, Some(3_000));
     }
 
     /// A resume replays the surviving history into the SAME transcript,
@@ -5183,7 +5526,10 @@ mod tests {
     /// one of them mid-body keeps it.
     #[test]
     fn continuation_summary_text_strips_only_the_framing() {
-        assert_eq!(continuation_summary_text(CONTINUATION), CONTINUATION_SUMMARY);
+        assert_eq!(
+            continuation_summary_text(CONTINUATION),
+            CONTINUATION_SUMMARY
+        );
 
         let quoting = CONTINUATION.replace(
             "   - None.",
@@ -5553,10 +5899,7 @@ mod tests {
     fn write_clear_jsonl(path: &Path, lines: &[&str]) {
         std::fs::write(
             path,
-            lines
-                .iter()
-                .map(|l| format!("{l}\n"))
-                .collect::<String>(),
+            lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
         )
         .unwrap();
     }
@@ -5751,7 +6094,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
-            agent_message_id: None,
+                agent_message_id: None,
             },
             MessageTurn {
                 id: "turn-1".to_string(),
@@ -5767,7 +6110,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
-            agent_message_id: None,
+                agent_message_id: None,
             },
         ];
 
@@ -5952,8 +6295,10 @@ mod tests {
         tag: &str,
         lines: &[serde_json::Value],
     ) -> (Option<String>, Option<String>) {
-        let path =
-            std::env::temp_dir().join(format!("houhub-claude-{tag}-{}.jsonl", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "houhub-claude-{tag}-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
         let mut file = fs::File::create(&path).expect("create temp jsonl");
         for line in lines {
             writeln!(file, "{line}").expect("write line");
@@ -6468,7 +6813,9 @@ mod tests {
             .iter()
             .filter_map(|t| t.usage.as_ref())
             .map(|u| {
-                u.input_tokens + u.output_tokens + u.cache_creation_input_tokens
+                u.input_tokens
+                    + u.output_tokens
+                    + u.cache_creation_input_tokens
                     + u.cache_read_input_tokens
             })
             .sum()
@@ -6902,8 +7249,10 @@ mod tests {
             })
             .to_string()
         };
-        let detail =
-            parse_lines_into_detail(&[line("a1", "2026-03-01T10:00:00Z"), line("a2", "2026-03-01T10:00:01Z")]);
+        let detail = parse_lines_into_detail(&[
+            line("a1", "2026-03-01T10:00:00Z"),
+            line("a2", "2026-03-01T10:00:01Z"),
+        ]);
         assert_eq!(total_usage_tokens(&detail), 30);
     }
 
@@ -7005,7 +7354,12 @@ mod tests {
             &session_launching("abc", 1),
             &[(
                 "abc",
-                vec![subagent_line("s1", "msg_sub", "2026-03-01T10:02:00Z", 7_000)],
+                vec![subagent_line(
+                    "s1",
+                    "msg_sub",
+                    "2026-03-01T10:02:00Z",
+                    7_000,
+                )],
             )],
         );
         assert_eq!(total_usage_tokens(&detail), 8_000);
@@ -7019,7 +7373,12 @@ mod tests {
             &session_launching("abc", 3),
             &[(
                 "abc",
-                vec![subagent_line("s1", "msg_sub", "2026-03-01T10:02:00Z", 7_000)],
+                vec![subagent_line(
+                    "s1",
+                    "msg_sub",
+                    "2026-03-01T10:02:00Z",
+                    7_000,
+                )],
             )],
         );
         assert_eq!(total_usage_tokens(&detail), 8_000);
@@ -7034,7 +7393,12 @@ mod tests {
             &session_launching("abc", 0),
             &[(
                 "orphan",
-                vec![subagent_line("s1", "msg_sub", "2026-03-01T10:02:00Z", 7_000)],
+                vec![subagent_line(
+                    "s1",
+                    "msg_sub",
+                    "2026-03-01T10:02:00Z",
+                    7_000,
+                )],
             )],
         );
         assert_eq!(total_usage_tokens(&detail), 8_000);
@@ -7061,7 +7425,12 @@ mod tests {
             )],
             &[(
                 "abc",
-                vec![subagent_line("s1", "msg_sub", "2026-03-01T10:02:00Z", 900_000)],
+                vec![subagent_line(
+                    "s1",
+                    "msg_sub",
+                    "2026-03-01T10:02:00Z",
+                    900_000,
+                )],
             )],
         );
         let stats = detail.session_stats.expect("session stats");
@@ -7074,15 +7443,13 @@ mod tests {
     fn sub_agent_spend_lands_on_the_turn_that_was_running_when_it_started() {
         // A session working across midnight must not report a sub-agent's
         // tokens on whichever day the session happened to end.
-        let mut lines = vec![
-            assistant_block_line(
-                "a1",
-                "msg_before",
-                "2026-03-01T23:00:00Z",
-                json!({"type": "tool_use", "id": "tu1", "name": "Task", "input": {}}),
-                json!({"input_tokens": 10, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}),
-            ),
-        ];
+        let mut lines = vec![assistant_block_line(
+            "a1",
+            "msg_before",
+            "2026-03-01T23:00:00Z",
+            json!({"type": "tool_use", "id": "tu1", "name": "Task", "input": {}}),
+            json!({"input_tokens": 10, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}),
+        )];
         lines.push(assistant_block_line(
             "a2",
             "msg_after",
@@ -7095,7 +7462,12 @@ mod tests {
             &lines,
             &[(
                 "abc",
-                vec![subagent_line("s1", "msg_sub", "2026-03-01T23:10:00Z", 5_000)],
+                vec![subagent_line(
+                    "s1",
+                    "msg_sub",
+                    "2026-03-01T23:10:00Z",
+                    5_000,
+                )],
             )],
         );
         let carrying: Vec<_> = detail
@@ -7111,9 +7483,57 @@ mod tests {
             .collect();
         assert_eq!(total_usage_tokens(&detail), 5_030);
         assert!(
-            carrying.iter().any(|(ts, n)| ts.starts_with("2026-03-01") && *n == 5_010),
+            carrying
+                .iter()
+                .any(|(ts, n)| ts.starts_with("2026-03-01") && *n == 5_010),
             "sub-agent spend belongs to the turn that launched it, got {carrying:?}"
         );
+    }
+
+    /// A fork's transcript repeats the launching record — same `message.id`,
+    /// same usage — which the session's own transcript already counted. Only
+    /// the fork's own calls are delegated spend.
+    #[test]
+    fn a_forks_copy_of_the_launching_message_is_not_counted_twice() {
+        let launch = json!({
+            "type": "tool_use", "id": "tu1", "name": "Agent",
+            "input": {"description": "d", "prompt": "go", "subagent_type": "fork"}
+        });
+        let launch_usage = json!({
+            "input_tokens": 1000,
+            "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0
+        });
+        let detail = parse_with_subagents(
+            &[assistant_block_line(
+                "a1",
+                "msg_launch",
+                "2026-03-01T10:00:00Z",
+                launch.clone(),
+                launch_usage.clone(),
+            )],
+            &[(
+                "af1",
+                vec![
+                    json!({
+                        "type": "fork-context-ref", "agentId": "af1",
+                        "parentSessionId": "dedup-test", "contextLength": 1
+                    })
+                    .to_string(),
+                    assistant_block_line(
+                        "copy",
+                        "msg_launch",
+                        "2026-03-01T10:00:00Z",
+                        launch,
+                        launch_usage,
+                    ),
+                    fork_directive("2026-03-01T10:00:01Z", "tu1", "go"),
+                    subagent_line("s1", "msg_fork", "2026-03-01T10:02:00Z", 7_000),
+                ],
+            )],
+        );
+        assert_eq!(total_usage_tokens(&detail), 8_000);
     }
 
     #[test]
@@ -7397,9 +7817,10 @@ mod tests {
         ));
         // The hook instruction is addressed to the model, not spoken by the
         // user — it must stay out of the transcript.
-        assert!(!turns.iter().any(|t| t.blocks.iter().any(
-            |b| matches!(b, ContentBlock::Text { text } if text.contains("Stop hook"))
-        )));
+        assert!(!turns.iter().any(|t| t
+            .blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("Stop hook")))));
 
         // Mid-turn (the model is still thinking, no assistant record yet): the
         // hook injection alone must already resolve it, because the transcript
@@ -7895,7 +8316,10 @@ mod tests {
         acc.finalize_background_lifecycle();
         let cards = goal_cards(&group_into_turns(acc.messages));
         assert_eq!(
-            cards.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),
+            cards
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
             vec!["create_goal", "update_goal"]
         );
         assert_eq!(cards[1].1["status"], "complete");
@@ -8243,9 +8667,10 @@ mod tests {
         acc.finalize_background_lifecycle();
         let turns = group_into_turns(acc.messages);
         assert!(
-            !turns.iter().any(|t| t.blocks.iter().any(
-                |b| matches!(b, ContentBlock::Text { text } if text.contains("/model"))
-            )),
+            !turns.iter().any(|t| t
+                .blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("/model")))),
             "the cron owns that reply — the command must not claim its prompt slot"
         );
     }
@@ -8288,9 +8713,10 @@ mod tests {
         }
         acc.finalize_background_lifecycle();
         let turns = group_into_turns(acc.messages);
-        assert!(!turns.iter().any(|t| t.blocks.iter().any(
-            |b| matches!(b, ContentBlock::Text { text } if text.contains("/model"))
-        )));
+        assert!(!turns.iter().any(|t| t
+            .blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("/model")))));
     }
 
     /// A client-only command stays hidden even when the CLI writes several
@@ -8334,9 +8760,10 @@ mod tests {
         let turns = group_into_turns(acc.messages);
         let roles: Vec<_> = turns.iter().map(role_name).collect();
         assert_eq!(roles, vec!["user", "assistant"]);
-        assert!(!turns.iter().any(|t| t.blocks.iter().any(
-            |b| matches!(b, ContentBlock::Text { text } if text.contains("/model"))
-        )));
+        assert!(!turns.iter().any(|t| t
+            .blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("/model")))));
     }
 
     #[test]

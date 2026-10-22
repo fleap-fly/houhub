@@ -10,12 +10,15 @@
 //! silently change which identity a task writes with.
 
 use std::collections::HashMap;
+
 use std::sync::{LazyLock, RwLock};
 
 use sea_orm::DatabaseConnection;
 
 use super::{ForgeError, ForgeProvider};
+
 use crate::db::service::app_metadata_service;
+
 use crate::models::{GitHubAccount, GitHubAccountsSettings};
 
 /// Same key as `commands/version_control.rs` — duplicated because that module
@@ -91,65 +94,54 @@ pub async fn resolve_forge_auth(
         return Err(ForgeError::Invalid("server host is empty".into()));
     }
     let settings = load_accounts(conn).await?;
-    let on_host: Vec<&GitHubAccount> = settings
-        .accounts
-        .iter()
-        .filter(|a| host_of_server_url(&a.server_url) == host && serves(a, provider))
-        .collect();
+    let on_host = serving_accounts(&settings.accounts, &host, provider);
 
     let account = match account_id {
         Some(id) => on_host
             .iter()
             .find(|a| a.id == id)
             .copied()
-            .ok_or_else(|| {
-                ForgeError::Auth(format!("account {id} not found on host {host}"))
-            })?,
+            .ok_or_else(|| ForgeError::Auth(format!("account {id} not found on host {host}")))?,
         // Nothing configured for this host is the ONE auth miss the user can
         // act on, so it gets its own variant (and with it an i18n key + an
         // "add an account" affordance in the workbench).
-        None => on_host
-            .iter()
-            .find(|a| a.is_default)
-            .or_else(|| on_host.first())
-            .copied()
-            .ok_or_else(|| {
-                // …unless there is no reason to believe this host is a forge we
-                // speak at all: nothing configured for it, nothing detected on
-                // it, AND a name that does not claim to be GitHub or GitLab.
-                // Telling a Bitbucket or Gitee user their "GitHub account" is
-                // missing sends them to add a credential that would not help.
-                // Note the test is for accounts on the HOST, not for the ones
-                // that serve `provider` — the same deliberate optimism as
-                // `HostProfile::recognized`, and for the same reason: a
-                // configured host keeps the behaviour it has, whichever forge a
-                // caller thinks it is.
-                let configured = settings
-                    .accounts
-                    .iter()
-                    .any(|a| host_of_server_url(&a.server_url) == host);
-                // The probe's verdict vouches for a host exactly as an account
-                // or a forge-claiming name does, and it has to be consulted
-                // HERE or the two halves of this file contradict each other:
-                // `host_profile` marks a detected GitLab `recognized`, which is
-                // what lets the panel spend a request on it, and this function
-                // would then answer that request with "not a forge we speak" —
-                // about an instance houhub positively identified. What such a
-                // user is missing is an ACCOUNT, and that is what to say.
-                //
-                // Only a POSITIVE verdict counts. `Some(None)` is "asked, and
-                // it is not a GitLab", which is the Bitbucket/Gitee case the
-                // name rule already owns and must keep owning.
-                let detected = recall_verdict(&host).flatten().is_some();
-                if !configured && !detected && provider_from_host_name(&host).is_none() {
-                    ForgeError::UnsupportedHost { host: host.clone() }
-                } else {
-                    ForgeError::NoAccount {
-                        provider,
-                        host: host.clone(),
-                    }
+        None => unpinned_account(&on_host).ok_or_else(|| {
+            // …unless there is no reason to believe this host is a forge we
+            // speak at all: nothing configured for it, nothing detected on
+            // it, AND a name that does not claim to be GitHub or GitLab.
+            // Telling a Bitbucket or Gitee user their "GitHub account" is
+            // missing sends them to add a credential that would not help.
+            // Note the test is for accounts on the HOST, not for the ones
+            // that serve `provider` — the same deliberate optimism as
+            // `HostProfile::recognized`, and for the same reason: a
+            // configured host keeps the behaviour it has, whichever forge a
+            // caller thinks it is.
+            let configured = settings
+                .accounts
+                .iter()
+                .any(|a| host_of_server_url(&a.server_url) == host);
+            // The probe's verdict vouches for a host exactly as an account
+            // or a forge-claiming name does, and it has to be consulted
+            // HERE or the two halves of this file contradict each other:
+            // `host_profile` marks a detected GitLab `recognized`, which is
+            // what lets the panel spend a request on it, and this function
+            // would then answer that request with "not a forge we speak" —
+            // about an instance houhub positively identified. What such a
+            // user is missing is an ACCOUNT, and that is what to say.
+            //
+            // Only a POSITIVE verdict counts. `Some(None)` is "asked, and
+            // it is not a GitLab", which is the Bitbucket/Gitee case the
+            // name rule already owns and must keep owning.
+            let detected = recall_verdict(&host).flatten().is_some();
+            if !configured && !detected && provider_from_host_name(&host).is_none() {
+                ForgeError::UnsupportedHost { host: host.clone() }
+            } else {
+                ForgeError::NoAccount {
+                    provider,
+                    host: host.clone(),
                 }
-            })?,
+            }
+        })?,
     };
 
     let token = crate::keyring_store::get_token(&account.id)
@@ -165,6 +157,30 @@ pub async fn resolve_forge_auth(
         token,
         scopes: account.scopes.clone(),
     })
+}
+
+/// The accounts on `host` that may be spent against `provider`, in stored
+/// order — what [`resolve_forge_auth`] chooses among.
+fn serving_accounts<'a>(
+    accounts: &'a [GitHubAccount],
+    host: &str,
+    provider: ForgeProvider,
+) -> Vec<&'a GitHubAccount> {
+    accounts
+        .iter()
+        .filter(|a| host_of_server_url(&a.server_url) == host && serves(a, provider))
+        .collect()
+}
+
+/// The one of them spent when no account is pinned: the host's default, else
+/// the first. [`host_profile_in`] links to the instance through the same
+/// choice, so a link opens the instance the API calls behind it went to.
+fn unpinned_account<'a>(on_host: &[&'a GitHubAccount]) -> Option<&'a GitHubAccount> {
+    on_host
+        .iter()
+        .find(|a| a.is_default)
+        .or_else(|| on_host.first())
+        .copied()
 }
 
 /// Whether a stored account may be used against `provider`. An account with no
@@ -186,6 +202,15 @@ pub struct HostProfile {
     /// root" (`https://host/gitlab`), and where one is in use EVERY repository
     /// path in a git remote carries that prefix while no API path does.
     pub base_path: String,
+    /// The instance's web root — scheme, host, port and mount path — as
+    /// registered by the account [`resolve_forge_auth`] spends on this host
+    /// when none is pinned, and `https://{host}` when there is none (or what
+    /// it registered is not an http(s) address). The origin the API base is
+    /// built under, which is what a browser link has to use for an SSH
+    /// remote: that remote carries none of those parts, and an instance
+    /// served over plain `http://` or on a port of its own is not there at
+    /// `https://{host}`.
+    pub web_origin: String,
     /// Whether `provider` is something houhub actually KNOWS about this host —
     /// an account configured for it, or a hostname that names one of the
     /// supported forges — as opposed to the last-resort GitHub guess.
@@ -231,10 +256,11 @@ pub async fn host_profile(conn: &DatabaseConnection, server_host: &str) -> HostP
     let accounts = load_accounts(conn).await.unwrap_or_default().accounts;
     let host = server_host.trim().to_ascii_lowercase();
 
-    // Everything knowable without the network — the mount path, the provider
-    // and the `recognized` rule. Deriving it HERE rather than restating it is
-    // what keeps the two halves from drifting: the probe below can only
-    // replace the provider, and only when it has a conclusive answer.
+    // Everything knowable without the network — the mount path, the web
+    // origin (which the probe below asks), the provider and the `recognized`
+    // rule. Deriving it HERE rather than restating it is what keeps the two
+    // halves from drifting: the probe below can only replace the provider,
+    // and only when it has a conclusive answer.
     let profile = host_profile_in(&host, &accounts);
 
     let authority = authority_in(&host, &accounts);
@@ -248,8 +274,7 @@ pub async fn host_profile(conn: &DatabaseConnection, server_host: &str) -> HostP
     // instance what it is. Only a conclusive answer is taken; anything else
     // falls through to the same guess this has always made, so a host that is
     // slow, offline or behind a proxy is no worse off than before.
-    let origin = server_origin(&host, authority.map_or("", |a| a.server_url.as_str()));
-    match detect_forge(&host, &origin).await {
+    match detect_forge(&host, &profile.web_origin).await {
         // The instance ANSWERED, and that is the strongest witness there is:
         // stronger than an account (which vouches for a host without saying
         // what it runs) and stronger than the name (which is why this probe
@@ -291,10 +316,21 @@ pub fn host_profile_in(server_host: &str, accounts: &[GitHubAccount]) -> HostPro
     let base_path = authority
         .map(|a| path_of_server_url(&a.server_url))
         .unwrap_or_default();
+    // From the account the API spends for this forge, not from the authority
+    // above: an undeclared default beside a declaring account is the one
+    // `resolve_forge_auth` reads with, and a link through the other would open
+    // a different instance from the one the panel's list came from. Only a
+    // web scheme says where an instance lives; anything else — an `ssh://`
+    // typed in by mistake, or worse — would reach a browser link as-is, so it
+    // gets the guess a host without an account gets.
+    let web_origin = unpinned_account(&serving_accounts(accounts, &host, provider))
+        .and_then(|a| super::sanitize_web_url(&server_origin(&host, &a.server_url)))
+        .unwrap_or_else(|| format!("https://{host}"));
 
     HostProfile {
         provider,
         base_path,
+        web_origin,
         recognized,
     }
 }
@@ -654,7 +690,11 @@ pub fn host_of_server_url(server_url: &str) -> String {
         .unwrap_or(trimmed);
     let host_port = no_scheme.split(['/', '?', '#']).next().unwrap_or("");
     let host = host_port.split('@').next_back().unwrap_or("");
-    host.split(':').next().unwrap_or("").trim().to_ascii_lowercase()
+    host.split(':')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
 }
 
 /// REST base for a host. github.com uses the dedicated API host; GitHub
@@ -700,7 +740,10 @@ mod tests {
         assert_eq!(host_of_server_url("https://github.com"), "github.com");
         assert_eq!(host_of_server_url("https://GitHub.com/"), "github.com");
         assert_eq!(host_of_server_url("https://ghe.corp.com"), "ghe.corp.com");
-        assert_eq!(host_of_server_url("http://ghe.corp.com:8443/x"), "ghe.corp.com");
+        assert_eq!(
+            host_of_server_url("http://ghe.corp.com:8443/x"),
+            "ghe.corp.com"
+        );
         assert_eq!(host_of_server_url("ghe.corp.com"), "ghe.corp.com");
     }
 
@@ -731,7 +774,10 @@ mod tests {
             api_base_for(gh, "ghe.corp.com", "https://ghe.corp.com/"),
             "https://ghe.corp.com/api/v3"
         );
-        assert_eq!(api_base_for(gh, "ghe.corp.com", ""), "https://ghe.corp.com/api/v3");
+        assert_eq!(
+            api_base_for(gh, "ghe.corp.com", ""),
+            "https://ghe.corp.com/api/v3"
+        );
         // A bare hostname is what users actually type; without a scheme the
         // result would be a relative path rather than a request URL.
         assert_eq!(
@@ -745,7 +791,10 @@ mod tests {
     #[test]
     fn gitlab_api_base_is_always_under_the_instance() {
         let gl = ForgeProvider::GitLab;
-        assert_eq!(api_base_for(gl, "gitlab.com", ""), "https://gitlab.com/api/v4");
+        assert_eq!(
+            api_base_for(gl, "gitlab.com", ""),
+            "https://gitlab.com/api/v4"
+        );
         assert_eq!(
             api_base_for(gl, "gitlab.com", "https://gitlab.com"),
             "https://gitlab.com/api/v4"
@@ -763,7 +812,10 @@ mod tests {
     #[test]
     fn gitea_api_base_is_v1_under_the_instance() {
         let gt = ForgeProvider::Gitea;
-        assert_eq!(api_base_for(gt, "gitea.com", ""), "https://gitea.com/api/v1");
+        assert_eq!(
+            api_base_for(gt, "gitea.com", ""),
+            "https://gitea.com/api/v1"
+        );
         assert_eq!(
             api_base_for(gt, "codeberg.org", "https://codeberg.org/"),
             "https://codeberg.org/api/v1"
@@ -779,16 +831,34 @@ mod tests {
     /// every existing install keeps behaving exactly as it did.
     #[test]
     fn a_hosts_forge_comes_from_its_accounts_first() {
-        assert_eq!(host_profile_in("github.com", &[]).provider, ForgeProvider::GitHub);
-        assert_eq!(host_profile_in("gitlab.com", &[]).provider, ForgeProvider::GitLab);
-        assert_eq!(host_profile_in("gitlab.corp.com", &[]).provider, ForgeProvider::GitLab);
+        assert_eq!(
+            host_profile_in("github.com", &[]).provider,
+            ForgeProvider::GitHub
+        );
+        assert_eq!(
+            host_profile_in("gitlab.com", &[]).provider,
+            ForgeProvider::GitLab
+        );
+        assert_eq!(
+            host_profile_in("gitlab.corp.com", &[]).provider,
+            ForgeProvider::GitLab
+        );
         // "gitlab" as a whole label only — `mygitlabhost.com` says nothing.
-        assert_eq!(host_profile_in("mygitlabhost.com", &[]).provider, ForgeProvider::GitHub);
-        assert_eq!(host_profile_in("ghe.corp.com", &[]).provider, ForgeProvider::GitHub);
+        assert_eq!(
+            host_profile_in("mygitlabhost.com", &[]).provider,
+            ForgeProvider::GitHub
+        );
+        assert_eq!(
+            host_profile_in("ghe.corp.com", &[]).provider,
+            ForgeProvider::GitHub
+        );
 
         // A declared account overrides the hostname guess in both directions.
         let declared = [account("a", "https://git.corp.com", Some("gitlab"))];
-        assert_eq!(host_profile_in("git.corp.com", &declared).provider, ForgeProvider::GitLab);
+        assert_eq!(
+            host_profile_in("git.corp.com", &declared).provider,
+            ForgeProvider::GitLab
+        );
         let declared = [account("a", "https://gitlab.corp.com", Some("github"))];
         assert_eq!(
             host_profile_in("gitlab.corp.com", &declared).provider,
@@ -796,17 +866,29 @@ mod tests {
         );
         // Accounts on OTHER hosts have no say.
         let elsewhere = [account("a", "https://gitlab.com", Some("gitlab"))];
-        assert_eq!(host_profile_in("ghe.corp.com", &elsewhere).provider, ForgeProvider::GitHub);
+        assert_eq!(
+            host_profile_in("ghe.corp.com", &elsewhere).provider,
+            ForgeProvider::GitHub
+        );
         // Undeclared accounts (everything stored before GitLab support) do not
         // vote either — they are credentials for a host, not a statement.
         let legacy = [account("a", "https://gitlab.corp.com", None)];
-        assert_eq!(host_profile_in("gitlab.corp.com", &legacy).provider, ForgeProvider::GitLab);
+        assert_eq!(
+            host_profile_in("gitlab.corp.com", &legacy).provider,
+            ForgeProvider::GitLab
+        );
 
         // Two declarations on one host: the default account speaks for it.
         let mut github_default = account("gh", "https://git.corp.com", Some("github"));
         github_default.is_default = true;
-        let mixed = [account("gl", "https://git.corp.com", Some("gitlab")), github_default];
-        assert_eq!(host_profile_in("git.corp.com", &mixed).provider, ForgeProvider::GitHub);
+        let mixed = [
+            account("gl", "https://git.corp.com", Some("gitlab")),
+            github_default,
+        ];
+        assert_eq!(
+            host_profile_in("git.corp.com", &mixed).provider,
+            ForgeProvider::GitHub
+        );
     }
 
     /// The GitHub fallback is a GUESS, and a host it was guessed for is not a
@@ -818,7 +900,12 @@ mod tests {
     #[test]
     fn a_guessed_host_is_marked_unrecognized() {
         // The two public services, and any instance whose NAME makes a claim.
-        for host in ["github.com", "gitlab.com", "gitlab.corp.com", "github.corp.com"] {
+        for host in [
+            "github.com",
+            "gitlab.com",
+            "gitlab.corp.com",
+            "github.corp.com",
+        ] {
             assert!(host_profile_in(host, &[]).recognized, "{host}");
         }
         // Nothing configured, and a name that says nothing.
@@ -861,7 +948,10 @@ mod tests {
         };
 
         assert!(
-            matches!(refuse("gitee.com").await, ForgeError::UnsupportedHost { .. }),
+            matches!(
+                refuse("gitee.com").await,
+                ForgeError::UnsupportedHost { .. }
+            ),
             "a host that is neither forge"
         );
         assert!(
@@ -869,7 +959,10 @@ mod tests {
             "the public service is a forge with no credential yet"
         );
         assert!(
-            matches!(refuse("gitlab.corp.com").await, ForgeError::NoAccount { .. }),
+            matches!(
+                refuse("gitlab.corp.com").await,
+                ForgeError::NoAccount { .. }
+            ),
             "a name that claims a forge is a claim we take"
         );
 
@@ -897,8 +990,14 @@ mod tests {
     /// guess has always used. `mygitlabhost.com` is somebody's domain.
     #[test]
     fn a_hostname_claims_a_forge_only_by_whole_label() {
-        assert_eq!(provider_from_host_name("gitlab.com"), Some(ForgeProvider::GitLab));
-        assert_eq!(provider_from_host_name("GitHub.com"), Some(ForgeProvider::GitHub));
+        assert_eq!(
+            provider_from_host_name("gitlab.com"),
+            Some(ForgeProvider::GitLab)
+        );
+        assert_eq!(
+            provider_from_host_name("GitHub.com"),
+            Some(ForgeProvider::GitHub)
+        );
         assert_eq!(
             provider_from_host_name("git.gitlab.corp.com"),
             Some(ForgeProvider::GitLab)
@@ -912,8 +1011,14 @@ mod tests {
         // claims the same client. `codeberg.org` deliberately does NOT — this
         // is a rule about what a name SAYS, not a list of instances we happen
         // to know about, and the probe identifies that one anyway.
-        assert_eq!(provider_from_host_name("gitea.corp.com"), Some(ForgeProvider::Gitea));
-        assert_eq!(provider_from_host_name("forgejo.example"), Some(ForgeProvider::Gitea));
+        assert_eq!(
+            provider_from_host_name("gitea.corp.com"),
+            Some(ForgeProvider::Gitea)
+        );
+        assert_eq!(
+            provider_from_host_name("forgejo.example"),
+            Some(ForgeProvider::Gitea)
+        );
         assert_eq!(provider_from_host_name("codeberg.org"), None);
         assert_eq!(provider_from_host_name("giteaish.dev"), None);
     }
@@ -973,10 +1078,20 @@ mod tests {
         let profile = host_profile_in("host.example", &mounted);
         assert_eq!(profile.base_path, "gitlab");
         assert_eq!(profile.provider, ForgeProvider::GitLab);
-        assert_eq!(strip_base_path("gitlab/group/proj", &profile.base_path), "group/proj");
+        assert_eq!(
+            strip_base_path("gitlab/group/proj", &profile.base_path),
+            "group/proj"
+        );
         // Deeper mounts and trailing slashes are the same statement.
-        let deep = [account("a", "https://host.example/tools/gitlab/", Some("gitlab"))];
-        assert_eq!(host_profile_in("host.example", &deep).base_path, "tools/gitlab");
+        let deep = [account(
+            "a",
+            "https://host.example/tools/gitlab/",
+            Some("gitlab"),
+        )];
+        assert_eq!(
+            host_profile_in("host.example", &deep).base_path,
+            "tools/gitlab"
+        );
 
         // The ordinary root install: nothing to learn, nothing to strip.
         let root = [account("a", "https://gitlab.com", Some("gitlab"))];
@@ -993,9 +1108,15 @@ mod tests {
             authoritative,
         ];
         let profile = host_profile_in("host.example", &mixed);
-        assert_eq!(profile.base_path, "", "the declaring account speaks, path and all");
+        assert_eq!(
+            profile.base_path, "",
+            "the declaring account speaks, path and all"
+        );
         assert_eq!(profile.provider, ForgeProvider::GitLab);
-        assert_eq!(strip_base_path("gitlab/team/app", &profile.base_path), "gitlab/team/app");
+        assert_eq!(
+            strip_base_path("gitlab/team/app", &profile.base_path),
+            "gitlab/team/app"
+        );
 
         // Stripping only ever removes a prefix it can actually see, and never
         // leaves something that is no longer a repository path — a project
@@ -1005,14 +1126,97 @@ mod tests {
         assert_eq!(strip_base_path("GitLab/Group/Proj", "gitlab"), "group/proj");
     }
 
+    /// An SSH remote carries no scheme, port or mount path, so whatever links
+    /// to the instance takes all three from the account registered for the
+    /// host — the origin its API is already called under. Assuming `https://`
+    /// linked an http-only instance to a port nothing listens on (#997).
+    #[test]
+    fn the_web_origin_is_the_one_the_hosts_account_registered() {
+        let http = [account("a", "http://gitlab.example.com/", Some("gitlab"))];
+        assert_eq!(
+            host_profile_in("gitlab.example.com", &http).web_origin,
+            "http://gitlab.example.com"
+        );
+        // A port and a mount path are part of where the instance lives, and
+        // the API base is built under exactly the same origin.
+        let mounted = [account(
+            "a",
+            "http://git.corp.com:8929/gitlab/",
+            Some("gitlab"),
+        )];
+        let profile = host_profile_in("git.corp.com", &mounted);
+        assert_eq!(profile.web_origin, "http://git.corp.com:8929/gitlab");
+        assert_eq!(
+            api_base_for(
+                ForgeProvider::GitLab,
+                "git.corp.com",
+                "http://git.corp.com:8929/gitlab/"
+            ),
+            format!("{}/api/v4", profile.web_origin)
+        );
+        // A bare hostname typed as the server URL, and the public service's
+        // empty one, are https — as their API bases are.
+        let bare = [account("a", "ghe.corp.com", None)];
+        assert_eq!(
+            host_profile_in("ghe.corp.com", &bare).web_origin,
+            "https://ghe.corp.com"
+        );
+        let public = [account("a", "", None)];
+        assert_eq!(
+            host_profile_in("github.com", &public).web_origin,
+            "https://github.com"
+        );
+
+        // Nothing registered for the host — an account elsewhere says nothing
+        // about it, and a server URL that is no web address says nothing
+        // either — leaves https as the only thing to go on.
+        let elsewhere = [account("a", "http://other.example", Some("gitlab"))];
+        let not_web = [account("a", "ssh://git@gitlab.example.com", Some("gitlab"))];
+        let script = [account(
+            "a",
+            "javascript://gitlab.example.com/%0aalert(1)",
+            None,
+        )];
+        for accounts in [&[][..], &elsewhere[..], &not_web[..], &script[..]] {
+            assert_eq!(
+                host_profile_in("gitlab.example.com", accounts).web_origin,
+                "https://gitlab.example.com"
+            );
+        }
+
+        // With several accounts on the host, the origin is the one the API
+        // spends — the default among those serving the forge — even where a
+        // non-default account declares the forge and so speaks for the host.
+        // Linking through that one would open the instance on :8443 while
+        // the list on screen was read from the one on :443.
+        let mut legacy = account("legacy", "https://ghe.example.com/", None);
+        legacy.is_default = true;
+        let mixed = [
+            legacy,
+            account("declared", "https://ghe.example.com:8443/", Some("github")),
+        ];
+        let profile = host_profile_in("ghe.example.com", &mixed);
+        assert_eq!(profile.provider, ForgeProvider::GitHub);
+        assert_eq!(profile.web_origin, "https://ghe.example.com");
+    }
+
     /// A GitLab token handed to the GitHub client buys a 401 that reads like
     /// an expired credential. Declared accounts serve only their own forge;
     /// undeclared ones serve whatever the host is.
     #[test]
     fn accounts_only_serve_the_forge_they_declare() {
-        assert!(serves(&account("a", "", Some("gitlab")), ForgeProvider::GitLab));
-        assert!(!serves(&account("a", "", Some("gitlab")), ForgeProvider::GitHub));
-        assert!(serves(&account("a", "", Some("GitHub")), ForgeProvider::GitHub));
+        assert!(serves(
+            &account("a", "", Some("gitlab")),
+            ForgeProvider::GitLab
+        ));
+        assert!(!serves(
+            &account("a", "", Some("gitlab")),
+            ForgeProvider::GitHub
+        ));
+        assert!(serves(
+            &account("a", "", Some("GitHub")),
+            ForgeProvider::GitHub
+        ));
         assert!(serves(&account("a", "", None), ForgeProvider::GitLab));
         assert!(serves(&account("a", "", Some("  ")), ForgeProvider::GitHub));
     }
@@ -1111,7 +1315,9 @@ mod tests {
         assert!(shown.contains("<redacted>") && !shown.contains("tok-alt"));
 
         // No pin → the host's default.
-        let by_default = resolve_forge_auth(conn, gh, "github.com", None).await.unwrap();
+        let by_default = resolve_forge_auth(conn, gh, "github.com", None)
+            .await
+            .unwrap();
         assert_eq!(by_default.account_id, "acc-default");
 
         // A pinned id on the WRONG host is an error, not a silent substitute.
@@ -1145,13 +1351,74 @@ mod tests {
         let gl = resolve_forge_auth(conn, ForgeProvider::GitLab, "gitlab.com", None)
             .await
             .unwrap();
-        assert_eq!((gl.account_id.as_str(), gl.api_base.as_str()), ("acc-gitlab", "https://gitlab.com/api/v4"));
+        assert_eq!(
+            (gl.account_id.as_str(), gl.api_base.as_str()),
+            ("acc-gitlab", "https://gitlab.com/api/v4")
+        );
         // …and is invisible to the GitHub client, which would only spend it on
         // a 401 that reads like an expired token.
         assert!(matches!(
             resolve_forge_auth(conn, gh, "gitlab.com", Some("acc-gitlab")).await,
             Err(ForgeError::Auth(_))
         ));
+    }
+
+    /// A link to the instance and the API go to the same place, checked
+    /// against the real resolution rather than restated: for each host, the
+    /// profile's origin is the web origin of the identity
+    /// `resolve_forge_auth` hands back. Server mode only, like the happy path
+    /// above — the token store must not be the OS keyring.
+    #[cfg(not(feature = "tauri-runtime"))]
+    #[tokio::test]
+    async fn the_link_origin_is_the_one_the_api_is_called_under() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let conn = db.conn.clone();
+        let dir = tmp.path().to_string_lossy().to_string();
+        temp_env::async_with_vars([("HOUHUB_DATA_DIR", Some(dir.as_str()))], async move {
+            let mut http = account("http", "http://gitlab.example.com/", Some("gitlab"));
+            http.is_default = true;
+            let mut legacy = account("legacy", "https://ghe.example.com/", None);
+            legacy.is_default = true;
+            let accounts = vec![
+                http,
+                legacy,
+                account("declared", "https://ghe.example.com:8443/", Some("github")),
+                account("mounted", "https://host.example/gitlab/", Some("gitlab")),
+                account("public", "", None),
+            ];
+            let settings = GitHubAccountsSettings {
+                accounts: accounts.clone(),
+            };
+            app_metadata_service::upsert_value(
+                &conn,
+                GITHUB_ACCOUNTS_KEY,
+                &serde_json::to_string(&settings).unwrap(),
+            )
+            .await
+            .unwrap();
+            for a in &accounts {
+                crate::keyring_store::set_token(&a.id, "tok").unwrap();
+            }
+
+            for host in [
+                "gitlab.example.com",
+                "ghe.example.com",
+                "host.example",
+                "github.com",
+            ] {
+                let profile = host_profile_in(host, &accounts);
+                let auth = resolve_forge_auth(&conn, profile.provider, host, None)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    profile.web_origin,
+                    crate::forge::web_origin(&auth),
+                    "{host}"
+                );
+            }
+        })
+        .await;
     }
 
     // ── forge detection ────────────────────────────────────────────────────
@@ -1205,7 +1472,10 @@ mod tests {
         // Unauthenticated GitLab answers 401, and that is enough: the endpoint
         // EXISTS, which is the fact being tested for.
         let origin = mock_instance(401, "application/json").await;
-        assert_eq!(detect_forge(host, &origin).await, Some(ForgeProvider::GitLab));
+        assert_eq!(
+            detect_forge(host, &origin).await,
+            Some(ForgeProvider::GitLab)
+        );
         // The guess this overrode would have been GitHub, and with it /api/v3.
         assert_eq!(guess_provider(host), ForgeProvider::GitHub);
         // Conclusive answers are cached, so the round trip is paid once.
@@ -1296,10 +1566,17 @@ mod tests {
         remember_forge(answered_gitlab, ForgeProvider::GitLab);
         record_verdict(answered_not, None);
 
-        assert_eq!(recall_verdict(answered_gitlab), Some(Some(ForgeProvider::GitLab)));
+        assert_eq!(
+            recall_verdict(answered_gitlab),
+            Some(Some(ForgeProvider::GitLab))
+        );
         assert_eq!(recall_forge(answered_gitlab), Some(ForgeProvider::GitLab));
 
-        assert_eq!(recall_verdict(answered_not), Some(None), "asked: not a GitLab");
+        assert_eq!(
+            recall_verdict(answered_not),
+            Some(None),
+            "asked: not a GitLab"
+        );
         assert_eq!(recall_forge(answered_not), None);
 
         assert_eq!(recall_verdict(unasked), None, "never asked");
@@ -1343,7 +1620,10 @@ mod tests {
             get(move || async move {
                 (
                     axum::http::StatusCode::OK,
-                    [(axum::http::header::CONTENT_TYPE, "application/json;charset=utf-8")],
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        "application/json;charset=utf-8",
+                    )],
                     body,
                 )
             }),
@@ -1359,7 +1639,10 @@ mod tests {
         let host = "probe-serves-v1.test";
         forget_forge(host);
         let origin = mock_gitea("{\"version\":\"1.23.4\"}").await;
-        assert_eq!(detect_forge(host, &origin).await, Some(ForgeProvider::Gitea));
+        assert_eq!(
+            detect_forge(host, &origin).await,
+            Some(ForgeProvider::Gitea)
+        );
         // The guess this overrode would have been GitHub, and with it /api/v3.
         assert_eq!(guess_provider(host), ForgeProvider::GitHub);
         assert_eq!(recall_forge(host), Some(ForgeProvider::Gitea));

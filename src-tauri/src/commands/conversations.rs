@@ -249,6 +249,9 @@ fn list_conversations_sync(
         parsers.push((custom, build_agent_parser(custom, &envs.get(custom))));
     }
 
+    // The sessions houhub ran itself to generate text (`acp::one_shot`) were
+    // never conversations: left out, recognised by where they ran.
+    let generated = crate::acp::one_shot::GenerationPaths::current();
     for (at, parser) in &parsers {
         if let Some(ref filter) = agent_type {
             if filter != at {
@@ -259,6 +262,13 @@ fn list_conversations_sync(
             Ok(conversations) => {
                 // Deduplicate conversations based on (agent_type, id) combination
                 for conversation in conversations {
+                    if conversation
+                        .folder_path
+                        .as_deref()
+                        .is_some_and(|p| generated.contains(p))
+                    {
+                        continue;
+                    }
                     let key = format!("{:?}-{}", conversation.agent_type, conversation.id);
                     if seen_keys.insert(key) {
                         all_conversations.push(conversation);
@@ -3015,7 +3025,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-        agent_message_id: None,
+            agent_message_id: None,
         }
     }
 
@@ -3054,7 +3064,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-        agent_message_id: None,
+            agent_message_id: None,
         }
     }
 
@@ -3073,7 +3083,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: completed.then_some(ts),
-        agent_message_id: None,
+            agent_message_id: None,
         }
     }
 
@@ -3608,7 +3618,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-        agent_message_id: None,
+            agent_message_id: None,
         }
     }
 
@@ -3871,7 +3881,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-        agent_message_id: None,
+            agent_message_id: None,
         }];
         let children = vec![summary_child(42, "tu-1", "completed")];
         inject_delegation_meta(&mut turns, &children);
@@ -4940,15 +4950,10 @@ mod tests {
         )
         .await;
 
-        notify_conversation_title_updates(
-            &db.conn,
-            &emitter,
-            &chat_channel_manager,
-            vec![row.id],
-        )
-        .await
-        .await
-        .expect("detached title sync task");
+        notify_conversation_title_updates(&db.conn, &emitter, &chat_channel_manager, vec![row.id])
+            .await
+            .await
+            .expect("detached title sync task");
 
         let recorded = title_edits.recorded().await;
         let current = conversation_service::get_by_id(&db.conn, row.id)
@@ -5364,8 +5369,8 @@ mod tests {
             &crate::chat_channel::manager::ChatChannelManager::new(),
             999_999,
         )
-            .await
-            .expect_err("missing folder must surface as error");
+        .await
+        .expect_err("missing folder must surface as error");
         let msg = format!("{err:?}");
         assert!(
             msg.to_lowercase().contains("not found") || msg.to_lowercase().contains("999999"),
@@ -6905,8 +6910,8 @@ mod tests {
             &crate::chat_channel::manager::ChatChannelManager::new(),
             folder_id,
         )
-            .await
-            .expect_err("legacy import must be rejected while an import is in progress");
+        .await
+        .expect_err("legacy import must be rejected while an import is in progress");
         let msg = format!("{err:?}").to_lowercase();
         assert!(
             msg.contains("already in progress"),

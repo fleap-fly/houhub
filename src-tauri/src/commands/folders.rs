@@ -477,10 +477,7 @@ pub(crate) fn ensure_pushable_branch_name(branch: &str) -> Result<(), AppCommand
 /// `show-ref --verify` deliberately, NOT `rev-parse --verify`: the latter takes
 /// a revision EXPRESSION, so `main^` and `main@{1}` would both resolve and slip
 /// through. `show-ref --verify` only accepts an exact ref path.
-async fn ensure_local_branch_exists(
-    path: &str,
-    branch: &str,
-) -> Result<(), AppCommandError> {
+async fn ensure_local_branch_exists(path: &str, branch: &str) -> Result<(), AppCommandError> {
     let output = crate::process::tokio_command("git")
         .args([
             "show-ref",
@@ -493,8 +490,9 @@ async fn ensure_local_branch_exists(
         .await
         .map_err(AppCommandError::io)?;
     if !output.status.success() {
-        return Err(AppCommandError::not_found("Branch not found")
-            .with_detail(format!("branch={branch}")));
+        return Err(
+            AppCommandError::not_found("Branch not found").with_detail(format!("branch={branch}"))
+        );
     }
     Ok(())
 }
@@ -970,7 +968,10 @@ pub async fn delete_folder_group_core(
     if !removed {
         return Err(AppCommandError::not_found("Folder group not found"));
     }
-    emit_folder_group_change(emitter, crate::web::event_bridge::FolderGroupChange::Deleted { id: group_id });
+    emit_folder_group_change(
+        emitter,
+        crate::web::event_bridge::FolderGroupChange::Deleted { id: group_id },
+    );
     // Members moved back to the top level, so their rows changed too.
     emit_folder_group_change(emitter, crate::web::event_bridge::FolderGroupChange::Layout);
     Ok(())
@@ -2753,7 +2754,9 @@ pub async fn git_show_file_base64(
         .map_err(AppCommandError::io)?;
 
     let oid = if oid_output.status.success() {
-        String::from_utf8_lossy(&oid_output.stdout).trim().to_string()
+        String::from_utf8_lossy(&oid_output.stdout)
+            .trim()
+            .to_string()
     } else {
         String::new()
     };
@@ -2800,7 +2803,9 @@ pub async fn git_show_file_base64(
         .map_err(|_| {
             AppCommandError::external_command(
                 "git cat-file returned an unreadable object size",
-                String::from_utf8_lossy(&size_output.stdout).trim().to_string(),
+                String::from_utf8_lossy(&size_output.stdout)
+                    .trim()
+                    .to_string(),
             )
         })?;
 
@@ -2867,13 +2872,21 @@ pub(crate) async fn git_commit_core(
         .filter(|f| !staged_deletions.contains(f.as_str()))
         .collect();
 
+    let add_specs: Vec<String> = files_to_add
+        .iter()
+        .map(|file| to_git_literal_pathspec(file))
+        .collect();
+    // What the index holds for them before anything is staged here, so a
+    // refused commit can give back exactly what it staged itself.
+    let indexed_before = if add_specs.is_empty() {
+        None
+    } else {
+        index_entries(path, &add_specs).await
+    };
+
     if !files_to_add.is_empty() {
         let mut add_args = vec!["add".to_string(), "--".to_string()];
-        add_args.extend(
-            files_to_add
-                .iter()
-                .map(|file| to_git_literal_pathspec(file)),
-        );
+        add_args.extend(add_specs.iter().cloned());
 
         let add_output = crate::process::tokio_command("git")
             .args(&add_args)
@@ -2886,6 +2899,18 @@ pub(crate) async fn git_commit_core(
             return Err(git_command_error("add", &add_output.stderr));
         }
     }
+
+    // The files that add brought into the index, untracked until now, with
+    // what it staged for each.
+    let added: Option<HashMap<String, String>> = match indexed_before {
+        Some(before) => index_entries(path, &add_specs).await.map(|after| {
+            after
+                .into_iter()
+                .filter(|(file, _)| !before.contains_key(file))
+                .collect()
+        }),
+        None => None,
+    };
 
     // Resolve commit author from matching account (e.g. GitHub username)
     let author_override = crate::git_credential::resolve_commit_author(path, conn).await;
@@ -2905,6 +2930,13 @@ pub(crate) async fn git_commit_core(
     let commit_output = commit_cmd.output().await.map_err(AppCommandError::io)?;
 
     if !commit_output.status.success() {
+        match added {
+            Some(added) => unstage_added_files(path, &added).await,
+            None if !add_specs.is_empty() => tracing::warn!(
+                "[folders] can't tell which new files a refused commit staged in {path}"
+            ),
+            None => {}
+        }
         return Err(git_command_error("commit", &commit_output.stderr));
     }
 
@@ -2924,6 +2956,134 @@ pub(crate) async fn git_commit_core(
     }
 
     Ok(GitCommitResult { committed_files })
+}
+
+/// The index entries `pathspecs` match, as repository-relative path → staged
+/// object id; `None` when git can't tell.
+async fn index_entries(path: &str, pathspecs: &[String]) -> Option<HashMap<String, String>> {
+    let output = crate::process::tokio_command("git")
+        .args(["ls-files", "--stage", "--full-name", "-z", "--"])
+        .args(pathspecs)
+        .current_dir(path)
+        .output()
+        .await
+        .ok()
+        .filter(|output| output.status.success())?;
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .split('\0')
+            .filter_map(|record| {
+                // `<mode> <object> <stage>\t<path>`
+                let (meta, file) = record.split_once('\t')?;
+                let object = meta.split(' ').nth(1)?;
+                Some((file.to_string(), object.to_string()))
+            })
+            .collect(),
+    )
+}
+
+/// After a refused commit (a pre-commit hook, say), take the files its
+/// `git add` brought into the index back out: they were untracked, and left
+/// staged a later commit would take them whatever was picked for it. Only
+/// while the index still holds what that add staged (`added`) and the
+/// working copy still matches it — restaged since (by a hook or an agent) or
+/// edited since, its staged content would be lost, so it stays. `git reset`
+/// puts back what HEAD holds, so a file another commit has taken in since
+/// stays as committed. Best effort: on a failure the index keeps what the
+/// refused commit staged.
+async fn unstage_added_files(path: &str, added: &HashMap<String, String>) {
+    if added.is_empty() {
+        return;
+    }
+    let specs: Vec<String> = added
+        .keys()
+        .map(|file| format!(":(top,literal){file}"))
+        .collect();
+    let (Some(now), Some(edited)) = (
+        index_entries(path, &specs).await,
+        edited_since_staged(path, &specs).await,
+    ) else {
+        tracing::warn!("[folders] can't tell what a refused commit left staged in {path}");
+        return;
+    };
+    let ours: Vec<String> = added
+        .iter()
+        .filter(|(file, object)| now.get(*file) == Some(*object) && !edited.contains(*file))
+        .map(|(file, _)| format!(":(top,literal){file}"))
+        .collect();
+    if ours.is_empty() {
+        return;
+    }
+    // `git reset` reads HEAD once: when a commit lands while it runs, reset
+    // again, so whatever that commit took in goes back as committed.
+    let mut head = head_commit(path).await;
+    let mut reset = reset_paths(path, &ours).await;
+    for _ in 0..3 {
+        let landed = head_commit(path).await;
+        if landed == head {
+            break;
+        }
+        head = landed;
+        reset = reset_paths(path, &ours).await;
+    }
+    if !reset {
+        tracing::warn!(
+            "[folders] a refused commit left {} new file(s) staged in {path}",
+            ours.len()
+        );
+    }
+}
+
+/// The commit HEAD names; `None` on an unborn branch or when git can't tell.
+async fn head_commit(path: &str) -> Option<String> {
+    let output = crate::process::tokio_command("git")
+        .args(["rev-parse", "-q", "--verify", "HEAD"])
+        .current_dir(path)
+        .output()
+        .await
+        .ok()
+        .filter(|output| output.status.success())?;
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Reset the index entries `pathspecs` match to HEAD's; whether git did.
+async fn reset_paths(path: &str, pathspecs: &[String]) -> bool {
+    crate::process::tokio_command("git")
+        .args(["reset", "-q", "--"])
+        .args(pathspecs)
+        .current_dir(path)
+        .output()
+        .await
+        .is_ok_and(|output| output.status.success())
+}
+
+/// Of the files `pathspecs` match, the ones whose working copy differs from
+/// what is staged, repository-relative; `None` when git can't tell.
+async fn edited_since_staged(path: &str, pathspecs: &[String]) -> Option<HashSet<String>> {
+    let output = crate::process::tokio_command("git")
+        .args([
+            "--no-optional-locks",
+            "-c",
+            "diff.relative=false",
+            "diff",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            "--",
+        ])
+        .args(pathspecs)
+        .current_dir(path)
+        .output()
+        .await
+        .ok()
+        .filter(|output| output.status.success())?;
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .split('\0')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect(),
+    )
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -3257,10 +3417,10 @@ pub async fn git_remove_worktree_core(
         let canonical =
             std::fs::canonicalize(&worktree_path).unwrap_or_else(|_| PathBuf::from(&worktree_path));
         if main_path.as_deref() == Some(worktree_path.as_str()) {
-            return Err(AppCommandError::invalid_input(
-                "The main working tree cannot be removed",
-            )
-            .with_detail(worktree_path));
+            return Err(
+                AppCommandError::invalid_input("The main working tree cannot be removed")
+                    .with_detail(worktree_path),
+            );
         }
         let canonical_repo =
             std::fs::canonicalize(&repo_path).unwrap_or_else(|_| PathBuf::from(&repo_path));
@@ -3274,8 +3434,7 @@ pub async fn git_remove_worktree_core(
         let wt_folder = folder_at_path(db, &canonical).await?;
         if let Some(folder) = &wt_folder {
             let busy = crate::db::service::work_task_service::tasks_blocking_worktree_removal(
-                &db.conn,
-                folder.id,
+                &db.conn, folder.id,
             )
             .await
             .map_err(AppCommandError::from)?;
@@ -3346,7 +3505,10 @@ pub async fn git_remove_worktree_core(
                 .to_lowercase()
                 .contains("not found")
         {
-            return Err(git_command_error(&format!("branch {flag}"), &deleted.stderr));
+            return Err(git_command_error(
+                &format!("branch {flag}"),
+                &deleted.stderr,
+            ));
         }
         removal.branch_deleted = true;
     }
@@ -3365,14 +3527,13 @@ async fn reparent_target(
         .and_then(|folder| folder.parent_id);
     let target = match recorded_parent {
         Some(parent_id) => Some(parent_id),
-        None if source_folder_id > 0 => folder_service::get_folder_by_id(
-            &db.conn,
-            source_folder_id,
-        )
-        .await
-        .ok()
-        .flatten()
-        .map(|folder| folder.parent_id.unwrap_or(folder.id)),
+        None if source_folder_id > 0 => {
+            folder_service::get_folder_by_id(&db.conn, source_folder_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|folder| folder.parent_id.unwrap_or(folder.id))
+        }
         None => None,
     };
     target.filter(|id| *id != worktree_folder_id)
@@ -3410,9 +3571,9 @@ async fn converge_removed_worktree_folder(
                 );
             }
         }
-        Err(error) => tracing::warn!(
-            "[folders] tab cleanup failed for folder {worktree_folder_id}: {error}"
-        ),
+        Err(error) => {
+            tracing::warn!("[folders] tab cleanup failed for folder {worktree_folder_id}: {error}")
+        }
     }
 
     let folder_gone = match folder_service::soft_delete_folder(&db.conn, worktree_folder_id).await {
@@ -3427,9 +3588,7 @@ async fn converge_removed_worktree_folder(
     let detached = work_task_service::clear_worktree_by_folder(&db.conn, worktree_folder_id)
         .await
         .unwrap_or_else(|error| {
-            tracing::warn!(
-                "[folders] task detach failed for folder {worktree_folder_id}: {error}"
-            );
+            tracing::warn!("[folders] task detach failed for folder {worktree_folder_id}: {error}");
             Vec::new()
         });
 
@@ -3912,7 +4071,7 @@ const FILE_IO_MAX_CONCURRENT_OPS: usize = 8;
 static FILE_IO_SEMAPHORE: LazyLock<Semaphore> =
     LazyLock::new(|| Semaphore::new(FILE_IO_MAX_CONCURRENT_OPS));
 
-fn to_git_literal_pathspec(path: &str) -> String {
+pub(crate) fn to_git_literal_pathspec(path: &str) -> String {
     format!(":(literal){path}")
 }
 
@@ -5136,10 +5295,8 @@ pub async fn read_workspace_file_base64(
         // read race: the original `target` symlink can't be re-resolved (we use
         // the canonical path), a final-component symlink swapped in after the
         // check makes the open fail, and metadata/read never re-look-up the path.
-        let canonical_root =
-            std::fs::canonicalize(&root).map_err(AppCommandError::io)?;
-        let canonical_target =
-            std::fs::canonicalize(&target).map_err(AppCommandError::io)?;
+        let canonical_root = std::fs::canonicalize(&root).map_err(AppCommandError::io)?;
+        let canonical_target = std::fs::canonicalize(&target).map_err(AppCommandError::io)?;
         if !is_within_workspace(&canonical_root, &canonical_target) {
             return Err(AppCommandError::invalid_input(
                 "Path is outside workspace root",
@@ -6237,10 +6394,7 @@ async fn get_unpushed_hashes(
             .current_dir(path)
             .output()
             .await
-            .map(|o| {
-                o.status.success()
-                    && !String::from_utf8_lossy(&o.stdout).trim().is_empty()
-            })
+            .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
             .unwrap_or(false);
         let mut rev_args = vec!["rev-list".to_string(), limit_arg.clone()];
         if let Some(a) = author.filter(|a| !a.is_empty()) {
@@ -6519,7 +6673,10 @@ mod workspace_confinement_tests {
             "sub".to_string(),
         )
         .await;
-        assert!(res.is_err(), "must not clobber a dangling destination symlink");
+        assert!(
+            res.is_err(),
+            "must not clobber a dangling destination symlink"
+        );
         assert!(
             std::fs::symlink_metadata(root.path().join("sub/a.txt")).is_ok(),
             "dangling symlink must remain intact",
@@ -6531,11 +6688,7 @@ mod workspace_confinement_tests {
     async fn move_file_tree_entry_moves_a_symlink_entry() {
         let root = tempfile::tempdir().expect("root");
         std::fs::write(root.path().join("target.txt"), b"x").expect("write");
-        symlink(
-            root.path().join("target.txt"),
-            root.path().join("link.txt"),
-        )
-        .expect("symlink");
+        symlink(root.path().join("target.txt"), root.path().join("link.txt")).expect("symlink");
         std::fs::create_dir(root.path().join("sub")).expect("mkdir");
 
         let new_rel = move_file_tree_entry(
@@ -6547,8 +6700,8 @@ mod workspace_confinement_tests {
         .expect("move symlink");
         assert_eq!(new_rel.replace('\\', "/"), "sub/link.txt");
         // The moved entry is still a symlink (the link itself moved, not its target).
-        let meta = std::fs::symlink_metadata(root.path().join("sub/link.txt"))
-            .expect("moved link exists");
+        let meta =
+            std::fs::symlink_metadata(root.path().join("sub/link.txt")).expect("moved link exists");
         assert!(meta.file_type().is_symlink(), "entry stays a symlink");
         assert!(!root.path().join("link.txt").exists(), "old link gone");
     }
@@ -7372,10 +7525,7 @@ mod tests {
         // BRE metacharacters are backslash-escaped...
         assert_eq!(git_author_match_pattern("a.b*c"), "^a\\.b\\*c <");
         assert_eq!(git_author_match_pattern("na[me]"), "^na\\[me\\] <");
-        assert_eq!(
-            git_author_match_pattern("back\\slash"),
-            "^back\\\\slash <"
-        );
+        assert_eq!(git_author_match_pattern("back\\slash"), "^back\\\\slash <");
         // ...but `|` is literal in BRE, so a name like `程相|cx` is left as-is.
         assert_eq!(git_author_match_pattern("程相|cx"), "^程相|cx <");
     }
@@ -7504,9 +7654,9 @@ mod tests {
         // Intermediate directory entries are emitted alongside files — the
         // `@`-mention picker relies on directories being present.
         assert!(
-            entries.iter().any(
-                |e| e.path == "a" && matches!(e.kind, WorkspaceEntryKind::Dir)
-            ),
+            entries
+                .iter()
+                .any(|e| e.path == "a" && matches!(e.kind, WorkspaceEntryKind::Dir)),
             "directory entries must be present"
         );
     }
@@ -7648,6 +7798,142 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
+    /// What the hook `refusing_hook` installs writes to stderr as it refuses.
+    const HOOK_REFUSAL: &str = "refused by the test pre-commit hook";
+
+    /// Point the repository at a pre-commit hook that runs `script` and then
+    /// refuses the commit, whatever hooks path the user's own config names:
+    /// the repository's setting wins.
+    fn refusing_hook(root: &std::path::Path, script: &str) {
+        let hooks = root.join(".test-hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-commit");
+        std::fs::write(
+            &hook,
+            format!("#!/bin/sh\n{script}\necho '{HOOK_REFUSAL}' >&2\nexit 1\n"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        git_run(root, &["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    }
+
+    /// Commit `files` as the app does and return git's stderr from the
+    /// refusal. `git_commit_core` runs git with this process's environment,
+    /// not `git_run`'s, and git looks for an author before it runs pre-commit:
+    /// without one in the repository's own config, a machine that has none
+    /// configured (a CI runner) would refuse every commit before the hook ran.
+    async fn refused_commit(path: &std::path::Path, files: &[&str]) -> String {
+        git_run(path, &["config", "user.name", "t"]);
+        git_run(path, &["config", "user.email", "t@example.com"]);
+        let db = fresh_in_memory_db().await;
+        let files: Vec<String> = files.iter().map(|f| f.to_string()).collect();
+        match git_commit_core(
+            &EventEmitter::Noop,
+            None,
+            &db.conn,
+            path.to_str().unwrap(),
+            "feat: refused",
+            &files,
+        )
+        .await
+        {
+            Ok(_) => panic!("the commit went through"),
+            Err(err) => err.detail.unwrap_or(err.message),
+        }
+    }
+
+    /// A commit refused after its `git add` gives back the files that add
+    /// brought into the index, so a later commit with another pick can't take
+    /// them. What the index held before stays; so does a new file restaged
+    /// (here by the hook) or edited since, whose staged content would be lost.
+    #[tokio::test]
+    async fn a_refused_commit_gives_back_the_new_files_it_staged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        git_run(root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("tracked.txt"), "one\n").unwrap();
+        git_run(root, &["add", "tracked.txt"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+        std::fs::write(root.join("tracked.txt"), "one\ntwo\n").unwrap();
+        for file in ["picked.txt", "restaged.txt", "edited.txt", "staged.txt"] {
+            std::fs::write(root.join(file), "new\n").unwrap();
+        }
+        git_run(root, &["add", "staged.txt"]);
+        refusing_hook(
+            root,
+            "echo changed > restaged.txt && git add restaged.txt\necho changed > edited.txt",
+        );
+
+        let files = [
+            "edited.txt",
+            "picked.txt",
+            "restaged.txt",
+            "staged.txt",
+            "tracked.txt",
+        ];
+        let refusal = refused_commit(root, &files).await;
+        assert!(refusal.contains(HOOK_REFUSAL), "{refusal}");
+
+        let status = git_capture(root, &["status", "--porcelain=v1", "-uall"]);
+        let lines: Vec<&str> = status.lines().collect();
+        assert!(lines.contains(&"?? picked.txt"), "{status}");
+        assert!(lines.contains(&"A  restaged.txt"), "{status}");
+        assert!(lines.contains(&"AM edited.txt"), "{status}");
+        assert!(lines.contains(&"A  staged.txt"), "{status}");
+        // A tracked file is never taken out of the index, only re-staged.
+        assert!(lines.contains(&"M  tracked.txt"), "{status}");
+    }
+
+    /// A file another process committed between the refusal and the clean-up
+    /// stays as committed: what goes back is HEAD's, never a deletion.
+    #[tokio::test]
+    async fn giving_back_a_file_committed_meanwhile_leaves_it_committed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        git_run(root, &["init", "-q", "-b", "main"]);
+        git_run(root, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        std::fs::write(root.join("f.txt"), "x\n").unwrap();
+        git_run(root, &["add", "f.txt"]);
+        let path = root.to_str().unwrap();
+        let added = index_entries(path, &[to_git_literal_pathspec("f.txt")])
+            .await
+            .expect("index entries");
+        git_run(root, &["commit", "-q", "-m", "another process"]);
+
+        unstage_added_files(path, &added).await;
+        assert_eq!(
+            git_capture(root, &["status", "--porcelain=v1", "-uall"]),
+            ""
+        );
+    }
+
+    /// Below the repository root, what goes back is what the add actually
+    /// staged: its pathspecs resolve against the folder, the index's paths
+    /// against the root.
+    #[tokio::test]
+    async fn a_refused_commit_below_the_root_gives_back_what_its_add_staged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        git_run(root, &["init", "-q", "-b", "main"]);
+        git_run(root, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let folder = root.join("pkg");
+        std::fs::create_dir_all(folder.join("src")).unwrap();
+        std::fs::write(folder.join("src/new.txt"), "new\n").unwrap();
+        refusing_hook(root, ":");
+
+        let refusal = refused_commit(&folder, &["src/new.txt"]).await;
+        assert!(refusal.contains(HOOK_REFUSAL), "{refusal}");
+        let status = git_capture(root, &["status", "--porcelain=v1", "-uall"]);
+        assert!(
+            status.lines().any(|l| l == "?? pkg/src/new.txt"),
+            "{status}"
+        );
+    }
+
     // All-branches push status: with no remote-tracking refs every listed commit
     // is a definite "not pushed" (never the old unknown/None), and the classified
     // set walks the same `--all` universe as the log so a tag-only commit shown in
@@ -7785,7 +8071,7 @@ mod tests {
 
         let result = git_log(
             p.to_string_lossy().to_string(),
-            Some(5),                   // limit → status window is `-5`
+            Some(5), // limit → status window is `-5`
             None,
             None,
             None,
@@ -7824,7 +8110,14 @@ mod tests {
         // combination that made the literal-HEAD comparison wrong. Remote-tracking
         // refs are faked with update-ref so the test needs no network.
         git_run(p, &["update-ref", "refs/remotes/origin/main", &base]);
-        git_run(p, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+        git_run(
+            p,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
         git_run(p, &["checkout", "-q", "-b", "feature"]);
         git_run(p, &["commit", "-q", "--allow-empty", "-m", "f1"]);
         let f1 = git_capture(p, &["rev-parse", "HEAD"]);
@@ -7903,7 +8196,14 @@ mod tests {
         git_run(p, &["commit", "-q", "--allow-empty", "-m", "c1"]);
         let c1 = git_capture(p, &["rev-parse", "HEAD"]);
         git_run(p, &["update-ref", "refs/remotes/origin/main", &c1]);
-        git_run(p, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+        git_run(
+            p,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
         git_run(p, &["commit", "-q", "--allow-empty", "-m", "c2"]);
         git_run(p, &["checkout", "-q", "--detach"]);
 
@@ -8298,7 +8598,10 @@ mod tests {
             .await
             .expect("ensure folder");
 
-        assert_eq!(entry.id, opened.id, "the same row is revived, not a new one");
+        assert_eq!(
+            entry.id, opened.id,
+            "the same row is revived, not a new one"
+        );
         assert!(
             folder_service::get_folder_by_id(&db.conn, opened.id)
                 .await
@@ -9064,9 +9367,7 @@ branch refs/heads/main";
         assert_eq!(cleared.default_agent_type, None);
         // Clearing it changes the inherited value just as much as setting it.
         assert_eq!(
-            rx.try_recv()
-                .expect("clearing should nudge too")
-                .payload["kind"],
+            rx.try_recv().expect("clearing should nudge too").payload["kind"],
             "settings"
         );
     }
@@ -9120,7 +9421,10 @@ branch refs/heads/main";
             "src/inner".to_string(),
         )
         .await;
-        assert!(res.is_err(), "moving a dir into its own descendant must fail");
+        assert!(
+            res.is_err(),
+            "moving a dir into its own descendant must fail"
+        );
         assert!(root.path().join("src/inner").is_dir(), "source untouched");
     }
 

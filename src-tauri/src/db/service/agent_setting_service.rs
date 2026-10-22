@@ -381,5 +381,5 @@ mod tests {
         for agent in crate::models::agent::BUILTIN_AGENT_TYPES {
             assert!(default_enabled(*agent), "{agent:?} defaults to disabled");
         }
-}
+    }
 }

@@ -525,6 +525,9 @@ impl TerminalManager {
                 cmd.env("PATH", path);
             }
         }
+        // The session's environment, not the one an AppImage's launcher set
+        // up for houhub itself.
+        crate::appimage_env::restore_pty(&mut cmd);
 
         let child = pair
             .slave
@@ -1651,7 +1654,8 @@ mod tests {
 
         let manager = Arc::new(TerminalManager::new());
         let id = uuid::Uuid::new_v4().to_string();
-        let output = std::env::temp_dir().join(format!("houhub-749-spawn-{}", uuid::Uuid::new_v4()));
+        let output =
+            std::env::temp_dir().join(format!("houhub-749-spawn-{}", uuid::Uuid::new_v4()));
         let gate = Arc::new(Barrier::new(3));
         let mut threads = Vec::new();
         for _ in 0..2 {

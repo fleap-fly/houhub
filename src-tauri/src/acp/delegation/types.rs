@@ -493,10 +493,20 @@ mod target_tests {
 
     #[test]
     fn a_present_but_invalid_assistant_id_never_falls_back_to_the_agent() {
-        for bad in [json!(0), json!(-1), json!(1.5), json!("abc"), json!("3a"), json!(true), json!(3_000_000_000_i64)] {
+        for bad in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("abc"),
+            json!("3a"),
+            json!(true),
+            json!(3_000_000_000_i64),
+        ] {
             assert!(
                 matches!(
-                    delegation_target_from_args(&json!({"assistant_id": bad, "agent_type": "codex"})),
+                    delegation_target_from_args(
+                        &json!({"assistant_id": bad, "agent_type": "codex"})
+                    ),
                     Err(DelegationTargetError::InvalidAssistantId(_))
                 ),
                 "{bad} must not resolve"
@@ -555,7 +565,8 @@ mod tests {
         ];
         for (err, expected) in cases {
             let display = err.to_string();
-            let DelegationOutcome::Err { code, message, .. } = DelegationOutcome::from_err(err, None)
+            let DelegationOutcome::Err { code, message, .. } =
+                DelegationOutcome::from_err(err, None)
             else {
                 panic!("from_err must produce an Err outcome");
             };

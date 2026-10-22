@@ -481,7 +481,10 @@ mod tests {
         let s = "aa\u{4f60}\u{597d}";
         for max in 0..s.len() {
             let cut = truncate(s, max);
-            let kept = cut.split("... [truncated").next().expect("split yields one");
+            let kept = cut
+                .split("... [truncated")
+                .next()
+                .expect("split yields one");
             assert!(
                 s.starts_with(kept),
                 "max={max} kept {kept:?}, which is not a prefix of {s:?}"
@@ -509,9 +512,9 @@ mod tests {
     fn the_append_budget_stops_the_file_growing_without_end() {
         let dir = tempfile::tempdir().unwrap();
         let now = chrono::Utc::now();
-        let path = dir
-            .path()
-            .join(crate::logging::budget::daily_file_name("houhub", "log", now));
+        let path = dir.path().join(crate::logging::budget::daily_file_name(
+            "houhub", "log", now,
+        ));
 
         // The REAL accounting, against a local counter — the process-global
         // one is shared with every other test in this binary and must not be

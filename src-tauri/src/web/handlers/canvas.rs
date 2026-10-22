@@ -201,7 +201,7 @@ pub async fn canvas_delete_node(
             &state.terminal_manager,
             params.node_id,
         )
-            .await?,
+        .await?,
     ))
 }
 
@@ -222,6 +222,6 @@ pub async fn canvas_delete_nodes(
             &state.terminal_manager,
             params.node_ids,
         )
-            .await?,
+        .await?,
     ))
 }

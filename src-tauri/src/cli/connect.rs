@@ -778,7 +778,10 @@ mod tests {
         assert_eq!(
             level(&global(), &env).unwrap(),
             Level::DataDirs {
-                dirs: vec!["/platform/com.houflow.houhub".into(), "/platform/houhub".into()],
+                dirs: vec![
+                    "/platform/com.houflow.houhub".into(),
+                    "/platform/houhub".into()
+                ],
                 label: "the default data directories"
             }
         );

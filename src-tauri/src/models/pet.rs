@@ -29,10 +29,10 @@ pub const SPRITE_GRID_ROWS: u32 = 9;
 #[allow(dead_code)]
 pub const SPRITE_FRAME_WIDTH: u32 = SPRITE_SHEET_WIDTH / SPRITE_GRID_COLS;
 
- // 192
+// 192
 pub const SPRITE_FRAME_HEIGHT: u32 = SPRITE_SHEET_HEIGHT / SPRITE_GRID_ROWS;
 
- // 208
+// 208
 
 /// Filename codex writes inside each pet directory. Stored as a relative path
 /// in `pet.json::spritesheetPath`; we resolve it against the pet directory.
@@ -448,7 +448,7 @@ mod tests {
         let payload = PetSessionsPayload::from_entries(vec![
             session_entry(ConnectionStatus::Prompting, false), // running
             session_entry(ConnectionStatus::Prompting, true), // waiting: pending outranks prompting
-            session_entry(ConnectionStatus::Error, false),     // error
+            session_entry(ConnectionStatus::Error, false),    // error
             session_entry(ConnectionStatus::Connected, false), // idle-ish: counted nowhere
         ]);
         assert_eq!(payload.running_count, 1);

@@ -36,13 +36,12 @@ use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerBrowserActRequest,
     BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
     BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
-    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerComputerActRequest,
-    BrokerComputerAppsRequest, BrokerComputerCaptureRequest, BrokerComputerLaunchRequest,
-    BrokerComputerSnapshotRequest,
-    BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCommitFeedbackRequest,
+    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
+    BrokerComputerActRequest, BrokerComputerAppsRequest, BrokerComputerCaptureRequest,
+    BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest,
+    BrokerComputerWindowsRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
     BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerMessage, BrokerRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerResponse,
-    BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest,
+    BrokerResponse, BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest,
     BrokerStatusRequest, BrokerSubmitResultRequest, BrokerTaskCompleteRequest,
     BrokerTaskProgressRequest,
 };
@@ -369,11 +368,7 @@ impl DelegationListener {
     #[cfg(unix)]
     fn staging_socket_path(socket_path: &Path) -> PathBuf {
         let salt = uuid::Uuid::new_v4().simple().to_string();
-        socket_path.with_file_name(format!(
-            ".stg-{}-{}",
-            std::process::id(),
-            &salt[..8]
-        ))
+        socket_path.with_file_name(format!(".stg-{}-{}", std::process::id(), &salt[..8]))
     }
 
     #[cfg(windows)]
@@ -506,10 +501,7 @@ impl DelegationListener {
                         write_frame(conn, &feedback_response(&[])?).await?;
                     }
                     Some(parent_conn_id) => {
-                        let pending = self
-                            .feedback
-                            .read_pending_feedback(&parent_conn_id)
-                            .await;
+                        let pending = self.feedback.read_pending_feedback(&parent_conn_id).await;
                         // Read-only: the response carries the note ids
                         // (`_commit_ids`); delivery is committed LATER, by the
                         // companion's `CommitFeedback` once it actually returns
@@ -1091,7 +1083,9 @@ impl DelegationListener {
                 crate::acp::computer_tools::no_such_target_note(&req.target_id),
             );
         }
-        self.computer.capture(&req.target_id, req.max_dimension).await
+        self.computer
+            .capture(&req.target_id, req.max_dimension)
+            .await
     }
 
     async fn process_computer_snapshot(
@@ -1426,9 +1420,7 @@ fn browser_tabs_response(outcome: BrowserTabsOutcome) -> std::io::Result<BrokerR
 /// Serialize a [`BrowserSnapshotOutcome`] into a [`BrokerResponse`] for the
 /// `BrowserSnapshot` arm — the companion renders it into the `browser_snapshot`
 /// tool result.
-fn browser_snapshot_response(
-    outcome: BrowserSnapshotOutcome,
-) -> std::io::Result<BrokerResponse> {
+fn browser_snapshot_response(outcome: BrowserSnapshotOutcome) -> std::io::Result<BrokerResponse> {
     Ok(BrokerResponse {
         outcome: serde_json::to_value(&outcome).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
@@ -1762,22 +1754,25 @@ pub fn default_socket_path(temp_dir: &Path) -> PathBuf {
 
 #[cfg(windows)]
 pub fn default_socket_path(_temp_dir: &Path) -> PathBuf {
-    PathBuf::from(format!(r"\\.\pipe\houhub-delegation-{}", std::process::id()))
+    PathBuf::from(format!(
+        r"\\.\pipe\houhub-delegation-{}",
+        std::process::id()
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
-    use crate::acp::scratch_dir::short_root;
+    use crate::acp::browser_tools::{NoBrowserTabs, ERROR_GRANT_REQUIRED};
+    use crate::acp::computer_tools::NoComputerDesktop;
     use crate::acp::delegation::broker::{ConversationDepthLookup, DelegationConfig};
-    use crate::models::AgentType;
     use crate::acp::delegation::spawner::{
         mock::MockSpawner, ConnectionSpawner, ResumedSpawn, SpawnerError,
     };
-    use crate::acp::browser_tools::{NoBrowserTabs, ERROR_GRANT_REQUIRED};
-    use crate::acp::computer_tools::NoComputerDesktop;
     use crate::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationSuccess};
+    #[cfg(unix)]
+    use crate::acp::scratch_dir::short_root;
+    use crate::models::AgentType;
     use serde_json::json;
     use std::time::Duration;
     use tokio::io::duplex;
@@ -1811,10 +1806,7 @@ mod tests {
     }
     #[async_trait]
     impl SessionFeedbackAccess for StubFeedback {
-        async fn read_pending_feedback(
-            &self,
-            parent_connection_id: &str,
-        ) -> Vec<PendingFeedback> {
+        async fn read_pending_feedback(&self, parent_connection_id: &str) -> Vec<PendingFeedback> {
             *self.read_conn.lock().await = Some(parent_connection_id.to_string());
             self.items.lock().await.clone()
         }
@@ -1834,9 +1826,7 @@ mod tests {
     #[derive(Default)]
     struct StubQuestion {
         pending: tokio::sync::Mutex<HashMap<String, oneshot::Sender<QuestionOutcome>>>,
-        registered: tokio::sync::Mutex<
-            Vec<(String, Vec<crate::acp::question::QuestionSpec>)>,
-        >,
+        registered: tokio::sync::Mutex<Vec<(String, Vec<crate::acp::question::QuestionSpec>)>>,
         canceled: tokio::sync::Mutex<Vec<String>>,
     }
     #[async_trait]
@@ -1921,11 +1911,7 @@ mod tests {
                 note: None,
             }
         }
-        async fn snapshot(
-            &self,
-            tab_id: &str,
-            max_chars: Option<usize>,
-        ) -> BrowserSnapshotOutcome {
+        async fn snapshot(&self, tab_id: &str, max_chars: Option<usize>) -> BrowserSnapshotOutcome {
             self.calls
                 .lock()
                 .await
@@ -1979,10 +1965,7 @@ mod tests {
             ));
             BrowserActOutcome::control_required(tab_id)
         }
-        async fn tab_op(
-            &self,
-            op: crate::acp::browser_tools::BrowserTabOp,
-        ) -> BrowserTabOutcome {
+        async fn tab_op(&self, op: crate::acp::browser_tools::BrowserTabOp) -> BrowserTabOutcome {
             self.calls
                 .lock()
                 .await
@@ -2811,7 +2794,8 @@ mod tests {
         }
 
         let mock = Arc::new(MockSpawner::new());
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
+            .await;
         mock.queue_resume_send(Ok(())).await;
         let broker = Arc::new(
             DelegationBroker::new(
@@ -3060,7 +3044,10 @@ mod tests {
         let commit_ids = resp.outcome["_commit_ids"].as_array().unwrap();
         assert_eq!(commit_ids, &vec!["f1", "f2"]);
         // Read was scoped to the token's parent connection id.
-        assert_eq!(feedback.read_conn.lock().await.as_deref(), Some("parent-conn"));
+        assert_eq!(
+            feedback.read_conn.lock().await.as_deref(),
+            Some("parent-conn")
+        );
         // The Feedback arm is READ-ONLY — it does NOT commit (delivery is
         // committed later, by the companion's CommitFeedback).
         assert!(feedback.committed.lock().await.is_empty());
@@ -3504,7 +3491,10 @@ mod tests {
             .await
             .expect("serve_one must return after peer close");
         result.unwrap().unwrap();
-        assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1".to_string()]);
+        assert_eq!(
+            questions.canceled.lock().await.as_slice(),
+            &["q-1".to_string()]
+        );
     }
 
     /// An invalid token never registers a question and returns a `declined`
@@ -3512,7 +3502,8 @@ mod tests {
     #[tokio::test]
     async fn ask_invalid_token_declined() {
         let questions = Arc::new(StubQuestion::default());
-        let listener = make_question_listener(Arc::new(TokenRegistry::default()), questions.clone());
+        let listener =
+            make_question_listener(Arc::new(TokenRegistry::default()), questions.clone());
         let (mut client, mut server) = duplex(8 * 1024);
         let server_task = tokio::spawn(async move {
             listener.serve_one(&mut server).await.unwrap();
@@ -3563,7 +3554,9 @@ mod tests {
 
         let listed = browser_round_trip(
             listener.clone(),
-            BrokerMessage::BrowserTabs(BrokerBrowserTabsRequest { token: "tok".into() }),
+            BrokerMessage::BrowserTabs(BrokerBrowserTabsRequest {
+                token: "tok".into(),
+            }),
         )
         .await;
         assert_eq!(listed.outcome["tabs"][0]["tabId"], "t1");
@@ -3718,7 +3711,10 @@ mod tests {
             },
         );
         let response = browser_capture_response(huge).unwrap();
-        assert_eq!(response.outcome["error"], crate::acp::browser_tools::ERROR_READ_FAILED);
+        assert_eq!(
+            response.outcome["error"],
+            crate::acp::browser_tools::ERROR_READ_FAILED
+        );
         assert_eq!(response.outcome["tabId"], "t1");
         assert!(response.outcome.get("capture").is_none());
         assert!(serde_json::to_vec(&response.outcome).unwrap().len() < 4096);
@@ -3740,7 +3736,10 @@ mod tests {
                 clipped: false,
             },
         );
-        assert_eq!(browser_capture_response(small).unwrap().outcome["capture"]["data"], "AAAA");
+        assert_eq!(
+            browser_capture_response(small).unwrap().outcome["capture"]["data"],
+            "AAAA"
+        );
     }
 
     /// A caller who cannot prove it is a companion is told the same thing a
@@ -3927,7 +3926,9 @@ mod tests {
             PathBuf::from("/tmp"),
             PathBuf::from(format!("/var/folders/hl/{}/T", "z".repeat(30))),
             short_root().join(format!("{}-deadbeef", std::process::id())),
-            std::env::temp_dir().join("houhub-acp").join("4242-deadbeef"),
+            std::env::temp_dir()
+                .join("houhub-acp")
+                .join("4242-deadbeef"),
             PathBuf::from("/tmp/houhub-acp/4242-deadbeef"),
             std::env::temp_dir(),
         ] {
@@ -3971,7 +3972,9 @@ mod tests {
             fits_sun_path(&socket),
             "the real path must fit, or this tests the wrong check"
         );
-        assert!(!fits_sun_path(&DelegationListener::staging_socket_path(&socket)));
+        assert!(!fits_sun_path(&DelegationListener::staging_socket_path(
+            &socket
+        )));
 
         let err = DelegationListener::bind(&socket).await.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
@@ -4327,7 +4330,9 @@ mod tests {
                 mock as Arc<dyn ConnectionSpawner>,
                 Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
             )
-            .with_assistants(Arc::new(StubAssistants(vec![assistant_info(3, "Reviewer")]))),
+            .with_assistants(Arc::new(StubAssistants(vec![assistant_info(
+                3, "Reviewer",
+            )]))),
         );
         broker
             .set_config(DelegationConfig {
@@ -4389,7 +4394,10 @@ mod tests {
         let spawn = mock.spawn_args.lock().await[0].clone();
         assert_eq!(spawn.agent_type, AgentType::Codex);
         assert_eq!(
-            spawn.preferred_config_values.get("model").map(String::as_str),
+            spawn
+                .preferred_config_values
+                .get("model")
+                .map(String::as_str),
             Some("gpt-5.5")
         );
         let send = mock.send_args.lock().await[0].clone();
@@ -4400,7 +4408,11 @@ mod tests {
     async fn an_unusable_assistant_is_refused_with_the_usable_roster() {
         let mock = Arc::new(MockSpawner::new());
         let (listener, _tokens) = assistant_listener(mock.clone()).await;
-        let refusal = serve(listener.clone(), call(json!({"assistant_id": 9, "task": "x"}))).await;
+        let refusal = serve(
+            listener.clone(),
+            call(json!({"assistant_id": 9, "task": "x"})),
+        )
+        .await;
         assert_eq!(refusal["status"], "failed");
         assert_eq!(refusal["error_code"], "assistant_not_found");
         let message = refusal["message"].as_str().unwrap();
@@ -4416,11 +4428,17 @@ mod tests {
         )
         .await;
         assert_eq!(refusal["error_code"], "assistant_not_found");
-        assert!(mock.spawn_args.lock().await.is_empty(), "nothing was spawned");
+        assert!(
+            mock.spawn_args.lock().await.is_empty(),
+            "nothing was spawned"
+        );
 
         let missing = serve(listener, call(json!({"task": "x"}))).await;
         assert_eq!(missing["error_code"], "invalid_agent_type");
-        assert!(missing["message"].as_str().unwrap().contains("assistant_id"));
+        assert!(missing["message"]
+            .as_str()
+            .unwrap()
+            .contains("assistant_id"));
     }
 
     #[tokio::test]

@@ -8,8 +8,10 @@
 #![recursion_limit = "256"]
 // The unoptimized lib test binary trips the same harmless macOS
 // "__eh_frame section too large" linker warning as the `houhub` binary; see the
-// note at the top of `main.rs`.
-#![cfg_attr(debug_assertions, allow(linker_messages))]
+// note at the top of `main.rs`. Only under `cfg(test)`: elsewhere the crate is
+// built as an rlib only, which is not the root of any link, so rustc flags the
+// allow there as an unused attribute (an error under clippy's -D warnings).
+#![cfg_attr(all(test, debug_assertions), allow(linker_messages))]
 
 pub mod acp;
 
@@ -30,6 +32,8 @@ mod app_menu;
 
 pub mod app_state;
 
+pub mod appimage_env;
+
 pub mod automation;
 
 pub mod backgrounds;
@@ -47,6 +51,8 @@ pub mod cli;
 pub mod cli_run;
 
 pub mod commands;
+
+pub mod commit_message;
 
 pub mod computer;
 
@@ -141,30 +147,22 @@ mod tauri_app {
     use crate::chat_channel::manager::ChatChannelManager;
 
     use crate::commands::{
-        acp as acp_commands, app_update as app_update_commands,
-        assistants as assistant_commands, automation as automation_commands,
-        background as background_commands, backup,
-        browser as browser_commands,
-        canvas as canvas_commands,
+        acp as acp_commands, app_update as app_update_commands, assistants as assistant_commands,
+        automation as automation_commands, background as background_commands, backup,
+        browser as browser_commands, canvas as canvas_commands,
         chat_authoring as chat_authoring_commands, chat_channel as chat_channel_commands,
-        clipboard as clipboard_commands,
-        config_sync,
-        conversation_tags,
-        conversations,
-        custom_skills as custom_skills_commands,
+        clipboard as clipboard_commands, commit_message as commit_message_commands, config_sync,
+        conversation_tags, conversations, custom_skills as custom_skills_commands,
         deepseek_settings as deepseek_settings_commands, delegation as delegation_commands,
         experts as experts_commands, feedback as feedback_commands, file_io, folder_commands,
-        folder_links, office_tools as office_tools_commands, open_in,
-        folders, houflow as houflow_commands, logging as logging_commands, mcp as mcp_commands,
-        model_provider as model_provider_commands, notification, pet as pet_commands, project_boot,
+        folder_links, folders, forge as forge_commands, local_command, logging as logging_commands,
+        mcp as mcp_commands, model_provider as model_provider_commands, notification,
+        office_tools as office_tools_commands, open_in, pet as pet_commands, project_boot,
         question as question_commands, quick_messages as quick_messages_commands,
-        remote_proxy as remote_proxy_commands,
-        remote_workspace as remote_workspace_commands, science as science_commands,
-        session_info as session_info_commands,
-        system_settings, terminal as terminal_commands,
-        token_usage as token_usage_commands,
-        forge as forge_commands, version_control, windows, work_task as work_task_commands,
-        workbench as workbench_commands,
+        remote_proxy as remote_proxy_commands, remote_workspace as remote_workspace_commands,
+        science as science_commands, session_info as session_info_commands, system_settings,
+        terminal as terminal_commands, token_usage as token_usage_commands, version_control,
+        windows, work_task as work_task_commands, workbench as workbench_commands,
         workspace_state as workspace_state_commands, workspace_windows,
     };
 
@@ -650,7 +648,8 @@ mod tauri_app {
         // After the PATH fixes above, which rewrite PATH.
         if let (Some(data_dir), Ok(exe)) = (&desktop_data_dir, std::env::current_exe()) {
             let local = dirs::data_local_dir().map(|d| d.join(&context.config().identifier));
-            if let Some(layout) = crate::cli_run::shim::plan_desktop(data_dir, local.as_deref(), &exe)
+            if let Some(layout) =
+                crate::cli_run::shim::plan_desktop(data_dir, local.as_deref(), &exe)
             {
                 layout.export();
                 layout.remember();

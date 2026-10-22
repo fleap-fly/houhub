@@ -1,11 +1,15 @@
 use std::path::Path;
+
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
 use super::*;
+
 use crate::db::service::folder_service;
+
 use crate::forge::settings::ForgePanelSettings;
+
 use crate::forge::ForgeLabel;
 
 fn at(rfc3339: &str) -> DateTime<Utc> {
@@ -247,6 +251,7 @@ fn an_automatic_task_is_drafted_like_a_clicked_one() {
         server_host: "github.com".into(),
         owner_repo: "acme/app".into(),
         remote_url: "https://github.com/acme/app.git".into(),
+        web_origin: "https://github.com".into(),
         provider: ForgeProvider::GitHub,
         supported: true,
     };

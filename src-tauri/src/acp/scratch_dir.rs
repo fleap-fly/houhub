@@ -573,7 +573,10 @@ fn verify_root_is_ours(root: &Path) -> std::io::Result<()> {
     if meta.uid() != us {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            format!("scratch root belongs to uid {}, not to us ({us})", meta.uid()),
+            format!(
+                "scratch root belongs to uid {}, not to us ({us})",
+                meta.uid()
+            ),
         ));
     }
     // Ours, but reachable by others — a root left behind by a houhub that
@@ -846,7 +849,12 @@ pub fn probe_pid(pid: u32) -> PidState {
 /// spawn, so the agent has no pid yet. It is what lets a startup sweep tell
 /// "some other houhub owns this" from "its owner is gone".
 fn new_dir_name(pid: u32) -> String {
-    let suffix: String = uuid::Uuid::new_v4().simple().to_string().chars().take(8).collect();
+    let suffix: String = uuid::Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(8)
+        .collect();
     format!("{pid}-{suffix}")
 }
 
@@ -1052,7 +1060,9 @@ mod tests {
         // `create` mints a new name on this error rather than adopting the
         // directory, so it has to keep arriving as `AlreadyExists`.
         assert_eq!(
-            create_leaf(&leaf).expect_err("second create must fail").kind(),
+            create_leaf(&leaf)
+                .expect_err("second create must fail")
+                .kind(),
             std::io::ErrorKind::AlreadyExists
         );
     }
@@ -1104,7 +1114,9 @@ mod tests {
         ));
         // The ambient root, wherever this machine's temp_dir points.
         assert!(is_inside_sweep_scope(
-            &std::env::temp_dir().join(SCRATCH_NAMESPACE).join("4242-deadbeef")
+            &std::env::temp_dir()
+                .join(SCRATCH_NAMESPACE)
+                .join("4242-deadbeef")
         ));
         // A plain per-user temp path is NOT in scope: a socket there must keep
         // the ordinary placement. Constructed, not read, so it holds on every
@@ -1181,7 +1193,10 @@ mod tests {
 
         sweep_foreign_orphans_in(&[alias], &adopted);
 
-        assert!(adopted.exists(), "the dir this process lives in must survive");
+        assert!(
+            adopted.exists(),
+            "the dir this process lives in must survive"
+        );
         assert!(
             !orphan.exists(),
             "and the guard must not cost a real orphan its reclaim"
@@ -1224,7 +1239,12 @@ mod tests {
         for (probe, in_scope) in probes.iter().zip(in_scope) {
             let deleted = !probe.exists();
             let is_bystander = probe.to_string_lossy().ends_with("-bystander.sock");
-            assert_eq!(deleted, !is_bystander, "{} deleted: {deleted}", probe.display());
+            assert_eq!(
+                deleted,
+                !is_bystander,
+                "{} deleted: {deleted}",
+                probe.display()
+            );
             assert_eq!(
                 in_scope,
                 deleted,
@@ -1252,7 +1272,10 @@ mod tests {
 
         sweep_own_orphans_in(&[root.path().to_path_buf()], &temp_dir);
 
-        assert!(adopted.exists(), "the dir this process lives in must survive");
+        assert!(
+            adopted.exists(),
+            "the dir this process lives in must survive"
+        );
         assert!(
             !orphan.exists(),
             "and the guard must not cost a real orphan its reclaim"
@@ -1278,13 +1301,13 @@ mod tests {
     #[test]
     fn pid_parser_rejects_foreign_names() {
         for name in [
-            "_MEI123456",          // another PyInstaller app
-            "not-a-pid",           // suffix is not hex
-            "123-abc",             // suffix too short
-            "123-0123456789",      // suffix too long
-            "123",                 // no suffix at all
-            "",                    // empty
-            "-deadbeef",           // no pid
+            "_MEI123456",     // another PyInstaller app
+            "not-a-pid",      // suffix is not hex
+            "123-abc",        // suffix too short
+            "123-0123456789", // suffix too long
+            "123",            // no suffix at all
+            "",               // empty
+            "-deadbeef",      // no pid
             // The broker socket's own names never match; the danger is the
             // PARENT directory they sit in going with a sweep.
             "houhub-delegation-16527.sock",
@@ -1340,7 +1363,10 @@ mod tests {
             released: false,
         });
 
-        assert!(!is_registered(&name), "a dropped name must not stay claimed");
+        assert!(
+            !is_registered(&name),
+            "a dropped name must not stay claimed"
+        );
         assert!(!path.exists(), "and the directory must be gone");
     }
 

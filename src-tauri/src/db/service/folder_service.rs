@@ -540,10 +540,7 @@ pub async fn remove_folder(conn: &DatabaseConnection, path: &str) -> Result<(), 
 /// Soft-delete a folder by id. Worktree cleanup uses the id because its path
 /// may already have disappeared from disk, so the path-based removal helper is
 /// not sufficient there.
-pub async fn soft_delete_folder(
-    conn: &DatabaseConnection,
-    folder_id: i32,
-) -> Result<(), DbError> {
+pub async fn soft_delete_folder(conn: &DatabaseConnection, folder_id: i32) -> Result<(), DbError> {
     let row = folder::Entity::find_by_id(folder_id)
         .filter(folder::Column::DeletedAt.is_null())
         .one(conn)

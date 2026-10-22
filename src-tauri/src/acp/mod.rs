@@ -62,6 +62,8 @@ pub mod lifecycle;
 
 pub mod manager;
 
+pub mod one_shot;
+
 pub mod opencode_catalog;
 
 pub mod opencode_launch;
@@ -106,6 +108,8 @@ pub mod work_task_tools;
 
 pub mod zcode;
 
+pub(crate) mod zcode_turn;
+
 pub use idle_sweep::{idle_sweep_task, idle_timeout_from_env, SWEEP_INTERVAL_SECS};
 
 pub use internal_bus::{EventBusMetrics, EventBusMetricsSnapshot, InternalEventBus};
@@ -141,7 +145,10 @@ pub use types::{
 ///
 /// Empty for agents with native history stores. Custom agents and ZCode
 /// use HouHub transcripts and can carry continuation ancestors forward.
-pub fn continued_session_ids(agent_type: crate::models::AgentType, session_id: &str) -> Vec<String> {
+pub fn continued_session_ids(
+    agent_type: crate::models::AgentType,
+    session_id: &str,
+) -> Vec<String> {
     if !agent_type.uses_acp_transcript() {
         return Vec::new();
     }

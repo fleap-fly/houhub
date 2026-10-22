@@ -1866,7 +1866,9 @@ fn codebuddy_config_path() -> PathBuf {
 }
 
 fn codebuddy_settings_path() -> PathBuf {
-    home_dir_or_default().join(".codebuddy").join("settings.json")
+    home_dir_or_default()
+        .join(".codebuddy")
+        .join("settings.json")
 }
 
 fn read_codebuddy_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
@@ -3456,7 +3458,10 @@ fn kimi_code_entry_to_canonical(spec: &Value, id: &str) -> Result<Value, AppComm
     // Read the discriminant into an owned value first so the map isn't borrowed when
     // we mutate it below. `transport` absent ⇒ infer; present-but-non-string or an
     // unknown literal ⇒ reject (as Kimi would).
-    let explicit_transport = obj.get("transport").and_then(Value::as_str).map(str::to_string);
+    let explicit_transport = obj
+        .get("transport")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     if obj.contains_key("transport") {
         let canonical_type = match explicit_transport.as_deref() {
             Some("stdio") => "stdio",
@@ -3469,7 +3474,10 @@ fn kimi_code_entry_to_canonical(spec: &Value, id: &str) -> Result<Value, AppComm
                 )));
             }
         };
-        obj.insert("type".to_string(), Value::String(canonical_type.to_string()));
+        obj.insert(
+            "type".to_string(),
+            Value::String(canonical_type.to_string()),
+        );
     }
     obj.remove("transport");
     canonicalize_spec(&Value::Object(obj), &format!("Kimi Code config '{id}'"))
@@ -3681,7 +3689,10 @@ fn canonical_to_kimi_code_entry(spec: &Value) -> Result<Value, AppCommandError> 
         }
     }
     if let Some(transport) = transport {
-        out.insert("transport".to_string(), Value::String(transport.to_string()));
+        out.insert(
+            "transport".to_string(),
+            Value::String(transport.to_string()),
+        );
     }
     Ok(Value::Object(out))
 }
@@ -3690,11 +3701,7 @@ fn upsert_kimi_code_server(id: &str, spec: &Value) -> Result<(), AppCommandError
     upsert_kimi_code_server_at(&kimi_code_mcp_json_path(), id, spec)
 }
 
-fn upsert_kimi_code_server_at(
-    path: &Path,
-    id: &str,
-    spec: &Value,
-) -> Result<(), AppCommandError> {
+fn upsert_kimi_code_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
     let mut root = read_json_file(path)?;
     if !root.is_object() {
         root = json!({});
@@ -3786,7 +3793,10 @@ fn write_grok_root_toml_at(path: &Path, root: &toml::Value) -> Result<(), AppCom
         fs::create_dir_all(parent).map_err(AppCommandError::io)?;
     }
     let serialized = toml::to_string_pretty(root).map_err(|e| {
-        mcp_configuration_invalid(format!("failed to serialize TOML for {}: {e}", path.display()))
+        mcp_configuration_invalid(format!(
+            "failed to serialize TOML for {}: {e}",
+            path.display()
+        ))
     })?;
     fs::write(path, format!("{serialized}\n")).map_err(AppCommandError::io)
 }
@@ -3807,7 +3817,10 @@ fn canonical_to_grok_entry(spec: &Value) -> Result<toml::Value, AppCommandError>
             let command = obj.get("command").and_then(Value::as_str).ok_or_else(|| {
                 mcp_invalid_input("Grok conversion: stdio MCP spec missing command")
             })?;
-            table.insert("command".to_string(), toml::Value::String(command.to_string()));
+            table.insert(
+                "command".to_string(),
+                toml::Value::String(command.to_string()),
+            );
             if let Some(args) = obj.get("args").and_then(Value::as_array) {
                 let values = args
                     .iter()
@@ -3916,8 +3929,15 @@ fn grok_entry_to_canonical(id: &str, value: &toml::Value) -> Result<Value, AppCo
         || (has_url && explicit_type != Some("stdio"));
 
     if is_remote {
-        let canonical_type = if explicit_type == Some("sse") { "sse" } else { "http" };
-        spec.insert("type".to_string(), Value::String(canonical_type.to_string()));
+        let canonical_type = if explicit_type == Some("sse") {
+            "sse"
+        } else {
+            "http"
+        };
+        spec.insert(
+            "type".to_string(),
+            Value::String(canonical_type.to_string()),
+        );
         if let Some(url) = table.get("url").and_then(toml::Value::as_str) {
             spec.insert("url".to_string(), Value::String(url.trim().to_string()));
         }
@@ -4058,7 +4078,10 @@ fn remove_grok_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError>
         return Ok(false);
     };
     let mut removed = false;
-    if let Some(mcp_servers) = table.get_mut("mcp_servers").and_then(toml::Value::as_table_mut) {
+    if let Some(mcp_servers) = table
+        .get_mut("mcp_servers")
+        .and_then(toml::Value::as_table_mut)
+    {
         removed |= mcp_servers.remove(id).is_some();
         if mcp_servers.is_empty() {
             table.remove("mcp_servers");
@@ -4180,12 +4203,17 @@ fn remove_trae_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError>
 // `command-code mcp add --scope user` writes Claude-shaped entries keyed on a
 // `transport` discriminant — `{transport: "stdio", enabled, command, args,
 // env}` or `{transport: "http", enabled, url, headers}`, plus an `oauth` block
-// for a server that signs in. Its loader (`parseStoredMcpServer`, read against
-// 1.84.0) takes `transport` first, then `type` as an alias, and otherwise
-// infers stdio from `command` and http from `url`. It models no `cwd`, and an
-// entry with any other transport (`sse` included) or a non-boolean `enabled`
-// fails and is dropped while the rest of the file still loads. houhub reads
-// entries the same way and writes only what that loader models.
+// for a server that signs in. The loader behind its `mcp` commands
+// (`parseStoredMcpServer`, read against 1.84.0 and 1.86.3) takes `transport`
+// first, then `type` as an alias, and otherwise infers stdio from `command`
+// and http from `url`. It models no `cwd`, and an entry with any other
+// transport (`sse` included) or a non-boolean `enabled` fails and is dropped
+// while the rest of the file still loads. houhub reads entries the same way, so
+// its list matches `command-code mcp list`, and writes only what that loader
+// models. The loader that starts a session's servers is looser: it connects an
+// `sse` entry with its HTTP client and treats a non-boolean `enabled` as
+// unset, so such a hand-written entry still starts although neither list
+// shows it.
 //
 // `command-code acp` loads this file itself, so `CommandCode` is on the ACP
 // forward skip list in `connection.rs`; the houhub-mcp companion still arrives
@@ -4365,7 +4393,7 @@ fn remove_command_code_server_at(path: &Path, id: &str) -> Result<bool, AppComma
 //
 // Cursor's CLI (and IDE — the file is shared) reads its user-global MCP config
 // from `~/.cursor/mcp.json` — a JSON file with a top-level `mcpServers`
-// object. The CLI (checked against 2026.10.16-e3cb207) parses each entry with
+// object. The CLI (checked against 2026.10.19-6bbf2c4) parses each entry with
 // a Zod union: stdio when it has a `command` and its optional `type` is
 // `"stdio"`, otherwise remote when it has a `url` and its optional `type` is
 // `"http"` or `"sse"`. A remote entry tries streamable HTTP first and falls
@@ -4394,10 +4422,13 @@ fn remove_command_code_server_at(path: &Path, id: &str) -> Result<bool, AppComma
 fn cursor_mcp_json_path() -> PathBuf {
     // Deliberately NOT `resolve_cursor_config_dir()`: the CLI reads its
     // user-level MCP config from a hardcoded `~/.cursor/mcp.json` (every
-    // loader in the 2026.07.16 bundle joins `homedir()`, and 2026.10.16's
+    // loader in the 2026.07.16 bundle joins `homedir()`, and 2026.10.19's
     // still do), even when `CURSOR_CONFIG_DIR`/`XDG_CONFIG_HOME` relocate
     // chats + cli-config.json.
-    dirs::home_dir().unwrap_or_default().join(".cursor").join("mcp.json")
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".cursor")
+        .join("mcp.json")
 }
 
 fn read_cursor_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
@@ -4489,7 +4520,9 @@ fn fits_cursor_stdio(entry: &Map<String, Value>) -> bool {
 fn fits_cursor_remote(entry: &Map<String, Value>) -> bool {
     let absent_or = |key: &str, check: fn(&Value) -> bool| entry.get(key).is_none_or(check);
     entry.get("url").is_some_and(Value::is_string)
-        && absent_or("type", |value| matches!(value.as_str(), Some("http" | "sse")))
+        && absent_or("type", |value| {
+            matches!(value.as_str(), Some("http" | "sse"))
+        })
         && absent_or("headers", is_string_map)
         && absent_or("auth", is_cursor_auth)
         && absent_or("tls", is_cursor_tls)
@@ -4882,8 +4915,10 @@ fn read_kiro_servers_at(path: &Path) -> Result<BTreeMap<String, Value>, AppComma
 /// whole file, so one malformed entry would cost the user every server in it.
 /// `oauth` / `oauthScopes` exist only on the remote branch.
 fn is_kiro_extension_field(key: &str, value: &Value, stdio: bool) -> bool {
-    let is_string_array =
-        |v: &Value| v.as_array().is_some_and(|items| items.iter().all(Value::is_string));
+    let is_string_array = |v: &Value| {
+        v.as_array()
+            .is_some_and(|items| items.iter().all(Value::is_string))
+    };
     match key {
         "disabled" => value.is_boolean(),
         "autoApprove" | "disabledTools" => is_string_array(value),
@@ -4912,9 +4947,7 @@ const KIRO_EXTENSION_KEYS: &[&str] = &[
 fn kiro_key_native_elsewhere(key: &str, holders: &BTreeSet<McpAppType>) -> bool {
     match key {
         "disabled" | "autoApprove" => holders.contains(&McpAppType::Cline),
-        "timeout" => {
-            holders.contains(&McpAppType::Cline) || holders.contains(&McpAppType::Gemini)
-        }
+        "timeout" => holders.contains(&McpAppType::Cline) || holders.contains(&McpAppType::Gemini),
         "disabledTools" => holders.contains(&McpAppType::KimiCode),
         _ => false,
     }
@@ -7568,7 +7601,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("mcp.json");
 
-        assert!(read_cursor_servers_at(&path).expect("read missing").is_empty());
+        assert!(read_cursor_servers_at(&path)
+            .expect("read missing")
+            .is_empty());
         assert!(!remove_cursor_server_at(&path, "ctx7").expect("remove missing"));
 
         let ctx7 = json!({
@@ -7621,7 +7656,9 @@ mod tests {
         assert!(remove_cursor_server_at(&path, "ctx7").expect("remove"));
         assert!(remove_cursor_server_at(&path, "remote").expect("remove remote"));
         assert!(remove_cursor_server_at(&path, "http").expect("remove http"));
-        assert!(read_cursor_servers_at(&path).expect("read after remove").is_empty());
+        assert!(read_cursor_servers_at(&path)
+            .expect("read after remove")
+            .is_empty());
     }
 
     // The transport is whichever branch of Cursor's union the entry lands in;
@@ -8233,11 +8270,11 @@ mod tests {
             Some("http")
         );
         // The type IS persisted here (no foreign schema to strip it for).
-        let root: Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("read file"))
-                .expect("parse json");
+        let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("read file"))
+            .expect("parse json");
         assert_eq!(
-            root.pointer("/mcpServers/ctx7/type").and_then(Value::as_str),
+            root.pointer("/mcpServers/ctx7/type")
+                .and_then(Value::as_str),
             Some("stdio")
         );
 
@@ -8276,7 +8313,11 @@ mod tests {
         .expect("upsert");
 
         let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
-        assert_eq!(mode & 0o077, 0, "fresh store must be owner-only, got {mode:o}");
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "fresh store must be owner-only, got {mode:o}"
+        );
         let parent_mode = std::fs::metadata(path.parent().expect("parent"))
             .expect("stat parent")
             .permissions()
@@ -8298,7 +8339,8 @@ mod tests {
         );
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).expect("chmod 640");
-        upsert_deepseek_server_at(&path, "ctx7", &json!({ "command": "npx" })).expect("re-upsert 2");
+        upsert_deepseek_server_at(&path, "ctx7", &json!({ "command": "npx" }))
+            .expect("re-upsert 2");
         assert_eq!(
             std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777,
             0o640,
@@ -8576,7 +8618,11 @@ mod tests {
         // `?`, so a single broken config hid EVERY agent's servers behind one
         // "load failed" banner. A bad source must degrade to a warning.
         let scan = scan_local_servers_from_readers(&[
-            LocalMcpReader::new("Claude Code", McpAppType::ClaudeCode, test_one_readable_server),
+            LocalMcpReader::new(
+                "Claude Code",
+                McpAppType::ClaudeCode,
+                test_one_readable_server,
+            ),
             LocalMcpReader::new("Antigravity", McpAppType::Antigravity, test_parse_failure),
             LocalMcpReader::new("Cursor", McpAppType::Cursor, test_io_failure),
             LocalMcpReader::new("Codex", McpAppType::Codex, test_late_server),
@@ -8774,14 +8820,10 @@ mod tests {
 
         // The merge promise: after both writes, every foreign key and the
         // skipped malformed entry are still on disk.
-        let root: Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("read file"))
-                .expect("parse json");
+        let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("read file"))
+            .expect("parse json");
         assert_eq!(root.pointer("/securityScan"), Some(&json!(true)));
-        assert_eq!(
-            root.pointer("/model/name"),
-            Some(&json!("qmodel_38max"))
-        );
+        assert_eq!(root.pointer("/model/name"), Some(&json!("qmodel_38max")));
         assert_eq!(
             root.pointer("/permissions/trustDirectories"),
             Some(&json!(true))
@@ -8803,9 +8845,8 @@ mod tests {
         assert_eq!(after.len(), 2);
         assert!(after.contains_key("remote"));
         assert!(after.contains_key("existing"));
-        let root: Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("re-read"))
-                .expect("re-parse");
+        let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("re-read"))
+            .expect("re-parse");
         assert_eq!(root.pointer("/model/name"), Some(&json!("qmodel_38max")));
     }
 
@@ -8847,8 +8888,7 @@ mod tests {
         edited["cwd"] = json!("/somewhere");
         edited["timeout"] = json!("soon");
         upsert_kiro_server_at(&path, "fetch", &edited, None).unwrap();
-        let root: Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let fetch = &root["mcpServers"]["fetch"];
         assert_eq!(fetch["command"], json!("uvx"));
         assert_eq!(fetch["disabled"], json!(true));
@@ -8942,7 +8982,10 @@ mod tests {
         let fs = read(&path);
         assert_eq!(fs["args"], json!(["fs-v2"]));
         assert_eq!(fs["disabled"], json!(true), "still disabled in Kiro");
-        assert!(fs.get("autoApprove").is_none(), "no approval Kiro never had");
+        assert!(
+            fs.get("autoApprove").is_none(),
+            "no approval Kiro never had"
+        );
         assert_eq!(fs["timeout"], json!(5000));
 
         // The user turns `disabled` on and sets a timeout: both are written.
@@ -9104,11 +9147,8 @@ mod tests {
         // file also holds unrelated `[cli]`/`[ui]` sections that must survive.
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("config.toml");
-        std::fs::write(
-            &path,
-            "[cli]\nauto_update = true\n\n[ui]\nyolo = false\n",
-        )
-        .expect("seed config");
+        std::fs::write(&path, "[cli]\nauto_update = true\n\n[ui]\nyolo = false\n")
+            .expect("seed config");
 
         // Missing entry → no servers; removing is a no-op.
         assert!(read_grok_servers_at(&path).expect("read seed").is_empty());
@@ -9152,7 +9192,9 @@ mod tests {
         let remote = servers.get("remote").expect("remote present");
         assert_eq!(remote.get("type").and_then(Value::as_str), Some("http"));
         assert_eq!(
-            remote.pointer("/headers/Authorization").and_then(Value::as_str),
+            remote
+                .pointer("/headers/Authorization")
+                .and_then(Value::as_str),
             Some("Bearer xyz")
         );
         let linear = servers.get("linear").expect("linear present");
@@ -9672,8 +9714,9 @@ mod tests {
         );
 
         // Full writer→reader round-trip stays canonical and transport-free.
-        let written = canonical_to_kimi_code_entry(&json!({"type": "sse", "url": "https://x/stream"}))
-            .expect("write sse");
+        let written =
+            canonical_to_kimi_code_entry(&json!({"type": "sse", "url": "https://x/stream"}))
+                .expect("write sse");
         let back = kimi_code_entry_to_canonical(&written, "srv").expect("read back");
         assert_eq!(back.get("type").and_then(Value::as_str), Some("sse"));
         assert!(back.get("transport").is_none());
@@ -9699,11 +9742,9 @@ mod tests {
 
         // An on-disk `type` with NO `transport` does not classify: Kimi strips `type`
         // and infers HTTP from the url, so houhub must too (not report it as SSE).
-        let stale_type = kimi_code_entry_to_canonical(
-            &json!({"type": "sse", "url": "https://host/mcp"}),
-            "s",
-        )
-        .expect("type-without-transport");
+        let stale_type =
+            kimi_code_entry_to_canonical(&json!({"type": "sse", "url": "https://host/mcp"}), "s")
+                .expect("type-without-transport");
         assert_eq!(stale_type.get("type").and_then(Value::as_str), Some("http"));
 
         // Explicit `transport: "sse"` yields SSE (and `type` is ignored, matching
@@ -9730,10 +9771,11 @@ mod tests {
             );
         }
         // A non-string transport is rejected too (Kimi's literals are exact).
-        assert!(
-            kimi_code_entry_to_canonical(&json!({"url": "https://host/mcp", "transport": 3}), "s")
-                .is_err()
-        );
+        assert!(kimi_code_entry_to_canonical(
+            &json!({"url": "https://host/mcp", "transport": 3}),
+            "s"
+        )
+        .is_err());
 
         // The `transport` discriminant wins over the entry's key shape: an explicit
         // `sse` on an entry that ALSO carries `command` is SSE (Kimi ignores the
@@ -9743,7 +9785,10 @@ mod tests {
             "s",
         )
         .expect("transport wins over command");
-        assert_eq!(sse_over_cmd.get("type").and_then(Value::as_str), Some("sse"));
+        assert_eq!(
+            sse_over_cmd.get("type").and_then(Value::as_str),
+            Some("sse")
+        );
     }
 
     #[test]
@@ -9760,8 +9805,14 @@ mod tests {
         .expect("http entry");
         let obj = entry.as_object().expect("object");
         assert_eq!(obj.get("transport").and_then(Value::as_str), Some("http"));
-        assert!(!obj.contains_key("enabled"), "wrong-typed enabled must be dropped");
-        assert!(!obj.contains_key("autoApprove"), "foreign key must be dropped");
+        assert!(
+            !obj.contains_key("enabled"),
+            "wrong-typed enabled must be dropped"
+        );
+        assert!(
+            !obj.contains_key("autoApprove"),
+            "foreign key must be dropped"
+        );
 
         // A correctly-typed `enabled` bool is preserved.
         let ok = canonical_to_kimi_code_entry(&json!({
@@ -9769,7 +9820,9 @@ mod tests {
         }))
         .expect("http entry");
         assert_eq!(
-            ok.as_object().and_then(|o| o.get("enabled")).and_then(Value::as_bool),
+            ok.as_object()
+                .and_then(|o| o.get("enabled"))
+                .and_then(Value::as_bool),
             Some(true)
         );
     }
@@ -9792,10 +9845,19 @@ mod tests {
         let canonical = kimi_code_entry_to_canonical(&on_disk, "srv").expect("canonical");
         let written = canonical_to_kimi_code_entry(&canonical).expect("write");
         let obj = written.as_object().expect("object");
-        assert_eq!(obj.get("runtime_id").and_then(Value::as_str), Some("remote-box"));
+        assert_eq!(
+            obj.get("runtime_id").and_then(Value::as_str),
+            Some("remote-box")
+        );
         assert_eq!(obj.get("executor").and_then(Value::as_str), Some("local"));
-        assert_eq!(obj.get("startupTimeoutMs").and_then(Value::as_i64), Some(30_000));
-        assert_eq!(obj.get("toolTimeoutMs").and_then(Value::as_i64), Some(120_000));
+        assert_eq!(
+            obj.get("startupTimeoutMs").and_then(Value::as_i64),
+            Some(30_000)
+        );
+        assert_eq!(
+            obj.get("toolTimeoutMs").and_then(Value::as_i64),
+            Some(120_000)
+        );
         assert_eq!(obj.get("enabledTools"), Some(&json!(["a", "b"])));
         assert_eq!(obj.get("disabledTools"), Some(&json!([])));
 
@@ -9834,9 +9896,15 @@ mod tests {
         let mut canonical = json!({"type": "stdio", "command": "npx", "args": ["-y", "ctx7"]});
         merge_kimi_extension_fields(&mut canonical, &kimi, &none);
         let obj = canonical.as_object().expect("object");
-        assert_eq!(obj.get("runtime_id").and_then(Value::as_str), Some("remote-box"));
+        assert_eq!(
+            obj.get("runtime_id").and_then(Value::as_str),
+            Some("remote-box")
+        );
         assert_eq!(obj.get("executor").and_then(Value::as_str), Some("local"));
-        assert_eq!(obj.get("toolTimeoutMs").and_then(Value::as_i64), Some(120_000));
+        assert_eq!(
+            obj.get("toolTimeoutMs").and_then(Value::as_i64),
+            Some(120_000)
+        );
         assert_eq!(obj.get("disabledTools"), Some(&json!(["danger"])));
         // The winning spec still owns every key it already had.
         assert_eq!(obj.get("args"), Some(&json!(["-y", "ctx7"])));
@@ -9856,7 +9924,10 @@ mod tests {
             Some("remote-box")
         );
         assert!(
-            !stale.as_object().expect("object").contains_key("enabledTools"),
+            !stale
+                .as_object()
+                .expect("object")
+                .contains_key("enabledTools"),
             "a key Kimi no longer sets must not survive in another agent's copy"
         );
         // Only the Kimi-owned keys are touched.
@@ -9883,7 +9954,9 @@ mod tests {
             "OpenClaw declared `auth` itself; Kimi's copy must not clear it"
         );
         assert_eq!(
-            openclaw_first.get("bearerTokenEnvVar").and_then(Value::as_str),
+            openclaw_first
+                .get("bearerTokenEnvVar")
+                .and_then(Value::as_str),
             Some("TOKEN")
         );
 
@@ -9917,7 +9990,10 @@ mod tests {
         let remote_obj = remote.as_object().expect("object");
         assert!(!remote_obj.contains_key("runtime_id"));
         assert!(!remote_obj.contains_key("executor"));
-        assert_eq!(remote_obj.get("toolTimeoutMs").and_then(Value::as_i64), Some(120_000));
+        assert_eq!(
+            remote_obj.get("toolTimeoutMs").and_then(Value::as_i64),
+            Some(120_000)
+        );
 
         let mut stdio = json!({"type": "stdio", "command": "npx"});
         merge_kimi_extension_fields(
@@ -10123,7 +10199,10 @@ mod tests {
         .as_table()
         .cloned()
         .expect("table");
-        assert_eq!(entry.get("enabled").and_then(toml::Value::as_bool), Some(true));
+        assert_eq!(
+            entry.get("enabled").and_then(toml::Value::as_bool),
+            Some(true)
+        );
         for dropped in [
             "type",
             "required",

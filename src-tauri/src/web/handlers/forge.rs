@@ -318,7 +318,9 @@ pub async fn forge_auto_status(
 pub async fn forge_auto_scan_now(
     Json(params): Json<FolderParams>,
 ) -> Result<Json<crate::forge::auto::ScanReport>, AppCommandError> {
-    Ok(Json(core::forge_auto_scan_now_core(params.folder_id).await?))
+    Ok(Json(
+        core::forge_auto_scan_now_core(params.folder_id).await?,
+    ))
 }
 
 /// Largest webhook body accepted. Issue and pull-request deliveries are a few

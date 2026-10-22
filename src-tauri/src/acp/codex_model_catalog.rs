@@ -82,7 +82,13 @@ fn enum_spec_for(key: &str) -> Option<EnumSpec> {
         "default_reasoning_summary" => spec(&["auto", "concise", "detailed", "none"], false),
         "default_verbosity" => spec(&["low", "medium", "high"], true),
         "shell_type" => spec(
-            &["default", "local", "unified_exec", "disabled", "shell_command"],
+            &[
+                "default",
+                "local",
+                "unified_exec",
+                "disabled",
+                "shell_command",
+            ],
             false,
         ),
         // Only `freeform` is a variant; `function` would reject the whole catalog.
@@ -1052,7 +1058,10 @@ mod tests {
         // A removal that still applies keeps the takeover.
         assert!(!is_effectively_empty(&excluding(&["gpt-5.5"]), &s));
         // Mixed: the live one wins.
-        assert!(!is_effectively_empty(&excluding(&["gpt-5.4", "gpt-5.5"]), &s));
+        assert!(!is_effectively_empty(
+            &excluding(&["gpt-5.4", "gpt-5.5"]),
+            &s
+        ));
         // codex 0.155.1 DELETED gpt-5.2 and gpt-5.4-mini outright rather than
         // hiding them, which is the other way a stored exclusion goes stale. A
         // slug that is not in the catalog at all cannot be listable either, so
@@ -1146,8 +1155,15 @@ mod tests {
         };
         let cat = expand_to_catalog(&config, &snap());
         let x = find(&cat, "gw/n").expect("present");
-        for key in ["default_reasoning_summary", "web_search_tool_type", "shell_type"] {
-            assert!(!x.get(key).unwrap().is_null(), "{key} must keep the base value");
+        for key in [
+            "default_reasoning_summary",
+            "web_search_tool_type",
+            "shell_type",
+        ] {
+            assert!(
+                !x.get(key).unwrap().is_null(),
+                "{key} must keep the base value"
+            );
         }
         for key in ["apply_patch_tool_type", "tool_mode", "multi_agent_version"] {
             assert!(x.get(key).unwrap().is_null(), "{key} must accept null");
@@ -1469,9 +1485,13 @@ mod tests {
         // A ghost-only config (removals of officials codex has since hidden)
         // behaves the same: the files go away and the caller is told to drop the
         // `model_catalog_json` key, so the two never get out of sync.
-        write_catalog_files(r#"{"customs":[{"slug":"gw/y","base":"gpt-5.6-sol"}]}"#, &dir, &s)
-            .unwrap()
-            .expect("seeded");
+        write_catalog_files(
+            r#"{"customs":[{"slug":"gw/y","base":"gpt-5.6-sol"}]}"#,
+            &dir,
+            &s,
+        )
+        .unwrap()
+        .expect("seeded");
         assert!(dir.join(CATALOG_REL).exists());
         let ghosts = r#"{"customs":[],"excludedOfficials":["gpt-5.4","gpt-5.4-mini"]}"#;
         assert!(write_catalog_files(ghosts, &dir, &s).unwrap().is_none());
@@ -1507,7 +1527,10 @@ mod tests {
             // serve GPT's code-mode/multi-agent dialect.
             assert!(entry.get("tool_mode").unwrap().is_null());
             assert!(entry.get("multi_agent_version").unwrap().is_null());
-            assert_eq!(entry.get("use_responses_lite").unwrap(), &Value::Bool(false));
+            assert_eq!(
+                entry.get("use_responses_lite").unwrap(),
+                &Value::Bool(false)
+            );
         }
         // An empty list means "codex keeps its own table".
         assert!(catalog_from_provider_models(&[], None).customs.is_empty());
@@ -1528,7 +1551,9 @@ mod tests {
             Some("deepseek-flash")
         );
         assert_eq!(
-            catalog_from_provider_models(&models, None).default.as_deref(),
+            catalog_from_provider_models(&models, None)
+                .default
+                .as_deref(),
             Some("deepseek-flash")
         );
         // The derived default survives `default_slug_for_env` unchanged, so the

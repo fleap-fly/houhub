@@ -3,8 +3,11 @@
 import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { isDesktop } from "@/lib/platform"
-import { browserFetch } from "@/lib/browser-fetch"
-import { WEB_AUTH_TOKEN_KEY } from "@/lib/transport/web-auth"
+import {
+  houhubAuthHeaders,
+  probeProxyAuthentication,
+  unauthorizedSource,
+} from "@/lib/transport/web-auth"
 
 export default function Page() {
   const router = useRouter()
@@ -14,17 +17,22 @@ export default function Page() {
       return
     }
     // Web mode: validate token before entering app
-    const token = localStorage.getItem(WEB_AUTH_TOKEN_KEY)
+    const token = localStorage.getItem("houhub_token")
     if (!token) {
-      router.replace("/login")
+      // A proxy in front of HouHub may have signed the user in already
+      // (HOUHUB_AUTH=proxy-jwt); an unreachable server leaves that to the
+      // in-app connection dialog, as with a token.
+      void probeProxyAuthentication().then((result) => {
+        router.replace(result === "unauthorized" ? "/login" : "/workspace")
+      })
       return
     }
     // Verify token is still valid
-    browserFetch("/api/health", {
+    fetch("/api/health", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+        ...houhubAuthHeaders(token),
       },
       body: "{}",
     })
@@ -33,14 +41,18 @@ export default function Page() {
           router.replace("/workspace")
           return
         }
-        if (res.status === 401) {
+        if (
+          res.status === 401 &&
+          unauthorizedSource(res.headers.get("www-authenticate")) === "houhub"
+        ) {
           // Token genuinely rejected → clear it and re-authenticate.
-          localStorage.removeItem(WEB_AUTH_TOKEN_KEY)
+          localStorage.removeItem("houhub_token")
           router.replace("/login")
           return
         }
-        // Server reachable but unhealthy (5xx / proxy error). Keep the token
-        // and enter the app; the in-app reconnect dialog handles recovery
+        // Server reachable but unhealthy (5xx / proxy error), or a proxy in
+        // front of HouHub refused (its own session expired). Keep the token
+        // and enter the app; the in-app connection dialog handles recovery
         // instead of bouncing a valid session to /login.
         router.replace("/workspace")
       })

@@ -37,6 +37,9 @@ vi.mock("@/lib/transport/web-connection-store", () => ({
 }))
 vi.mock("@/lib/transport/web-auth", () => ({
   getWebAuthToken: mocks.token,
+  // The component asks for credentials (token or proxy sign-in); here the
+  // token stands for them.
+  hasHouHubCredentials: () => Boolean(mocks.token()),
 }))
 vi.mock("@/lib/updater", () => ({
   getRunningServerVersion: mocks.serverVersion,
