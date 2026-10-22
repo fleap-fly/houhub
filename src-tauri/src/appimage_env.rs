@@ -522,9 +522,13 @@ mod tests {
             .iter_full_env_as_str()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
+        // Content, not order: which keys survive is the contract, while the
+        // order comes from `portable_pty`'s env storage (it changed between
+        // releases, and our lockfile resolves a different one than upstream's).
+        let keys: Vec<&str> = env.keys().map(String::as_str).collect();
         assert_eq!(
-            env.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["HOUHUB_CLI", "HOME", "LANG", "PATH", "XDG_DATA_DIRS"]
+            keys,
+            ["HOME", "HOUHUB_CLI", "LANG", "PATH", "XDG_DATA_DIRS"]
         );
         assert_eq!(
             env["PATH"],
