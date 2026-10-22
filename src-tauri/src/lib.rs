@@ -1833,6 +1833,14 @@ mod tauri_app {
                 }
             })
             .invoke_handler(tauri::generate_handler![
+                // 0.39 additions we now wire up (the merge kept upstream's
+                // commands but our handler list did not register them).
+                commit_message_commands::git_generate_commit_message,
+                commit_message_commands::git_generate_commit_message_cancel,
+                commit_message_commands::get_commit_message_settings,
+                commit_message_commands::set_commit_message_settings,
+                commit_message_commands::delete_commit_message_settings,
+                local_command::run_local_command,
                 browser_commands::browser_capabilities,
                 browser_commands::browser_open_tab,
                 browser_commands::browser_close,
