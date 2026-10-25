@@ -23,6 +23,7 @@ vi.mock("@/components/ai-elements/link-safety", () => ({
 }))
 
 import { MessageResponse } from "./message"
+import { ReasoningMarkdown } from "./reasoning"
 
 describe("MessageResponse — houhub references survive sanitization (real Streamdown)", () => {
   it("renders an agent reference inline as a badge, not as '[blocked]'", async () => {
@@ -86,5 +87,25 @@ describe("MessageResponse — houhub references survive sanitization (real Strea
     expect(container.textContent).not.toContain("[blocked]")
     // Not mistaken for a reference badge.
     expect(container.querySelector("[data-reference-badge]")).toBeNull()
+  })
+})
+
+describe("ReasoningMarkdown — houhub references survive sanitization (real Streamdown)", () => {
+  // A thought's body runs its own Streamdown, so it needs the same sanitize
+  // allowance as MessageResponse or a reference there still reads "[blocked]".
+  it("renders an agent reference inline as a badge, not as '[blocked]'", async () => {
+    const { container } = render(
+      <ReasoningMarkdown isStreaming={false}>
+        {"[@Codex CLI](houhub://agent/codex) hi"}
+      </ReasoningMarkdown>
+    )
+    await waitFor(() => {
+      expect(
+        container.querySelector("[data-reference-badge][data-ref-type='agent']")
+      ).not.toBeNull()
+    })
+    expect(container.textContent).toContain("Codex CLI")
+    expect(container.textContent).toContain("hi")
+    expect(container.textContent).not.toContain("[blocked]")
   })
 })

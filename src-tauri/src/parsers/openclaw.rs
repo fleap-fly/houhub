@@ -1,14 +1,21 @@
 use std::collections::HashMap;
+
 use std::fs;
+
 use std::io::{BufRead, BufReader};
+
 use std::path::{Path, PathBuf};
+
 use std::sync::OnceLock;
 
 use chrono::{DateTime, TimeZone, Utc};
+
 use regex::Regex;
+
 use serde::Deserialize;
 
 use crate::models::*;
+
 use crate::parsers::{
     compute_session_stats, folder_name_from_path, infer_context_window_max_tokens,
     latest_turn_total_usage_tokens, merge_context_window_stats, title_from_user_text, truncate_str,
@@ -615,7 +622,7 @@ impl OpenClawParser {
                         duration_ms: None,
                         model: None,
                         completed_at: Some(timestamp),
-                        agent_message_id: None,
+                    agent_message_id: None,
                     });
                 }
                 "assistant" => {
@@ -639,7 +646,7 @@ impl OpenClawParser {
                         duration_ms: None,
                         model: msg_model,
                         completed_at: Some(timestamp),
-                        agent_message_id: None,
+                    agent_message_id: None,
                     });
                 }
                 "toolResult" => {
@@ -653,7 +660,7 @@ impl OpenClawParser {
                         duration_ms: None,
                         model: None,
                         completed_at: Some(timestamp),
-                        agent_message_id: None,
+                    agent_message_id: None,
                     });
                 }
                 _ => {}
@@ -1079,6 +1086,7 @@ fn extract_tool_result_content(value: &serde_json::Value) -> Vec<ContentBlock> {
         is_error,
         agent_stats: None,
         images: Vec::new(),
+        exit_code: None,
     });
 
     blocks
@@ -1116,7 +1124,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             i += 1;
         } else if matches!(msg.role, MessageRole::System) {
@@ -1129,7 +1137,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             i += 1;
         } else {
@@ -1164,7 +1172,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms,
                 model: turn_model,
                 completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
         }
     }

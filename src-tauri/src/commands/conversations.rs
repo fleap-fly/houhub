@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 #[cfg(feature = "tauri-runtime")]
 use tauri::Manager;
 
+use crate::acp::types::ToolApprovalInfo;
+
 use crate::app_error::AppCommandError;
 
 use crate::db::entities::conversation;
@@ -11,6 +13,7 @@ use crate::db::entities::folder::FolderKind;
 
 use crate::db::service::{
     agent_setting_service, conversation_service, folder_service, import_service, tab_service,
+    tool_approval_service,
 };
 
 #[cfg(feature = "tauri-runtime")]
@@ -1435,6 +1438,58 @@ fn inject_delegation_meta(turns: &mut [MessageTurn], children: &[DbConversationS
     }
 }
 
+/// Where a tool call's approval record rides on its `ToolUse` block, beside
+/// whatever metadata the agent or [`inject_delegation_meta`] put there.
+const APPROVAL_META_KEY: &str = "houhub.approval";
+
+/// Stamp each kept approval onto the tool call it was about, as
+/// `meta["houhub.approval"]`. Transcripts record the call but never how its
+/// permission request was answered, so this is what lets a reopened
+/// conversation draw the same "approved" chip the live one did. Merges into an
+/// existing meta object; a non-object meta (no parser writes one) is left
+/// alone rather than replaced. Records whose call is not in these turns — an id
+/// the transcript spells differently, a call in a sub-agent's own transcript —
+/// simply match nothing.
+fn inject_tool_approvals(turns: &mut [MessageTurn], approvals: &[ToolApprovalInfo]) {
+    if approvals.is_empty() {
+        return;
+    }
+    let by_call: HashMap<&str, &ToolApprovalInfo> = approvals
+        .iter()
+        .map(|a| (a.tool_call_id.as_str(), a))
+        .collect();
+    for turn in turns.iter_mut() {
+        for block in turn.blocks.iter_mut() {
+            let ContentBlock::ToolUse {
+                tool_use_id: Some(tool_use_id),
+                meta,
+                ..
+            } = block
+            else {
+                continue;
+            };
+            let Some(approval) = by_call.get(tool_use_id.as_str()) else {
+                continue;
+            };
+            let stamp = serde_json::json!({
+                "option_kind": approval.option_kind,
+                "option_name": approval.option_name,
+                "origin": approval.origin,
+                "decided_at": approval.decided_at,
+            });
+            match meta {
+                None => {
+                    *meta = Some(serde_json::json!({ APPROVAL_META_KEY: stamp }));
+                }
+                Some(serde_json::Value::Object(map)) => {
+                    map.insert(APPROVAL_META_KEY.to_string(), stamp);
+                }
+                Some(_) => {}
+            }
+        }
+    }
+}
+
 /// Core logic for loading a folder conversation with full OpenClaw fallback.
 /// Shared by both the Tauri command and the web handler.
 ///
@@ -1632,6 +1687,12 @@ pub async fn get_folder_conversation_core(
         .await
         .unwrap_or_default();
     inject_delegation_meta(&mut turns, &children);
+    // Same best-effort contract: a failed read costs the approval chips, never
+    // the detail load.
+    let approvals = tool_approval_service::list_by_conversation(conn, conversation_id)
+        .await
+        .unwrap_or_default();
+    inject_tool_approvals(&mut turns, &approvals);
 
     Ok((
         DbConversationDetail {
@@ -3025,7 +3086,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-            agent_message_id: None,
+        agent_message_id: None,
         }
     }
 
@@ -3064,7 +3125,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-            agent_message_id: None,
+        agent_message_id: None,
         }
     }
 
@@ -3083,7 +3144,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: completed.then_some(ts),
-            agent_message_id: None,
+        agent_message_id: None,
         }
     }
 
@@ -3549,6 +3610,53 @@ mod tests {
         assert_eq!(turns.len(), 2, "the prior completed reply is preserved");
     }
 
+    fn approval_record(tool_call_id: &str, option_kind: &str) -> ToolApprovalInfo {
+        ToolApprovalInfo {
+            tool_call_id: tool_call_id.into(),
+            option_kind: option_kind.into(),
+            option_name: "Always Allow".into(),
+            origin: "chat_channel".into(),
+            decided_at: chrono::DateTime::parse_from_rfc3339("2026-10-22T09:41:12Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        }
+    }
+
+    #[test]
+    fn inject_tool_approvals_stamps_the_matching_call() {
+        let mut turns = vec![
+            tool_use_turn(Some("tu-1"), "Bash"),
+            tool_use_turn(Some("tu-2"), "Bash"),
+            tool_use_turn(None, "Bash"),
+        ];
+        inject_tool_approvals(&mut turns, &[approval_record("tu-1", "allow_always")]);
+        let meta = first_block_meta(&turns[0]).expect("stamped");
+        assert_eq!(
+            meta[APPROVAL_META_KEY],
+            serde_json::json!({
+                "option_kind": "allow_always",
+                "option_name": "Always Allow",
+                "origin": "chat_channel",
+                "decided_at": "2026-10-22T09:41:12Z",
+            })
+        );
+        assert!(first_block_meta(&turns[1]).is_none(), "no record, no stamp");
+        assert!(first_block_meta(&turns[2]).is_none());
+    }
+
+    #[test]
+    fn inject_tool_approvals_merges_into_existing_meta() {
+        let mut turns = vec![tool_use_turn(
+            Some("tu-1"),
+            "mcp__houhub-mcp__delegate_to_agent",
+        )];
+        inject_delegation_meta(&mut turns, &[summary_child(42, "tu-1", "completed")]);
+        inject_tool_approvals(&mut turns, &[approval_record("tu-1", "allow_once")]);
+        let meta = first_block_meta(&turns[0]).expect("meta");
+        assert_eq!(meta["houhub.delegation"]["child_conversation_id"], 42);
+        assert_eq!(meta[APPROVAL_META_KEY]["option_kind"], "allow_once");
+    }
+
     #[test]
     fn inject_delegation_meta_populates_completed_child() {
         let mut turns = vec![tool_use_turn(
@@ -3612,13 +3720,14 @@ mod tests {
                 is_error: false,
                 agent_stats: None,
                 images: Vec::new(),
+                exit_code: None,
             }],
             timestamp: chrono::Utc::now(),
             usage: None,
             duration_ms: None,
             model: None,
             completed_at: None,
-            agent_message_id: None,
+        agent_message_id: None,
         }
     }
 
@@ -3881,7 +3990,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-            agent_message_id: None,
+        agent_message_id: None,
         }];
         let children = vec![summary_child(42, "tu-1", "completed")];
         inject_delegation_meta(&mut turns, &children);
@@ -4513,6 +4622,72 @@ mod tests {
             .await
             .expect("read by session id");
         assert_eq!(by_id.turns.len(), 2);
+    }
+
+    /// A reopened conversation gets back the approvals its live run showed:
+    /// the kept record is stamped onto the transcript's tool call.
+    #[tokio::test]
+    async fn a_reopened_conversation_carries_its_tool_approvals() {
+        let config_dir = tempfile::tempdir().expect("tempdir");
+        let project = config_dir.path().join("projects").join("-approvals-proj");
+        std::fs::create_dir_all(&project).expect("project dir");
+        let session_id = "6b1e2f30-4c5d-4e6f-8a7b-9c0d1e2f3a4b";
+        std::fs::write(
+            project.join(format!("{session_id}.jsonl")),
+            [
+                r#"{"type":"user","timestamp":"2026-10-22T09:40:00.000Z","uuid":"u1","cwd":"/tmp/houhub-approvals-proj","message":{"role":"user","content":[{"type":"text","text":"commit it"}]}}"#,
+                r#"{"type":"assistant","timestamp":"2026-10-22T09:40:05.000Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_01","role":"assistant","model":"claude-opus-5","content":[{"type":"tool_use","id":"toolu_commit","name":"Bash","input":{"command":"git commit -am wip"}}]}}"#,
+                r#"{"type":"user","timestamp":"2026-10-22T09:41:20.000Z","uuid":"u2","parentUuid":"a1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_commit","content":"[main 1a2b3c4] wip"}]}}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("write transcript");
+
+        let db = fresh_in_memory_db().await;
+        save_agent_env_json(
+            &db,
+            AgentType::ClaudeCode,
+            &serde_json::json!({ "CLAUDE_CONFIG_DIR": config_dir.path() }).to_string(),
+        )
+        .await;
+        let folder_id = seed_folder(&db, "/tmp/houhub-approvals-proj").await;
+        let conversation_id = create_conversation_core(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("approvals".into()),
+        )
+        .await
+        .expect("create conversation");
+        conversation_service::bind_external_id(&db.conn, conversation_id, session_id, &[])
+            .await
+            .expect("bind session");
+        tool_approval_service::record(
+            &db.conn,
+            conversation_id,
+            &approval_record("toolu_commit", "allow_always"),
+        )
+        .await
+        .expect("record approval");
+
+        let (detail, _) = get_folder_conversation_core(&db.conn, conversation_id)
+            .await
+            .expect("open conversation");
+        let stamp = detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .find_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_use_id: Some(id),
+                    meta: Some(meta),
+                    ..
+                } if id == "toolu_commit" => meta.get(APPROVAL_META_KEY).cloned(),
+                _ => None,
+            })
+            .expect("the commit carries its approval");
+        assert_eq!(stamp["option_kind"], "allow_always");
+        assert_eq!(stamp["origin"], "chat_channel");
     }
 
     #[tokio::test]
@@ -5369,8 +5544,8 @@ mod tests {
             &crate::chat_channel::manager::ChatChannelManager::new(),
             999_999,
         )
-        .await
-        .expect_err("missing folder must surface as error");
+            .await
+            .expect_err("missing folder must surface as error");
         let msg = format!("{err:?}");
         assert!(
             msg.to_lowercase().contains("not found") || msg.to_lowercase().contains("999999"),
@@ -6910,8 +7085,8 @@ mod tests {
             &crate::chat_channel::manager::ChatChannelManager::new(),
             folder_id,
         )
-        .await
-        .expect_err("legacy import must be rejected while an import is in progress");
+            .await
+            .expect_err("legacy import must be rejected while an import is in progress");
         let msg = format!("{err:?}").to_lowercase();
         assert!(
             msg.contains("already in progress"),

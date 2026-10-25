@@ -83,7 +83,7 @@ use crate::acp::types::{
     PromptInputBlock, RemoteControlInfo, SessionConfigBooleanInfo, SessionConfigKindInfo,
     SessionConfigOptionInfo, SessionConfigSelectGroupInfo, SessionConfigSelectInfo,
     SessionConfigSelectOptionInfo, SessionFailureRecord, SessionModeInfo, SessionModeStateInfo,
-    SessionNotice, ToolCallImageInfo, UserMessageBlock,
+    SessionNotice, ToolApprovalInfo, ToolCallImageInfo, UserMessageBlock,
 };
 
 use crate::logging::throttle::LeadingEdgeThrottle;
@@ -2950,6 +2950,16 @@ struct QueuedPermission {
     options: Vec<PermissionOptionInfo>,
 }
 
+/// A blocked responder, with what its card asked: the answer's approval record
+/// needs the tool call and the chosen option, and by then the card itself has
+/// been moved into its publish.
+struct Parked<R> {
+    responder: R,
+    /// Empty when the card names no tool call.
+    tool_call_id: String,
+    options: Vec<PermissionOptionInfo>,
+}
+
 /// What [`PermissionQueue::resolve`] decided.
 struct ResolvedPermission {
     /// `false` when `request_id` was not ours (already answered, drained, or a
@@ -2957,6 +2967,19 @@ struct ResolvedPermission {
     answered: bool,
     /// The card promoted onto the screen by this answer, if any.
     next: Option<QueuedPermission>,
+    /// What the answer decided about the card's tool call. `None` when the card
+    /// named no tool call or the answer picked an option it did not offer.
+    decision: Option<PermissionDecision>,
+}
+
+/// The tool call an answered card was about and the option that took effect —
+/// everything an approval record needs except who answered and when, which
+/// the caller knows.
+#[derive(Debug, PartialEq)]
+struct PermissionDecision {
+    tool_call_id: String,
+    option_kind: String,
+    option_name: String,
 }
 
 /// Where a card stood when it left [`PermissionQueue`].
@@ -3015,7 +3038,7 @@ enum Departure {
 /// while holding this mutex is the sanctioned direction; nothing may acquire
 /// this mutex while already holding a `SessionState` guard.
 struct PermissionQueue<R = PendingPermission> {
-    responders: HashMap<String, R>,
+    responders: HashMap<String, Parked<R>>,
     /// The card currently published to clients. `None` = nothing on screen.
     showing: Option<String>,
     waiting: VecDeque<QueuedPermission>,
@@ -3059,7 +3082,14 @@ impl<R: PermissionResponder> PermissionQueue<R> {
     /// NOW — the newcomer itself when the screen was free, otherwise `None`
     /// (it waits its turn).
     fn admit(&mut self, responder: R, card: QueuedPermission) -> Option<QueuedPermission> {
-        self.responders.insert(card.request_id.clone(), responder);
+        self.responders.insert(
+            card.request_id.clone(),
+            Parked {
+                responder,
+                tool_call_id: crate::acp::session_state::extract_tool_call_id(&card.tool_call),
+                options: card.options.clone(),
+            },
+        );
         if self.showing.is_none() {
             self.showing = Some(card.request_id.clone());
             Some(card)
@@ -3075,19 +3105,31 @@ impl<R: PermissionResponder> PermissionQueue<R> {
     /// false`) — two clients racing the same card must not double-respond to a
     /// responder that has already been consumed.
     fn resolve(&mut self, request_id: &str, option_id: String) -> ResolvedPermission {
-        let Some((pending, departure)) = self.take(request_id) else {
+        let Some((parked, departure)) = self.take(request_id) else {
             return ResolvedPermission {
                 answered: false,
                 next: None,
+                decision: None,
             };
         };
-        pending.respond_selected(option_id);
+        let decision = parked
+            .options
+            .iter()
+            .find(|o| o.option_id == option_id)
+            .filter(|_| !parked.tool_call_id.is_empty())
+            .map(|o| PermissionDecision {
+                tool_call_id: parked.tool_call_id.clone(),
+                option_kind: o.kind.clone(),
+                option_name: o.name.clone(),
+            });
+        parked.responder.respond_selected(option_id);
         ResolvedPermission {
             answered: true,
             next: match departure {
                 Departure::Shown { next } => next,
                 Departure::Queued => None,
             },
+            decision,
         }
     }
 
@@ -3096,14 +3138,14 @@ impl<R: PermissionResponder> PermissionQueue<R> {
     /// `None` when the id is no longer ours — answered or drained first, which
     /// is the common outcome of a withdrawal racing the user's click.
     fn withdraw(&mut self, request_id: &str) -> Option<Departure> {
-        let (pending, departure) = self.take(request_id)?;
-        pending.respond_cancelled();
+        let (parked, departure) = self.take(request_id)?;
+        parked.responder.respond_cancelled();
         Some(departure)
     }
 
     /// Remove `request_id`'s responder and card, promoting the next card when
     /// it was the one on screen. `None` when the id is not ours.
-    fn take(&mut self, request_id: &str) -> Option<(R, Departure)> {
+    fn take(&mut self, request_id: &str) -> Option<(Parked<R>, Departure)> {
         let pending = self.responders.remove(request_id)?;
         if self.showing.as_deref() == Some(request_id) {
             let next = self.promote_next();
@@ -3132,12 +3174,12 @@ impl<R: PermissionResponder> PermissionQueue<R> {
             let withdrawn = self
                 .responders
                 .get(&card.request_id)
-                .is_some_and(R::is_withdrawn);
+                .is_some_and(|parked| parked.responder.is_withdrawn());
             if !withdrawn {
                 return Some(card);
             }
-            if let Some(pending) = self.responders.remove(&card.request_id) {
-                pending.respond_cancelled();
+            if let Some(parked) = self.responders.remove(&card.request_id) {
+                parked.responder.respond_cancelled();
             }
             // Pairs with its `queued` line; the queue cannot take the state
             // lock the other lines' scope needs, and the id is unique enough.
@@ -3160,8 +3202,8 @@ impl<R: PermissionResponder> PermissionQueue<R> {
     /// the `detached` ones — dropping their abort senders lets each bridged
     /// task clear its own surface.
     fn drain(&mut self) -> Option<String> {
-        for (_, pending) in self.responders.drain() {
-            pending.respond_cancelled();
+        for (_, parked) in self.responders.drain() {
+            parked.responder.respond_cancelled();
         }
         self.waiting.clear();
         self.detached.clear();
@@ -3320,6 +3362,7 @@ async fn resolve_permission(
     if !resolved.answered {
         return;
     }
+    let decided_at = chrono::Utc::now();
     // Pairs with the `shown` line: a watchdog reading only the raise side can't
     // tell a permission the user answered in seconds from one that has been
     // blocking the agent since. Resolved AFTER the idempotent no-op check, so a
@@ -3332,6 +3375,7 @@ async fn resolve_permission(
     }
     // Only an answer that took effect gets here (a stale or duplicate one
     // returned above), so this option and origin are the effective ones.
+    let origin_kind = origin.kind();
     emit_with_state(
         state,
         emitter,
@@ -3342,6 +3386,22 @@ async fn resolve_permission(
         },
     )
     .await;
+    if let Some(decision) = resolved.decision {
+        emit_with_state(
+            state,
+            emitter,
+            AcpEvent::ToolApproval {
+                approval: ToolApprovalInfo {
+                    tool_call_id: decision.tool_call_id,
+                    option_kind: decision.option_kind,
+                    option_name: decision.option_name,
+                    origin: origin_kind.to_string(),
+                    decided_at,
+                },
+            },
+        )
+        .await;
+    }
 }
 
 /// Publish the card a departing one promoted onto the screen, with `depth`
@@ -3785,12 +3845,12 @@ fn visible_config_options(
 }
 
 #[allow(dead_code)]
-// see the note above: test-only in this fork
+// test-only in this fork: upstream’s production caller is the pi enabled-models flow we do not adopt
 const PI_THINKING_LEVEL_SUFFIXES: &[&str] =
     &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 #[allow(dead_code)]
-// see the note above: test-only in this fork
+// test-only in this fork: upstream’s production caller is the pi enabled-models flow we do not adopt
 fn pi_model_pattern_without_thinking_level(pattern: &str) -> &str {
     let Some((model, level)) = pattern.rsplit_once(':') else {
         return pattern;
@@ -3803,7 +3863,7 @@ fn pi_model_pattern_without_thinking_level(pattern: &str) -> &str {
 }
 
 #[allow(dead_code)]
-// see the note above: test-only in this fork
+// test-only in this fork: upstream’s production caller is the pi enabled-models flow we do not adopt
 fn pi_model_glob_matches(value: &str, pattern: &str) -> bool {
     let value = value.chars().collect::<Vec<_>>();
     let pattern = pattern.chars().collect::<Vec<_>>();
@@ -3845,7 +3905,7 @@ fn pi_model_glob_matches(value: &str, pattern: &str) -> bool {
 /// [`PiModelRow::glob_plain`] calls plain: segment by segment, so `*` and `?`
 /// stop at `/`, and a segment that starts with `.` only matches a literal `.`.
 #[allow(dead_code)]
-// see the note above: test-only in this fork
+// test-only in this fork: upstream’s production caller is the pi enabled-models flow we do not adopt
 fn pi_minimatch(path: &str, glob: &str) -> bool {
     let path: Vec<&str> = path.split('/').collect();
     let glob: Vec<&str> = glob.split('/').collect();
@@ -3863,7 +3923,7 @@ fn pi_minimatch(path: &str, glob: &str) -> bool {
 /// `/` optional, as minimatch reads a path; a `\` is tried both as itself and
 /// as the separator it is on Windows.
 #[allow(dead_code)]
-// see the note above: test-only in this fork
+// test-only in this fork: upstream’s production caller is the pi enabled-models flow we do not adopt
 fn pi_minimatch_may_match(path: &str, glob: &str) -> bool {
     let glob = glob.replace('?', "*");
     let lower = path.to_lowercase();
@@ -3957,7 +4017,7 @@ enum PiScopeEntry {
 /// fuzzy pick: when the text names a provider that lists neither, pi picks the
 /// provider's closest id/name match before it looks at any other provider.
 #[allow(dead_code)]
-// see the note above: test-only in this fork
+// test-only in this fork: upstream’s production caller is the pi enabled-models flow we do not adopt
 fn pi_exact_model_rows(lower: &str, rows: &[PiModelRow]) -> (Vec<usize>, bool) {
     let mut exact = Vec::new();
     let mut named_fuzzily = false;
@@ -4000,7 +4060,7 @@ fn pi_exact_model_rows(lower: &str, rows: &[PiModelRow]) -> (Vec<usize>, bool) {
 /// slashes folding into one, `..` undoing the segment before it, and a leading
 /// drive letter (`c:`), whose segment Windows minimatch takes literally.
 #[allow(dead_code)]
-// see the note above: test-only in this fork
+// test-only in this fork: upstream’s production caller is the pi enabled-models flow we do not adopt
 fn pi_model_glob_is_supported(glob: &str) -> bool {
     let drive = matches!(glob.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic());
     !drive
@@ -4022,7 +4082,7 @@ fn pi_model_glob_is_supported(glob: &str) -> bool {
 /// fuzzy pick (1.x keeps them all, as this does), and read a glob that spells
 /// a model id (`model[1m]`) only as a glob.
 #[allow(dead_code)]
-// see the note above: test-only in this fork
+// test-only in this fork: upstream’s production caller is the pi enabled-models flow we do not adopt
 fn pi_scope_entry(pattern: &str, rows: &[PiModelRow]) -> PiScopeEntry {
     if pattern.contains(['*', '?', '[']) {
         let glob = pi_model_pattern_without_thinking_level(pattern);
@@ -4063,8 +4123,6 @@ fn pi_scope_entry(pattern: &str, rows: &[PiModelRow]) -> PiScopeEntry {
 /// pi's reference rule, in pi's order: an exact model, else a fuzzy id/name
 /// match, else the same text without its last `:suffix` (a thinking level, or
 /// — scope parsing being lenient — anything after the colon).
-#[allow(dead_code)]
-// see the note above: test-only in this fork
 fn pi_scope_reference(lower: &str, rows: &[PiModelRow]) -> PiScopeEntry {
     let (exact, named_fuzzily) = pi_exact_model_rows(lower, rows);
     if named_fuzzily || (exact.is_empty() && rows.iter().any(|row| row.fuzzy_matches(lower))) {
@@ -4083,13 +4141,13 @@ fn pi_scope_reference(lower: &str, rows: &[PiModelRow]) -> PiScopeEntry {
 /// whole.
 ///
 /// Mirroring pi's resolver has to fail safe, because a row dropped here is a
-/// model the user cannot pick in HouHub at all. So the result never leaves out
+/// model the user cannot pick in houhub at all. So the result never leaves out
 /// a model pi's scope holds, and never scopes a list pi leaves unscoped (pi
-/// runs unscoped when no entry resolves): an entry whose rows HouHub cannot
+/// runs unscoped when no entry resolves): an entry whose rows houhub cannot
 /// know keeps the whole list, an entry pi would skip is skipped, and an empty
 /// result keeps the whole list.
 #[allow(dead_code)]
-// see the note above: test-only in this fork
+// test-only in this fork: upstream’s production caller is the pi enabled-models flow we do not adopt
 fn pi_enabled_model_scope(
     patterns: &[String],
     options: &SessionConfigSelectOptions,
@@ -4126,7 +4184,7 @@ fn pi_enabled_model_scope(
 /// session, or a saved pick replayed on connect), so the selector still shows
 /// what the session runs; once the user switches away, the row goes too.
 #[allow(dead_code)]
-// see the note above: test-only in this fork
+// test-only in this fork: upstream’s production caller is the pi enabled-models flow we do not adopt
 fn filter_pi_enabled_model_options(
     patterns: &[String],
     config_options: Vec<SessionConfigOption>,
@@ -22000,583 +22058,6 @@ async fn emit_conversation_update(
 }
 
 #[cfg(test)]
-mod zcode_mode_tests {
-    use super::*;
-    use agent_client_protocol::schema::v1::{
-        PromptResponse, SetSessionConfigOptionResponse, SetSessionModeResponse,
-    };
-    use std::sync::Mutex;
-
-    fn mode_options(mode: &str) -> Vec<SessionConfigOption> {
-        serde_json::from_value(serde_json::json!([{
-            "id": "mode", "name": "Mode", "category": "mode", "type": "select",
-            "currentValue": mode,
-            "options": [
-                {"value":"build","name":"Build"},
-                {"value":"plan","name":"Plan"},
-                {"value":"yolo","name":"Yolo"}
-            ]
-        }]))
-        .unwrap()
-    }
-
-    async fn drive_mode_gate(
-        preferred: Option<&str>,
-        confirm: bool,
-        accept_mode: bool,
-    ) -> Vec<String> {
-        drive_mode_gate_with_cancel(preferred, confirm, accept_mode, false).await
-    }
-
-    async fn drive_mode_gate_with_cancel(
-        preferred: Option<&str>,
-        confirm: bool,
-        accept_mode: bool,
-        cancel_mode: bool,
-    ) -> Vec<String> {
-        let handshake = CancellationToken::new();
-        let native_handshake = handshake.clone();
-        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
-        let seen_mode = seen.clone();
-        let seen_legacy = seen.clone();
-        let native_mode = Arc::new(Mutex::new(None::<String>));
-        let native_set = native_mode.clone();
-        let native_config = native_mode.clone();
-        let seen_prompt = seen.clone();
-        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
-        let agent = tokio::spawn(
-            Agent
-                .builder()
-                .on_receive_request(
-                    async move |req: SetSessionModeRequest,
-                                responder: Responder<SetSessionModeResponse>,
-                                _cx: ConnectionTo<Client>| {
-                        seen_legacy
-                            .lock()
-                            .unwrap()
-                            .push(format!("mode:{}", req.mode_id));
-                        if cancel_mode {
-                            native_handshake.cancel();
-                            std::future::pending::<()>().await;
-                        }
-                        if accept_mode {
-                            *native_set.lock().unwrap() = Some(req.mode_id.to_string());
-                            responder.respond(SetSessionModeResponse::new())
-                        } else {
-                            responder.respond_with_error(
-                                agent_client_protocol::Error::invalid_params()
-                                    .data("mode rejected"),
-                            )
-                        }
-                    },
-                    on_receive_request!(),
-                )
-                .on_receive_request(
-                    async move |req: SetSessionConfigOptionRequest,
-                                responder: Responder<SetSessionConfigOptionResponse>,
-                                _cx: ConnectionTo<Client>| {
-                        let value = serde_json::to_value(&req.value).unwrap();
-                        let mode = value["value"].as_str().unwrap().to_string();
-                        seen_mode.lock().unwrap().push(format!("config:{mode}"));
-                        if confirm
-                            && native_config.lock().unwrap().as_deref() == Some(mode.as_str())
-                        {
-                            responder
-                                .respond(SetSessionConfigOptionResponse::new(mode_options(&mode)))
-                        } else {
-                            responder
-                                .respond(SetSessionConfigOptionResponse::new(mode_options("yolo")))
-                        }
-                    },
-                    on_receive_request!(),
-                )
-                .on_receive_request(
-                    async move |_req: PromptRequest,
-                                responder: Responder<PromptResponse>,
-                                _cx: ConnectionTo<Client>| {
-                        seen_prompt.lock().unwrap().push("prompt".into());
-                        responder.respond(PromptResponse::new(StopReason::EndTurn))
-                    },
-                    on_receive_request!(),
-                )
-                .connect_to(agent_end),
-        );
-        Client
-            .builder()
-            .connect_with(client_end, async |cx: ConnectionTo<Agent>| {
-                let modes: SessionModeState = serde_json::from_value(serde_json::json!({
-                    "currentModeId":"yolo",
-                    "availableModes":[{"id":"build","name":"Build"},{"id":"plan","name":"Plan"},{"id":"yolo","name":"Yolo"}]
-                }))
-                .unwrap();
-                let response = NewSessionResponse::new(SessionId::new("zcode-test"))
-                    .modes(modes)
-                    .config_options(mode_options("yolo"));
-                let session = AgentSession::attach(&cx, response)?;
-                let result = configure_new_zcode_session(
-                    AgentType::ZCode,
-                    &cx,
-                    &session,
-                    &handshake,
-                    preferred,
-                    &BTreeMap::new(),
-                    Some(mode_options("yolo")),
-                )
-                .await;
-                if cancel_mode {
-                    assert!(result.unwrap_err().to_string().contains(HANDSHAKE_CANCELLED_SENTINEL));
-                } else if confirm && accept_mode {
-                    let (_, preferences) = result?;
-                    assert_eq!(
-                        preferences.get("mode").map(String::as_str),
-                        Some(preferred.unwrap_or("build"))
-                    );
-                    cx.send_request_to(
-                        Agent,
-                        PromptRequest::new(session.session_id().clone(), vec![]),
-                    )
-                    .block_task()
-                    .await?;
-                } else {
-                    assert!(
-                        result.is_err(),
-                        "a contradictory confirmation must block prompting"
-                    );
-                }
-                Ok::<_, agent_client_protocol::Error>(())
-            })
-            .await
-            .unwrap();
-        agent.abort();
-        let observed = seen.lock().unwrap().clone();
-        observed
-    }
-
-    #[tokio::test]
-    async fn zcode_confirms_build_before_first_prompt() {
-        assert_eq!(
-            drive_mode_gate(None, true, true).await,
-            vec!["mode:build", "config:build", "prompt"]
-        );
-    }
-
-    #[tokio::test]
-    async fn zcode_preserves_explicit_yolo_choice() {
-        assert_eq!(
-            drive_mode_gate(Some("yolo"), true, true).await,
-            vec!["mode:yolo", "config:yolo", "prompt"]
-        );
-    }
-
-    #[tokio::test]
-    async fn zcode_does_not_prompt_after_failed_mode_confirmation() {
-        assert_eq!(
-            drive_mode_gate(None, false, true).await,
-            vec!["mode:build", "config:build"]
-        );
-    }
-
-    #[tokio::test]
-    async fn zcode_plan_updates_native_mode_before_confirming_config() {
-        assert_eq!(
-            drive_mode_gate(Some("plan"), true, true).await,
-            vec!["mode:plan", "config:plan", "prompt"]
-        );
-    }
-
-    #[tokio::test]
-    async fn zcode_does_not_prompt_or_set_config_after_rejected_native_mode() {
-        assert_eq!(drive_mode_gate(None, true, false).await, vec!["mode:build"]);
-    }
-
-    #[tokio::test]
-    async fn zcode_cancelled_handshake_stops_mode_confirmation_before_config_or_prompt() {
-        let observed = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            drive_mode_gate_with_cancel(None, true, true, true),
-        )
-        .await
-        .expect("a cancelled ZCode handshake must not wait for mode confirmation");
-        assert_eq!(observed, vec!["mode:build"]);
-    }
-
-    #[test]
-    fn zcode_does_not_replay_the_mode_its_gate_applied() {
-        assert_eq!(
-            mode_to_replay_after_gate(AgentType::ZCode, Some("plan".into())),
-            None
-        );
-        assert_eq!(
-            mode_to_replay_after_gate(AgentType::OpenCode, Some("plan".into())),
-            Some("plan".to_string())
-        );
-        assert_eq!(mode_to_replay_after_gate(AgentType::OpenCode, None), None);
-    }
-
-    #[test]
-    fn zcode_negotiates_images_and_resources_but_not_audio() {
-        let advertised = agent_client_protocol::schema::v1::PromptCapabilities::default()
-            .image(true)
-            .audio(true)
-            .embedded_context(true);
-        let zcode = effective_prompt_capabilities(AgentType::ZCode, &advertised);
-        assert!(zcode.image && zcode.embedded_context);
-        assert!(!zcode.audio);
-        let absent = effective_prompt_capabilities(
-            AgentType::ZCode,
-            &agent_client_protocol::schema::v1::PromptCapabilities::default(),
-        );
-        assert!(!absent.image && !absent.audio && !absent.embedded_context);
-        let other = effective_prompt_capabilities(AgentType::KimiCode, &advertised);
-        assert!(other.image && other.audio && other.embedded_context);
-    }
-
-    #[test]
-    fn zcode_records_history_without_enabling_native_parser_agents() {
-        assert_eq!(
-            transcript_dir_for(AgentType::ZCode),
-            Some("houhub-zcode-acp")
-        );
-        assert_eq!(transcript_dir_for(AgentType::ClaudeCode), None);
-        assert_eq!(transcript_dir_for(AgentType::DeepSeek), None);
-        assert!(transcript_dir_for(AgentType::custom("example").unwrap()).is_some());
-    }
-
-    #[test]
-    fn trae_records_history_in_its_own_transcript_dir() {
-        assert_eq!(transcript_dir_for(AgentType::Trae), Some("houhub-trae-cli"));
-        assert_ne!(
-            transcript_dir_for(AgentType::Trae),
-            transcript_dir_for(AgentType::ZCode)
-        );
-    }
-
-    #[test]
-    fn command_code_records_history_in_its_own_transcript_dir() {
-        assert_eq!(
-            transcript_dir_for(AgentType::CommandCode),
-            Some("houhub-command-code")
-        );
-        assert_ne!(
-            transcript_dir_for(AgentType::CommandCode),
-            transcript_dir_for(AgentType::Trae)
-        );
-    }
-}
-
-#[cfg(test)]
-mod wire_mcp_gate_tests {
-    use super::*;
-
-    // Cline keeps the `mcpServers` it is sent and never connects them, so the
-    // houhub-mcp companion must not be injected: its delegation and feedback
-    // tools would be advertised to a model that never gets them. Its user
-    // servers travel through its own settings file instead.
-    #[test]
-    fn cline_takes_mcp_from_its_settings_file_not_the_wire() {
-        assert!(!agent_delivers_wire_mcp(AgentType::Cline));
-        assert!(agent_reads_own_mcp_config(AgentType::Cline));
-        assert!(load_mcp_servers_for_agent(AgentType::Cline).is_empty());
-    }
-
-    #[test]
-    fn pi_stays_off_the_wire_and_the_rest_stay_on_it() {
-        assert!(!agent_delivers_wire_mcp(AgentType::Pi));
-        for agent_type in [
-            AgentType::ClaudeCode,
-            AgentType::Codex,
-            AgentType::OpenCode,
-            AgentType::Hermes,
-            AgentType::CodeBuddy,
-            AgentType::Grok,
-            AgentType::Cursor,
-            AgentType::Qoder,
-            AgentType::DeepSeek,
-            AgentType::ZCode,
-        ] {
-            assert!(agent_delivers_wire_mcp(agent_type), "{agent_type}");
-        }
-        // DeepSeek reads no MCP file at all: the wire is its only channel.
-        assert!(!agent_reads_own_mcp_config(AgentType::DeepSeek));
-    }
-
-    // TRAE CLI starts both the servers in its `traecli.toml` and the ones on
-    // `session/new`, so the file's servers stay off the wire (or each would be
-    // mounted twice) while the wire still carries the houhub-mcp companion.
-    #[test]
-    fn trae_takes_user_servers_from_its_config_and_the_companion_from_the_wire() {
-        assert!(agent_delivers_wire_mcp(AgentType::Trae));
-        assert!(agent_reads_own_mcp_config(AgentType::Trae));
-        assert!(load_mcp_servers_for_agent(AgentType::Trae).is_empty());
-    }
-
-    // Command Code also starts both its `~/.commandcode/mcp.json` servers and
-    // the ones on `session/new`: the file's stay off the wire, the companion
-    // rides it.
-    #[test]
-    fn command_code_takes_user_servers_from_its_config_and_the_companion_from_the_wire() {
-        assert!(agent_delivers_wire_mcp(AgentType::CommandCode));
-        assert!(agent_reads_own_mcp_config(AgentType::CommandCode));
-        assert!(load_mcp_servers_for_agent(AgentType::CommandCode).is_empty());
-    }
-}
-
-#[cfg(test)]
-mod trae_handshake_tests {
-    use super::*;
-    use agent_client_protocol::schema::v1::InitializeResponse;
-
-    /// The `initialize` result `traecli acp serve` 0.209.1 sends, trimmed to
-    /// what the PAT gate reads.
-    fn trae_initialize() -> InitializeResponse {
-        serde_json::from_value(serde_json::json!({
-            "protocolVersion": 1,
-            "agentCapabilities": {"loadSession": true},
-            "authMethods": [
-                {
-                    "id": "trae-tob-browser",
-                    "name": "Sign in with Enterprise SSO",
-                    "description": "Open your TRAE enterprise browser login"
-                },
-                {
-                    "id": "trae-tob-pat",
-                    "name": "Sign in with Personal Access Token",
-                    "description": "Requires `TRAECLI_PERSONAL_ACCESS_TOKEN` to be set before starting TRAE CLI."
-                }
-            ],
-            "agentInfo": {"name": "traecli-acp", "title": "TRAE CLI", "version": "0.209.1"}
-        }))
-        .expect("traecli 0.209.1 initialize parses")
-    }
-
-    #[test]
-    fn a_configured_pat_signs_trae_in_with_the_advertised_method() {
-        let init = trae_initialize();
-        assert_eq!(
-            trae_pat_sign_in_method(AgentType::Trae, true, &init.auth_methods),
-            Some("trae-tob-pat")
-        );
-    }
-
-    #[test]
-    fn no_pat_means_no_sign_in_and_the_stored_login_is_left_alone() {
-        let init = trae_initialize();
-        assert_eq!(
-            trae_pat_sign_in_method(AgentType::Trae, false, &init.auth_methods),
-            None
-        );
-    }
-
-    #[test]
-    fn a_server_without_the_method_and_other_agents_get_no_authenticate() {
-        let init = trae_initialize();
-        let browser_only: Vec<_> = init
-            .auth_methods
-            .iter()
-            .filter(|m| m.id().0.as_ref() != "trae-tob-pat")
-            .cloned()
-            .collect();
-        assert_eq!(
-            trae_pat_sign_in_method(AgentType::Trae, true, &browser_only),
-            None
-        );
-        // The flag is only ever set for TRAE CLI, but the gate does not rely
-        // on that: another agent advertising a same-named method is not TRAE.
-        for agent_type in [
-            AgentType::Kiro,
-            AgentType::Codex,
-            AgentType::custom("trae").unwrap(),
-        ] {
-            assert_eq!(
-                trae_pat_sign_in_method(agent_type, true, &init.auth_methods),
-                None,
-                "{agent_type}"
-            );
-        }
-    }
-}
-
-fn prepend_path_value(current: Option<&str>, dirs: impl IntoIterator<Item = PathBuf>) -> String {
-    let sep = if cfg!(windows) { ";" } else { ":" };
-    let mut parts: Vec<String> = Vec::new();
-    for dir in dirs {
-        let value = dir.to_string_lossy().to_string();
-        if !value.is_empty() && !parts.iter().any(|item| item == &value) {
-            parts.push(value);
-        }
-    }
-    if let Some(value) = current.filter(|value| !value.is_empty()) {
-        parts.push(value.to_string());
-    }
-    parts.join(sep)
-}
-
-async fn patch_pi_launch_env(env: Vec<(String, String)>) -> Vec<(String, String)> {
-    let mut map: BTreeMap<String, String> = env.into_iter().collect();
-    let mut path_dirs = Vec::new();
-    if let Some(bin_dir) = crate::commands::acp::node_command_bin_dir() {
-        path_dirs.push(bin_dir);
-    }
-    if let Some(bin_dir) = crate::commands::acp::npm_command_bin_dir("pi-acp").await {
-        path_dirs.push(bin_dir);
-    }
-    if let Some(bin_dir) = crate::commands::acp::npm_command_bin_dir("pi").await {
-        path_dirs.push(bin_dir);
-    }
-    if let Some(bin_dir) = crate::commands::acp::resolve_pi_command_path("pi")
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-    {
-        path_dirs.push(bin_dir);
-    }
-    if !path_dirs.is_empty() {
-        let next_path = prepend_path_value(map.get("PATH").map(String::as_str), path_dirs);
-        map.insert("PATH".to_string(), next_path);
-    }
-    map.into_iter().collect()
-}
-
-fn sanitize_agent_env(agent_type: AgentType, env: Vec<(String, String)>) -> Vec<(String, String)> {
-    if agent_type != AgentType::Codex {
-        return env;
-    }
-    sanitize_agent_env_with_fallback(
-        agent_type,
-        env,
-        crate::commands::acp::default_codex_home_dir_for_launch(),
-    )
-}
-
-fn sanitize_agent_env_with_fallback(
-    agent_type: AgentType,
-    env: Vec<(String, String)>,
-    fallback_home: PathBuf,
-) -> Vec<(String, String)> {
-    if agent_type != AgentType::Codex {
-        return env;
-    }
-
-    let mut saw_valid_codex_home = false;
-    let mut cleaned = Vec::with_capacity(env.len() + 1);
-    env.into_iter().for_each(|(key, value)| {
-        if !key.eq_ignore_ascii_case("CODEX_HOME") {
-            cleaned.push((key, value));
-            return;
-        }
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            tracing::warn!("[ACP][Codex] ignoring empty CODEX_HOME");
-            return;
-        }
-        if std::path::Path::new(trimmed).exists() {
-            saw_valid_codex_home = true;
-            cleaned.push((key, value));
-            return;
-        }
-        tracing::warn!(
-            "[ACP][Codex] ignoring CODEX_HOME={trimmed:?} because the path does not exist"
-        );
-    });
-    if !saw_valid_codex_home {
-        if let Err(err) = std::fs::create_dir_all(&fallback_home) {
-            tracing::warn!(
-                "[ACP][Codex] failed to create fallback CODEX_HOME {fallback_home:?}: {err}"
-            );
-        } else {
-            cleaned.push((
-                "CODEX_HOME".to_string(),
-                fallback_home.display().to_string(),
-            ));
-        }
-    }
-    cleaned
-}
-
-fn pi_bound_model_value(provider: &str, model: &str) -> String {
-    let provider = provider.trim();
-    let model = model.trim();
-    if model.starts_with(&format!("{provider}/")) {
-        model.to_string()
-    } else {
-        format!("{provider}/{model}")
-    }
-}
-
-fn pi_model_belongs_to_provider(value: &str, provider: &str) -> bool {
-    let prefix = format!("{}/", provider.trim());
-    value.trim().starts_with(&prefix) && value.trim().len() > prefix.len()
-}
-
-/// Keep the wire-facing Pi model selector scoped to the HouHub-bound provider.
-/// Pi intentionally advertises every authenticated provider, so filtering only
-/// in the React picker would leave snapshots and reconnect preferences able to
-/// select an old provider. This projection is applied on every emission.
-fn filter_pi_bound_model_options(
-    options: &mut [SessionConfigOptionInfo],
-    provider: Option<&str>,
-    model: Option<&str>,
-) {
-    let Some(provider) = provider.map(str::trim).filter(|value| !value.is_empty()) else {
-        return;
-    };
-    let desired = model
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| pi_bound_model_value(provider, value));
-
-    for option in options {
-        if option.id != "model" && option.category.as_deref() != Some("model") {
-            continue;
-        }
-        let SessionConfigKindInfo::Select(select) = &mut option.kind else {
-            continue;
-        };
-        select
-            .options
-            .retain(|item| pi_model_belongs_to_provider(&item.value, provider));
-        for group in &mut select.groups {
-            group
-                .options
-                .retain(|item| pi_model_belongs_to_provider(&item.value, provider));
-        }
-        select.groups.retain(|group| !group.options.is_empty());
-
-        // A provider catalog can arrive a tick after the initial selector
-        // event. Keep a stable, usable value instead of exposing another
-        // provider while that catalog is settling.
-        if select.options.is_empty() {
-            if let Some(value) = desired.clone() {
-                let label = value
-                    .split_once('/')
-                    .map(|(_, model)| model)
-                    .unwrap_or(value.as_str())
-                    .to_string();
-                select.options.push(SessionConfigSelectOptionInfo {
-                    value: value.clone(),
-                    name: label,
-                    description: None,
-                });
-                select.groups.clear();
-            }
-        }
-
-        let current_is_bound = select
-            .options
-            .iter()
-            .any(|item| item.value == select.current_value);
-        if !current_is_bound {
-            if let Some(value) = desired
-                .as_deref()
-                .filter(|value| select.options.iter().any(|item| item.value == *value))
-            {
-                select.current_value = value.to_string();
-            } else if let Some(first) = select.options.first() {
-                select.current_value = first.value.clone();
-            }
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -22781,6 +22262,65 @@ mod tests {
             Some("c".to_string()),
             "the dead entry must be skipped by removal, not by a promote-time check"
         );
+    }
+
+    #[test]
+    fn permission_queue_reports_what_an_answer_decided_about_its_tool_call() {
+        let (mut q, log) = stub_queue();
+        let option = |id: &str, name: &str, kind: &str| PermissionOptionInfo {
+            option_id: id.into(),
+            name: name.into(),
+            kind: kind.into(),
+            meta: None,
+        };
+        let options = vec![
+            option("allow", "Allow", "allow_once"),
+            option("always", "Always Allow", "allow_always"),
+            option("deny", "Reject", "reject_once"),
+        ];
+        for (id, tool_call) in [
+            ("a", serde_json::json!({ "toolCallId": "tc-a" })),
+            ("b", serde_json::json!({ "title": "no call named" })),
+            ("c", serde_json::json!({ "toolCallId": "tc-c" })),
+            ("d", serde_json::json!({ "toolCallId": "tc-d" })),
+        ] {
+            q.admit(
+                StubResponder {
+                    request_id: id.into(),
+                    log: Arc::clone(&log),
+                    withdrawn: Default::default(),
+                },
+                QueuedPermission {
+                    request_id: id.into(),
+                    tool_call,
+                    options: options.clone(),
+                },
+            );
+        }
+        let decision = |tool_call_id: &str, option_kind: &str, option_name: &str| {
+            Some(PermissionDecision {
+                tool_call_id: tool_call_id.into(),
+                option_kind: option_kind.into(),
+                option_name: option_name.into(),
+            })
+        };
+
+        // A card still waiting behind the visible one carries its own facts.
+        assert_eq!(
+            q.resolve("c", "deny".into()).decision,
+            decision("tc-c", "reject_once", "Reject")
+        );
+        assert_eq!(
+            q.resolve("a", "always".into()).decision,
+            decision("tc-a", "allow_always", "Always Allow")
+        );
+        let unnamed = q.resolve("b", "allow".into());
+        assert!(unnamed.answered);
+        assert_eq!(unnamed.decision, None, "the card named no tool call");
+        let bogus = q.resolve("d", "not-offered".into());
+        assert!(bogus.answered, "the agent still gets the answer");
+        assert_eq!(bogus.decision, None, "but it decided nothing we can name");
+        assert_eq!(q.resolve("zzz", "allow".into()).decision, None);
     }
 
     #[test]
@@ -23156,6 +22696,12 @@ mod tests {
             "the card must be retracted, not left up with no one behind it, and \
              a withdrawal names no option and no answerer"
         );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.payload, AcpEvent::ToolApproval { .. })),
+            "a withdrawal decided nothing about the call"
+        );
         assert!(perms.lock().await.showing.is_none());
     }
 
@@ -23297,6 +22843,28 @@ mod tests {
             vec![(shown, Some("deny".to_string()), Some(policy))],
             "exactly one report, naming the effective option and its answerer"
         );
+
+        // …followed by exactly one record of what it decided about the call.
+        let resolved_at = events
+            .iter()
+            .position(|e| matches!(e.payload, AcpEvent::PermissionResolved { .. }))
+            .expect("resolved");
+        let approvals: Vec<_> = events
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| match &e.payload {
+                AcpEvent::ToolApproval { approval } => Some((i, approval.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(approvals.len(), 1, "one record per effective answer");
+        let (approval_at, approval) = &approvals[0];
+        assert!(*approval_at > resolved_at, "after the card is retired");
+        assert_eq!(approval.tool_call_id, "call-1");
+        assert_eq!(approval.option_kind, "reject_once");
+        assert_eq!(approval.option_name, "Deny");
+        assert_eq!(approval.origin, "cli_policy");
+        assert_eq!(guard.tool_approvals, vec![approval.clone()]);
     }
 
     /// An agent request HouHub has no handler for still gets an answer. One
@@ -43153,5 +42721,582 @@ mod tests {
                 }));
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod zcode_mode_tests {
+    use super::*;
+    use agent_client_protocol::schema::v1::{
+        PromptResponse, SetSessionConfigOptionResponse, SetSessionModeResponse,
+    };
+    use std::sync::Mutex;
+
+    fn mode_options(mode: &str) -> Vec<SessionConfigOption> {
+        serde_json::from_value(serde_json::json!([{
+            "id": "mode", "name": "Mode", "category": "mode", "type": "select",
+            "currentValue": mode,
+            "options": [
+                {"value":"build","name":"Build"},
+                {"value":"plan","name":"Plan"},
+                {"value":"yolo","name":"Yolo"}
+            ]
+        }]))
+        .unwrap()
+    }
+
+    async fn drive_mode_gate(
+        preferred: Option<&str>,
+        confirm: bool,
+        accept_mode: bool,
+    ) -> Vec<String> {
+        drive_mode_gate_with_cancel(preferred, confirm, accept_mode, false).await
+    }
+
+    async fn drive_mode_gate_with_cancel(
+        preferred: Option<&str>,
+        confirm: bool,
+        accept_mode: bool,
+        cancel_mode: bool,
+    ) -> Vec<String> {
+        let handshake = CancellationToken::new();
+        let native_handshake = handshake.clone();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen_mode = seen.clone();
+        let seen_legacy = seen.clone();
+        let native_mode = Arc::new(Mutex::new(None::<String>));
+        let native_set = native_mode.clone();
+        let native_config = native_mode.clone();
+        let seen_prompt = seen.clone();
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let agent = tokio::spawn(
+            Agent
+                .builder()
+                .on_receive_request(
+                    async move |req: SetSessionModeRequest,
+                                responder: Responder<SetSessionModeResponse>,
+                                _cx: ConnectionTo<Client>| {
+                        seen_legacy
+                            .lock()
+                            .unwrap()
+                            .push(format!("mode:{}", req.mode_id));
+                        if cancel_mode {
+                            native_handshake.cancel();
+                            std::future::pending::<()>().await;
+                        }
+                        if accept_mode {
+                            *native_set.lock().unwrap() = Some(req.mode_id.to_string());
+                            responder.respond(SetSessionModeResponse::new())
+                        } else {
+                            responder.respond_with_error(
+                                agent_client_protocol::Error::invalid_params()
+                                    .data("mode rejected"),
+                            )
+                        }
+                    },
+                    on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |req: SetSessionConfigOptionRequest,
+                                responder: Responder<SetSessionConfigOptionResponse>,
+                                _cx: ConnectionTo<Client>| {
+                        let value = serde_json::to_value(&req.value).unwrap();
+                        let mode = value["value"].as_str().unwrap().to_string();
+                        seen_mode.lock().unwrap().push(format!("config:{mode}"));
+                        if confirm
+                            && native_config.lock().unwrap().as_deref() == Some(mode.as_str())
+                        {
+                            responder
+                                .respond(SetSessionConfigOptionResponse::new(mode_options(&mode)))
+                        } else {
+                            responder
+                                .respond(SetSessionConfigOptionResponse::new(mode_options("yolo")))
+                        }
+                    },
+                    on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_req: PromptRequest,
+                                responder: Responder<PromptResponse>,
+                                _cx: ConnectionTo<Client>| {
+                        seen_prompt.lock().unwrap().push("prompt".into());
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    },
+                    on_receive_request!(),
+                )
+                .connect_to(agent_end),
+        );
+        Client
+            .builder()
+            .connect_with(client_end, async |cx: ConnectionTo<Agent>| {
+                let modes: SessionModeState = serde_json::from_value(serde_json::json!({
+                    "currentModeId":"yolo",
+                    "availableModes":[{"id":"build","name":"Build"},{"id":"plan","name":"Plan"},{"id":"yolo","name":"Yolo"}]
+                }))
+                .unwrap();
+                let response = NewSessionResponse::new(SessionId::new("zcode-test"))
+                    .modes(modes)
+                    .config_options(mode_options("yolo"));
+                let session = AgentSession::attach(&cx, response)?;
+                let result = configure_new_zcode_session(
+                    AgentType::ZCode,
+                    &cx,
+                    &session,
+                    &handshake,
+                    preferred,
+                    &BTreeMap::new(),
+                    Some(mode_options("yolo")),
+                )
+                .await;
+                if cancel_mode {
+                    assert!(result.unwrap_err().to_string().contains(HANDSHAKE_CANCELLED_SENTINEL));
+                } else if confirm && accept_mode {
+                    let (_, preferences) = result?;
+                    assert_eq!(
+                        preferences.get("mode").map(String::as_str),
+                        Some(preferred.unwrap_or("build"))
+                    );
+                    cx.send_request_to(
+                        Agent,
+                        PromptRequest::new(session.session_id().clone(), vec![]),
+                    )
+                    .block_task()
+                    .await?;
+                } else {
+                    assert!(
+                        result.is_err(),
+                        "a contradictory confirmation must block prompting"
+                    );
+                }
+                Ok::<_, agent_client_protocol::Error>(())
+            })
+            .await
+            .unwrap();
+        agent.abort();
+        let observed = seen.lock().unwrap().clone();
+        observed
+    }
+
+    #[tokio::test]
+    async fn zcode_confirms_build_before_first_prompt() {
+        assert_eq!(
+            drive_mode_gate(None, true, true).await,
+            vec!["mode:build", "config:build", "prompt"]
+        );
+    }
+
+    #[tokio::test]
+    async fn zcode_preserves_explicit_yolo_choice() {
+        assert_eq!(
+            drive_mode_gate(Some("yolo"), true, true).await,
+            vec!["mode:yolo", "config:yolo", "prompt"]
+        );
+    }
+
+    #[tokio::test]
+    async fn zcode_does_not_prompt_after_failed_mode_confirmation() {
+        assert_eq!(
+            drive_mode_gate(None, false, true).await,
+            vec!["mode:build", "config:build"]
+        );
+    }
+
+    #[tokio::test]
+    async fn zcode_plan_updates_native_mode_before_confirming_config() {
+        assert_eq!(
+            drive_mode_gate(Some("plan"), true, true).await,
+            vec!["mode:plan", "config:plan", "prompt"]
+        );
+    }
+
+    #[tokio::test]
+    async fn zcode_does_not_prompt_or_set_config_after_rejected_native_mode() {
+        assert_eq!(drive_mode_gate(None, true, false).await, vec!["mode:build"]);
+    }
+
+    #[tokio::test]
+    async fn zcode_cancelled_handshake_stops_mode_confirmation_before_config_or_prompt() {
+        let observed = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            drive_mode_gate_with_cancel(None, true, true, true),
+        )
+        .await
+        .expect("a cancelled ZCode handshake must not wait for mode confirmation");
+        assert_eq!(observed, vec!["mode:build"]);
+    }
+
+    #[test]
+    fn zcode_does_not_replay_the_mode_its_gate_applied() {
+        assert_eq!(
+            mode_to_replay_after_gate(AgentType::ZCode, Some("plan".into())),
+            None
+        );
+        assert_eq!(
+            mode_to_replay_after_gate(AgentType::OpenCode, Some("plan".into())),
+            Some("plan".to_string())
+        );
+        assert_eq!(mode_to_replay_after_gate(AgentType::OpenCode, None), None);
+    }
+
+    #[test]
+    fn zcode_negotiates_images_and_resources_but_not_audio() {
+        let advertised = agent_client_protocol::schema::v1::PromptCapabilities::default()
+            .image(true)
+            .audio(true)
+            .embedded_context(true);
+        let zcode = effective_prompt_capabilities(AgentType::ZCode, &advertised);
+        assert!(zcode.image && zcode.embedded_context);
+        assert!(!zcode.audio);
+        let absent = effective_prompt_capabilities(
+            AgentType::ZCode,
+            &agent_client_protocol::schema::v1::PromptCapabilities::default(),
+        );
+        assert!(!absent.image && !absent.audio && !absent.embedded_context);
+        let other = effective_prompt_capabilities(AgentType::KimiCode, &advertised);
+        assert!(other.image && other.audio && other.embedded_context);
+    }
+
+    #[test]
+    fn zcode_records_history_without_enabling_native_parser_agents() {
+        assert_eq!(
+            transcript_dir_for(AgentType::ZCode),
+            Some("houhub-zcode-acp")
+        );
+        assert_eq!(transcript_dir_for(AgentType::ClaudeCode), None);
+        assert_eq!(transcript_dir_for(AgentType::DeepSeek), None);
+        assert!(transcript_dir_for(AgentType::custom("example").unwrap()).is_some());
+    }
+
+    #[test]
+    fn trae_records_history_in_its_own_transcript_dir() {
+        assert_eq!(transcript_dir_for(AgentType::Trae), Some("houhub-trae-cli"));
+        assert_ne!(
+            transcript_dir_for(AgentType::Trae),
+            transcript_dir_for(AgentType::ZCode)
+        );
+    }
+
+    #[test]
+    fn command_code_records_history_in_its_own_transcript_dir() {
+        assert_eq!(
+            transcript_dir_for(AgentType::CommandCode),
+            Some("houhub-command-code")
+        );
+        assert_ne!(
+            transcript_dir_for(AgentType::CommandCode),
+            transcript_dir_for(AgentType::Trae)
+        );
+    }
+}
+
+#[cfg(test)]
+mod wire_mcp_gate_tests {
+    use super::*;
+
+    // Cline keeps the `mcpServers` it is sent and never connects them, so the
+    // houhub-mcp companion must not be injected: its delegation and feedback
+    // tools would be advertised to a model that never gets them. Its user
+    // servers travel through its own settings file instead.
+    #[test]
+    fn cline_takes_mcp_from_its_settings_file_not_the_wire() {
+        assert!(!agent_delivers_wire_mcp(AgentType::Cline));
+        assert!(agent_reads_own_mcp_config(AgentType::Cline));
+        assert!(load_mcp_servers_for_agent(AgentType::Cline).is_empty());
+    }
+
+    #[test]
+    fn pi_stays_off_the_wire_and_the_rest_stay_on_it() {
+        assert!(!agent_delivers_wire_mcp(AgentType::Pi));
+        for agent_type in [
+            AgentType::ClaudeCode,
+            AgentType::Codex,
+            AgentType::OpenCode,
+            AgentType::Hermes,
+            AgentType::CodeBuddy,
+            AgentType::Grok,
+            AgentType::Cursor,
+            AgentType::Qoder,
+            AgentType::DeepSeek,
+            AgentType::ZCode,
+        ] {
+            assert!(agent_delivers_wire_mcp(agent_type), "{agent_type}");
+        }
+        // DeepSeek reads no MCP file at all: the wire is its only channel.
+        assert!(!agent_reads_own_mcp_config(AgentType::DeepSeek));
+    }
+
+    // TRAE CLI starts both the servers in its `traecli.toml` and the ones on
+    // `session/new`, so the file's servers stay off the wire (or each would be
+    // mounted twice) while the wire still carries the houhub-mcp companion.
+    #[test]
+    fn trae_takes_user_servers_from_its_config_and_the_companion_from_the_wire() {
+        assert!(agent_delivers_wire_mcp(AgentType::Trae));
+        assert!(agent_reads_own_mcp_config(AgentType::Trae));
+        assert!(load_mcp_servers_for_agent(AgentType::Trae).is_empty());
+    }
+
+    // Command Code also starts both its `~/.commandcode/mcp.json` servers and
+    // the ones on `session/new`: the file's stay off the wire, the companion
+    // rides it.
+    #[test]
+    fn command_code_takes_user_servers_from_its_config_and_the_companion_from_the_wire() {
+        assert!(agent_delivers_wire_mcp(AgentType::CommandCode));
+        assert!(agent_reads_own_mcp_config(AgentType::CommandCode));
+        assert!(load_mcp_servers_for_agent(AgentType::CommandCode).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod trae_handshake_tests {
+    use super::*;
+    use agent_client_protocol::schema::v1::InitializeResponse;
+
+    /// The `initialize` result `traecli acp serve` 0.209.1 sends, trimmed to
+    /// what the PAT gate reads.
+    fn trae_initialize() -> InitializeResponse {
+        serde_json::from_value(serde_json::json!({
+            "protocolVersion": 1,
+            "agentCapabilities": {"loadSession": true},
+            "authMethods": [
+                {
+                    "id": "trae-tob-browser",
+                    "name": "Sign in with Enterprise SSO",
+                    "description": "Open your TRAE enterprise browser login"
+                },
+                {
+                    "id": "trae-tob-pat",
+                    "name": "Sign in with Personal Access Token",
+                    "description": "Requires `TRAECLI_PERSONAL_ACCESS_TOKEN` to be set before starting TRAE CLI."
+                }
+            ],
+            "agentInfo": {"name": "traecli-acp", "title": "TRAE CLI", "version": "0.209.1"}
+        }))
+        .expect("traecli 0.209.1 initialize parses")
+    }
+
+    #[test]
+    fn a_configured_pat_signs_trae_in_with_the_advertised_method() {
+        let init = trae_initialize();
+        assert_eq!(
+            trae_pat_sign_in_method(AgentType::Trae, true, &init.auth_methods),
+            Some("trae-tob-pat")
+        );
+    }
+
+    #[test]
+    fn no_pat_means_no_sign_in_and_the_stored_login_is_left_alone() {
+        let init = trae_initialize();
+        assert_eq!(
+            trae_pat_sign_in_method(AgentType::Trae, false, &init.auth_methods),
+            None
+        );
+    }
+
+    #[test]
+    fn a_server_without_the_method_and_other_agents_get_no_authenticate() {
+        let init = trae_initialize();
+        let browser_only: Vec<_> = init
+            .auth_methods
+            .iter()
+            .filter(|m| m.id().0.as_ref() != "trae-tob-pat")
+            .cloned()
+            .collect();
+        assert_eq!(
+            trae_pat_sign_in_method(AgentType::Trae, true, &browser_only),
+            None
+        );
+        // The flag is only ever set for TRAE CLI, but the gate does not rely
+        // on that: another agent advertising a same-named method is not TRAE.
+        for agent_type in [
+            AgentType::Kiro,
+            AgentType::Codex,
+            AgentType::custom("trae").unwrap(),
+        ] {
+            assert_eq!(
+                trae_pat_sign_in_method(agent_type, true, &init.auth_methods),
+                None,
+                "{agent_type}"
+            );
+        }
+    }
+}
+
+fn prepend_path_value(current: Option<&str>, dirs: impl IntoIterator<Item = PathBuf>) -> String {
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let mut parts: Vec<String> = Vec::new();
+    for dir in dirs {
+        let value = dir.to_string_lossy().to_string();
+        if !value.is_empty() && !parts.iter().any(|item| item == &value) {
+            parts.push(value);
+        }
+    }
+    if let Some(value) = current.filter(|value| !value.is_empty()) {
+        parts.push(value.to_string());
+    }
+    parts.join(sep)
+}
+
+async fn patch_pi_launch_env(env: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut map: BTreeMap<String, String> = env.into_iter().collect();
+    let mut path_dirs = Vec::new();
+    if let Some(bin_dir) = crate::commands::acp::node_command_bin_dir() {
+        path_dirs.push(bin_dir);
+    }
+    if let Some(bin_dir) = crate::commands::acp::npm_command_bin_dir("pi-acp").await {
+        path_dirs.push(bin_dir);
+    }
+    if let Some(bin_dir) = crate::commands::acp::npm_command_bin_dir("pi").await {
+        path_dirs.push(bin_dir);
+    }
+    if let Some(bin_dir) = crate::commands::acp::resolve_pi_command_path("pi")
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+    {
+        path_dirs.push(bin_dir);
+    }
+    if !path_dirs.is_empty() {
+        let next_path = prepend_path_value(map.get("PATH").map(String::as_str), path_dirs);
+        map.insert("PATH".to_string(), next_path);
+    }
+    map.into_iter().collect()
+}
+
+fn sanitize_agent_env(agent_type: AgentType, env: Vec<(String, String)>) -> Vec<(String, String)> {
+    if agent_type != AgentType::Codex {
+        return env;
+    }
+    sanitize_agent_env_with_fallback(
+        agent_type,
+        env,
+        crate::commands::acp::default_codex_home_dir_for_launch(),
+    )
+}
+
+fn sanitize_agent_env_with_fallback(
+    agent_type: AgentType,
+    env: Vec<(String, String)>,
+    fallback_home: PathBuf,
+) -> Vec<(String, String)> {
+    if agent_type != AgentType::Codex {
+        return env;
+    }
+
+    let mut saw_valid_codex_home = false;
+    let mut cleaned = Vec::with_capacity(env.len() + 1);
+    env.into_iter().for_each(|(key, value)| {
+        if !key.eq_ignore_ascii_case("CODEX_HOME") {
+            cleaned.push((key, value));
+            return;
+        }
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            tracing::warn!("[ACP][Codex] ignoring empty CODEX_HOME");
+            return;
+        }
+        if std::path::Path::new(trimmed).exists() {
+            saw_valid_codex_home = true;
+            cleaned.push((key, value));
+            return;
+        }
+        tracing::warn!(
+            "[ACP][Codex] ignoring CODEX_HOME={trimmed:?} because the path does not exist"
+        );
+    });
+    if !saw_valid_codex_home {
+        if let Err(err) = std::fs::create_dir_all(&fallback_home) {
+            tracing::warn!(
+                "[ACP][Codex] failed to create fallback CODEX_HOME {fallback_home:?}: {err}"
+            );
+        } else {
+            cleaned.push((
+                "CODEX_HOME".to_string(),
+                fallback_home.display().to_string(),
+            ));
+        }
+    }
+    cleaned
+}
+
+fn pi_bound_model_value(provider: &str, model: &str) -> String {
+    let provider = provider.trim();
+    let model = model.trim();
+    if model.starts_with(&format!("{provider}/")) {
+        model.to_string()
+    } else {
+        format!("{provider}/{model}")
+    }
+}
+
+fn pi_model_belongs_to_provider(value: &str, provider: &str) -> bool {
+    let prefix = format!("{}/", provider.trim());
+    value.trim().starts_with(&prefix) && value.trim().len() > prefix.len()
+}
+
+/// Keep the wire-facing Pi model selector scoped to the HouHub-bound provider.
+/// Pi intentionally advertises every authenticated provider, so filtering only
+/// in the React picker would leave snapshots and reconnect preferences able to
+/// select an old provider. This projection is applied on every emission.
+fn filter_pi_bound_model_options(
+    options: &mut [SessionConfigOptionInfo],
+    provider: Option<&str>,
+    model: Option<&str>,
+) {
+    let Some(provider) = provider.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let desired = model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| pi_bound_model_value(provider, value));
+
+    for option in options {
+        if option.id != "model" && option.category.as_deref() != Some("model") {
+            continue;
+        }
+        let SessionConfigKindInfo::Select(select) = &mut option.kind else {
+            continue;
+        };
+        select
+            .options
+            .retain(|item| pi_model_belongs_to_provider(&item.value, provider));
+        for group in &mut select.groups {
+            group
+                .options
+                .retain(|item| pi_model_belongs_to_provider(&item.value, provider));
+        }
+        select.groups.retain(|group| !group.options.is_empty());
+
+        // A provider catalog can arrive a tick after the initial selector
+        // event. Keep a stable, usable value instead of exposing another
+        // provider while that catalog is settling.
+        if select.options.is_empty() {
+            if let Some(value) = desired.clone() {
+                let label = value
+                    .split_once('/')
+                    .map(|(_, model)| model)
+                    .unwrap_or(value.as_str())
+                    .to_string();
+                select.options.push(SessionConfigSelectOptionInfo {
+                    value: value.clone(),
+                    name: label,
+                    description: None,
+                });
+                select.groups.clear();
+            }
+        }
+
+        let current_is_bound = select
+            .options
+            .iter()
+            .any(|item| item.value == select.current_value);
+        if !current_is_bound {
+            if let Some(value) = desired
+                .as_deref()
+                .filter(|value| select.options.iter().any(|item| item.value == *value))
+            {
+                select.current_value = value.to_string();
+            } else if let Some(first) = select.options.first() {
+                select.current_value = first.value.clone();
+            }
+        }
     }
 }

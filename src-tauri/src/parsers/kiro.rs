@@ -25,19 +25,26 @@
 //! `<id>/` (the session's task list).
 
 use std::collections::{HashMap, HashSet};
+
 use std::ffi::OsString;
+
 use std::fs;
+
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
+
 use chrono::{DateTime, TimeZone, Utc};
+
 use serde_json::Value;
 
 use crate::models::{
     AgentType, ContentBlock, ConversationDetail, ConversationSummary, ImageData, MessageRole,
     UnifiedMessage,
 };
+
 use crate::parsers::claude::group_into_turns;
+
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, is_safe_subagent_id, merge_context_window_stats,
@@ -447,6 +454,7 @@ fn tool_result_blocks(data: &Value, tools: &HashMap<String, CanonicalTool>) -> V
             is_error: body.get("status").and_then(Value::as_str) == Some("error"),
             agent_stats: None,
             images,
+            exit_code: None,
         });
     }
     blocks

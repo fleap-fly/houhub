@@ -747,6 +747,7 @@ impl GeminiParser {
                     is_error,
                     agent_stats: None,
                     images: Vec::new(),
+                    exit_code: None,
                 });
             }
         }
@@ -848,7 +849,7 @@ impl GeminiParser {
                         duration_ms: None,
                         model: None,
                         completed_at: Some(timestamp),
-                        agent_message_id: None,
+                    agent_message_id: None,
                     });
                 }
                 "gemini" | "assistant" | "model" => {
@@ -868,7 +869,7 @@ impl GeminiParser {
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string()),
                         completed_at: Some(timestamp),
-                        agent_message_id: None,
+                    agent_message_id: None,
                     });
                 }
                 "system" => {
@@ -884,7 +885,7 @@ impl GeminiParser {
                         duration_ms: None,
                         model: None,
                         completed_at: Some(timestamp),
-                        agent_message_id: None,
+                    agent_message_id: None,
                     });
                 }
                 _ => {}
@@ -1018,7 +1019,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             i += 1;
             continue;
@@ -1034,7 +1035,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             i += 1;
             continue;
@@ -1078,7 +1079,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
             duration_ms,
             model,
             completed_at,
-            agent_message_id: None,
+        agent_message_id: None,
         });
     }
 

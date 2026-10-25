@@ -50,6 +50,8 @@ pub mod token_usage_sync;
 
 pub mod token_usage_turn;
 
+pub mod tool_approval;
+
 pub mod work_task;
 
 pub mod work_task_event;

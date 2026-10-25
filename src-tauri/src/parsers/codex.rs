@@ -1436,6 +1436,7 @@ fn unwrap_code_mode_script(
             is_error,
             agent_stats: None,
             images: Vec::new(),
+            exit_code: None,
         }
     };
 
@@ -1819,6 +1820,7 @@ fn unwrap_completed_mcp_calls(
             is_error: item.is_error,
             agent_stats: None,
             images: Vec::new(),
+            exit_code: None,
         });
     }
     Some((uses, results))
@@ -3650,6 +3652,7 @@ impl CodexParser {
                                                 is_error: false,
                                                 agent_stats: None,
                                                 images: Vec::new(),
+                                                exit_code: None,
                                             },
                                         ],
                                         timestamp,
@@ -4496,6 +4499,7 @@ impl CodexParser {
                                             is_error: false,
                                             agent_stats: None,
                                             images: Vec::new(),
+                                            exit_code: None,
                                         }],
                                         timestamp,
                                         usage: None,
@@ -4573,6 +4577,7 @@ impl CodexParser {
                                                 is_error,
                                                 agent_stats: None,
                                                 images: Vec::new(),
+                                                exit_code: None,
                                             }],
                                             timestamp,
                                             usage: None,
@@ -4692,6 +4697,7 @@ impl CodexParser {
                                             is_error,
                                             agent_stats: None,
                                             images: Vec::new(),
+                                            exit_code: None,
                                         }],
                                         timestamp,
                                         usage: None,
@@ -5637,7 +5643,7 @@ fn flush_pending_reasoning(
         duration_ms: None,
         model: None,
         completed_at: Some(timestamp),
-        agent_message_id: None,
+    agent_message_id: None,
     });
 }
 
@@ -5850,6 +5856,7 @@ fn push_plan_review_marker(messages: &mut Vec<UnifiedMessage>, timestamp: DateTi
                 is_error: false,
                 agent_stats: None,
                 images: Vec::new(),
+                exit_code: None,
             },
         ],
         timestamp,
@@ -6536,6 +6543,7 @@ fn codex_compaction_divider(
             is_error: false,
             agent_stats: None,
             images: Vec::new(),
+            exit_code: None,
         },
     ];
     if let Some(summary) = summary {
@@ -6789,7 +6797,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             i += 1;
         } else if matches!(msg.role, MessageRole::System) {
@@ -6802,7 +6810,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             i += 1;
         } else {
@@ -6843,7 +6851,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms,
                 model: turn_model,
                 completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
         }
     }

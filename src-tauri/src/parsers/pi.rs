@@ -37,13 +37,13 @@ use crate::parsers::{
 /// through pi's tilde rule ([`expand_pi_tilde`]), because pi reads them through
 /// `expandTildePath`.
 ///
-/// That is pi's own documented order minus its `--session-dir` flag, which houhub
+/// That is pi's own documented order minus its `--session-dir` flag, which HouHub
 /// never passes (`docs/settings.md`: "precedence is `--session-dir`,
 /// `PI_CODING_AGENT_SESSION_DIR`, then `sessionDir` in settings.json"). The
 /// settings layer is not optional garnish: pi-acp reads it too
 /// (`getPiSessionsDir` → `readSessionDirFromSettings`), so a user who sets
 /// `sessionDir` and is missing this layer gets a pi that resumes fine while
-/// houhub's history list stays permanently empty.
+/// HouHub's history list stays permanently empty.
 ///
 /// Mirrors the `resolve_*`/`resolve_*_from` split of `parsers::kimi_code` so the
 /// environment lookup is a pure function over its inputs (testable without
@@ -101,7 +101,7 @@ pub(crate) fn resolve_pi_agent_dir_for_env(env: &AgentEnv) -> PathBuf {
 /// `contextWindow: definition.contextWindow ?? 128000`. The entry REPLACES any
 /// built-in model of the same id (`applyModelsJson` upserts by id and only
 /// borrows `api`/`baseUrl` from the one it replaces), so 128K is what pi runs
-/// with — not the built-in catalog's number, and not houhub's name table's.
+/// with — not the built-in catalog's number, and not HouHub's name table's.
 const PI_DEFAULT_MODEL_CONTEXT_WINDOW: u64 = 128_000;
 
 /// The context window `<agent_dir>/models.json` settles on for a model.
@@ -251,7 +251,7 @@ fn expand_pi_tilde(value: &str, home_dir: Option<&Path>) -> PathBuf {
 /// resolves a single sessions root with no workspace in hand.
 ///
 /// Guessing is worse than declining. Resolving a relative value against the agent
-/// dir (which is what pi-acp's own discovery helper does) would point houhub at a
+/// dir (which is what pi-acp's own discovery helper does) would point HouHub at a
 /// directory nobody writes to AND would shadow the default — costing the user the
 /// history pi wrote to `<agent_dir>/sessions` before they ever set the option.
 /// Falling through keeps that history listed.
@@ -864,6 +864,7 @@ fn parse_message_record(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
                     is_error,
                     agent_stats: None,
                     images: content_images(message.get("content")),
+                    exit_code: None,
                 }],
                 ts,
                 None,
@@ -946,6 +947,7 @@ fn parse_compaction(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>, idx
                 is_error: false,
                 agent_stats: None,
                 images: Vec::new(),
+                exit_code: None,
             },
         ],
         ts,
@@ -977,7 +979,7 @@ fn parse_branch_summary(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
 
 /// An extension-injected message that DOES participate in the LLM context
 /// (`custom_message`). `display: false` is the extension asking for it to stay
-/// hidden in the TUI, and houhub honors that rather than second-guessing it.
+/// hidden in the TUI, and HouHub honors that rather than second-guessing it.
 fn parse_custom_message(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>, idx: usize) {
     if !value
         .get("display")
@@ -1070,6 +1072,7 @@ fn parse_bash_execution(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
             is_error,
             agent_stats: None,
             images: Vec::new(),
+            exit_code,
         }],
         ts,
         None,
@@ -1422,7 +1425,7 @@ fn text_message(
         duration_ms: None,
         model,
         completed_at: Some(ts),
-        agent_message_id: None,
+    agent_message_id: None,
     }
 }
 
@@ -1448,7 +1451,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             i += 1;
         } else if matches!(msg.role, MessageRole::System) {
@@ -1461,7 +1464,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             i += 1;
         } else {
@@ -1500,7 +1503,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms,
                 model: turn_model,
                 completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
         }
     }
@@ -1511,8 +1514,11 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use serde_json::json;
+
     use std::io::Write;
+
     use tempfile::tempdir;
 
     /// Two providers, same id, different windows — the file pi would resolve
@@ -1562,8 +1568,8 @@ mod tests {
     /// pi's `modelFromJson` ends `contextWindow: definition.contextWindow ??
     /// 128000`, and the entry REPLACES any built-in of the same id. So a listed
     /// model that declares nothing is not unknown — it is 128K, including for
-    /// an id houhub's own name table would answer differently. This is the shape
-    /// houhub's Pi settings panel writes (`apply_pi_custom_model` records `id` +
+    /// an id HouHub's own name table would answer differently. This is the shape
+    /// HouHub's Pi settings panel writes (`apply_pi_custom_model` records `id` +
     /// `name` + reasoning, never a window).
     #[test]
     fn a_listed_model_without_a_window_takes_pi_s_own_default() {
@@ -1717,6 +1723,7 @@ mod tests {
     /// honored-path assertions quietly exercise the FALLBACK there.
     #[cfg(windows)]
     const ABS_PREFIX: &str = "C:";
+
     #[cfg(not(windows))]
     const ABS_PREFIX: &str = "";
 
@@ -1801,14 +1808,14 @@ mod tests {
             json!({"type":"model_change","id":"mc1","parentId":"m1","timestamp":"2026-06-27T10:00:01.500Z",
                    "provider":"anthropic","modelId":"claude-sonnet-4-6"}),
             json!({"type":"message","id":"m2","parentId":"mc1","timestamp":"2026-06-27T10:00:02.000Z",
-            "message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","stopReason":"tool_use",
-              "usage":{"input":1200,"output":80,"cacheRead":4000,"cacheWrite":0,"totalTokens":5280,"cost":0.01},
-              "content":[
-                // The REAL on-disk shape: the payload key is `thinking`.
-                {"type":"thinking","thinking":"check the build first","thinkingSignature":"sig"},
-                {"type":"text","text":"Running the build now."},
-                {"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"pnpm build"}}
-              ]}}),
+                   "message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","stopReason":"tool_use",
+                     "usage":{"input":1200,"output":80,"cacheRead":4000,"cacheWrite":0,"totalTokens":5280,"cost":0.01},
+                     "content":[
+                       // The REAL on-disk shape: the payload key is `thinking`.
+                       {"type":"thinking","thinking":"check the build first","thinkingSignature":"sig"},
+                       {"type":"text","text":"Running the build now."},
+                       {"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"pnpm build"}}
+                     ]}}),
             json!({"type":"message","id":"m3","parentId":"m2","timestamp":"2026-06-27T10:00:09.000Z",
                    "message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash",
                      "content":[{"type":"text","text":"Compiled successfully"}],"isError":false}}),
@@ -2006,10 +2013,10 @@ mod tests {
             &[
                 json!({"type":"session","version":3,"id":id,"timestamp":"2026-06-27T10:00:00.000Z","cwd":"/Users/demo/app"}),
                 json!({"type":"message","id":"m1","timestamp":"2026-06-27T10:00:01.000Z",
-                "message":{"role":"user","content":[
-                  {"type":"text","text":"part one "},
-                  {"type":"text","text":"part two"}
-                ]}}),
+                       "message":{"role":"user","content":[
+                         {"type":"text","text":"part one "},
+                         {"type":"text","text":"part two"}
+                       ]}}),
                 json!({"type":"message","id":"m2","timestamp":"2026-06-27T10:00:02.000Z",
                        "message":{"role":"assistant","model":"claude-sonnet-4-6",
                          "content":[{"type":"text","text":"ok"}]}}),
@@ -2063,12 +2070,12 @@ mod tests {
         assert!(has_bash_use, "bashExecution becomes a bash ToolUse");
 
         let errored = detail.turns.iter().flat_map(|t| &t.blocks).any(|b| {
-            matches!(b, ContentBlock::ToolResult { is_error, output_preview, .. }
-                if *is_error && output_preview.as_deref() == Some("boom"))
+            matches!(b, ContentBlock::ToolResult { is_error, output_preview, exit_code, .. }
+                if *is_error && output_preview.as_deref() == Some("boom") && *exit_code == Some(1))
         });
         assert!(
             errored,
-            "a non-zero exitCode marks the bash result an error"
+            "a non-zero exitCode marks the bash result an error, and is kept"
         );
     }
 
@@ -2182,10 +2189,10 @@ mod tests {
                 json!({"type":"message","id":"m1","parentId":null,"timestamp":"2026-06-27T10:00:01.000Z",
                        "message":{"role":"user","content":"go"}}),
                 json!({"type":"message","id":"m2","parentId":"m1","timestamp":"2026-06-27T10:00:02.000Z",
-                "message":{"role":"assistant","model":"m","content":[
-                  {"type":"thinking","thinking":"weighing the options","thinkingSignature":"abc"},
-                  {"type":"text","text":"done"}
-                ]}}),
+                       "message":{"role":"assistant","model":"m","content":[
+                         {"type":"thinking","thinking":"weighing the options","thinkingSignature":"abc"},
+                         {"type":"text","text":"done"}
+                       ]}}),
             ],
             id,
         );
@@ -2204,9 +2211,9 @@ mod tests {
             &[
                 header(id),
                 json!({"type":"message","id":"m1","parentId":null,"timestamp":"2026-06-27T10:00:01.000Z",
-                "message":{"role":"assistant","model":"m","content":[
-                  {"type":"thinking","text":"legacy shape"}
-                ]}}),
+                       "message":{"role":"assistant","model":"m","content":[
+                         {"type":"thinking","text":"legacy shape"}
+                       ]}}),
             ],
             id,
         );
@@ -2553,7 +2560,7 @@ mod tests {
             ],
             id,
         );
-        let (output, is_error) = detail
+        let (output, is_error, exit_code) = detail
             .turns
             .iter()
             .flat_map(|t| &t.blocks)
@@ -2561,12 +2568,18 @@ mod tests {
                 ContentBlock::ToolResult {
                     output_preview,
                     is_error,
+                    exit_code,
                     ..
-                } => Some((output_preview.clone().unwrap_or_default(), *is_error)),
+                } => Some((
+                    output_preview.clone().unwrap_or_default(),
+                    *is_error,
+                    *exit_code,
+                )),
                 _ => None,
             })
             .expect("the bash result");
         assert!(is_error, "a cancelled run is not a success");
+        assert_eq!(exit_code, None, "an interrupted run never got a code");
         assert!(output.contains("partial"), "the output is kept: {output}");
         assert!(output.contains("[cancelled]"), "got: {output}");
         assert!(output.contains("/tmp/pi-out.txt"), "got: {output}");
@@ -2705,7 +2718,7 @@ mod tests {
 
     /// pi-acp resolves `<agentDir>/settings.json` → `sessionDir` before falling
     /// back to `<agentDir>/sessions`, so a user who sets it kept a pi that
-    /// resumed fine and a houhub history list that was permanently empty.
+    /// resumed fine and a HouHub history list that was permanently empty.
     #[test]
     fn settings_json_session_dir_is_honored() {
         let dir = tempdir().expect("tempdir");
@@ -2794,7 +2807,7 @@ mod tests {
     /// relative one does: `\srv\x` (and `/srv/x`) carries a root but no drive
     /// prefix, so Windows resolves it against whatever drive the pi process's cwd
     /// sits on — and that cwd is the per-session workspace pi-acp passes. Widening
-    /// the gate from `is_absolute` to `has_root` would name a directory houhub
+    /// the gate from `is_absolute` to `has_root` would name a directory HouHub
     /// cannot know AND shadow the history in `<agent_dir>\sessions`.
     #[test]
     #[cfg(windows)]
@@ -2880,7 +2893,7 @@ mod tests {
     }
 
     /// #948: built with an agent's launch env, the parser reads where THAT
-    /// env puts the agent's files, not where houhub's own environment does.
+    /// env puts the agent's files, not where HouHub's own environment does.
     #[test]
     fn for_env_reads_both_dirs_of_the_launch_env() {
         let env = AgentEnv::with_overrides(&[

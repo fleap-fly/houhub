@@ -1,4 +1,15 @@
 import "@testing-library/jest-dom/vitest"
+import { beforeEach } from "vitest"
+
+import { resetDisclosureStore } from "@/components/message/activity/disclosure-store"
+
+// The activity timeline remembers which rows were opened in a module-level
+// store keyed by step (tool call) id, so it outlives a test's render: without
+// a reset, a row one test opened mounts already open in the next test that
+// reuses the id, and that test's click closes it instead.
+beforeEach(() => {
+  resetDisclosureStore()
+})
 
 if (typeof window !== "undefined" && !("ResizeObserver" in window)) {
   class ResizeObserverMock {

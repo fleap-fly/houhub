@@ -419,7 +419,7 @@ impl OpenCodeParser {
                 duration_ms,
                 model: msg_model,
                 completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
         }
 
@@ -561,6 +561,7 @@ impl OpenCodeParser {
                         is_error: false,
                         agent_stats: None,
                         images: Vec::new(),
+                        exit_code: None,
                     });
                 }
                 // A slash command that targets a sub-agent is recorded as a
@@ -719,6 +720,7 @@ impl OpenCodeParser {
                             is_error: is_error_status(status) || has_error_field,
                             agent_stats,
                             images: Vec::new(),
+                            exit_code: None,
                         });
                     } else {
                         let normalized = normalize_tool_call(raw_tool_name, state);
@@ -743,6 +745,7 @@ impl OpenCodeParser {
                             is_error: normalized.is_error,
                             agent_stats: None,
                             images: Vec::new(),
+                            exit_code: None,
                         });
                     }
                 }
@@ -2010,7 +2013,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             i += 1;
         } else if matches!(msg.role, MessageRole::System) {
@@ -2023,7 +2026,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             i += 1;
         } else {
@@ -2063,7 +2066,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms,
                 model: turn_model,
                 completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
         }
     }
@@ -2300,6 +2303,7 @@ fn v2_assistant_blocks(
                     is_error: normalized.is_error,
                     agent_stats: None,
                     images: Vec::new(),
+                    exit_code: None,
                 });
             }
             _ => {}
@@ -2397,6 +2401,7 @@ fn v2_agent_blocks(
                 child_session_id: None,
             }),
             images: Vec::new(),
+            exit_code: None,
         },
     ]
 }
@@ -2502,8 +2507,11 @@ async fn batch_load_v2_subagent_tool_calls(
 #[cfg(test)]
 mod tests {
     use super::{extract_opencode_file_image, resolve_xdg_data_home};
+
     use crate::models::ContentBlock;
+
     use sea_orm::{ConnectionTrait, DbBackend, Statement};
+
     use std::path::PathBuf;
 
     #[test]
@@ -3077,6 +3085,7 @@ mod tests {
             is_error: false,
             agent_stats: None,
             images: Vec::new(),
+            exit_code: None,
         };
 
         assert!(super::is_compaction_only(&[compaction(), result()]));

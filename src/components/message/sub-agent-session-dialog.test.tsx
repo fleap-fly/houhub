@@ -222,6 +222,7 @@ function makeConnState(overrides: Partial<ConnectionState>): ConnectionState {
     pendingPlanApproval: null,
     claudeApiRetry: null,
     sessionFailures: [],
+    toolApprovals: {},
     asyncTasks: [],
     error: null,
     errorLevel: "error",

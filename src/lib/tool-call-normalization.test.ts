@@ -440,7 +440,7 @@ describe("inferLiveToolName query-bearing MCP calls", () => {
 })
 
 describe("normalizeToolName collapses delegate_to_agent across hosts", () => {
-  // The houhub multi-agent delegation MCP tool is named the same across hosts
+  // The HouHub multi-agent delegation MCP tool is named the same across hosts
   // (`delegate_to_agent`) but each host serializes the server prefix
   // differently: Claude Code uses `mcp__<server>__`, Codex live ACP uses
   // `<server>/`, others use `.` or `:`. All forms must collapse to the
@@ -859,7 +859,12 @@ describe("inferLiveToolName cursor task and MCP shapes", () => {
 })
 
 describe("inferLiveToolName Grok plan-mode via x.ai/tool.kind", () => {
-  it("resolves enter_plan_mode despite the mutating title", () => {
+  it("resolves enter_plan_mode from x.ai/tool.kind despite the mutating title", () => {
+    // Grok's live tool_call title drifts `enter_plan_mode` → "Plan: Enter" →
+    // "Plan mode entered" while `_meta["x.ai/tool"].kind` stays `enter_plan`.
+    // The completed frame (worst case) must still resolve to the canonical name
+    // — which normalizes to "enterplanmode" so it draws as the plan-mode row,
+    // matching the historical path.
     const name = inferLiveToolName({
       title: "Plan mode entered",
       kind: "other",
@@ -1000,7 +1005,7 @@ describe("normalizeToolName codex command-action titles", () => {
   it("resolves search command actions to grep", () => {
     // codex-acp announces a search-classified shell command with NO rawInput and
     // no tool name — only the title. Without this the whole title became the
-    // "tool name": no search icon, an "other" tool-group tally, and a body that
+    // "tool name": no search icon, an "other" tool tally, and a body that
     // dumped the raw {formatted_output, exit_code} envelope.
     for (const title of [
       "Search for 'Tests run:' in com.forwayaudio.app",
