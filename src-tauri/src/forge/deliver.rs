@@ -24,17 +24,14 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-
 use sea_orm::DatabaseConnection;
-
 use serde::Deserialize;
 
 use super::auth::ResolvedAuth;
-
 use super::{
-    gitea, github, gitlab, urlencode_query, web_origin, ForgeError, ForgeItemKind, ForgeProvider,
+    gitea, github, gitlab, urlencode_query, web_origin, DeliveryTarget, ForgeError, ForgeItemKind,
+    ForgeProvider,
 };
-
 use crate::app_error::AppCommandError;
 
 /// Flatten a classified git failure into one line, git's own words included.
@@ -63,11 +60,7 @@ fn git_failure_message(err: AppCommandError) -> String {
         .map(str::trim)
         .filter(|d| !d.is_empty())
     {
-        Some(detail) => format!(
-            "{}: {}",
-            err.message,
-            truncate_chars(&redact_userinfo(detail))
-        ),
+        Some(detail) => format!("{}: {}", err.message, truncate_chars(&redact_userinfo(detail))),
         None => err.message,
     }
 }
@@ -244,18 +237,20 @@ pub struct DeliveryCtx<'a> {
 /// against a real HTTP server (see this module's tests).
 #[async_trait]
 pub trait ForgeDeliveryApi: Send + Sync {
-    /// Publish `work_branch` as `remote_branch` on `repo` — the repository the
-    /// push lands in: the source repository for an issue task's own branch,
-    /// the recorded HEAD repository for a pull-request push-back (the same
+    /// Publish `commit` as `remote_branch` on `repo` — the repository the
+    /// push lands in: the source repository for a task's own branch, the
+    /// recorded HEAD repository for a pull-request push-back (the same
     /// repository except when the pull request comes from a fork).
-    /// Fast-forward only — a rejected push means that branch has another owner
-    /// and the task must go back to a human.
+    /// `commit` is the work-branch tip the delivery snapshotted before its
+    /// CAS — never whatever the branch points at by the time this runs (see
+    /// [`push_refspec`]). Fast-forward only — a rejected push means that
+    /// branch has another owner and the task must go back to a human.
     async fn push_branch(
         &self,
         ctx: &DeliveryCtx<'_>,
         worktree_path: &str,
         repo: &str,
-        work_branch: &str,
+        commit: &str,
         remote_branch: &str,
     ) -> Result<(), String>;
 
@@ -275,8 +270,26 @@ pub trait ForgeDeliveryApi: Send + Sync {
 
     /// One pull request by number — how a task that IS a pull request checks
     /// what it is delivering into. Its number is part of the task's source
-    /// key, so this is a lookup, not a search.
+    /// key, so this is a lookup, not a search. The same lookup serves a task
+    /// that stayed in review after an earlier delivery: the pull request that
+    /// one opened is recorded on its row by number.
     async fn get_pull(&self, ctx: &DeliveryCtx<'_>, number: i64) -> Result<ForgePr, String>;
+
+    /// Where a task WITHOUT forge provenance delivers: the repository the
+    /// project checkout at `project_path` names as its `origin` — when that is
+    /// a forge houhub speaks — and the account that speaks for its host (the
+    /// host's default, the one the repository panel reads with). Asked once,
+    /// at such a task's first delivery; the engine pins the answer on the row
+    /// (see [`DeliveryTarget`]).
+    ///
+    /// On the trait for the same reason as everything else here: the answer
+    /// comes from the OS keyring and, for a host nothing declares, from a
+    /// network probe — neither of which a unit test may touch.
+    async fn local_target(
+        &self,
+        conn: &DatabaseConnection,
+        project_path: &str,
+    ) -> Result<DeliveryTarget, String>;
 
     /// Fetch `remote_ref` from the source repository into `local_ref` inside
     /// `repo_path`, and return the OID it landed on.
@@ -337,13 +350,13 @@ impl ForgeDeliveryApi for ForgeDelivery {
         ctx: &DeliveryCtx<'_>,
         worktree_path: &str,
         repo: &str,
-        work_branch: &str,
+        commit: &str,
         remote_branch: &str,
     ) -> Result<(), String> {
         // Git is git: the same explicit-URL push with the same pinned
         // credentials works against both forges.
         let auth = resolve(ctx).await?;
-        push_work_branch(ctx, &auth, worktree_path, repo, work_branch, remote_branch).await
+        push_work_branch(ctx, &auth, worktree_path, repo, commit, remote_branch).await
     }
 
     async fn find_pulls(
@@ -357,7 +370,9 @@ impl ForgeDeliveryApi for ForgeDelivery {
             ForgeProvider::GitLab => {
                 gitlab::find_merge_requests(&auth, ctx.owner_repo, head_branch).await
             }
-            ForgeProvider::Gitea => gitea::find_pulls(&auth, ctx.owner_repo, head_branch).await,
+            ForgeProvider::Gitea => {
+                gitea::find_pulls(&auth, ctx.owner_repo, head_branch).await
+            }
         }
         .map_err(|e| e.to_string())
     }
@@ -370,7 +385,9 @@ impl ForgeDeliveryApi for ForgeDelivery {
         let auth = resolve(ctx).await?;
         match ctx.provider {
             ForgeProvider::GitHub => create_pull(&auth, ctx.owner_repo, req).await,
-            ForgeProvider::GitLab => gitlab::create_merge_request(&auth, ctx.owner_repo, req).await,
+            ForgeProvider::GitLab => {
+                gitlab::create_merge_request(&auth, ctx.owner_repo, req).await
+            }
             ForgeProvider::Gitea => gitea::create_pull(&auth, ctx.owner_repo, req).await,
         }
         .map_err(|e| e.to_string())
@@ -380,10 +397,51 @@ impl ForgeDeliveryApi for ForgeDelivery {
         let auth = resolve(ctx).await?;
         match ctx.provider {
             ForgeProvider::GitHub => get_pull(&auth, ctx.owner_repo, number).await,
-            ForgeProvider::GitLab => gitlab::get_merge_request(&auth, ctx.owner_repo, number).await,
+            ForgeProvider::GitLab => {
+                gitlab::get_merge_request(&auth, ctx.owner_repo, number).await
+            }
             ForgeProvider::Gitea => gitea::get_pull(&auth, ctx.owner_repo, number).await,
         }
         .map_err(|e| e.to_string())
+    }
+
+    async fn local_target(
+        &self,
+        conn: &DatabaseConnection,
+        project_path: &str,
+    ) -> Result<DeliveryTarget, String> {
+        // The repository panel's own reading of the folder — the same remote,
+        // the same mount-path stripping, the same `recognized` rule — so the
+        // board offers a pull request exactly where the panel can read one.
+        let remote = crate::commands::forge::forge_remote_at(conn, project_path)
+            .await
+            .map_err(|e| e.message)?
+            .ok_or_else(|| {
+                "this project has no `origin` remote on GitHub, GitLab or Gitea to deliver to"
+                    .to_string()
+            })?;
+        if !remote.supported {
+            return Err(ForgeError::UnsupportedHost {
+                host: remote.server_host,
+            }
+            .to_string());
+        }
+        let auth = super::resolve_forge_auth(conn, remote.provider, &remote.server_host, None)
+            .await
+            .map_err(|e| match e {
+                ForgeError::NoAccount { provider, host } => format!(
+                    "no {} account for {host} — add one under Settings → Version Control, then \
+                     deliver",
+                    provider.display_name()
+                ),
+                other => other.to_string(),
+            })?;
+        Ok(DeliveryTarget {
+            provider: remote.provider,
+            server_host: remote.server_host,
+            account_id: auth.account_id,
+            owner_repo: remote.owner_repo,
+        })
     }
 
     async fn fetch_ref(
@@ -416,9 +474,7 @@ impl ForgeDeliveryApi for ForgeDelivery {
     ) -> Result<String, String> {
         let auth = resolve(ctx).await?;
         match ctx.provider {
-            ForgeProvider::GitHub => {
-                create_issue_comment(&auth, ctx.owner_repo, number, body).await
-            }
+            ForgeProvider::GitHub => create_issue_comment(&auth, ctx.owner_repo, number, body).await,
             ForgeProvider::GitLab => gitlab::create_note(&auth, ctx.owner_repo, kind, number, body)
                 .await
                 // The write-back wants the LINK; the composer wants the whole
@@ -437,14 +493,9 @@ impl ForgeDeliveryApi for ForgeDelivery {
 }
 
 async fn resolve(ctx: &DeliveryCtx<'_>) -> Result<ResolvedAuth, String> {
-    super::resolve_forge_auth(
-        ctx.conn,
-        ctx.provider,
-        ctx.server_host,
-        Some(ctx.account_id),
-    )
-    .await
-    .map_err(|e| e.to_string())
+    super::resolve_forge_auth(ctx.conn, ctx.provider, ctx.server_host, Some(ctx.account_id))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// `GET /repos/{o}/{r}/pulls?head={owner}:{branch}&state=all`.
@@ -493,9 +544,7 @@ pub async fn get_pull(
     let repo = super::normalize_repo(owner_repo)
         .ok_or_else(|| ForgeError::Invalid(format!("bad repository path: {owner_repo}")))?;
     if number <= 0 {
-        return Err(ForgeError::Invalid(format!(
-            "bad work item number: {number}"
-        )));
+        return Err(ForgeError::Invalid(format!("bad work item number: {number}")));
     }
     let url = format!("{}/repos/{repo}/pulls/{number}", auth.api_base);
     let raw: RawPull = github::api_get(auth, &url)
@@ -614,19 +663,15 @@ async fn push_work_branch(
     auth: &ResolvedAuth,
     worktree_path: &str,
     repo: &str,
-    work_branch: &str,
+    commit: &str,
     remote_branch: &str,
 ) -> Result<(), String> {
     // Everything here is interpolated into a URL or a refspec. Validate
     // BEFORE building either.
-    let repo = super::normalize_repo(repo).ok_or_else(|| format!("bad repository path: {repo}"))?;
-    ensure_pushable_branch(work_branch)?;
-    ensure_pushable_branch(remote_branch)?;
+    let repo = super::normalize_repo(repo)
+        .ok_or_else(|| format!("bad repository path: {repo}"))?;
+    let refspec = push_refspec(commit, remote_branch)?;
     let url = format!("{}/{}.git", web_origin(auth), repo);
-    // Fully qualified on both sides: a short name goes through git's revision
-    // resolution, where a same-named tag makes it ambiguous (the project's
-    // existing push path documents the same trap).
-    let refspec = format!("refs/heads/{work_branch}:refs/heads/{remote_branch}");
 
     let mut cmd = crate::process::tokio_command("git");
     cmd.args(["push", &url, &refspec])
@@ -692,14 +737,9 @@ async fn fetch_base_tip(
     ensure_pushable_branch(base_branch).ok()?;
     let url = format!("{}/{}.git", web_origin(auth), ctx.owner_repo);
     let mut cmd = crate::process::tokio_command("git");
-    cmd.args([
-        "fetch",
-        "--quiet",
-        &url,
-        &format!("refs/heads/{base_branch}"),
-    ])
-    .current_dir(worktree_path)
-    .stdin(std::process::Stdio::null());
+    cmd.args(["fetch", "--quiet", &url, &format!("refs/heads/{base_branch}")])
+        .current_dir(worktree_path)
+        .stdin(std::process::Stdio::null());
     with_credentials(&mut cmd, ctx, auth);
     let fetched = cmd.output().await.ok()?;
     if !fetched.status.success() {
@@ -752,6 +792,27 @@ fn ensure_pushable_branch(branch: &str) -> Result<(), String> {
     crate::commands::folders::ensure_pushable_branch_name(branch).map_err(|e| e.to_string())
 }
 
+/// The refspec a delivery pushes with: the snapshotted COMMIT, never a branch
+/// name. A branch is resolved when git runs, so anything that moves it between
+/// the delivery's snapshot and the push — a commit landing in the worktree, a
+/// reset — would publish a commit the delivery never decided on, and the
+/// settle would then record it as this task's. Naming the commit publishes
+/// exactly the one the delivery checked, and leaves whatever moved local
+/// (the cleanup that follows keeps such a worktree for it).
+///
+/// The destination is fully qualified: git cannot infer one for a raw commit,
+/// and a short name goes through git's revision resolution, where a
+/// same-named tag makes it ambiguous (the project's existing push path
+/// documents the same trap).
+fn push_refspec(commit: &str, remote_branch: &str) -> Result<String, String> {
+    let is_oid = matches!(commit.len(), 40 | 64) && commit.chars().all(|c| c.is_ascii_hexdigit());
+    if !is_oid {
+        return Err(format!("not a commit id: '{commit}'"));
+    }
+    ensure_pushable_branch(remote_branch)?;
+    Ok(format!("{commit}:refs/heads/{remote_branch}"))
+}
+
 /// How a houhub task id is written into text that lands on a forge.
 ///
 /// The number is houhub-local: it names a row in this workspace's task list,
@@ -780,21 +841,33 @@ pub fn pull_request_body(issue_url: &str, issue_number: i64, task_id: i32) -> St
     let task = task_ref(task_id);
     format!(
         "Closes #{issue_number}\n\n\
-         Prepared by [houhub](https://github.com/xggz/houhub) work task {task} \
+         Prepared by [houhub]({HOUHUB_HOME}) work task {task} \
          from {issue_url}.\n\n\
          Review the diff before merging — the task ran against issue text \
          written by an external author."
     )
 }
 
+/// Body of the pull request houhub opens for a task WITHOUT forge provenance.
+/// There is no issue to close and no external author whose text the task ran
+/// against, so it says only where the change came from. Built from the task id
+/// alone, like every text houhub posts on its own: nothing an agent wrote
+/// reaches a forge unless its user puts it there.
+pub fn local_pull_request_body(task_id: i32) -> String {
+    format!(
+        "Prepared by [houhub]({HOUHUB_HOME}) work task {}.",
+        task_ref(task_id)
+    )
+}
+
+/// Where the "Prepared by houhub" line in a pull request body points.
+const HOUHUB_HOME: &str = "https://github.com/fleap-fly/houhub";
+
 /// How a task finished, in the three shapes worth telling its thread about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskOutcome<'a> {
     /// Landed on the base branch of the local checkout.
-    Merged {
-        commit: &'a str,
-        base_branch: &'a str,
-    },
+    Merged { commit: &'a str, base_branch: &'a str },
     /// Published as a pull request.
     Delivered { pr_url: &'a str },
     /// The third settlement: accepted in houhub without anything landing.
@@ -839,10 +912,7 @@ pub fn writeback_comment_body(
     };
     let task = task_ref(task_id);
     match outcome {
-        TaskOutcome::Merged {
-            commit,
-            base_branch,
-        } => {
+        TaskOutcome::Merged { commit, base_branch } => {
             let short: String = commit.chars().take(7).collect();
             // "merged locally", not "merged": this landed in the triggering
             // user's own checkout and was never pushed, so to everyone else
@@ -966,13 +1036,11 @@ mod tests {
         let echoed = "fatal: unable to access \
              'https://me:s3cret@git.example.com/team/app.git/': The requested URL returned \
              error: 403";
-        let flattened =
-            git_failure_message(AppCommandError::network("git push failed").with_detail(echoed));
-        assert!(!flattened.contains("s3cret"), "{flattened}");
-        assert!(
-            flattened.contains("https://***@git.example.com/team/app.git/"),
-            "{flattened}"
+        let flattened = git_failure_message(
+            AppCommandError::network("git push failed").with_detail(echoed),
         );
+        assert!(!flattened.contains("s3cret"), "{flattened}");
+        assert!(flattened.contains("https://***@git.example.com/team/app.git/"), "{flattened}");
         // The rest of git's sentence has to survive the scrub intact.
         assert!(flattened.contains("returned error: 403"), "{flattened}");
     }
@@ -1032,7 +1100,13 @@ mod tests {
     fn same_head_against_another_base_is_not_adopted() {
         let wrong_base = pr(1, "abc123", "task/7", "release/1.x", "acme/app");
         assert_eq!(
-            adopt_pull_request(vec![wrong_base], "abc123", "task/7", "main", "acme/app"),
+            adopt_pull_request(
+                vec![wrong_base],
+                "abc123",
+                "task/7",
+                "main",
+                "acme/app"
+            ),
             PrAdoption::NoMatch
         );
     }
@@ -1056,33 +1130,13 @@ mod tests {
     fn near_misses_are_never_adopted_and_a_blocked_pair_is_named() {
         let expected = ("abc123", "task/7", "main", "acme/app");
         let cases = vec![
-            (
-                "another branch",
-                pr(4, "abc123", "task/8", "main", "acme/app"),
-                false,
-            ),
-            (
-                "a fork's branch",
-                pr(5, "abc123", "task/7", "main", "someone/app"),
-                false,
-            ),
-            (
-                "head repo missing",
-                pr(6, "abc123", "task/7", "main", ""),
-                false,
-            ),
-            (
-                "another base",
-                pr(7, "abc123", "task/7", "release/1.x", "acme/app"),
-                false,
-            ),
+            ("another branch", pr(4, "abc123", "task/8", "main", "acme/app"), false),
+            ("a fork's branch", pr(5, "abc123", "task/7", "main", "someone/app"), false),
+            ("head repo missing", pr(6, "abc123", "task/7", "main", ""), false),
+            ("another base", pr(7, "abc123", "task/7", "release/1.x", "acme/app"), false),
             // Same branch, same base, different commit: the head/base pair is
             // taken, so creating would earn a 422 rather than a pull request.
-            (
-                "head OID moved",
-                pr(3, "def456", "task/7", "main", "acme/app"),
-                true,
-            ),
+            ("head OID moved", pr(3, "def456", "task/7", "main", "acme/app"), true),
         ];
         for (label, candidate, blocked) in cases {
             let verdict = adopt_pull_request(
@@ -1140,12 +1194,94 @@ mod tests {
     #[test]
     fn branch_names_that_could_forge_a_refspec_are_rejected() {
         for bad in ["--force", "a:b", "with space", "-x", ""] {
+            assert!(ensure_pushable_branch(bad).is_err(), "{bad} must be rejected");
+        }
+        assert!(ensure_pushable_branch("task/12").is_ok());
+    }
+
+    /// The source side of a delivery's refspec is a commit id and nothing
+    /// else — a branch name, a revision expression or an option would let git
+    /// pick what gets published when it runs.
+    #[test]
+    fn a_delivery_refspec_names_the_commit_it_publishes() {
+        let sha1 = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            push_refspec(sha1, "task/12").unwrap(),
+            format!("{sha1}:refs/heads/task/12")
+        );
+        let sha256 = "a".repeat(64);
+        assert!(
+            push_refspec(&sha256, "task/12").is_ok(),
+            "SHA-256 repositories too"
+        );
+        for bad in [
+            "task/12",
+            "refs/heads/task/12",
+            "HEAD",
+            "--force",
+            "0123abc",
+            "",
+        ] {
             assert!(
-                ensure_pushable_branch(bad).is_err(),
+                push_refspec(bad, "task/12").is_err(),
                 "{bad} must be rejected"
             );
         }
-        assert!(ensure_pushable_branch("task/12").is_ok());
+        assert!(push_refspec(&sha1[..39], "task/12").is_err());
+        assert!(
+            push_refspec(sha1, "a:b").is_err(),
+            "the destination is still checked"
+        );
+    }
+
+    /// What that refspec does to a real repository: the remote branch lands on
+    /// the commit the delivery snapshotted — created when it did not exist —
+    /// even though the local branch moved on after the snapshot. Run against a
+    /// local bare repository, so it is git's own answer and not a model of it.
+    #[test]
+    fn pushing_the_snapshot_publishes_it_even_after_the_branch_moved() {
+        use std::process::Command;
+        let git = |dir: &std::path::Path, args: &[&str]| -> String {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@example.com")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@example.com")
+                .output()
+                .expect("spawn git");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let home = tempfile::tempdir().expect("tempdir");
+        let remote = home.path().join("remote.git");
+        let local = home.path().join("local");
+        std::fs::create_dir_all(&remote).expect("mkdir");
+        std::fs::create_dir_all(&local).expect("mkdir");
+        git(&remote, &["init", "-q", "--bare"]);
+        git(&local, &["init", "-q", "-b", "task/7"]);
+        std::fs::write(local.join("a.txt"), "reviewed\n").expect("write");
+        git(&local, &["add", "-A"]);
+        git(&local, &["commit", "-qm", "the reviewed work"]);
+        let snapshot = git(&local, &["rev-parse", "HEAD"]);
+        // The branch moves after the delivery took its snapshot.
+        std::fs::write(local.join("a.txt"), "never reviewed\n").expect("write");
+        git(&local, &["commit", "-qam", "landed meanwhile"]);
+
+        let refspec = push_refspec(&snapshot, "task/7").expect("refspec");
+        git(&local, &["push", "-q", remote.to_str().unwrap(), &refspec]);
+        assert_eq!(
+            git(&remote, &["rev-parse", "refs/heads/task/7"]),
+            snapshot,
+            "the remote branch is the snapshot, not the moved local tip"
+        );
     }
 
     fn auth_for(api_base: String) -> ResolvedAuth {
@@ -1210,9 +1346,7 @@ mod tests {
                 post(|| async {
                     (
                         axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-                        Json(
-                            serde_json::json!({ "message": "No commits between main and task/7" }),
-                        ),
+                        Json(serde_json::json!({ "message": "No commits between main and task/7" })),
                     )
                 }),
             )
@@ -1253,10 +1387,7 @@ mod tests {
         let merged = find_pulls(&auth, "acme/app", "merged").await.unwrap();
         assert!(merged[0].merged, "merged_at must set the merged flag");
 
-        assert!(find_pulls(&auth, "acme/app", "nothing")
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(find_pulls(&auth, "acme/app", "nothing").await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1333,6 +1464,16 @@ mod tests {
         assert!(!body.contains("#12"), "autolinkable task id: {body}");
     }
 
+    /// A task with no issue behind it closes nothing and names no external
+    /// author — and its id is written the same unlinkable way.
+    #[test]
+    fn local_body_names_the_task_and_references_nothing() {
+        let body = local_pull_request_body(12);
+        assert!(body.contains("work task `12`"), "{body}");
+        assert!(!body.contains('#'), "no reference of any kind: {body}");
+        assert!(!body.contains("Closes"), "{body}");
+    }
+
     /// The trigger gate answers one question: when the agent finishes, is
     /// there anywhere for its commits to go? A task that cannot be delivered
     /// cannot be merged locally either, so it would strand in review.
@@ -1380,11 +1521,9 @@ mod tests {
 
         // A GitLab user is told about a MERGE request — being told they have a
         // pull request reads like the wrong tool answered.
-        let err = pull_is_workable(ForgeProvider::GitLab, &merged, "acme/app").expect_err("merged");
-        assert!(
-            err.contains("merge request #7") && !err.contains("pull"),
-            "{err}"
-        );
+        let err = pull_is_workable(ForgeProvider::GitLab, &merged, "acme/app")
+            .expect_err("merged");
+        assert!(err.contains("merge request #7") && !err.contains("pull"), "{err}");
     }
 
     /// A pull request by number is what turns "PR #7" into something
@@ -1394,10 +1533,7 @@ mod tests {
         let (api_base, _, _, _) = mock_api().await;
         let auth = auth_for(api_base);
         let pr = get_pull(&auth, "Acme/App", 7).await.expect("pull");
-        assert_eq!(
-            (pr.number, pr.head_ref.as_str(), pr.base_ref.as_str()),
-            (7, "task/7", "main")
-        );
+        assert_eq!((pr.number, pr.head_ref.as_str(), pr.base_ref.as_str()), (7, "task/7", "main"));
         assert_eq!(pr.head_repo, "Acme/App");
         assert!(!pr.merged && pr.state == "open");
 
@@ -1420,12 +1556,8 @@ mod tests {
         assert_eq!(sent["body"], "done");
 
         // A path that cannot be a repository never reaches the network.
-        assert!(create_issue_comment(&auth, "not-a-repo", 7, "x")
-            .await
-            .is_err());
-        assert!(create_issue_comment(&auth, "acme/app", 0, "x")
-            .await
-            .is_err());
+        assert!(create_issue_comment(&auth, "not-a-repo", 7, "x").await.is_err());
+        assert!(create_issue_comment(&auth, "acme/app", 0, "x").await.is_err());
     }
 
     /// The comment says what happened, in numbers and links. Nothing an agent
@@ -1449,10 +1581,7 @@ mod tests {
         assert!(!merged.contains("#12"), "autolinkable task id: {merged}");
         assert!(merged.contains("`abc1234`"), "short sha: {merged}");
         assert!(!merged.contains("def5678"), "full sha leaked: {merged}");
-        assert!(
-            merged.contains("`main`") && merged.contains("(3 files, +42/-7)"),
-            "{merged}"
-        );
+        assert!(merged.contains("`main`") && merged.contains("(3 files, +42/-7)"), "{merged}");
         // A local merge must not read as "this shipped" to the thread.
         assert!(merged.contains("merged locally into"), "{merged}");
 
@@ -1465,14 +1594,8 @@ mod tests {
             },
             Some((1, 1, 0)),
         );
-        assert!(
-            delivered.contains("https://github.com/acme/app/pull/42"),
-            "{delivered}"
-        );
-        assert!(
-            delivered.contains("(1 file, +1/-0)"),
-            "singular: {delivered}"
-        );
+        assert!(delivered.contains("https://github.com/acme/app/pull/42"), "{delivered}");
+        assert!(delivered.contains("(1 file, +1/-0)"), "singular: {delivered}");
 
         // No recorded diff → the sentence still stands on its own.
         let bare =
@@ -1485,30 +1608,20 @@ mod tests {
             12,
             gh,
             issue,
-            &TaskOutcome::Accepted {
-                nothing_to_land: true,
-            },
+            &TaskOutcome::Accepted { nothing_to_land: true },
             None,
         );
-        assert!(
-            empty.contains("work task `12`") && empty.contains("it made no changes"),
-            "{empty}"
-        );
+        assert!(empty.contains("work task `12`") && empty.contains("it made no changes"), "{empty}");
         // …and an acceptance whose worktree was gone must NOT claim the task
         // made no changes while printing the counters that say otherwise.
         let gone = writeback_comment_body(
             12,
             gh,
             issue,
-            &TaskOutcome::Accepted {
-                nothing_to_land: false,
-            },
+            &TaskOutcome::Accepted { nothing_to_land: false },
             Some((3, 42, 7)),
         );
-        assert!(
-            gone.contains("its work was not merged (3 files, +42/-7)"),
-            "{gone}"
-        );
+        assert!(gone.contains("its work was not merged (3 files, +42/-7)"), "{gone}");
         assert!(!gone.contains("no changes"), "{gone}");
     }
 
@@ -1524,11 +1637,7 @@ mod tests {
     /// beside counters that say otherwise.
     #[test]
     fn a_finish_that_landed_nothing_is_never_a_verdict_on_the_item() {
-        for provider in [
-            ForgeProvider::GitHub,
-            ForgeProvider::GitLab,
-            ForgeProvider::Gitea,
-        ] {
+        for provider in [ForgeProvider::GitHub, ForgeProvider::GitLab, ForgeProvider::Gitea] {
             let noun = provider.change_noun();
             for item in [ForgeItemKind::Issue, ForgeItemKind::Change] {
                 for nothing_to_land in [true, false] {
@@ -1540,10 +1649,7 @@ mod tests {
                         Some((3, 42, 7)),
                     );
                     let at = format!("{provider:?} {item:?} nothing_to_land={nothing_to_land}");
-                    assert!(
-                        body.starts_with("houhub work task `12` is done — "),
-                        "{at}: {body}"
-                    );
+                    assert!(body.starts_with("houhub work task `12` is done — "), "{at}: {body}");
                     let lower = body.to_lowercase();
                     for verdict in ["accept", "approv", "reject", "closed", "lgtm"] {
                         assert!(!lower.contains(verdict), "{at} reads as a verdict: {body}");

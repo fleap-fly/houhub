@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   CheckCircle2,
@@ -45,6 +45,12 @@ import {
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
+import { useProviderModels } from "@/hooks/use-provider-models"
+import {
+  ModelIdInputWithFetch,
+  ModelIdListField,
+} from "@/components/settings/provider-models"
+import type { ProviderModelsProtocol } from "@/lib/types"
 import {
   PI_CONFIG_DIR_ENV,
   PI_MIN_RUNTIME_VERSION,
@@ -62,14 +68,14 @@ import {
   type PiModelReasoning,
   type PiThinkingLevel,
 } from "@/lib/pi-thinking"
-import type { AcpAgentInfo, ModelProviderInfo } from "@/lib/types"
+import type { AcpAgentInfo } from "@/lib/types"
 import { cn, randomUUID } from "@/lib/utils"
 
 const PI_COMMAND_ENV = "PI_ACP_PI_COMMAND"
 const PI_SESSION_DIR_ENV = "PI_CODING_AGENT_SESSION_DIR"
 /**
  * LEGACY per-agent `env_json` flag that used to gate launch-time workspace-trust
- * seeding. HouHub no longer seeds pi's `trust.json` — auto-trusting the opened
+ * seeding. houhub no longer seeds pi's `trust.json` — auto-trusting the opened
  * folder let a repo's own `.pi/extensions` execute at pi startup — so nothing
  * reads this key any more; project trust is an explicit per-workspace decision
  * (see `PiProjectTrustBanner` and the Project trust list below). It stays
@@ -149,8 +155,6 @@ const PI_BUILTIN_PROVIDERS: { id: string; label: string }[] = [
 
 /** Sentinel Select value that switches the credentials form to custom mode. */
 const PI_CUSTOM_SENTINEL = "__custom__"
-const PI_MODEL_PROVIDER_SENTINEL = "__houhub_model_provider__"
-const PI_MODEL_PROVIDER_VALUE_PREFIX = "__houhub_model_provider__:"
 
 /** Wire protocols pi accepts for a custom provider in `models.json`. */
 const PI_CUSTOM_API_PROTOCOLS = [
@@ -160,19 +164,11 @@ const PI_CUSTOM_API_PROTOCOLS = [
   "google-generative-ai",
 ]
 
-function modelChoicesFromProvider(provider: ModelProviderInfo): string[] {
-  const seen = new Set<string>()
-  const choices: string[] = []
-  for (const value of provider.models) {
-    const trimmed = value.trim()
-    const match = /^(main|reasoning|haiku|sonnet|opus):(.+)$/.exec(trimmed)
-    const model = (match ? match[2] : trimmed).trim()
-    if (model && !seen.has(model)) {
-      seen.add(model)
-      choices.push(model)
-    }
-  }
-  return choices
+/** How a custom provider speaking `api` lists its models. */
+function piModelsProtocol(api: string): ProviderModelsProtocol {
+  if (api === "anthropic-messages") return "anthropic"
+  if (api === "google-generative-ai") return "gemini"
+  return "openai"
 }
 
 function isAbsolutePiPath(path: string): boolean {
@@ -312,19 +308,14 @@ export function PiConfigPanel({
   saving,
   onSaveEnv,
   onSaved,
-  modelProviders = [],
 }: {
   agent: AcpAgentInfo
   saving: boolean
-  onSaveEnv: (
-    env: Record<string, string>,
-    enabled: boolean,
-    modelProviderId?: number | null
-  ) => Promise<unknown>
+  onSaveEnv: (env: Record<string, string>, enabled: boolean) => Promise<unknown>
   onSaved: () => Promise<void>
-  modelProviders?: ModelProviderInfo[]
 }) {
   const t = useTranslations("AcpAgentSettings")
+  const tModels = useTranslations("ProviderModels")
 
   // --- Credentials (pi's native ~/.pi/agent/{settings,auth,models}.json) ---
   // `selectedProvider` is the Select value: a built-in id, a loaded-but-not-
@@ -335,6 +326,9 @@ export function PiConfigPanel({
   const [customBaseUrl, setCustomBaseUrl] = useState("")
   const [customApi, setCustomApi] = useState(PI_CUSTOM_API_PROTOCOLS[0])
   const [customProviders, setCustomProviders] = useState<PiCustomProvider[]>([])
+  /** The custom provider's model list as edited; `null` until touched, so a
+   *  save leaves the list on disk as it is. */
+  const [customModels, setCustomModels] = useState<string[] | null>(null)
   const [model, setModel] = useState("")
   const [thinkingLevel, setThinkingLevel] = useState("")
   const [apiKey, setApiKey] = useState("")
@@ -342,9 +336,6 @@ export function PiConfigPanel({
   const [authProviders, setAuthProviders] = useState<string[]>([])
   const [savingCreds, setSavingCreds] = useState(false)
   const [loadingCreds, setLoadingCreds] = useState(true)
-  const [selectedModelProviderId, setSelectedModelProviderId] = useState(() =>
-    agent.model_provider_id == null ? "" : String(agent.model_provider_id)
-  )
   const [reasoning, setReasoning] = useState<PiModelReasoning>(NO_REASONING)
   const [showWireValues, setShowWireValues] = useState(false)
   const [configLoadError, setConfigLoadError] = useState<string | null>(null)
@@ -369,43 +360,32 @@ export function PiConfigPanel({
   const isCustom = selectedProvider === PI_CUSTOM_SENTINEL
   const effectiveProvider = (isCustom ? customId : selectedProvider).trim()
 
-  // A HouHub model-provider binding is authoritative for the agent. Keep its
-  // catalog in the native Pi form instead of leaving the stale built-in model
-  // list visible when the binding changes.
-  const houhubModelProviders = useMemo(
-    () =>
-      modelProviders.filter(
-        (provider) =>
-          provider.agent_types.includes("pi") ||
-          provider.id === agent.model_provider_id
-      ),
-    [agent.model_provider_id, modelProviders]
+  // The edited model list belongs to one provider; another one starts from
+  // its own list on disk.
+  const [customModelsFor, setCustomModelsFor] = useState(effectiveProvider)
+  if (customModelsFor !== effectiveProvider) {
+    setCustomModelsFor(effectiveProvider)
+    setCustomModels(null)
+  }
+  const storedCustomModels =
+    customProviders
+      .find((provider) => provider.id === effectiveProvider)
+      ?.models?.map((entry) => entry.id) ?? []
+  // The custom provider's own models, asked the way its protocol lists them —
+  // with the key typed here, else the one pi keeps for it.
+  const providerModels = useProviderModels(
+    isCustom
+      ? {
+          protocol: piModelsProtocol(customApi),
+          baseUrl: customBaseUrl,
+          apiKey,
+          storedKey:
+            effectiveProvider && authProviders.includes(effectiveProvider)
+              ? { kind: "piAuth", provider: effectiveProvider }
+              : null,
+        }
+      : null
   )
-
-  const selectedHouhubModelProvider = useMemo(
-    () =>
-      selectedModelProviderId
-        ? (houhubModelProviders.find(
-            (item) => String(item.id) === selectedModelProviderId
-          ) ?? null)
-        : null,
-    [houhubModelProviders, selectedModelProviderId]
-  )
-
-  const selectedCustomProvider = useMemo(
-    () =>
-      isCustom
-        ? (customProviders.find((provider) => provider.id === customId) ?? null)
-        : null,
-    [customId, customProviders, isCustom]
-  )
-
-  const modelChoices = useMemo(() => {
-    if (selectedHouhubModelProvider) {
-      return modelChoicesFromProvider(selectedHouhubModelProvider)
-    }
-    return selectedCustomProvider?.models.map((entry) => entry.id) ?? []
-  }, [selectedCustomProvider, selectedHouhubModelProvider])
 
   // Rehydrate the reasoning controls whenever the edited model's identity changes
   // (provider switch, or a different model id typed in). Reading the stored entry
@@ -451,10 +431,7 @@ export function PiConfigPanel({
         setModel(cfg.defaultModel ?? "")
         setThinkingLevel(cfg.defaultThinkingLevel ?? "")
         setAuthProviders(cfg.authProviders ?? [])
-        const customs = (cfg.customProviders ?? []).map((provider) => ({
-          ...provider,
-          models: Array.isArray(provider.models) ? provider.models : [],
-        }))
+        const customs = cfg.customProviders ?? []
         setCustomProviders(customs)
         const dp = cfg.defaultProvider ?? ""
         const matched = customs.find((c) => c.id === dp)
@@ -467,9 +444,6 @@ export function PiConfigPanel({
         } else {
           setSelectedProvider(dp)
         }
-        setSelectedModelProviderId(
-          agent.model_provider_id == null ? "" : String(agent.model_provider_id)
-        )
       })
       .catch((error) => {
         console.error("[Pi] load config failed", error)
@@ -489,7 +463,7 @@ export function PiConfigPanel({
     return () => {
       cancelled = true
     }
-  }, [agent.model_provider_id, savedAgentDir, invalidSavedAgentDir])
+  }, [savedAgentDir, invalidSavedAgentDir])
 
   useEffect(() => {
     let cancelled = false
@@ -604,6 +578,8 @@ export function PiConfigPanel({
               >,
             }
           : undefined,
+        customModels:
+          isCustom && customModels !== null ? customModels : undefined,
       })
       if (apiKey.trim()) {
         setApiKey("")
@@ -613,23 +589,22 @@ export function PiConfigPanel({
             : [...prev, effectiveProvider].sort()
         )
       }
-      // Keep the ACP setting bound to the same provider the credentials were
-      // saved from. Selecting a built-in or an unrelated custom pi provider
-      // explicitly clears the HouHub binding.
-      await onSaveEnv(
-        agent.env,
-        agent.enabled,
-        selectedModelProviderId ? Number(selectedModelProviderId) : null
-      )
       if (isCustom) {
         // Reflect the just-saved custom provider so a reopen rehydrates it —
         // including the model's declaration, so switching away and back shows
         // the chips that are now on disk rather than a stale read.
         setCustomProviders((prev) => {
           const previous = prev.find((c) => c.id === effectiveProvider)
+          const listed = customModels === null ? null : new Set(customModels)
           const models = (previous?.models ?? []).filter(
-            (entry) => entry.id !== trimmedModel
+            (entry) =>
+              entry.id !== trimmedModel && (!listed || listed.has(entry.id))
           )
+          for (const id of customModels ?? []) {
+            if (id !== trimmedModel && !models.some((m) => m.id === id)) {
+              models.push({ id, reasoning: null, thinkingLevelMap: {} })
+            }
+          }
           models.push({
             id: trimmedModel,
             reasoning: reasoning.enabled,
@@ -669,11 +644,8 @@ export function PiConfigPanel({
     defaultLevelUnlisted,
     reasoning,
     apiKey,
-    agent.enabled,
-    agent.env,
+    customModels,
     onSaved,
-    onSaveEnv,
-    selectedModelProviderId,
     t,
   ])
 
@@ -696,79 +668,8 @@ export function PiConfigPanel({
   const credsIncomplete =
     !effectiveProvider || !model.trim() || (isCustom && !customBaseUrl.trim())
 
-  const providerDefaultModel = useCallback((provider: ModelProviderInfo) => {
-    const listed = modelChoicesFromProvider(provider)[0]
-    if (listed) return listed
-    if (!provider.model) return ""
-    try {
-      const parsed = JSON.parse(provider.model) as Record<string, unknown>
-      const main = parsed?.main
-      return typeof main === "string" ? main.trim() : ""
-    } catch {
-      return provider.model.trim()
-    }
-  }, [])
-
-  // The native pi config can still contain an old built-in provider (usually
-  // `openai`) even when the agent is bound to a HouHub model provider. The DB
-  // binding is authoritative for an ACP agent, so hydrate the native form from
-  // it as soon as the provider list is available. This also makes the model
-  // picker use the configured provider catalog instead of pi's stale defaults.
-  useEffect(() => {
-    if (!selectedModelProviderId || !selectedHouhubModelProvider) return
-    const providerId =
-      selectedHouhubModelProvider.name.trim().toLowerCase() ===
-      "houflow gateway"
-        ? "houflow"
-        : `houhub-provider-${selectedHouhubModelProvider.id}`
-    if (selectedProvider === PI_CUSTOM_SENTINEL && customId === providerId) {
-      return
-    }
-    setSelectedProvider(PI_CUSTOM_SENTINEL)
-    setCustomId(providerId)
-    setCustomBaseUrl(selectedHouhubModelProvider.api_url)
-    setCustomApi("openai-completions")
-    setModel(providerDefaultModel(selectedHouhubModelProvider))
-    setApiKey(selectedHouhubModelProvider.api_key)
-  }, [
-    customId,
-    providerDefaultModel,
-    selectedHouhubModelProvider,
-    selectedModelProviderId,
-    selectedProvider,
-  ])
-
-  const handleHouhubProviderChange = useCallback(
-    (value: string) => {
-      setSelectedModelProviderId(value)
-      const provider = houhubModelProviders.find(
-        (item) => String(item.id) === value
-      )
-      if (!provider) return
-      const modelName = providerDefaultModel(provider)
-      const providerId =
-        provider.name.trim().toLowerCase() === "houflow gateway"
-          ? "houflow"
-          : `houhub-provider-${provider.id}`
-      setSelectedProvider(PI_CUSTOM_SENTINEL)
-      setCustomId(providerId)
-      setCustomBaseUrl(provider.api_url)
-      setCustomApi("openai-completions")
-      setModel(modelName)
-      setApiKey(provider.api_key)
-    },
-    [houhubModelProviders, providerDefaultModel]
-  )
-
   const handleProviderChange = useCallback(
     (value: string) => {
-      if (value.startsWith(PI_MODEL_PROVIDER_VALUE_PREFIX)) {
-        handleHouhubProviderChange(
-          value.slice(PI_MODEL_PROVIDER_VALUE_PREFIX.length)
-        )
-        return
-      }
-      setSelectedModelProviderId("")
       setSelectedProvider(value)
       // Switching to custom with nothing typed yet → prefill from an existing
       // custom provider (if any) so a known endpoint need not be re-entered.
@@ -781,10 +682,9 @@ export function PiConfigPanel({
         setCustomId(first.id)
         setCustomBaseUrl(first.baseUrl)
         setCustomApi(first.api || PI_CUSTOM_API_PROTOCOLS[0])
-        setModel(first.models[0]?.id ?? model)
       }
     },
-    [customId, customProviders, handleHouhubProviderChange, model]
+    [customId, customProviders]
   )
 
   // --- pi binary (pi-coding-agent) — the prerequisite pi-acp spawns ---
@@ -970,11 +870,6 @@ export function PiConfigPanel({
       sessionDir
     )
     try {
-      await onSaveEnv(
-        env,
-        agent.enabled,
-        selectedModelProviderId ? Number(selectedModelProviderId) : null
-      )
       await onSaveEnv(env, agent.enabled)
       // A changed runtime re-asks pi by itself (the catalog follows the saved
       // env); an unchanged one may still point at a replaced binary.
@@ -999,7 +894,6 @@ export function PiConfigPanel({
     configDir,
     sessionDir,
     onSaveEnv,
-    selectedModelProviderId,
     t,
   ])
 
@@ -1376,15 +1270,8 @@ export function PiConfigPanel({
             {t("pi.providerLabel")}
           </label>
           <Select
-            value={
-              selectedModelProviderId
-                ? `${PI_MODEL_PROVIDER_VALUE_PREFIX}${selectedModelProviderId}`
-                : selectedProvider
-            }
-            onValueChange={(value) => {
-              if (value === PI_MODEL_PROVIDER_SENTINEL) return
-              handleProviderChange(value)
-            }}
+            value={selectedProvider}
+            onValueChange={handleProviderChange}
             disabled={savingCreds || loadingCreds}
           >
             <SelectTrigger className="w-full">
@@ -1394,22 +1281,6 @@ export function PiConfigPanel({
               <SelectItem value={PI_CUSTOM_SENTINEL}>
                 {t("pi.customProvider")}
               </SelectItem>
-              {houhubModelProviders.length > 0 && (
-                <>
-                  <SelectSeparator />
-                  <SelectItem value={PI_MODEL_PROVIDER_SENTINEL} disabled>
-                    {t("selectModelProvider")}
-                  </SelectItem>
-                  {houhubModelProviders.map((provider) => (
-                    <SelectItem
-                      key={provider.id}
-                      value={`${PI_MODEL_PROVIDER_VALUE_PREFIX}${provider.id}`}
-                    >
-                      {provider.name}
-                    </SelectItem>
-                  ))}
-                </>
-              )}
               <SelectSeparator />
               {providerOptions.map((p) => (
                 <SelectItem key={p.id} value={p.id}>
@@ -1418,11 +1289,6 @@ export function PiConfigPanel({
               ))}
             </SelectContent>
           </Select>
-          {selectedModelProviderId && (
-            <p className="text-[11px] text-muted-foreground">
-              {t("modelProviderHint")}
-            </p>
-          )}
         </div>
 
         {isCustom && (
@@ -1484,33 +1350,25 @@ export function PiConfigPanel({
           <label className="text-2xs text-muted-foreground">
             {t("pi.modelLabel")}
           </label>
-          {selectedHouhubModelProvider && modelChoices.length > 0 ? (
-            <Select
-              value={model}
-              onValueChange={setModel}
-              disabled={savingCreds || loadingCreds}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder={modelChoices[0]} />
-              </SelectTrigger>
-              <SelectContent align="start">
-                {modelChoices.map((choice) => (
-                  <SelectItem key={choice} value={choice}>
-                    {choice}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <Input
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              placeholder="claude-sonnet-5-5"
-              spellCheck={false}
-              disabled={savingCreds || loadingCreds}
-            />
-          )}
+          <ModelIdInputWithFetch
+            value={model}
+            onChange={setModel}
+            state={providerModels}
+            placeholder="claude-sonnet-5-5"
+            disabled={savingCreds || loadingCreds}
+          />
         </div>
+
+        {isCustom && (
+          <ModelIdListField
+            ids={customModels ?? storedCustomModels}
+            onChange={setCustomModels}
+            state={providerModels}
+            readOnly={savingCreds || loadingCreds}
+            title={tModels("piList.title")}
+            hint={tModels("piList.hint")}
+          />
+        )}
 
         {/* ---- Reasoning card ----
             pi reads `reasoning: modelDef.reasoning ?? false`, and an undeclared

@@ -38,11 +38,11 @@
 //!    browser that completes the consent does not have to be the process that
 //!    delivers the result.
 //!
-//! So: HouHub starts a short-lived agent process purely to sign in, drives ACP
+//! So: houhub starts a short-lived agent process purely to sign in, drives ACP
 //! `initialize` + `authenticate` over its stdio, scrapes the printed URL, and
 //! shows it. The user opens it in whatever browser they have, consents, and
 //! lands on a `http://127.0.0.1:<port>/?state=…&code=…` page their browser
-//! cannot reach. They paste that address back, and HouHub — which *is* on the
+//! cannot reach. They paste that address back, and houhub — which *is* on the
 //! machine where that port is listening — performs the redirect on their
 //! behalf. The agent then completes the exchange, runs its own onboarding, and
 //! writes the credential exactly where a real session will look for it.
@@ -62,13 +62,13 @@
 //!
 //! # Security
 //!
-//! `finish` takes a URL typed by the user and makes HouHub issue an HTTP request
+//! `finish` takes a URL typed by the user and makes houhub issue an HTTP request
 //! — the shape of an SSRF. It is closed by construction: the request target is
-//! rebuilt from the `redirect_uri` **HouHub captured from the agent's own
+//! rebuilt from the `redirect_uri` **houhub captured from the agent's own
 //! authorization URL**, and only `code`/`state`/`error` are taken from the
 //! paste. The captured value is additionally required to be
 //! `http://127.0.0.1:<port>/`, matching the agent's hardcoded `_LOOPBACK_HOST`,
-//! so even a compromised upstream cannot redirect HouHub off the loopback. The
+//! so even a compromised upstream cannot redirect houhub off the loopback. The
 //! request also bypasses any configured proxy: a loopback address must never
 //! leave the machine.
 //!
@@ -203,12 +203,12 @@ pub struct AntigravityLoginOutcome {
     /// The agent's own words when it refused, already redacted. `None` on
     /// success.
     pub message: Option<String>,
-    /// Whether the same link can still be used. True only for a paste HouHub
+    /// Whether the same link can still be used. True only for a paste houhub
     /// rejected on its own — the agent's listener never saw it, so the consent
     /// the user already gave is still good and only the paste needs fixing.
     /// False once the redirect has been delivered: it is one-shot.
     pub retryable: bool,
-    /// Where the agent stores the credential this sign-in produced, when HouHub
+    /// Where the agent stores the credential this sign-in produced, when houhub
     /// can name it. Worth surfacing: it is a portable file, so a user with
     /// several headless machines can sign in once and copy it.
     pub credential_path: Option<String>,
@@ -221,8 +221,9 @@ pub struct AntigravityLoginOutcome {
 /// state must expire on its own: in server mode a client disconnect drops the
 /// handler future mid-`await`, and a `Finishing` that nothing ever clears would
 /// refuse every later sign-in for the life of the process.
-const FINISH_BUDGET: Duration =
-    Duration::from_secs(REDIRECT_WAIT.as_secs() + AUTHENTICATE_WAIT.as_secs() + 30);
+const FINISH_BUDGET: Duration = Duration::from_secs(
+    REDIRECT_WAIT.as_secs() + AUTHENTICATE_WAIT.as_secs() + 30,
+);
 
 /// A sign-in waiting for its redirect.
 struct Pending {
@@ -490,13 +491,15 @@ async fn claim_slot_as(next: SlotState) -> Result<u64, AcpError> {
 /// Publish a finished handshake, unless a newer `start` has taken over.
 ///
 /// `Err` hands the attempt back so the caller can reap the child it just
-/// spawned — the newer attempt is the one the user is looking at.
-async fn install(generation: u64, pending: Pending) -> Result<(), Box<Pending>> {
+/// spawned — the newer attempt is the one the user is looking at. Boxed on both
+/// sides: `Waiting` stores it boxed anyway, and an unboxed `Pending` would make
+/// every `Ok` of this `Result` carry the several hundred bytes of the error.
+async fn install(generation: u64, pending: Box<Pending>) -> Result<(), Box<Pending>> {
     let mut slot = pending_slot().lock().await;
     if slot.generation != generation {
-        return Err(Box::new(pending));
+        return Err(pending);
     }
-    slot.state = SlotState::Waiting(Box::new(pending));
+    slot.state = SlotState::Waiting(pending);
     Ok(())
 }
 
@@ -517,7 +520,7 @@ async fn abandon_start(generation: u64) {
 /// `method_id` is taken from the caller rather than from the stored row on
 /// purpose. The panel can offer "sign in" for the method currently selected in
 /// the form, and the agent persists the choice itself (`_remember_auth_type`
-/// runs at the end of a successful `authenticate`), so HouHub does not write
+/// runs at the end of a successful `authenticate`), so houhub does not write
 /// `settings.json` here — doing so would record the *saved* method, which is
 /// not necessarily the one being signed in.
 pub async fn start(
@@ -644,7 +647,9 @@ async fn start_claimed(
         StartSignal::Url(url) => url,
         StartSignal::Authenticated => {
             reap_and_release(child, stdin, scratch).await;
-            tracing::info!("[ACP][Antigravity] {method_id} was already signed in; no link needed");
+            tracing::info!(
+                "[ACP][Antigravity] {method_id} was already signed in; no link needed"
+            );
             return Ok(AntigravityLoginStart {
                 already_signed_in: true,
                 handle: None,
@@ -684,7 +689,7 @@ async fn start_claimed(
 
     let handle = uuid::Uuid::new_v4().to_string();
     let credential_path = credential_path_for(runtime_env, method_id);
-    let pending = Pending {
+    let pending = Box::new(Pending {
         handle: handle.clone(),
         method_id: method_id.to_string(),
         redirect_uri: redirect_uri.clone(),
@@ -696,7 +701,7 @@ async fn start_claimed(
         stderr: tail,
         scratch,
         started: Instant::now(),
-    };
+    });
     // The spawn and handshake above ran OUTSIDE the lock, so a newer `start`
     // may already have claimed the slot and shown the user a different link.
     // If so this attempt is the stale one and gets reaped, rather than
@@ -759,7 +764,7 @@ async fn spawn_agent(
     // sign-out each unpack a full copy. They were invisible in the leak report
     // because neither emits the `[ACP] spawning connection` line the user
     // counted — the directories were there all the same.
-    let scratch = crate::acp::scratch_dir::create();
+    let scratch = crate::acp::scratch_dir::create(AgentType::Antigravity);
     let mut env = crate::acp::connection::antigravity_launch_env(
         runtime_env,
         scratch.as_ref().map(|s| s.path()),
@@ -888,7 +893,7 @@ enum StartSignal {
 pub async fn finish(handle: &str, pasted: &str) -> Result<AntigravityLoginOutcome, AcpError> {
     let parsed = ParsedRedirect::parse(pasted);
 
-    // Validate WITHOUT consuming the attempt. A paste HouHub itself rejects
+    // Validate WITHOUT consuming the attempt. A paste houhub itself rejects
     // never reached the agent, so the listener is still open and the consent
     // the user already gave in their browser is still good — making them redo
     // the whole Google round trip over a truncated copy would be gratuitous.
@@ -897,7 +902,9 @@ pub async fn finish(handle: &str, pasted: &str) -> Result<AntigravityLoginOutcom
     let (target, pending, generation) = {
         let mut slot = pending_slot().lock().await;
         let SlotState::Waiting(pending) = &slot.state else {
-            return Err(AcpError::protocol("no sign-in is waiting; start a new one"));
+            return Err(AcpError::protocol(
+                "no sign-in is waiting; start a new one",
+            ));
         };
         if pending.handle != handle {
             return Err(AcpError::protocol(
@@ -1036,7 +1043,7 @@ async fn finish_delivering(target: String, pending: Pending) -> AntigravityLogin
     }
 }
 
-/// Why HouHub will not send this paste on, if it will not.
+/// Why houhub will not send this paste on, if it will not.
 ///
 /// Everything here is decidable without touching the agent, which is exactly
 /// what makes these failures cheap to retry. Takes the expected `state` rather
@@ -1070,7 +1077,9 @@ pub async fn cancel(handle: &str) -> Result<(), AcpError> {
     let abandoned = {
         let mut slot = pending_slot().lock().await;
         let SlotState::Waiting(pending) = &slot.state else {
-            return Err(AcpError::protocol("no sign-in is waiting; start a new one"));
+            return Err(AcpError::protocol(
+                "no sign-in is waiting; start a new one",
+            ));
         };
         // A handle that is not the current one belongs to an attempt already
         // displaced (a stale browser tab, a double submit). Reporting that is
@@ -1172,10 +1181,15 @@ async fn request_logout(agent: &mut AgentChild) -> Result<(), AcpError> {
         "params": {},
     });
     write_frame(&mut agent.stdin, &logout).await?;
-    await_response(&mut agent.responses, ID_LOGOUT, LOGOUT_WAIT, &agent.stderr)
-        .await
-        .map(|_| ())
-        .map_err(|reason| AcpError::protocol(format!("Antigravity refused to sign out: {reason}")))
+    await_response(
+        &mut agent.responses,
+        ID_LOGOUT,
+        LOGOUT_WAIT,
+        &agent.stderr,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|reason| AcpError::protocol(format!("Antigravity refused to sign out: {reason}")))
 }
 
 /// Whether the agent's `initialize` answer offers the ACP `logout` method.
@@ -1248,7 +1262,7 @@ impl ParsedRedirect {
 /// Rebuild the redirect request from the captured listener address.
 ///
 /// The single place the SSRF question is answered: the host, port and path come
-/// from `redirect_uri`, which HouHub read out of the agent's own authorization
+/// from `redirect_uri`, which houhub read out of the agent's own authorization
 /// URL and re-checks here against the agent's hardcoded loopback host. Only the
 /// three OAuth parameters come from the user.
 fn build_redirect_request(
@@ -1292,10 +1306,10 @@ fn is_loopback_redirect(redirect_uri: &str) -> bool {
 /// Perform the redirect against the agent's one-shot listener.
 async fn deliver_redirect(target: &str) -> Result<(), String> {
     let client = reqwest::Client::builder()
-        // A loopback address must never be handed to a proxy — and HouHub's
+        // A loopback address must never be handed to a proxy — and houhub's
         // users routinely run behind one.
         .no_proxy()
-        // The loopback-only invariant is checked on the target HouHub builds;
+        // The loopback-only invariant is checked on the target houhub builds;
         // following a redirect would let the response choose the next one and
         // step straight out of it. The shipped listener only ever answers 200,
         // so nothing legitimate is lost.
@@ -1514,7 +1528,7 @@ fn find_auth_url(line: &str) -> Option<String> {
 /// authorization URL.
 fn extract_redirect_uri(auth_url: &str) -> Result<String, String> {
     let redirect = query_param(auth_url, "redirect_uri").ok_or_else(|| {
-        "Antigravity's sign-in link carries no redirect address, so HouHub cannot complete it"
+        "Antigravity's sign-in link carries no redirect address, so houhub cannot complete it"
             .to_string()
     })?;
     if !is_loopback_redirect(&redirect) {
@@ -1680,7 +1694,7 @@ mod tests {
     /// need an actual agent. `cat` is the cheapest process that stays alive on
     /// a piped stdin and closes its stdout the instant it dies.
     #[cfg(unix)]
-    async fn fake_pending(handle: &str) -> (Pending, tokio::process::ChildStdout) {
+    async fn fake_pending(handle: &str) -> (Box<Pending>, tokio::process::ChildStdout) {
         let mut child = tokio::process::Command::new("/bin/cat")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1693,7 +1707,7 @@ mod tests {
         let (_tx, responses) = mpsc::unbounded_channel();
         // `_tx` is dropped here on purpose: nothing in these tests waits on a
         // response, and a closed channel is the honest shape for a dead agent.
-        let pending = Pending {
+        let pending = Box::new(Pending {
             handle: handle.to_string(),
             method_id: "oauth-personal".to_string(),
             redirect_uri: "http://127.0.0.1:1/".to_string(),
@@ -1705,7 +1719,7 @@ mod tests {
             stderr: Arc::new(StderrTail::new()),
             scratch: None,
             started: Instant::now(),
-        };
+        });
         (pending, stdout)
     }
 
@@ -1740,9 +1754,7 @@ mod tests {
 
         // A second start displaces the published attempt AND reaps its child —
         // otherwise that agent holds its loopback listener for 300s.
-        let second = claim_slot()
-            .await
-            .expect("a published attempt is displaceable");
+        let second = claim_slot().await.expect("a published attempt is displaceable");
         assert!(second > first);
         assert_reaped(out1, "the displaced attempt").await;
 
@@ -1794,7 +1806,10 @@ mod tests {
             "a stale abandon must not release a newer start"
         );
         abandon_start(third).await;
-        assert!(matches!(pending_slot().lock().await.state, SlotState::Idle));
+        assert!(matches!(
+            pending_slot().lock().await.state,
+            SlotState::Idle
+        ));
 
         // And `release_finishing` is a no-op unless the slot is actually
         // completing, so a late one cannot cancel a fresh start.
@@ -1832,7 +1847,10 @@ mod tests {
         );
 
         release_finishing(attempt_b).await;
-        assert!(matches!(pending_slot().lock().await.state, SlotState::Idle));
+        assert!(matches!(
+            pending_slot().lock().await.state,
+            SlotState::Idle
+        ));
 
         // A sign-out takes the same exclusive state, and takes it in ONE lock
         // acquisition. It is about to erase the credential from the moment it
@@ -1854,7 +1872,10 @@ mod tests {
             "a sign-in during a sign-out must be refused"
         );
         release_finishing(sign_out).await;
-        assert!(matches!(pending_slot().lock().await.state, SlotState::Idle));
+        assert!(matches!(
+            pending_slot().lock().await.state,
+            SlotState::Idle
+        ));
     }
 
     /// The protocol requires the check ("Clients MUST NOT call `logout` unless
@@ -2023,9 +2044,7 @@ mod tests {
         // With nothing but the prompt to report, the hint is empty rather than
         // a dangling "Last output:".
         let only_prompt = StderrTail::new();
-        only_prompt.push(&format!(
-            "{AUTH_PROMPT_MARKER}https://accounts.google.com/x"
-        ));
+        only_prompt.push(&format!("{AUTH_PROMPT_MARKER}https://accounts.google.com/x"));
         assert_eq!(stderr_hint(&only_prompt), "");
     }
 
@@ -2048,7 +2067,7 @@ mod tests {
     }
 
     /// The whole SSRF surface: whatever the user pastes, the request must go to
-    /// the address HouHub captured.
+    /// the address houhub captured.
     #[test]
     fn the_request_target_ignores_the_pasted_host() {
         let parsed = ParsedRedirect::parse("http://evil.example/?code=4%2Fabc&state=good");
@@ -2159,10 +2178,7 @@ mod tests {
             error_message(&with_data).as_deref(),
             Some("the long actionable one")
         );
-        assert_eq!(
-            error_message(&serde_json::json!({"id": 2, "result": {}})),
-            None
-        );
+        assert_eq!(error_message(&serde_json::json!({"id": 2, "result": {}})), None);
     }
 
     /// The agent's message is rendered in the panel, so it goes through the

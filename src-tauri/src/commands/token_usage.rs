@@ -14,7 +14,7 @@
 //! A conversation is re-parsed when its `conversation.updated_at` differs from
 //! what the last sync recorded. That covers:
 //!
-//!   * every HouHub-driven turn — each one flips the row's status, bumping
+//!   * every houhub-driven turn — each one flips the row's status, bumping
 //!     `updated_at`;
 //!   * every freshly imported session — it has no stamp at all;
 //!   * every **re-imported** session — `import_one` drops the stamp explicitly,
@@ -22,7 +22,7 @@
 //!     precisely the moment a CLI-grown transcript comes back into view.
 //!
 //! One case it does NOT cover: a transcript that grows in the agent's own CLI
-//! and is then never re-imported and never touched inside HouHub. Nothing in the
+//! and is then never re-imported and never touched inside houhub. Nothing in the
 //! database moves, so nothing marks it stale. Closing that automatically would
 //! need a per-conversation transcript fingerprint the parser layer does not
 //! expose (each agent stores history differently — single file, many files, or
@@ -43,34 +43,24 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
-
 use futures::stream::{self, StreamExt};
-
 use serde::{Deserialize, Serialize};
 
 use crate::app_error::AppCommandError;
-
 use crate::commands::conversations::get_folder_conversation_core;
-
 use crate::db::entities::folder;
-
 use crate::db::service::app_metadata_service;
-
 use crate::db::service::token_usage_service::{
     self as usage_service, FactQuery, UsageFact, UsageFactRow,
 };
-
 use crate::models::conversation::DbConversationDetail;
-
 use crate::models::message::MessageTurn;
-
 use crate::models::token_usage::{
     TokenUsageBreakdownItem, TokenUsageBucket, TokenUsageConversationItem, TokenUsageFacets,
-    TokenUsageFilter, TokenUsageFolderFacet, TokenUsageHeatCell, TokenUsagePoint, TokenUsageReport,
-    TokenUsageStreak, TokenUsageSyncProgress, TokenUsageSyncResult, TokenUsageSyncStatus,
-    TokenUsageTotals,
+    TokenUsageFilter, TokenUsageFolderFacet, TokenUsageHeatCell, TokenUsagePoint,
+    TokenUsageReport, TokenUsageStreak, TokenUsageSyncProgress, TokenUsageSyncResult,
+    TokenUsageSyncStatus, TokenUsageTotals,
 };
-
 use crate::web::event_bridge::{emit_event, EventEmitter, TOKEN_USAGE_SYNC_PROGRESS_EVENT};
 
 use sea_orm::EntityTrait;
@@ -145,6 +135,22 @@ const TOP_CONVERSATIONS: usize = 8;
 ///   them again. Forks are on by default in the terminal since CLI 2.1.232
 ///   and in every Agent SDK session since 2.1.302, so unchanged transcripts
 ///   read differently now. See `parsers::claude::is_fork_directive_record`.
+/// * `7` — TRAE CLI usage counted from its native `token_usage_record` rows.
+///   TRAE's ACP `usage_update` is only context occupancy, and houhub records
+///   none of the counters its prompt response carries (which leave out
+///   sub-agents anyway), so both the built-in and pre-integration custom
+///   `traecli` sessions previously wrote no facts. Rollout `thread_id` is the
+///   ACP session id, which makes the native counters an exact enrichment of
+///   houhub's ACP-projected history; each sub-agent's own rollout is read too,
+///   and its spend lands on the turn that launched it. See
+///   `parsers::trae_usage`.
+/// * `9` — the usage a turn end reports is kept when no open reply is there
+///   to carry it: a prompt that produced no text or tools, or a reply that a
+///   relayed user message closed before the turn ended. Such usage used to be
+///   dropped. It comes from ZCode's turn metrics and, for custom agents, from
+///   the official Claude adapter's prompt response. See
+///   `parsers::acp_native::project_turns`. (`8` is skipped: preview builds of
+///   an earlier proposal wrote it.)
 ///
 /// Only the accounting stored in `token_usage_turn` counts: the four token
 /// counters, the duration and the timestamp. A conversation's context WINDOW is
@@ -159,7 +165,7 @@ const TOP_CONVERSATIONS: usize = 8;
 /// counters predate it, since a custom/BYO model has always exposed them and
 /// the parser reads every session under `~/.qoder/projects`, not just the ones
 /// houhub launched.
-const FACT_SCHEMA_VERSION: &str = "6";
+const FACT_SCHEMA_VERSION: &str = "9";
 
 const FACT_SCHEMA_VERSION_KEY: &str = "token_usage_fact_schema_version";
 
@@ -181,7 +187,7 @@ pub enum TokenUsageSyncMode {
     #[default]
     Incremental,
     /// Drop everything and re-parse every conversation. The escape hatch for a
-    /// transcript that grew without HouHub noticing.
+    /// transcript that grew without houhub noticing.
     Full,
 }
 
@@ -486,15 +492,14 @@ pub(crate) fn aggregate_report(
             .or_default()
             .add(row);
         by_folder.entry(row.folder_id).or_default().add(row);
-        by_agent.entry(row.agent_type.clone()).or_default().add(row);
+        by_agent
+            .entry(row.agent_type.clone())
+            .or_default()
+            .add(row);
         // A turn whose transcript never named a model still spent tokens, so it
         // is counted under an explicit "unknown" slice rather than dropped.
         by_model
-            .entry(
-                row.model
-                    .clone()
-                    .unwrap_or_else(|| UNKNOWN_MODEL.to_string()),
-            )
+            .entry(row.model.clone().unwrap_or_else(|| UNKNOWN_MODEL.to_string()))
             .or_default()
             .add(row);
 
@@ -565,14 +570,12 @@ pub(crate) fn aggregate_report(
 
     let mut heatmap: Vec<TokenUsageHeatCell> = heat
         .into_iter()
-        .map(
-            |((weekday, hour), (total_tokens, turn_count))| TokenUsageHeatCell {
-                weekday,
-                hour,
-                total_tokens,
-                turn_count,
-            },
-        )
+        .map(|((weekday, hour), (total_tokens, turn_count))| TokenUsageHeatCell {
+            weekday,
+            hour,
+            total_tokens,
+            turn_count,
+        })
         .collect();
     heatmap.sort_by_key(|a| (a.weekday, a.hour));
 
@@ -915,10 +918,17 @@ pub async fn token_usage_status_core(
     let counts = usage_service::sync_counts(conn)
         .await
         .map_err(AppCommandError::from)?;
+    let schema = app_metadata_service::get_value(conn, FACT_SCHEMA_VERSION_KEY)
+        .await
+        .map_err(AppCommandError::from)?;
     Ok(TokenUsageSyncStatus {
         total_conversations: counts.total_conversations,
         synced_conversations: counts.synced_conversations,
-        stale_conversations: counts.stale_conversations,
+        stale_conversations: if schema.as_deref() != Some(FACT_SCHEMA_VERSION) {
+            counts.total_conversations
+        } else {
+            counts.stale_conversations
+        },
         fact_rows: counts.fact_rows,
         last_synced_at: counts.last_synced_at,
         running: SYNC_RUNNING.load(std::sync::atomic::Ordering::Relaxed),
@@ -983,9 +993,10 @@ pub async fn token_usage_sync_core(
     // Rows written under older accounting are wrong, not stale, so no stamp
     // will ever mark them for re-parse. Upgrading the mode is what actually
     // delivers a counting fix to history the user already has.
-    let recorded_schema = app_metadata_service::get_value(conn, FACT_SCHEMA_VERSION_KEY)
-        .await
-        .map_err(AppCommandError::from)?;
+    let recorded_schema =
+        app_metadata_service::get_value(conn, FACT_SCHEMA_VERSION_KEY)
+            .await
+            .map_err(AppCommandError::from)?;
     let schema_changed = recorded_schema.as_deref() != Some(FACT_SCHEMA_VERSION);
     let mode = if schema_changed {
         tracing::info!(
@@ -1278,7 +1289,7 @@ mod tests {
             duration_ms: Some(1200),
             model: Some("  claude-opus-5  ".into()),
             completed_at: None,
-            agent_message_id: None,
+        agent_message_id: None,
         }
     }
 
@@ -1462,15 +1473,12 @@ mod tests {
     fn a_conversation_with_no_token_data_anywhere_contributes_nothing() {
         // Cursor's shape: no per-turn usage and no session totals either.
         let turns = vec![turn("a", None, "2026-08-01T10:00:00Z")];
-        assert!(
-            facts_from_detail(&detail(turns.clone(), None), ts("2026-08-01T12:00:00Z")).is_empty()
-        );
+        assert!(facts_from_detail(&detail(turns.clone(), None), ts("2026-08-01T12:00:00Z")).is_empty());
         // A stats block that exists but reports zeros is equally empty.
-        assert!(facts_from_detail(
-            &detail(turns, Some(session_stats(0, 0))),
-            ts("2026-08-01T12:00:00Z")
-        )
-        .is_empty());
+        assert!(
+            facts_from_detail(&detail(turns, Some(session_stats(0, 0))), ts("2026-08-01T12:00:00Z"))
+                .is_empty()
+        );
     }
 
     fn candidate(synced_turns: Option<i32>) -> usage_service::SyncCandidate {
@@ -1505,10 +1513,7 @@ mod tests {
             ..candidate(Some(5))
         };
         assert!(should_reparse(&current, TokenUsageSyncMode::Full));
-        assert!(parse_lost_a_readable_source(
-            &detail(vec![], None),
-            &current
-        ));
+        assert!(parse_lost_a_readable_source(&detail(vec![], None), &current));
     }
 
     #[test]
@@ -1521,7 +1526,10 @@ mod tests {
             ..candidate(Some(5))
         };
         assert!(reimported.is_stale());
-        assert!(should_reparse(&reimported, TokenUsageSyncMode::Incremental));
+        assert!(should_reparse(
+            &reimported,
+            TokenUsageSyncMode::Incremental
+        ));
         assert!(parse_lost_a_readable_source(
             &detail(vec![], None),
             &reimported
@@ -1599,10 +1607,7 @@ mod tests {
     #[test]
     fn series_is_dense_across_the_requested_range() {
         let labels = HashMap::new();
-        let rows = vec![
-            row("2026-08-01T10:00:00Z", 100),
-            row("2026-08-04T10:00:00Z", 50),
-        ];
+        let rows = vec![row("2026-08-01T10:00:00Z", 100), row("2026-08-04T10:00:00Z", 50)];
         let report = aggregate_report(
             &rows,
             &[],
@@ -1614,15 +1619,8 @@ mod tests {
                 Some(ts("2026-08-05T00:00:00Z")),
             ),
         );
-        let keys: Vec<&str> = report
-            .series
-            .iter()
-            .map(|p| p.bucket_key.as_str())
-            .collect();
-        assert_eq!(
-            keys,
-            ["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04"]
-        );
+        let keys: Vec<&str> = report.series.iter().map(|p| p.bucket_key.as_str()).collect();
+        assert_eq!(keys, ["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04"]);
         assert_eq!(report.series[1].total_tokens, 0);
         assert_eq!(report.series[3].total_tokens, 50);
     }
@@ -1652,11 +1650,7 @@ mod tests {
             &[],
             &opts(&labels, TokenUsageBucket::Month, 0, None, None),
         );
-        let keys: Vec<&str> = report
-            .series
-            .iter()
-            .map(|p| p.bucket_key.as_str())
-            .collect();
+        let keys: Vec<&str> = report.series.iter().map(|p| p.bucket_key.as_str()).collect();
         assert_eq!(keys, ["2026-12", "2027-01"]);
     }
 
@@ -1684,10 +1678,7 @@ mod tests {
         let mut labels = HashMap::new();
         labels.insert(1, "houhub".to_string());
         labels.insert(2, "other".to_string());
-        let mut rows = vec![
-            row("2026-08-01T10:00:00Z", 100),
-            row("2026-08-01T11:00:00Z", 300),
-        ];
+        let mut rows = vec![row("2026-08-01T10:00:00Z", 100), row("2026-08-01T11:00:00Z", 300)];
         rows[1].folder_id = 2;
         rows[1].conversation_id = 2;
         rows[1].agent_type = "codex".into();
@@ -1841,22 +1832,15 @@ mod tests {
         usage_service::replace_conversation_facts(&db.conn, conv, updated_at, &[])
             .await
             .expect("stamp");
-        assert!(!usage_service::list_sync_candidates(&db.conn)
-            .await
-            .expect("c")[0]
-            .is_stale());
+        assert!(!usage_service::list_sync_candidates(&db.conn).await.expect("c")[0].is_stale());
 
         // First pass: the recorded schema is absent, so the conversation is
         // re-parsed even though nothing about it moved. This is what carries a
         // counting fix to history the user already has — stale-tracking never
         // would, because the transcript did not change, the arithmetic did.
-        let first = token_usage_sync_core(
-            &db.conn,
-            &EventEmitter::Noop,
-            TokenUsageSyncMode::Incremental,
-        )
-        .await
-        .expect("first sync");
+        let first = token_usage_sync_core(&db.conn, &EventEmitter::Noop, TokenUsageSyncMode::Incremental)
+            .await
+            .expect("first sync");
         assert_eq!(first.scanned, 1);
         assert_eq!(first.skipped, 0, "a schema change must not skip anything");
 
@@ -1869,13 +1853,9 @@ mod tests {
         );
 
         // Second pass: the marker matches, so incremental is incremental again.
-        let second = token_usage_sync_core(
-            &db.conn,
-            &EventEmitter::Noop,
-            TokenUsageSyncMode::Incremental,
-        )
-        .await
-        .expect("second sync");
+        let second = token_usage_sync_core(&db.conn, &EventEmitter::Noop, TokenUsageSyncMode::Incremental)
+            .await
+            .expect("second sync");
         assert_eq!(second.skipped, 1, "the marker must not be sticky");
     }
 
@@ -1913,20 +1893,14 @@ mod tests {
         )
         .await
         .expect("seed facts");
-        assert!(!usage_service::list_sync_candidates(&db.conn)
-            .await
-            .expect("c")[0]
-            .is_stale());
+        assert!(!usage_service::list_sync_candidates(&db.conn).await.expect("c")[0].is_stale());
 
         // The schema change selects it, the parse comes back with nothing, and
         // the lost-source guard keeps the old rows rather than erasing them.
-        let first = token_usage_sync_core(
-            &db.conn,
-            &EventEmitter::Noop,
-            TokenUsageSyncMode::Incremental,
-        )
-        .await
-        .expect("first sync");
+        let first =
+            token_usage_sync_core(&db.conn, &EventEmitter::Noop, TokenUsageSyncMode::Incremental)
+                .await
+                .expect("first sync");
         assert_eq!(first.lost, 1, "the empty parse must not be written through");
         assert_eq!(
             first.failed, 0,
@@ -1945,13 +1919,10 @@ mod tests {
         // agent's whole transcript tree on every pass, failed identically, and
         // reported it — forever, because nothing here counts attempts. The
         // stamp settles instead, so the case closes after one look.
-        let second = token_usage_sync_core(
-            &db.conn,
-            &EventEmitter::Noop,
-            TokenUsageSyncMode::Incremental,
-        )
-        .await
-        .expect("second sync");
+        let second =
+            token_usage_sync_core(&db.conn, &EventEmitter::Noop, TokenUsageSyncMode::Incremental)
+                .await
+                .expect("second sync");
         assert_eq!(second.skipped, 1, "a settled conversation is not revisited");
         assert_eq!(second.lost, 0);
         assert_eq!(second.failed, 0);
@@ -1963,13 +1934,10 @@ mod tests {
         usage_service::mark_stale_for_reparse(&db.conn, conv)
             .await
             .expect("re-import");
-        let third = token_usage_sync_core(
-            &db.conn,
-            &EventEmitter::Noop,
-            TokenUsageSyncMode::Incremental,
-        )
-        .await
-        .expect("third sync");
+        let third =
+            token_usage_sync_core(&db.conn, &EventEmitter::Noop, TokenUsageSyncMode::Incremental)
+                .await
+                .expect("third sync");
         assert_eq!(third.lost, 1, "a re-import earns one more attempt");
         assert_eq!(
             usage_service::fetch_facts(&db.conn, &FactQuery::default(), 100)
@@ -2031,13 +1999,10 @@ mod tests {
             .await
             .expect("install failure trigger");
 
-        let first = token_usage_sync_core(
-            &db.conn,
-            &EventEmitter::Noop,
-            TokenUsageSyncMode::Incremental,
-        )
-        .await
-        .expect("schema rebuild");
+        let first =
+            token_usage_sync_core(&db.conn, &EventEmitter::Noop, TokenUsageSyncMode::Incremental)
+                .await
+                .expect("schema rebuild");
         assert_eq!(first.failed, 1);
         assert_eq!(first.lost, 0);
         let after_failure = usage_service::list_sync_candidates(&db.conn)
@@ -2050,13 +2015,10 @@ mod tests {
 
         // The trigger allows epoch-to-current, proving the next incremental
         // pass actually revisits the row and can settle it normally.
-        let second = token_usage_sync_core(
-            &db.conn,
-            &EventEmitter::Noop,
-            TokenUsageSyncMode::Incremental,
-        )
-        .await
-        .expect("retry");
+        let second =
+            token_usage_sync_core(&db.conn, &EventEmitter::Noop, TokenUsageSyncMode::Incremental)
+                .await
+                .expect("retry");
         assert_eq!(second.failed, 0);
         assert_eq!(second.lost, 1);
         assert!(!usage_service::list_sync_candidates(&db.conn)

@@ -9,15 +9,14 @@
 use agent_client_protocol::schema::v1::{
     ForkSessionRequest, ForkSessionResponse, McpServer, Meta, SessionId, AGENT_METHOD_NAMES,
 };
-
 use agent_client_protocol::{Agent, ConnectionTo};
 
-use crate::acp::connection::{claude_raw_sdk_session_meta, send_capturing_models};
+use crate::acp::connection::{
+    claude_raw_sdk_session_meta, send_capturing_models, ClaudeSessionOptions,
+};
 
 use crate::acp::error::AcpError;
-
 use crate::models::agent::AgentType;
-
 use crate::models::message::{ContentBlock, MessageTurn, TurnRole};
 
 /// Where in the history to fork, for the agents that can honour it.
@@ -225,20 +224,13 @@ pub async fn fork_session(
     agent_type: AgentType,
     cwd: &str,
     mcp_servers: &[McpServer],
-    prompt_suggestions: bool,
+    claude: &ClaudeSessionOptions,
     fork_point: Option<&ForkPoint>,
 ) -> Result<(ForkSessionResponse, Option<serde_json::Value>), AcpError> {
     send_capturing_models(
         cx,
         AGENT_METHOD_NAMES.session_fork,
-        build_fork_request(
-            session_id,
-            agent_type,
-            cwd,
-            mcp_servers,
-            prompt_suggestions,
-            fork_point,
-        ),
+        build_fork_request(session_id, agent_type, cwd, mcp_servers, claude, fork_point),
     )
     .await
     .map_err(|e| AcpError::protocol(format!("session/fork failed: {e}")))
@@ -278,12 +270,12 @@ fn build_fork_request(
     agent_type: AgentType,
     cwd: &str,
     mcp_servers: &[McpServer],
-    prompt_suggestions: bool,
+    claude: &ClaudeSessionOptions,
     fork_point: Option<&ForkPoint>,
 ) -> ForkSessionRequest {
     let mut req = ForkSessionRequest::new(session_id.clone(), cwd);
     let mut meta = fork_point.map(ForkPoint::to_meta).unwrap_or_default();
-    if let Some(session_meta) = claude_raw_sdk_session_meta(agent_type, prompt_suggestions) {
+    if let Some(session_meta) = claude_raw_sdk_session_meta(agent_type, claude) {
         // Disjoint keys: the fork point lives under `jetbrains`, the session's
         // own settings under `claudeCode`.
         meta.extend(session_meta);
@@ -332,7 +324,7 @@ mod tests {
             AgentType::Codex,
             "/work",
             &[server("other")],
-            true,
+            &ClaudeSessionOptions::new(true),
             Some(&point),
         ))
         .unwrap();
@@ -369,7 +361,7 @@ mod tests {
                 agent_type,
                 "/work",
                 &[server("houhub-mcp")],
-                true,
+                &ClaudeSessionOptions::new(true),
                 None,
             ))
             .unwrap();
@@ -393,7 +385,7 @@ mod tests {
             AgentType::ClaudeCode,
             "/work",
             &servers,
-            true,
+            &ClaudeSessionOptions::new(true),
             None,
         ))
         .unwrap();
@@ -402,7 +394,7 @@ mod tests {
             SessionId::new("sess-2"),
             std::path::Path::new("/work"),
             servers.clone(),
-            true,
+            &ClaudeSessionOptions::new(true),
         ))
         .unwrap();
         assert_eq!(fork["cwd"], resume["cwd"]);
@@ -420,7 +412,7 @@ mod tests {
             AgentType::ClaudeCode,
             "/work",
             &[],
-            true,
+            &ClaudeSessionOptions::new(true),
             None,
         ))
         .unwrap();
@@ -442,7 +434,7 @@ mod tests {
             AgentType::ClaudeCode,
             "/work",
             &[server("houhub-mcp")],
-            false,
+            &ClaudeSessionOptions::new(false),
             None,
         ))
         .unwrap();
@@ -451,7 +443,7 @@ mod tests {
             SessionId::new("sess-2"),
             std::path::Path::new("/work"),
             vec![server("houhub-mcp")],
-            false,
+            &ClaudeSessionOptions::new(false),
         ))
         .unwrap();
         assert_eq!(fork["_meta"], resume["_meta"]);
@@ -479,7 +471,7 @@ mod tests {
             AgentType::ClaudeCode,
             "/work",
             &[],
-            true,
+            &ClaudeSessionOptions::new(true),
             Some(&point),
         ))
         .unwrap();
@@ -718,11 +710,7 @@ mod tests {
     #[test]
     fn other_agents_have_no_fork_point() {
         let turns = vec![turn("turn-1", TurnRole::Assistant, "hello", Some("msg_01"))];
-        for agent in [
-            AgentType::Gemini,
-            AgentType::Grok,
-            AgentType::Custom("acme"),
-        ] {
+        for agent in [AgentType::Gemini, AgentType::Grok, AgentType::Custom("acme")] {
             assert!(resolve_fork_point(&turns, "turn-1", agent).is_none());
         }
     }

@@ -28,36 +28,26 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-
 use chrono::{DateTime, Utc};
-
 use agent_client_protocol::schema::v1::{
-    CreateElicitationRequest, CreateElicitationResponse, ElicitationAcceptAction,
-    ElicitationAction, ElicitationContentValue, ElicitationMode, ElicitationPropertySchema,
-    ElicitationScope, MultiSelectItems, StringPropertySchema,
+    CreateElicitationRequest, CreateElicitationResponse, ElicitationAcceptAction, ElicitationAction,
+    ElicitationContentValue, ElicitationMode, ElicitationPropertySchema, ElicitationScope,
+    MultiSelectItems, StringPropertySchema,
 };
-
 use serde::{Deserialize, Serialize};
-
 use serde_json::Value;
-
 use std::collections::BTreeMap;
-
 use tokio::sync::{oneshot, RwLock};
 
 /// Max questions per `ask_user_question` call. Matches Claude Code's
 /// `AskUserQuestion` contract; the JSON schema advertises the same `maxItems`.
 pub const MAX_QUESTIONS: usize = 4;
-
 /// Min / max selectable options per question. Fewer than two options is not a
 /// meaningful choice; more than four overwhelms the card. Matches Claude Code.
 pub const MIN_OPTIONS: usize = 2;
-
 pub const MAX_OPTIONS: usize = 4;
-
 /// Max characters for a question's short `header` chip.
 pub const MAX_HEADER_CHARS: usize = 12;
-
 /// Per-field sanity bound (characters) for every agent/user-supplied free-text
 /// field: the question text, each option label + description, and the free-text
 /// "Other" answer. The full text rides in the broadcast event, the snapshot, and
@@ -362,9 +352,7 @@ pub fn validate_specs(specs: &[QuestionSpec]) -> Result<(), String> {
         let mut seen_labels = std::collections::HashSet::new();
         for (oi, o) in q.options.iter().enumerate() {
             if o.label.trim().is_empty() {
-                return Err(format!(
-                    "questions[{qi}].options[{oi}] has an empty `label`"
-                ));
+                return Err(format!("questions[{qi}].options[{oi}] has an empty `label`"));
             }
             if o.label.chars().count() > MAX_QUESTION_TEXT_CHARS {
                 return Err(format!(
@@ -454,7 +442,7 @@ pub fn build_outcome(questions: &[QuestionSpec], answer: &QuestionAnswer) -> Que
     }
 }
 
-/// Some native asks carry NO `header` (the short category chip HouHub renders):
+/// Some native asks carry NO `header` (the short category chip houhub renders):
 /// grok's `ask_user_question` tool and pi's extension-UI `select` both send bare
 /// question text. Synthesize one from the leading characters, bounded to
 /// [`MAX_HEADER_CHARS`]. Always returns a non-empty, in-bounds string so
@@ -469,13 +457,13 @@ pub(crate) fn synthesize_header(question: &str) -> String {
     }
 }
 
-/// Convert grok's native `_x.ai/ask_user_question` ext-request params into Houhub
+/// Convert grok's native `_x.ai/ask_user_question` ext-request params into houhub
 /// [`QuestionSpec`]s, so grok's own questions render in the SAME interactive card
-/// as the built-in MCP ask tool (grok emits an ACP ext request and blocks on the
-/// reply; if Houhub doesn't answer it, grok falls back to inert fire-and-forget
+/// as the `houhub-mcp` ask tool (grok emits an ACP ext request and blocks on the
+/// reply; if houhub doesn't answer it, grok falls back to inert fire-and-forget
 /// rendering — see the connection handler). Grok's wire shape per question is
 /// `{question, options:[{label, description}], multiSelect}` — no `header`, which
-/// we synthesize. Counts are clamped to Houhub's bounds because
+/// we synthesize. Counts are clamped to houhub's bounds because
 /// [`crate::acp::manager::ConnectionManager::register_question`] re-runs
 /// [`validate_specs`] and would otherwise decline the whole ask: more than
 /// [`MAX_QUESTIONS`] questions or [`MAX_OPTIONS`] options are truncated (logged,
@@ -713,6 +701,110 @@ pub fn is_houhub_ask_tool_name(name: &str) -> bool {
     crate::acp::delegation::is_houhub_mcp_tool(name, "ask_user_question")
 }
 
+/// The id prefix antigravity-acp gives the synthetic tool call of one of its
+/// own questions: `server.py::_ask_user_handler` mints
+/// `interaction_<8 hex>` for each question it asks (the model's `ask_question`,
+/// asked one question at a time, and the workspace-trust prompt alike). It is
+/// the only producer of that prefix in 1.4.1 and 1.4.3.
+pub const ANTIGRAVITY_INTERACTION_ID_PREFIX: &str = "interaction_";
+
+/// True when `id` has the shape of an antigravity-acp question's tool call id
+/// (see [`ANTIGRAVITY_INTERACTION_ID_PREFIX`]). The prefix alone says nothing
+/// about the agent, so callers must also check that the connection is
+/// Antigravity's.
+pub fn is_antigravity_interaction_id(id: &str) -> bool {
+    id.strip_prefix(ANTIGRAVITY_INTERACTION_ID_PREFIX)
+        .is_some_and(|rest| !rest.is_empty())
+}
+
+/// Antigravity 原生交互通过权限选项承载答案，保留文字到 optionId 的映射。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AntigravityAsk {
+    pub spec: QuestionSpec,
+    pub option_ids: Vec<(String, String)>,
+}
+
+/// 识别 antigravity-acp 1.4.1 的交互请求，而非模型调用 ask_question 的参数。
+/// 实测 title 是问题正文、rawInput 为空，选项位于请求外层。
+/// 调用方还必须校验 AgentType::Antigravity，避免接管其他代理的权限请求。
+pub fn parse_antigravity_ask(
+    tool_call: &Value,
+    options: &[(String, String)],
+) -> Option<AntigravityAsk> {
+    let id = tool_call.get("toolCallId")?.as_str()?;
+    if !is_antigravity_interaction_id(id) || !(MIN_OPTIONS..=MAX_OPTIONS).contains(&options.len()) {
+        return None;
+    }
+    if let Some(kind) = tool_call.get("kind").and_then(Value::as_str) {
+        if kind != "other" {
+            return None;
+        }
+    }
+    if let Some(status) = tool_call.get("status").and_then(Value::as_str) {
+        if status != "pending" {
+            return None;
+        }
+    }
+    if let Some(raw_input) = tool_call.get("rawInput") {
+        let is_empty_or_null = raw_input.is_null()
+            || raw_input.as_object().is_some_and(serde_json::Map::is_empty);
+        if !is_empty_or_null {
+            return None;
+        }
+    }
+    let question = tool_call.get("title")?.as_str()?.trim();
+    if question.is_empty() || question.chars().count() > MAX_QUESTION_TEXT_CHARS {
+        return None;
+    }
+    let mut choices = Vec::with_capacity(options.len());
+    let mut option_ids = Vec::with_capacity(options.len());
+    let mut labels = std::collections::HashSet::new();
+    let mut ids = std::collections::HashSet::new();
+    for (id, name) in options {
+        let label = name.trim();
+        if id.trim().is_empty()
+            || label.is_empty()
+            || label.chars().count() > MAX_QUESTION_TEXT_CHARS
+            || !labels.insert(label)
+            || !ids.insert(id)
+        {
+            return None;
+        }
+        choices.push(QuestionOption {
+            label: label.to_string(),
+            description: String::new(),
+        });
+        option_ids.push((label.to_string(), id.clone()));
+    }
+    Some(AntigravityAsk {
+        spec: QuestionSpec {
+            id: uuid::Uuid::new_v4().to_string(),
+            question: question.to_string(),
+            header: synthesize_header(question),
+            // ACP 权限响应只接受一个 optionId，原生代理逐题发送交互请求。
+            multi_select: false,
+            options: choices,
+            is_secret: false,
+        },
+        option_ids,
+    })
+}
+
+/// 只回传本题的一个原生选项；取消或无法表达的自由文本不伪装为首项。
+pub fn antigravity_option_id(outcome: &QuestionOutcome, ask: &AntigravityAsk) -> Option<String> {
+    if outcome.declined || outcome.answers.len() != 1 {
+        return None;
+    }
+    let answer = &outcome.answers[0];
+    if answer.question != ask.spec.question || answer.selected.len() != 1 {
+        return None;
+    }
+    ask.option_ids
+        .iter()
+        .find(|(label, _)| label == &answer.selected[0])
+        .map(|(_, id)| id.clone())
+}
+
 /// Serialize a resolved [`QuestionOutcome`] into grok's `AskUserQuestionExtResponse`
 /// — the reply to a `_x.ai/ask_user_question` ext request. Verified against grok
 /// 0.2.101 on a real run: the response is internally tagged by `outcome`; the
@@ -885,7 +977,7 @@ pub const ELICITATION_DECLINE_OPTION_ID: &str = "__decline";
 /// ask card: an MCP tool-call approval (`_meta.codex_approval_kind ==
 /// "mcp_tool_call"`) or a message-only confirm (a form with no renderable
 /// fields). Routing these through the permission flow keeps MCP approvals
-/// looking exactly like they did before HouHub advertised `elicitation.form`
+/// looking exactly like they did before houhub advertised `elicitation.form`
 /// (codex-acp then used `session/request_permission` with the same options).
 pub struct ElicitationApproval {
     /// The human prompt ("Allow tool call?" / the MCP server's message).
@@ -926,10 +1018,7 @@ fn is_other_companion(id: &str) -> bool {
     let Some(pos) = id.rfind("__other") else {
         return false;
     };
-    pos > 0
-        && id[pos + "__other".len()..]
-            .chars()
-            .all(|c| c.is_ascii_digit())
+    pos > 0 && id[pos + "__other".len()..].chars().all(|c| c.is_ascii_digit())
 }
 
 /// True when the raw schema property carries codex's own companion marker, the
@@ -1001,13 +1090,18 @@ pub enum CodexUserInputShape {
 /// generation sent it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ElicitationPeer {
-    /// Anything that is not codex-acp (DeepSeek and Qoder today; any future
-    /// `elicitation.form` speaker). The form is parsed generically.
+    /// Anything that is neither codex-acp nor OpenCode (DeepSeek and Qoder
+    /// today; any future `elicitation.form` speaker). The form is parsed
+    /// generically.
     Other,
     /// codex-acp, carrying the `request_user_input` shape its RUNNING version
     /// implies — `None` when `agentInfo.version` was absent or unparseable, in
     /// which case the form's own markers have to date it.
     Codex(Option<CodexUserInputShape>),
+    /// OpenCode 2, whose question forms pair every select field `<id>` with a
+    /// free-text `<id>_custom` companion (see [`is_opencode_custom_companion`]).
+    /// Otherwise parsed generically.
+    OpenCode,
 }
 
 impl ElicitationPeer {
@@ -1067,7 +1161,10 @@ fn codex_form_shape(raw: &Value, peer: ElicitationPeer) -> Option<CodexUserInput
     let ElicitationPeer::Codex(running) = peer else {
         return None;
     };
-    let properties = raw.get("requestedSchema")?.get("properties")?.as_object()?;
+    let properties = raw
+        .get("requestedSchema")?
+        .get("properties")?
+        .as_object()?;
     let mut is_codex_form = false;
     let mut companion_shape = None;
     for id in properties.keys() {
@@ -1075,8 +1172,8 @@ fn codex_form_shape(raw: &Value, peer: ElicitationPeer) -> Option<CodexUserInput
             companion_shape = Some(shape);
             continue;
         }
-        is_codex_form |=
-            codex_property_meta(raw, id).is_some_and(|codex| codex.get("isOther").is_some());
+        is_codex_form |= codex_property_meta(raw, id)
+            .is_some_and(|codex| codex.get("isOther").is_some());
     }
     if !is_codex_form && companion_shape.is_none() {
         return None;
@@ -1128,7 +1225,6 @@ fn codex_form_shape(raw: &Value, peer: ElicitationPeer) -> Option<CodexUserInput
 /// Every failure lands on "keep the option". If upstream rewords the copy the
 /// filter simply stops firing and the redundant choice reappears.
 const CODEX_SYNTHETIC_OTHER_LABEL: &str = "None of the above";
-
 const CODEX_SYNTHETIC_OTHER_DESCRIPTION: &str = "Provide a different answer in the note field.";
 
 /// True when this property is an `isOther` codex question, i.e. the only place
@@ -1169,6 +1265,67 @@ fn is_codex_synthetic_other_choice(raw: &Value, id: &str, label: &str, value: &s
             && entry.get("description").and_then(Value::as_str)
                 == Some(CODEX_SYNTHETIC_OTHER_DESCRIPTION)
     })
+}
+
+/// True when `id` is the free-text companion OpenCode 2 puts beside a select
+/// field: `<field>_custom`, next to a `<field>` that offers choices. OpenCode
+/// marks it with nothing but the name — `custom: true` on a question field
+/// becomes a select plus a `"<title> (other)"` string property
+/// (`packages/cli/src/acp/elicitation.ts` `other` / `customKey`, 2.2.0) — so,
+/// like codex's `_meta.codex` markers, the rule is trusted only on an OpenCode
+/// connection, where the card's own "Other" input stands in for it.
+///
+/// The typed answer then rides under the select field's own id
+/// ([`build_elicitation_response`] writes every value there), which OpenCode
+/// accepts: its question fields are `custom`, so a value outside the options
+/// is the user's own answer (`core/src/form.ts`).
+fn is_opencode_custom_companion(
+    properties: &BTreeMap<String, ElicitationPropertySchema>,
+    id: &str,
+) -> bool {
+    let Some(field) = id.strip_suffix("_custom") else {
+        return false;
+    };
+    match properties.get(field) {
+        Some(ElicitationPropertySchema::String(s)) => !string_prop_choices(s).is_empty(),
+        Some(ElicitationPropertySchema::Array(_)) => true,
+        _ => false,
+    }
+}
+
+/// Whether an OpenCode 2 `elicitation/create` is its `question` tool's form:
+/// one `q<n>` field per question, each optionally beside its `q<n>_custom`
+/// companion (`core/src/tool/plugin/question.ts` `toField`, 2.2.0). OpenCode
+/// elicits one other form, the web-search provider choice
+/// (`core/src/tool/plugin/websearch.ts`, a `choice` field), which houhub does not
+/// ask the user: it is declined, and the search fails over to the model.
+pub fn is_opencode_question_form(raw: &Value) -> bool {
+    let Some(properties) = raw
+        .get("requestedSchema")
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    let is_question_key = |key: &str| {
+        key.strip_prefix('q')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    !properties.is_empty()
+        && properties.keys().any(|key| is_question_key(key))
+        && properties.keys().all(|key| {
+            is_question_key(key) || key.strip_suffix("_custom").is_some_and(is_question_key)
+        })
+}
+
+/// The elicitation reply that ANSWERS an OpenCode question with nothing:
+/// `accept` with no content. OpenCode then hands the model "Unanswered" for
+/// each question and the turn goes on (`core/src/tool/plugin/question.ts`
+/// `toModelContent`). Used where houhub cannot ask the user (the ask feature is
+/// off, another question is already open): a `decline` there would read to
+/// OpenCode as the user DISMISSING the question, which ends the turn.
+pub fn elicitation_unanswered_response() -> CreateElicitationResponse {
+    CreateElicitationResponse::new(ElicitationAction::Accept(ElicitationAcceptAction::new()))
 }
 
 /// True when the raw schema property carries the shared custom-answer marker
@@ -1259,15 +1416,18 @@ fn is_mcp_tool_call_approval(raw: &Value) -> bool {
 /// then dates the form from its own markers and falls back to the pinned
 /// adapter's shape.
 ///
-/// Counts are clamped to HouHub's bounds because
+/// Counts are clamped to houhub's bounds because
 /// [`crate::acp::manager::ConnectionManager::register_question`] re-runs
 /// [`validate_specs`]. Errors only on non-form / undeserializable requests,
 /// which the connection handler turns into a graceful decline.
-pub fn classify_elicitation(raw: &Value, peer: ElicitationPeer) -> Result<ElicitationPlan, String> {
+pub fn classify_elicitation(
+    raw: &Value,
+    peer: ElicitationPeer,
+) -> Result<ElicitationPlan, String> {
     let req: CreateElicitationRequest = serde_json::from_value(raw.clone())
         .map_err(|e| format!("unparseable elicitation request: {e}"))?;
     let ElicitationMode::Form(form) = &req.mode else {
-        // HouHub only advertises `elicitation.form` — URL mode goes down
+        // houhub only advertises `elicitation.form` — URL mode goes down
         // codex-acp's `request_permission` fallback and never reaches here.
         return Err("elicitation is not form mode".to_string());
     };
@@ -1363,11 +1523,7 @@ fn approval_from_form(
                 label: if c.label.trim().is_empty() {
                     value.to_string()
                 } else {
-                    c.label
-                        .trim()
-                        .chars()
-                        .take(MAX_QUESTION_TEXT_CHARS)
-                        .collect()
+                    c.label.trim().chars().take(MAX_QUESTION_TEXT_CHARS).collect()
                 },
                 kind: if value == "once" {
                     "allow_once"
@@ -1447,6 +1603,8 @@ fn parse_form_questions(
         if is_other_companion(id)
             || (peer_is_codex && codex_companion_role(raw, id).is_some())
             || is_custom_answer_property(raw, id)
+            || (peer == ElicitationPeer::OpenCode
+                && is_opencode_custom_companion(&form.requested_schema.properties, id))
         {
             continue;
         }
@@ -1630,13 +1788,7 @@ pub fn build_elicitation_response(
         let mapped: Vec<String> = item
             .selected
             .iter()
-            .map(|l| {
-                field
-                    .value_by_label
-                    .get(l)
-                    .cloned()
-                    .unwrap_or_else(|| l.clone())
-            })
+            .map(|l| field.value_by_label.get(l).cloned().unwrap_or_else(|| l.clone()))
             .collect();
         let value = match field.kind {
             ElicitationFieldKind::Text => match mapped.into_iter().next() {
@@ -1720,7 +1872,7 @@ pub fn elicitation_cancel_response() -> CreateElicitationResponse {
 }
 
 /// Build the `raw_input` (questions) for the in-stream `AskQuestionResultCard`
-/// HouHub synthesizes for a native ask that resolves out-of-band rather than as a
+/// houhub synthesizes for a native ask that resolves out-of-band rather than as a
 /// completed stream tool_call. Three callers: grok (answers over the
 /// `_x.ai/ask_user_question` ext round-trip — `handle_grok_ask_user_question`),
 /// codex `request_user_input` (answers over the `elicitation/create` round-trip
@@ -1753,7 +1905,7 @@ pub fn grok_result_card_input(specs: &[QuestionSpec]) -> Value {
 }
 
 /// Build the `raw_output` (`{answers, declined}` envelope) for the in-stream
-/// `AskQuestionResultCard` — the built-in MCP `structuredContent` shape the frontend
+/// `AskQuestionResultCard` — the houhub-mcp `structuredContent` shape the frontend
 /// already parses (`parseAskQuestionOutcome`). Emits `header:""` to match
 /// [`grok_result_card_input`] (see its docs). Companion to [`grok_result_card_input`].
 pub fn grok_result_card_output(outcome: &QuestionOutcome) -> Value {
@@ -1811,7 +1963,6 @@ impl QuestionRuntimeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use serde_json::json;
 
     fn valid_args() -> Value {
@@ -1867,6 +2018,149 @@ mod tests {
         }
     }
 
+    /// OpenCode 2.2.0's `question` tool, as its bridge elicits it (live
+    /// capture): a `q<n>` select per question beside a `q<n>_custom` text
+    /// companion, scoped to the streamed tool call.
+    fn opencode_question_raw() -> Value {
+        json!({
+            "mode": "form",
+            "sessionId": "ses_e826307d6ffepX5ltg2opas3fw",
+            "toolCallId": "call_main_11_15",
+            "message": "Questions",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "q0": {
+                        "type": "string",
+                        "title": "Color",
+                        "description": "Which color do you prefer?",
+                        "oneOf": [
+                            {"const": "Red", "title": "Red", "description": "Warm"},
+                            {"const": "Blue", "title": "Blue", "description": "Cool"},
+                        ],
+                    },
+                    "q0_custom": {
+                        "type": "string",
+                        "title": "Color (other)",
+                        "description": "Type your own answer",
+                    },
+                },
+                "required": [],
+            },
+        })
+    }
+
+    #[test]
+    fn classify_elicitation_reads_opencode_question_form() {
+        let raw = opencode_question_raw();
+        assert!(is_opencode_question_form(&raw));
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::OpenCode).unwrap());
+        // The companion is the card's own "Other" input, not a question.
+        assert_eq!(q.specs.len(), 1, "{:?}", q.specs);
+        let spec = &q.specs[0];
+        assert_eq!(spec.id, "q0");
+        assert_eq!(spec.header, "Color");
+        assert_eq!(spec.question, "Which color do you prefer?");
+        assert!(!spec.multi_select);
+        let labels: Vec<_> = spec.options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(labels, ["Red", "Blue"]);
+        assert_eq!(q.tool_call_id.as_deref(), Some("call_main_11_15"));
+
+        // A typed answer rides under the select field itself, which OpenCode
+        // takes as the user's own answer (its question fields are `custom`).
+        let outcome = QuestionOutcome {
+            answers: vec![QuestionAnsweredItem {
+                question: "Which color do you prefer?".to_string(),
+                header: "Color".to_string(),
+                multi_select: false,
+                selected: vec!["Teal".to_string()],
+            }],
+            declined: false,
+        };
+        assert_eq!(
+            serde_json::to_value(build_elicitation_response(&q, &outcome)).unwrap(),
+            json!({"action": "accept", "content": {"q0": "Teal"}})
+        );
+
+        // The name alone is no companion on another connection.
+        let generic = expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+        assert_eq!(generic.specs.len(), 2);
+    }
+
+    #[test]
+    fn opencode_multi_select_question_keeps_its_companion_hidden() {
+        let raw = json!({
+            "mode": "form",
+            "sessionId": "ses_1",
+            "toolCallId": "call_1",
+            "message": "Questions",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "q0": {
+                        "type": "array",
+                        "title": "Integrations",
+                        "description": "Pick the integrations",
+                        "items": {"anyOf": [
+                            {"const": "GitHub", "title": "GitHub"},
+                            {"const": "Slack", "title": "Slack"},
+                        ]},
+                        "minItems": 1,
+                    },
+                    "q0_custom": {
+                        "type": "string",
+                        "title": "Integrations (other)",
+                        "description": "Add your own answer",
+                    },
+                },
+                "required": ["q0"],
+            },
+        });
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::OpenCode).unwrap());
+        assert_eq!(q.specs.len(), 1);
+        assert!(q.specs[0].multi_select);
+    }
+
+    /// OpenCode's other form, the web-search provider choice, is not a
+    /// question form (`core/src/tool/plugin/websearch.ts`).
+    #[test]
+    fn opencode_websearch_form_is_not_a_question_form() {
+        let raw = json!({
+            "mode": "form",
+            "sessionId": "ses_1",
+            "message": "Web Search",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "choice": {
+                        "type": "string",
+                        "description": "Allow OpenCode to search the web for up-to-date information?",
+                        "oneOf": [
+                            {"const": "allow", "title": "Allow search via Exa"},
+                            {"const": "disable", "title": "Disable web search"},
+                        ],
+                    },
+                },
+                "required": ["choice"],
+            },
+        });
+        assert!(!is_opencode_question_form(&raw));
+        assert!(!is_opencode_question_form(&json!({"requestedSchema": {"properties": {}}})));
+        assert!(!is_opencode_question_form(&json!({
+            "requestedSchema": {"properties": {"q0_custom": {"type": "string"}}}
+        })));
+    }
+
+    /// An answer with nothing in it: OpenCode tells the model "Unanswered" and
+    /// goes on, where a decline would end the turn as a dismissal.
+    #[test]
+    fn unanswered_response_accepts_with_no_content() {
+        assert_eq!(
+            serde_json::to_value(elicitation_unanswered_response()).unwrap(),
+            json!({"action": "accept"})
+        );
+    }
+
     #[test]
     fn classify_elicitation_single_select_maps_options_and_id() {
         let raw = elicitation_raw(
@@ -1890,11 +2184,7 @@ mod tests {
         assert_eq!(q.specs[0].header, "Approach");
         assert!(!q.specs[0].multi_select);
         assert!(!q.specs[0].is_secret);
-        let labels: Vec<_> = q.specs[0]
-            .options
-            .iter()
-            .map(|o| o.label.as_str())
-            .collect();
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(labels, ["Incremental", "Rewrite"]);
         assert_eq!(q.fields[0].kind, ElicitationFieldKind::Text);
         // The elicitation's toolCallId rides along so the connection handler can
@@ -2008,11 +2298,7 @@ mod tests {
             q.specs[0].header, "Approach",
             "…and the short tab label in `description`"
         );
-        let labels: Vec<_> = q.specs[0]
-            .options
-            .iter()
-            .map(|o| o.label.as_str())
-            .collect();
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(
             labels,
             ["Incremental", "Rewrite"],
@@ -2046,11 +2332,7 @@ mod tests {
             json!(["q1"]),
         );
         let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
-        let labels: Vec<_> = q.specs[0]
-            .options
-            .iter()
-            .map(|o| o.label.as_str())
-            .collect();
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(labels, ["Incremental", "None of the above"]);
     }
 
@@ -2113,11 +2395,7 @@ mod tests {
 
         // Running ≥1.12.0 — `title` is the question.
         let q = expect_questions(
-            classify_elicitation(
-                &raw,
-                ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle)),
-            )
-            .unwrap(),
+            classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle))).unwrap(),
         );
         assert_eq!(q.specs[0].question, "Which approach should I take?");
         assert_eq!(q.specs[0].header, "Approach");
@@ -2125,11 +2403,7 @@ mod tests {
         // Running ≤1.11.0 — the old reading, even though no marker dates the
         // form. A custom pin is a supported configuration.
         let q = expect_questions(
-            classify_elicitation(
-                &raw,
-                ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInDescription)),
-            )
-            .unwrap(),
+            classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInDescription))).unwrap(),
         );
         assert_eq!(q.specs[0].question, "Approach");
         // …and the question text lands in the header slot, where the
@@ -2171,11 +2445,7 @@ mod tests {
             json!([]),
         );
         let q = expect_questions(
-            classify_elicitation(
-                &raw,
-                ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle)),
-            )
-            .unwrap(),
+            classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle))).unwrap(),
         );
         assert_eq!(q.specs[0].question, "Approach", "running version wins");
         // …and with no running version, the marker dates it the old way.
@@ -2214,11 +2484,7 @@ mod tests {
             ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInDescription)),
         ] {
             let q = expect_questions(classify_elicitation(&raw, peer).unwrap());
-            let labels: Vec<_> = q.specs[0]
-                .options
-                .iter()
-                .map(|o| o.label.as_str())
-                .collect();
+            let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
             assert_eq!(
                 labels,
                 ["Incremental", "None of the above"],
@@ -2276,11 +2542,7 @@ mod tests {
         );
         assert_eq!(q.specs[0].question, "Which approach should I take?");
         assert_eq!(q.specs[0].header, "Approach");
-        let labels: Vec<_> = q.specs[0]
-            .options
-            .iter()
-            .map(|o| o.label.as_str())
-            .collect();
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(labels, ["Incremental", "None of the above"]);
 
         // The identical payload from codex: companion skipped, 1.12 orientation,
@@ -2295,11 +2557,7 @@ mod tests {
         );
         assert_eq!(q.specs.len(), 1);
         assert_eq!(q.specs[0].question, "Approach");
-        let labels: Vec<_> = q.specs[0]
-            .options
-            .iter()
-            .map(|o| o.label.as_str())
-            .collect();
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(labels, ["Incremental"]);
     }
 
@@ -2344,11 +2602,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let labels: Vec<_> = q.specs[0]
-            .options
-            .iter()
-            .map(|o| o.label.as_str())
-            .collect();
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(
             labels,
             ["None of the above"],
@@ -2385,17 +2639,9 @@ mod tests {
             json!(["q1"]),
         );
         let q = expect_questions(
-            classify_elicitation(
-                &raw,
-                ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle)),
-            )
-            .unwrap(),
+            classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle))).unwrap(),
         );
-        let labels: Vec<_> = q.specs[0]
-            .options
-            .iter()
-            .map(|o| o.label.as_str())
-            .collect();
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(labels, ["Incremental", "None of the above"]);
     }
 
@@ -2415,10 +2661,7 @@ mod tests {
             json!(["port"]),
         );
         let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
-        assert_eq!(
-            q.specs[0].question,
-            "Which port should the server listen on?"
-        );
+        assert_eq!(q.specs[0].question, "Which port should the server listen on?");
         assert_eq!(q.specs[0].header, "Port");
     }
 
@@ -2752,11 +2995,7 @@ mod tests {
         assert_eq!(q.specs.len(), 1);
         assert!(q.specs[0].multi_select);
         // Titles display; consts ride back on accept.
-        let labels: Vec<_> = q.specs[0]
-            .options
-            .iter()
-            .map(|o| o.label.as_str())
-            .collect();
+        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(labels, ["Rust", "TS"]);
         let answer = QuestionAnswer {
             answers: vec![QuestionAnswerItem {
@@ -2784,11 +3023,7 @@ mod tests {
         assert_eq!(q.specs.len(), 3);
         // Booleans render as Yes/No; numbers as free text.
         let confirm = q.specs.iter().position(|s| s.id == "confirm").unwrap();
-        let labels: Vec<_> = q.specs[confirm]
-            .options
-            .iter()
-            .map(|o| o.label.as_str())
-            .collect();
+        let labels: Vec<_> = q.specs[confirm].options.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(labels, ["Yes", "No"]);
 
         let answer = QuestionAnswer {
@@ -2879,27 +3114,20 @@ mod tests {
             },
             "_meta": {"codex_approval_kind": "mcp_tool_call", "persist": ["session", "always"]}
         });
-        let approval =
-            expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        let approval = expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert_eq!(approval.message, "Allow tool call?");
         assert_eq!(approval.tool_call_id.as_deref(), Some("call-1"));
         assert!(approval.persist_in_content);
-        let ids: Vec<_> = approval
-            .options
-            .iter()
-            .map(|o| o.option_id.as_str())
-            .collect();
-        assert_eq!(
-            ids,
-            ["once", "session", "always", ELICITATION_DECLINE_OPTION_ID]
-        );
+        let ids: Vec<_> = approval.options.iter().map(|o| o.option_id.as_str()).collect();
+        assert_eq!(ids, ["once", "session", "always", ELICITATION_DECLINE_OPTION_ID]);
         assert_eq!(approval.options[0].label, "Allow once");
         assert_eq!(approval.options[0].kind, "allow_once");
         assert_eq!(approval.options[1].kind, "allow_always");
 
         // Accepting echoes the chosen persist back in content…
-        let v = serde_json::to_value(build_elicitation_approval_response(&approval, "session"))
-            .unwrap();
+        let v =
+            serde_json::to_value(build_elicitation_approval_response(&approval, "session"))
+                .unwrap();
         assert_eq!(v["action"], "accept");
         assert_eq!(v["content"]["persist"], "session");
         // …declining (or an unknown option) maps to decline.
@@ -2909,8 +3137,8 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(v["action"], "decline");
-        let v =
-            serde_json::to_value(build_elicitation_approval_response(&approval, "bogus")).unwrap();
+        let v = serde_json::to_value(build_elicitation_approval_response(&approval, "bogus"))
+            .unwrap();
         assert_eq!(v["action"], "decline");
     }
 
@@ -2927,17 +3155,12 @@ mod tests {
             "requestedSchema": {"type": "object", "properties": {}},
             "_meta": {"codex_approval_kind": "mcp_tool_call"}
         });
-        let approval =
-            expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        let approval = expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert!(!approval.persist_in_content);
-        let ids: Vec<_> = approval
-            .options
-            .iter()
-            .map(|o| o.option_id.as_str())
-            .collect();
+        let ids: Vec<_> = approval.options.iter().map(|o| o.option_id.as_str()).collect();
         assert_eq!(ids, ["accept", ELICITATION_DECLINE_OPTION_ID]);
-        let v =
-            serde_json::to_value(build_elicitation_approval_response(&approval, "accept")).unwrap();
+        let v = serde_json::to_value(build_elicitation_approval_response(&approval, "accept"))
+            .unwrap();
         assert_eq!(v["action"], "accept");
         assert!(
             v.get("content").is_none() || v["content"].is_null(),
@@ -2950,14 +3173,9 @@ mod tests {
         // A non-approval form with nothing to fill in (a bare MCP server
         // confirmation) renders Accept/Decline rather than auto-declining.
         let raw = elicitation_raw(json!({}), json!([]));
-        let approval =
-            expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
+        let approval = expect_approval(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
         assert_eq!(approval.message, "Input requested");
-        let ids: Vec<_> = approval
-            .options
-            .iter()
-            .map(|o| o.option_id.as_str())
-            .collect();
+        let ids: Vec<_> = approval.options.iter().map(|o| o.option_id.as_str()).collect();
         assert_eq!(ids, ["accept", ELICITATION_DECLINE_OPTION_ID]);
     }
 
@@ -3054,10 +3272,7 @@ mod tests {
             validate_specs(&[spec("ok", 2, MAX_QUESTION_TEXT_CHARS + 1)]).is_err(),
             "oversized option label"
         );
-        assert!(
-            validate_specs(&[spec("   ", 2, 0)]).is_err(),
-            "blank question"
-        );
+        assert!(validate_specs(&[spec("   ", 2, 0)]).is_err(), "blank question");
 
         // Duplicate question id across the set (spec() hardcodes id "q") — answer
         // routing + UI state key on id, so duplicates must be rejected.
@@ -3199,13 +3414,7 @@ mod tests {
                 labels: vec!["x".into()],
             });
         }
-        let outcome = build_outcome(
-            &qs,
-            &QuestionAnswer {
-                answers: items,
-                declined: false,
-            },
-        );
+        let outcome = build_outcome(&qs, &QuestionAnswer { answers: items, declined: false });
         assert_eq!(outcome.answers.len(), 1);
         // Cap = options.len() + 1 = 3 (every real option plus one "Other"); the
         // FIRST three are kept (early break — labels past the cap and the 10k
@@ -3335,7 +3544,7 @@ mod tests {
 
     #[test]
     fn parse_grok_ext_clamps_questions_and_options_to_bounds() {
-        // 6 questions, each with 6 options — both past Houhub's maxima.
+        // 6 questions, each with 6 options — both past houhub's maxima.
         let many: Vec<Value> = (0..6)
             .map(|qi| {
                 let opts: Vec<Value> = (0..6)
@@ -3346,10 +3555,7 @@ mod tests {
             .collect();
         let specs = parse_grok_ext_questions(&grok_params(json!(many))).unwrap();
         assert_eq!(specs.len(), MAX_QUESTIONS, "questions clamped");
-        assert!(
-            specs.iter().all(|s| s.options.len() == MAX_OPTIONS),
-            "options clamped"
-        );
+        assert!(specs.iter().all(|s| s.options.len() == MAX_OPTIONS), "options clamped");
         validate_specs(&specs).unwrap();
     }
 
@@ -3625,14 +3831,8 @@ mod tests {
             answers: vec![],
             declined: true,
         };
-        assert_eq!(
-            build_grok_ext_response(&outcome),
-            json!({ "outcome": "skip_interview" })
-        );
-        assert_eq!(
-            grok_ext_skip_response(),
-            json!({ "outcome": "skip_interview" })
-        );
+        assert_eq!(build_grok_ext_response(&outcome), json!({ "outcome": "skip_interview" }));
+        assert_eq!(grok_ext_skip_response(), json!({ "outcome": "skip_interview" }));
     }
 
     #[test]
@@ -3727,54 +3927,98 @@ mod tests {
         );
         let input = grok_result_card_input(&specs);
         let output = grok_result_card_output(&outcome);
-        assert_eq!(
-            input["questions"][0]["question"],
-            output["answers"][0]["question"]
-        );
+        assert_eq!(input["questions"][0]["question"], output["answers"][0]["question"]);
         assert_eq!(output["answers"][0]["header"], "");
     }
+    fn antigravity_interaction() -> Value {
+        json!({
+            "toolCallId": "interaction_396e46cc",
+            "status": "pending",
+            "title": "关于接下来的开发工作，您希望优先聚焦于哪个核心方向？",
+            "rawInput": {},
+            "kind": "other"
+        })
+    }
 
-    #[test]
-    fn is_houhub_ask_tool_name_accepts_every_host_spelling_of_houhubs_own_tool() {
-        for spelling in [
-            // claude-agent-acp: an MCP tool's permission card title IS the
-            // raw tool name.
-            "mcp__houhub-mcp__ask_user_question",
-            "houhub-mcp/ask_user_question",
-            "houhub-mcp: ask_user_question",
-            "mcp.houhub-mcp.ask_user_question",
-            // Hosts that title-case or pad it.
-            "  MCP__HouHub-MCP__Ask_User_Question  ",
-        ] {
-            assert!(
-                is_houhub_ask_tool_name(spelling),
-                "{spelling} is houhub's own ask tool"
-            );
-        }
+    fn antigravity_choices() -> Vec<(String, String)> {
+        vec![
+            ("opaque-first".into(), "后端开发".into()),
+            ("opaque-second".into(), "前端开发".into()),
+        ]
     }
 
     #[test]
-    fn is_houhub_ask_tool_name_rejects_tools_that_are_not_houhubs_ask() {
-        for other in [
-            // A third-party MCP server's similarly named tool: approving it is
-            // the user's decision, so the bare suffix must NOT be enough.
-            "mcp__other-server__ask_user_question",
-            "ask_user_question",
-            // grok's NATIVE ask arrives on its own ext channel, never as a
-            // permission request — and it is not houhub-mcp's tool either.
-            "_x.ai/ask_user_question",
-            // HouHub's other companion tools keep their approval gate.
-            "mcp__houhub-mcp__delegate_to_agent",
-            "mcp__houhub-mcp__check_user_feedback",
-            // Right server, right words, wrong tool — the match is anchored at
-            // the END so a longer name cannot borrow it.
-            "mcp__houhub-mcp__ask_user_question_twice",
-            "",
+    fn antigravity_live_interaction_is_recognized() {
+        let ask = parse_antigravity_ask(&antigravity_interaction(), &antigravity_choices())
+            .expect("实测交互格式应转换为问题卡片");
+        assert_eq!(ask.spec.options[1].label, "前端开发");
+        assert!(!ask.spec.multi_select);
+        assert_eq!(ask.option_ids[1].1, "opaque-second");
+
+        let mut no_kind = antigravity_interaction();
+        no_kind.as_object_mut().unwrap().remove("kind");
+        let ask_no_kind = parse_antigravity_ask(&no_kind, &antigravity_choices())
+            .expect("实测 antigravity-acp 1.4.1 省略 kind 字段亦应正确识别为问题卡片");
+        assert_eq!(ask_no_kind.spec.options[1].label, "前端开发");
+    }
+
+    #[test]
+    fn antigravity_answer_preserves_second_option_and_decline() {
+        let ask =
+            parse_antigravity_ask(&antigravity_interaction(), &antigravity_choices()).unwrap();
+        let mut outcome = QuestionOutcome {
+            answers: vec![QuestionAnsweredItem {
+                question: ask.spec.question.clone(),
+                header: ask.spec.header.clone(),
+                multi_select: false,
+                selected: vec!["前端开发".into()],
+            }],
+            declined: false,
+        };
+        assert_eq!(
+            antigravity_option_id(&outcome, &ask).as_deref(),
+            Some("opaque-second")
+        );
+        outcome.declined = true;
+        assert_eq!(antigravity_option_id(&outcome, &ask), None);
+        outcome.declined = false;
+        outcome.answers[0].selected = vec!["自由文本".into()];
+        assert_eq!(antigravity_option_id(&outcome, &ask), None);
+        outcome.answers[0].selected = vec!["后端开发".into(), "前端开发".into()];
+        assert_eq!(antigravity_option_id(&outcome, &ask), None);
+        outcome.answers.clear();
+        assert_eq!(antigravity_option_id(&outcome, &ask), None);
+    }
+
+    #[test]
+    fn antigravity_parser_preserves_ordinary_permissions_and_invalid_choices() {
+        for (field, value) in [
+            ("toolCallId", json!("tool-1")),
+            ("toolCallId", json!("interaction_")),
+            ("title", json!(" ")),
+            ("kind", json!("execute")),
+            ("status", json!("completed")),
+            ("rawInput", json!({"command":"cargo build"})),
         ] {
+            let mut call = antigravity_interaction();
+            call[field] = value;
             assert!(
-                !is_houhub_ask_tool_name(other),
-                "{other} must keep its approval card"
+                parse_antigravity_ask(&call, &antigravity_choices()).is_none(),
+                "{call}"
             );
+        }
+        for choices in [
+            vec![],
+            vec![("1".into(), "仅一项".into())],
+            vec![("1".into(), "重复".into()), ("2".into(), "重复".into())],
+            vec![("1".into(), "A".into()), ("1".into(), "B".into())],
+            vec![("".into(), "A".into()), ("2".into(), "B".into())],
+            vec![("1".into(), " ".into()), ("2".into(), "B".into())],
+            (0..5)
+                .map(|i| (i.to_string(), format!("选项{i}")))
+                .collect(),
+        ] {
+            assert!(parse_antigravity_ask(&antigravity_interaction(), &choices).is_none());
         }
     }
 }

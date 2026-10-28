@@ -2021,7 +2021,7 @@ mod tests {
             &db.conn,
             AgentType::Codex,
             agent_setting_service::AgentSettingsUpdate {
-                enabled: Some(false),
+                enabled: false,
                 env_json: None,
                 model_provider_id: None,
             },

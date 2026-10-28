@@ -1,17 +1,12 @@
 use std::fs;
-
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
-
 use std::path::{Path, PathBuf};
-
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
-
 use regex::Regex;
 
 use crate::models::*;
-
 use crate::parsers::{
     folder_name_from_path, is_safe_subagent_id, title_from_user_text, truncate_str, AgentEnv,
     AgentParser, ParseError,
@@ -48,8 +43,10 @@ fn system_tag_regex() -> &'static Regex {
 pub(crate) const BACKGROUND_TASK_MARKER: &str = "[[houhub-background-task]]";
 
 /// Cap for the folded `<result>` markdown carried on the lifecycle marker —
-/// generous for a sub-agent summary, bounded against a pathological one. The
-/// live watcher applies the same cap so live and cold rendering stay identical.
+/// generous for a sub-agent summary, bounded against a pathological one. Also
+/// applied by `background_watch.rs` to the `<result>` it carries on a live
+/// `settled` event, so the live-flipped card matches the cold-parse cap and an
+/// oversized report can't blow the event-stream size budget.
 pub(crate) const BACKGROUND_RESULT_MAX_CHARS: usize = 16_000;
 
 /// Latest `<task-notification>` observed for a background task id.
@@ -345,9 +342,10 @@ enum PendingCommandVerdict {
 /// The stripping requirement excludes the `<local-command-caveat>` the CLI
 /// writes around local commands — same submission, but it instructs nothing.
 fn is_same_submission_injection(value: &serde_json::Value, prompt_id: Option<&str>) -> bool {
-    let (Some(command_prompt_id), Some(record_prompt_id)) =
-        (prompt_id, value.get("promptId").and_then(|p| p.as_str()))
-    else {
+    let (Some(command_prompt_id), Some(record_prompt_id)) = (
+        prompt_id,
+        value.get("promptId").and_then(|p| p.as_str()),
+    ) else {
         return false;
     };
     if command_prompt_id != record_prompt_id || !is_meta_message(value) {
@@ -469,9 +467,9 @@ fn pending_command_verdict(
                 .and_then(|c| c.as_array())
                 .is_some_and(|blocks| {
                     !blocks.is_empty()
-                        && blocks
-                            .iter()
-                            .all(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_result"))
+                        && blocks.iter().all(|b| {
+                            b.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+                        })
                 });
             if tool_results_only || extract_user_content(value).is_empty() {
                 PendingCommandVerdict::Wait
@@ -657,7 +655,7 @@ fn push_goal_marker(messages: &mut Vec<UnifiedMessage>, goal: &PendingGoal) -> O
         duration_ms: None,
         model: None,
         completed_at: Some(goal.timestamp),
-        agent_message_id: None,
+    agent_message_id: None,
     });
     Some(marker.objective)
 }
@@ -856,21 +854,21 @@ pub(crate) fn capture_title_record(
     }
 }
 
-/// A stored or published session title as HouHub shows it: trimmed, without
+/// A stored or published session title as houhub shows it: trimmed, without
 /// JetBrains AIR's archive marker, and capped at 100 characters. `None` when
 /// nothing is left.
 ///
 /// AIR archives a Claude session by appending its title again with an
 /// `[archived] ` prefix (a `custom-title` record, plus an `agent-name` record
-/// HouHub does not read). From claude-agent-acp 0.89.0 the adapter publishes
-/// such a title to an AIR client, which HouHub is, with the marker removed
+/// houhub does not read). From claude-agent-acp 0.89.0 the adapter publishes
+/// such a title to an AIR client, which houhub is, with the marker removed
 /// once (`clientTitle`, AIR's `visibleTitle`), while the transcript keeps it.
-/// HouHub has two producers for a Claude title, this transcript reader and the
+/// houhub has two producers for a Claude title, this transcript reader and the
 /// wire's `session_info_update.title`
 /// (`acp::session_title::native_title_from_session_info`), and
 /// `publish_native_title` only collapses identical strings. So both go
 /// through this one function; otherwise a session archived in AIR would flip
-/// between the two names on the sidebar while it is open in HouHub.
+/// between the two names on the sidebar while it is open in houhub.
 ///
 /// The marker follows AIR's rule: `[archived]`, a run of ASCII white space,
 /// then a title. A bare `[archived]`, or one with no white space after it, is
@@ -1138,12 +1136,12 @@ fn claude_context_window_max_tokens_for_model(model: Option<&str>) -> Option<u64
         return None;
     }
 
-    // If user/model config contains an explicit capacity suffix, prefer it.
-    if let Some(suffixed_limit) = parse_model_capacity_suffix(model) {
+    // A capacity suffix that did survive (hand-written config, non-CLI writer)
+    // is authoritative.
+    if let Some(suffixed_limit) = super::parse_model_capacity_suffix(model) {
         return Some(suffixed_limit);
     }
 
-    // Claude models default to 1M when no explicit capacity is provided.
     if model.to_ascii_lowercase().starts_with("claude") {
         return Some(1_000_000);
     }
@@ -1189,8 +1187,9 @@ fn compaction_post_tokens(turn: &MessageTurn) -> Option<u64> {
 /// usage.
 fn latest_claude_context_window_used_tokens(turns: &[MessageTurn]) -> Option<u64> {
     turns.iter().rev().find_map(|turn| {
-        compaction_post_tokens(turn)
-            .or_else(|| super::latest_turn_prompt_usage_tokens(std::slice::from_ref(turn)))
+        compaction_post_tokens(turn).or_else(|| super::latest_turn_prompt_usage_tokens(
+            std::slice::from_ref(turn),
+        ))
     })
 }
 
@@ -1377,7 +1376,6 @@ pub(crate) fn follow_clear_rollover_chain(
 
 /// How many leading JSONL lines to inspect for a `/clear` command tag.
 const CLEAR_ROLLOVER_PEEK_LINES: usize = 40;
-
 /// `/clear` writes the successor immediately. Measured against a live
 /// claude-agent-acp 0.77.0 session (CLI 2.1.270): 4ms from the predecessor's
 /// last record to the successor's `/clear` record, and 5ms with 70s of idle
@@ -1391,12 +1389,10 @@ const CLEAR_ROLLOVER_PEEK_LINES: usize = 40;
 /// be mistaken for this one's successor. Five minutes covers the former
 /// without opening the latter to the hour the first draft allowed.
 pub(crate) const CLEAR_ROLLOVER_MAX_GAP_SECS: i64 = 300;
-
 /// How far BEFORE the predecessor's last record a successor's `/clear` record
 /// may be stamped. Non-zero because the two files are written by one process
 /// in one burst and the CLI's timestamps are not monotonic across them.
 const CLEAR_ROLLOVER_BACK_TOLERANCE_SECS: i64 = 5;
-
 const CLEAR_ROLLOVER_CHAIN_LIMIT: usize = 32;
 
 fn record_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
@@ -1499,6 +1495,7 @@ fn last_record_timestamp(path: &Path) -> Option<DateTime<Utc>> {
 }
 
 impl ClaudeParser {
+
     fn parse_jsonl_summary(
         &self,
         path: &PathBuf,
@@ -2181,7 +2178,7 @@ impl ClaudeRecordAccumulator {
                         duration_ms: None,
                         model: None,
                         completed_at: Some(timestamp),
-                        agent_message_id: None,
+                    agent_message_id: None,
                     },
                     prompt_id,
                 ));
@@ -2294,14 +2291,17 @@ impl ClaudeRecordAccumulator {
                             .and_then(|v| v.as_str())
                             .filter(|s| !s.is_empty())
                         {
-                            if let Some(ack_tool_use_id) = content.iter().find_map(|b| match b {
-                                ContentBlock::ToolResult {
-                                    tool_use_id: Some(id),
-                                    ..
-                                } => Some(id.clone()),
-                                _ => None,
-                            }) {
-                                background_acks.insert(ack_tool_use_id, task_id.to_string());
+                            if let Some(ack_tool_use_id) =
+                                content.iter().find_map(|b| match b {
+                                    ContentBlock::ToolResult {
+                                        tool_use_id: Some(id),
+                                        ..
+                                    } => Some(id.clone()),
+                                    _ => None,
+                                })
+                            {
+                                background_acks
+                                    .insert(ack_tool_use_id, task_id.to_string());
                             }
                         }
                     }
@@ -2354,7 +2354,7 @@ impl ClaudeRecordAccumulator {
                     duration_ms: None,
                     model: None,
                     completed_at: Some(timestamp),
-                    agent_message_id: None,
+                agent_message_id: None,
                 });
             }
             "assistant" => {
@@ -2642,7 +2642,7 @@ impl ClaudeRecordAccumulator {
                         duration_ms: None,
                         model: None,
                         completed_at: Some(timestamp),
-                        agent_message_id: None,
+                    agent_message_id: None,
                     });
                 }
             }
@@ -2765,7 +2765,7 @@ impl ClaudeRecordAccumulator {
                         duration_ms: None,
                         model: None,
                         completed_at: Some(timestamp),
-                        agent_message_id: None,
+                    agent_message_id: None,
                     });
                 }
             }
@@ -3382,12 +3382,81 @@ pub(crate) fn extract_assistant_content(value: &serde_json::Value) -> Vec<Conten
                         meta: None,
                     });
                 }
+                "advisor_tool_result" => {
+                    if let Some(result) = advisor_tool_result(item) {
+                        // Its own record, like the call's: `relocate_orphaned_tool_results`
+                        // moves it next to the call.
+                        blocks.push(ContentBlock::ToolResult {
+                            tool_use_id: Some(result.tool_use_id),
+                            output_preview: result.text,
+                            is_error: result.is_error,
+                            agent_stats: None,
+                            images: Vec::new(),
+                            exit_code: None,
+                        });
+                    }
+                }
                 _ => {}
             }
         }
     }
 
     blocks
+}
+
+/// The text claude-agent-acp shows for advice the API returned encrypted
+/// (`advisor_redacted_result`), copied from 0.97.0's `toAcpNotifications`.
+const ADVISOR_REDACTED_RESULT_TEXT: &str = "Advisor guidance applied server-side.";
+
+/// One `advisor_tool_result` block, read the way the live path reports it.
+pub(crate) struct AdvisorToolResult {
+    pub(crate) tool_use_id: String,
+    pub(crate) text: Option<String>,
+    pub(crate) is_error: bool,
+}
+
+/// The result of a call to Claude's `advisor` server tool (the `advisorModel`
+/// setting or `--advisor`), from an assistant record's `advisor_tool_result`
+/// block. `None` for a block that names no call.
+///
+/// A server tool runs inside the API request, so its result is not a user
+/// `tool_result`: the response carries the `server_tool_use` call and this
+/// block side by side, and Claude Code writes each as an assistant record of
+/// its own (same `message.id`). claude-agent-acp 0.97.0 (#1247) completes the
+/// live tool call from the block: the advice when the API sends it in plain
+/// text, a fixed line when it sends it encrypted, and `Advisor error: <code>`
+/// as a failure. This reads it the same way, so a reloaded session shows what
+/// the live one did. Before 0.97.0 the adapter dropped the block, failed the
+/// call ("Claude ended the turn without returning a result for this tool.")
+/// and the turn with it.
+///
+/// An unknown `content.type` yields no text and no failure: the call happened,
+/// and nothing here can say more.
+pub(crate) fn advisor_tool_result(item: &serde_json::Value) -> Option<AdvisorToolResult> {
+    let tool_use_id = item
+        .get("tool_use_id")
+        .and_then(|v| v.as_str())
+        .filter(|id| !id.is_empty())?
+        .to_string();
+    let content = item.get("content");
+    let field = |key: &str| content.and_then(|c| c.get(key)).and_then(|v| v.as_str());
+    let (text, is_error) = match field("type") {
+        Some("advisor_result") => (field("text").map(str::to_string), false),
+        Some("advisor_redacted_result") => (Some(ADVISOR_REDACTED_RESULT_TEXT.to_string()), false),
+        Some("advisor_tool_result_error") => (
+            Some(match field("error_code") {
+                Some(code) => format!("Advisor error: {code}"),
+                None => "Advisor error".to_string(),
+            }),
+            true,
+        ),
+        _ => (None, false),
+    };
+    Some(AdvisorToolResult {
+        tool_use_id,
+        text,
+        is_error,
+    })
 }
 
 /// `pub(crate)`: shared with `parsers::qoder` — qoder meters its subscription
@@ -3787,6 +3856,16 @@ pub(crate) fn parse_subagent_tool_calls(path: &PathBuf) -> SubagentTranscript {
                                 });
                             }
                         }
+                        // A server tool's result rides the assistant side (see
+                        // `advisor_tool_result`).
+                        "advisor_tool_result" => {
+                            if let Some(result) = advisor_tool_result(item) {
+                                results.insert(
+                                    result.tool_use_id,
+                                    (result.text.map(|s| truncate_str(&s, 500)), result.is_error),
+                                );
+                            }
+                        }
                         "thinking" | "text" => {
                             // The sub-agent's own reasoning and narration,
                             // interleaved with its tool calls in the
@@ -3886,7 +3965,7 @@ pub(crate) fn parse_subagent_tool_calls(path: &PathBuf) -> SubagentTranscript {
 /// The frame is model-directed provenance: it tells the MODEL that the text
 /// below is a subagent's words and carries no user authority. Over ACP,
 /// `claude-agent-acp` 0.81.0 strips it (`unwrapHandbackFrame`) before the
-/// report reaches a client — but HouHub's history path parses the CLI's own
+/// report reaches a client — but houhub's history path parses the CLI's own
 /// JSONL, where the frame is still sitting on the tool_result, so without this
 /// every subagent card in history opens with the whole paragraph and shows the
 /// report indented two spaces underneath.
@@ -4073,7 +4152,7 @@ pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             i += 1;
         } else {
@@ -4086,7 +4165,7 @@ pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             i += 1;
         }
@@ -4095,41 +4174,12 @@ pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn
     turns
 }
 
-/// Regex that matches an optional model capacity suffix like `[1M]` / `[500k]`.
-fn model_capacity_suffix_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)\[\s*([0-9]+(?:\.[0-9]+)?)\s*([km])\s*\]\s*$")
-            .expect("valid model capacity regex")
-    })
-}
-
-fn parse_model_capacity_suffix(model: &str) -> Option<u64> {
-    let captures = model_capacity_suffix_regex().captures(model.trim())?;
-    let value = captures.get(1)?.as_str().parse::<f64>().ok()?;
-    if !value.is_finite() || value <= 0.0 {
-        return None;
-    }
-
-    let unit = captures
-        .get(2)
-        .map(|m| m.as_str().to_ascii_lowercase())
-        .unwrap_or_default();
-    let multiplier = match unit.as_str() {
-        "m" => 1_000_000.0,
-        "k" => 1_000.0,
-        _ => return None,
-    };
-
-    Some((value * multiplier) as u64)
-}
-
 #[cfg(test)]
 mod tests {
+
     use std::io::Write;
 
     use super::*;
-
     use serde_json::json;
 
     /// Build the exact frame the CLI writes: notes above the header, report
@@ -4204,9 +4254,7 @@ mod tests {
         let text = handback(&[], &["real report", HANDBACK_HEADER, "still the report"]);
         assert_eq!(
             unwrap_handback_frame(&text).as_deref(),
-            Some(&*format!(
-                "real report\n{HANDBACK_HEADER}\nstill the report"
-            ))
+            Some(&*format!("real report\n{HANDBACK_HEADER}\nstill the report"))
         );
     }
 
@@ -4217,10 +4265,7 @@ mod tests {
         assert_eq!(unwrap_handback_frame("  ordinary indented output"), None);
         assert_eq!(unwrap_handback_frame(HANDBACK_HEADER), None);
         let item = json!({"type": "tool_result", "content": "plain result"});
-        assert_eq!(
-            extract_tool_result_text(&item).as_deref(),
-            Some("plain result")
-        );
+        assert_eq!(extract_tool_result_text(&item).as_deref(), Some("plain result"));
     }
 
     #[test]
@@ -4589,6 +4634,162 @@ mod tests {
         );
     }
 
+    /// What Claude Code 2.1.310 writes for one API message that called the
+    /// `advisor` server tool (recorded against a fake API, ids shortened): one
+    /// assistant record per content block, the call and its result included,
+    /// all under the same `message.id`.
+    fn advisor_transcript(result_content: serde_json::Value) -> Vec<String> {
+        let assistant = |uuid: &str, at: &str, block: serde_json::Value| {
+            json!({
+                "type": "assistant", "timestamp": at, "uuid": uuid,
+                "cwd": "/Users/test/proj", "sessionId": "sess-advisor",
+                "message": {
+                    "id": "msg_adv", "role": "assistant", "model": "claude-opus-5-5",
+                    "content": [block],
+                    "usage": {"input_tokens": 1000, "output_tokens": 7,
+                        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+                },
+            })
+            .to_string()
+        };
+        vec![
+            json!({
+                "type": "user", "timestamp": "2026-10-26T14:20:24.379Z", "uuid": "u1",
+                "cwd": "/Users/test/proj", "sessionId": "sess-advisor",
+                "message": {"role": "user", "content": "check my plan with the advisor"},
+            })
+            .to_string(),
+            assistant(
+                "a1",
+                "2026-10-26T14:20:24.420Z",
+                json!({"type": "text", "text": "let me ask the advisor"}),
+            ),
+            assistant(
+                "a2",
+                "2026-10-26T14:20:24.421Z",
+                json!({"type": "server_tool_use", "id": "srvtoolu_adv", "name": "advisor", "input": {}}),
+            ),
+            assistant(
+                "a3",
+                "2026-10-26T14:20:24.422Z",
+                json!({"type": "advisor_tool_result", "tool_use_id": "srvtoolu_adv",
+                    "content": result_content}),
+            ),
+            assistant(
+                "a4",
+                "2026-10-26T14:20:24.423Z",
+                json!({"type": "text", "text": "advisor consulted; final answer"}),
+            ),
+        ]
+    }
+
+    #[test]
+    fn an_advisor_call_reads_its_result_from_the_assistant_side() {
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().join("-Users-test-proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let lines = advisor_transcript(json!({
+            "type": "advisor_result",
+            "text": "ADVICE: check the edge cases first.",
+            "stop_reason": "end_turn",
+        }));
+        std::fs::write(proj.join("sess-advisor.jsonl"), lines.join("\n") + "\n").unwrap();
+
+        let parser = ClaudeParser::with_base_dir(dir.path().to_path_buf());
+        let detail = parser.get_conversation("sess-advisor").unwrap();
+        let turn = detail
+            .turns
+            .iter()
+            .find(|turn| {
+                turn.blocks.iter().any(|b| {
+                    matches!(b, ContentBlock::ToolUse { tool_name, .. } if tool_name == "advisor")
+                })
+            })
+            .expect("the advisor call is a turn's block");
+        assert!(
+            turn.blocks.iter().any(|b| matches!(
+                b,
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview: Some(text),
+                    is_error: false,
+                    ..
+                } if id == "srvtoolu_adv" && text == "ADVICE: check the edge cases first."
+            )),
+            "the result sits with its call, as the live card has it: {:?}",
+            turn.blocks
+        );
+        // The result's own record leaves no turn behind once it is moved.
+        assert!(
+            detail.turns.iter().all(|turn| !turn
+                .blocks
+                .iter()
+                .all(|b| matches!(b, ContentBlock::ToolResult { .. }))),
+            "{:?}",
+            detail.turns
+        );
+    }
+
+    #[test]
+    fn advisor_results_read_as_the_live_adapter_reports_them() {
+        let read = |content: serde_json::Value| {
+            advisor_tool_result(&json!({
+                "type": "advisor_tool_result", "tool_use_id": "srvtoolu_adv", "content": content,
+            }))
+            .map(|r| (r.tool_use_id, r.text, r.is_error))
+        };
+        assert_eq!(
+            read(json!({"type": "advisor_result", "text": "do X", "stop_reason": "end_turn"})),
+            Some(("srvtoolu_adv".to_string(), Some("do X".to_string()), false))
+        );
+        // Encrypted advice is never shown, as the adapter never shows it.
+        assert_eq!(
+            read(json!({
+                "type": "advisor_redacted_result",
+                "encrypted_content": "Q0lQSEVS",
+                "stop_reason": "end_turn",
+            })),
+            Some((
+                "srvtoolu_adv".to_string(),
+                Some("Advisor guidance applied server-side.".to_string()),
+                false
+            ))
+        );
+        assert_eq!(
+            read(json!({"type": "advisor_tool_result_error", "error_code": "overloaded"})),
+            Some((
+                "srvtoolu_adv".to_string(),
+                Some("Advisor error: overloaded".to_string()),
+                true
+            ))
+        );
+        assert_eq!(
+            read(json!({"type": "advisor_future_kind"})),
+            Some(("srvtoolu_adv".to_string(), None, false))
+        );
+        assert!(advisor_tool_result(&json!({"type": "advisor_tool_result"})).is_none());
+    }
+
+    #[test]
+    fn a_subagent_advisor_call_gets_its_result() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        for line in advisor_transcript(json!({"type": "advisor_tool_result_error",
+            "error_code": "overloaded"}))
+        .into_iter()
+        .skip(1)
+        {
+            writeln!(file, "{line}").unwrap();
+        }
+        let (calls, _, _, _, _) = parse_subagent_tool_calls(&file.path().to_path_buf());
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(calls[0].tool_name, "advisor");
+        assert_eq!(
+            calls[0].output_preview.as_deref(),
+            Some("Advisor error: overloaded")
+        );
+        assert!(calls[0].is_error);
+    }
+
     /// One sub-agent record, one content block. The helper keeps the fixture
     /// lines below shape-identical to what the CLI writes per streaming chunk.
     fn subagent_record(at: &str, block: serde_json::Value) -> String {
@@ -4617,10 +4818,7 @@ mod tests {
                     "type": "thinking", "thinking": "Need the file first.", "signature": "s"
                 }),
             ),
-            subagent_record(
-                "2026-08-16T15:45:33.189Z",
-                json!({"type": "text", "text": "Checking."}),
-            ),
+            subagent_record("2026-08-16T15:45:33.189Z", json!({"type": "text", "text": "Checking."})),
             subagent_record(
                 "2026-08-16T15:45:33.289Z",
                 json!({
@@ -4673,11 +4871,7 @@ mod tests {
             let call = &calls[entry.child_index.unwrap()];
             assert_eq!(
                 call.tool_name,
-                if entry.child_index == Some(0) {
-                    "Read"
-                } else {
-                    "Bash"
-                }
+                if entry.child_index == Some(0) { "Read" } else { "Bash" }
             );
         }
         assert_eq!(calls[0].output_preview.as_deref(), Some("1\theader"));
@@ -5285,7 +5479,7 @@ mod tests {
     }
 
     #[test]
-    /// The user typed `/compact`; the divider is what it produced. Live, HouHub
+    /// The user typed `/compact`; the divider is what it produced. Live, houhub
     /// echoes the prompt above the divider — so history has to as well, and at
     /// the same place, which is NOT where the CLI wrote the echo.
     fn the_compact_prompt_is_emitted_above_the_divider_it_caused() {
@@ -5531,10 +5725,7 @@ mod tests {
     /// one of them mid-body keeps it.
     #[test]
     fn continuation_summary_text_strips_only_the_framing() {
-        assert_eq!(
-            continuation_summary_text(CONTINUATION),
-            CONTINUATION_SUMMARY
-        );
+        assert_eq!(continuation_summary_text(CONTINUATION), CONTINUATION_SUMMARY);
 
         let quoting = CONTINUATION.replace(
             "   - None.",
@@ -5869,8 +6060,10 @@ mod tests {
         let settled = &previews.iter().find(|(id, _)| id == "toolu_01").unwrap().1;
         assert!(settled.starts_with(BACKGROUND_TASK_MARKER));
         assert!(!settled.contains("never quote"));
-        let payload: serde_json::Value =
-            serde_json::from_str(settled.strip_prefix(BACKGROUND_TASK_MARKER).unwrap()).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(
+            settled.strip_prefix(BACKGROUND_TASK_MARKER).unwrap(),
+        )
+        .unwrap();
         assert_eq!(payload["task_id"], "abc123");
         assert_eq!(payload["status"], "completed");
         assert_eq!(payload["summary"], "Agent \"Run pnpm build\" finished");
@@ -5879,8 +6072,10 @@ mod tests {
         // Unsettled: marker present, status null (frontend must NOT claim
         // "running" from the transcript alone — CC's zombie trap).
         let unsettled = &previews.iter().find(|(id, _)| id == "toolu_02").unwrap().1;
-        let payload: serde_json::Value =
-            serde_json::from_str(unsettled.strip_prefix(BACKGROUND_TASK_MARKER).unwrap()).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(
+            unsettled.strip_prefix(BACKGROUND_TASK_MARKER).unwrap(),
+        )
+        .unwrap();
         assert_eq!(payload["task_id"], "nores99");
         assert!(payload["status"].is_null());
     }
@@ -5904,7 +6099,10 @@ mod tests {
     fn write_clear_jsonl(path: &Path, lines: &[&str]) {
         std::fs::write(
             path,
-            lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+            lines
+                .iter()
+                .map(|l| format!("{l}\n"))
+                .collect::<String>(),
         )
         .unwrap();
     }
@@ -6071,9 +6269,17 @@ mod tests {
 
     #[test]
     fn defaults_context_limit_for_claude_models() {
+        // Claude Code strips the 1M marker when it writes the transcript, so a
+        // bare id has to be assumed to be the extended lane here — unlike the
+        // shared inference other agents' parsers use. See the doc comment on
+        // `claude_context_window_max_tokens_for_model`.
         assert_eq!(
             claude_context_window_max_tokens_for_model(Some("claude-sonnet-4-6")),
             Some(1_000_000)
+        );
+        assert_eq!(
+            super::super::infer_context_window_max_tokens(Some("claude-sonnet-4-6")),
+            Some(200_000)
         );
         assert_eq!(
             claude_context_window_max_tokens_for_model(Some("custom-model-x")),
@@ -6099,7 +6305,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
-                agent_message_id: None,
+            agent_message_id: None,
             },
             MessageTurn {
                 id: "turn-1".to_string(),
@@ -6115,7 +6321,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
-                agent_message_id: None,
+            agent_message_id: None,
             },
         ];
 
@@ -6300,10 +6506,8 @@ mod tests {
         tag: &str,
         lines: &[serde_json::Value],
     ) -> (Option<String>, Option<String>) {
-        let path = std::env::temp_dir().join(format!(
-            "houhub-claude-{tag}-{}.jsonl",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("houhub-claude-{tag}-{}.jsonl", uuid::Uuid::new_v4()));
         let mut file = fs::File::create(&path).expect("create temp jsonl");
         for line in lines {
             writeln!(file, "{line}").expect("write line");
@@ -6365,7 +6569,7 @@ mod tests {
     fn parse_shows_an_air_archived_title_without_its_marker() {
         // JetBrains AIR archives a session by appending the title again with
         // an `[archived] ` prefix, as this record pair. claude-agent-acp 0.89.0
-        // publishes the title to HouHub without the marker, so the history
+        // publishes the title to houhub without the marker, so the history
         // reads it the same way rather than flipping the row between the two.
         let (detail, summary) = parse_both_titles(
             "customtitle-archived",
@@ -6762,7 +6966,7 @@ mod tests {
         detail
     }
 
-    /// The fork point HouHub sends must be the id the ADAPTER would look up.
+    /// The fork point houhub sends must be the id the ADAPTER would look up.
     /// claude-agent-acp's `messageIdForGrouping` takes the API message id when
     /// the record has one, so an assistant turn must carry that — not the
     /// record uuid `MessageTurn::id`-adjacent code uses everywhere else.
@@ -6788,7 +6992,7 @@ mod tests {
     }
 
     /// `messageIdForGrouping` falls back to the record uuid when the message
-    /// carries no id, and so must HouHub — otherwise those turns would silently
+    /// carries no id, and so must houhub — otherwise those turns would silently
     /// lose their fork point.
     #[test]
     fn assistant_turns_fall_back_to_the_record_uuid() {
@@ -6818,9 +7022,7 @@ mod tests {
             .iter()
             .filter_map(|t| t.usage.as_ref())
             .map(|u| {
-                u.input_tokens
-                    + u.output_tokens
-                    + u.cache_creation_input_tokens
+                u.input_tokens + u.output_tokens + u.cache_creation_input_tokens
                     + u.cache_read_input_tokens
             })
             .sum()
@@ -7254,10 +7456,8 @@ mod tests {
             })
             .to_string()
         };
-        let detail = parse_lines_into_detail(&[
-            line("a1", "2026-03-01T10:00:00Z"),
-            line("a2", "2026-03-01T10:00:01Z"),
-        ]);
+        let detail =
+            parse_lines_into_detail(&[line("a1", "2026-03-01T10:00:00Z"), line("a2", "2026-03-01T10:00:01Z")]);
         assert_eq!(total_usage_tokens(&detail), 30);
     }
 
@@ -7359,12 +7559,7 @@ mod tests {
             &session_launching("abc", 1),
             &[(
                 "abc",
-                vec![subagent_line(
-                    "s1",
-                    "msg_sub",
-                    "2026-03-01T10:02:00Z",
-                    7_000,
-                )],
+                vec![subagent_line("s1", "msg_sub", "2026-03-01T10:02:00Z", 7_000)],
             )],
         );
         assert_eq!(total_usage_tokens(&detail), 8_000);
@@ -7378,12 +7573,7 @@ mod tests {
             &session_launching("abc", 3),
             &[(
                 "abc",
-                vec![subagent_line(
-                    "s1",
-                    "msg_sub",
-                    "2026-03-01T10:02:00Z",
-                    7_000,
-                )],
+                vec![subagent_line("s1", "msg_sub", "2026-03-01T10:02:00Z", 7_000)],
             )],
         );
         assert_eq!(total_usage_tokens(&detail), 8_000);
@@ -7398,12 +7588,7 @@ mod tests {
             &session_launching("abc", 0),
             &[(
                 "orphan",
-                vec![subagent_line(
-                    "s1",
-                    "msg_sub",
-                    "2026-03-01T10:02:00Z",
-                    7_000,
-                )],
+                vec![subagent_line("s1", "msg_sub", "2026-03-01T10:02:00Z", 7_000)],
             )],
         );
         assert_eq!(total_usage_tokens(&detail), 8_000);
@@ -7430,12 +7615,7 @@ mod tests {
             )],
             &[(
                 "abc",
-                vec![subagent_line(
-                    "s1",
-                    "msg_sub",
-                    "2026-03-01T10:02:00Z",
-                    900_000,
-                )],
+                vec![subagent_line("s1", "msg_sub", "2026-03-01T10:02:00Z", 900_000)],
             )],
         );
         let stats = detail.session_stats.expect("session stats");
@@ -7448,13 +7628,15 @@ mod tests {
     fn sub_agent_spend_lands_on_the_turn_that_was_running_when_it_started() {
         // A session working across midnight must not report a sub-agent's
         // tokens on whichever day the session happened to end.
-        let mut lines = vec![assistant_block_line(
-            "a1",
-            "msg_before",
-            "2026-03-01T23:00:00Z",
-            json!({"type": "tool_use", "id": "tu1", "name": "Task", "input": {}}),
-            json!({"input_tokens": 10, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}),
-        )];
+        let mut lines = vec![
+            assistant_block_line(
+                "a1",
+                "msg_before",
+                "2026-03-01T23:00:00Z",
+                json!({"type": "tool_use", "id": "tu1", "name": "Task", "input": {}}),
+                json!({"input_tokens": 10, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}),
+            ),
+        ];
         lines.push(assistant_block_line(
             "a2",
             "msg_after",
@@ -7467,12 +7649,7 @@ mod tests {
             &lines,
             &[(
                 "abc",
-                vec![subagent_line(
-                    "s1",
-                    "msg_sub",
-                    "2026-03-01T23:10:00Z",
-                    5_000,
-                )],
+                vec![subagent_line("s1", "msg_sub", "2026-03-01T23:10:00Z", 5_000)],
             )],
         );
         let carrying: Vec<_> = detail
@@ -7488,9 +7665,7 @@ mod tests {
             .collect();
         assert_eq!(total_usage_tokens(&detail), 5_030);
         assert!(
-            carrying
-                .iter()
-                .any(|(ts, n)| ts.starts_with("2026-03-01") && *n == 5_010),
+            carrying.iter().any(|(ts, n)| ts.starts_with("2026-03-01") && *n == 5_010),
             "sub-agent spend belongs to the turn that launched it, got {carrying:?}"
         );
     }
@@ -7619,10 +7794,8 @@ mod tests {
 
     #[test]
     fn slash_command_keeps_user_turn_between_assistant_turns() {
-        let path = std::env::temp_dir().join(format!(
-            "houhub-claude-slash-{}.jsonl",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("houhub-claude-slash-{}.jsonl", uuid::Uuid::new_v4()));
         let mut file = fs::File::create(&path).expect("create temp jsonl");
         // Client command /model: followed by stdout, no model turn -> stays hidden
         writeln!(
@@ -7822,10 +7995,9 @@ mod tests {
         ));
         // The hook instruction is addressed to the model, not spoken by the
         // user — it must stay out of the transcript.
-        assert!(!turns.iter().any(|t| t
-            .blocks
-            .iter()
-            .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("Stop hook")))));
+        assert!(!turns.iter().any(|t| t.blocks.iter().any(
+            |b| matches!(b, ContentBlock::Text { text } if text.contains("Stop hook"))
+        )));
 
         // Mid-turn (the model is still thinking, no assistant record yet): the
         // hook injection alone must already resolve it, because the transcript
@@ -8321,10 +8493,7 @@ mod tests {
         acc.finalize_background_lifecycle();
         let cards = goal_cards(&group_into_turns(acc.messages));
         assert_eq!(
-            cards
-                .iter()
-                .map(|(name, _)| name.as_str())
-                .collect::<Vec<_>>(),
+            cards.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),
             vec!["create_goal", "update_goal"]
         );
         assert_eq!(cards[1].1["status"], "complete");
@@ -8672,10 +8841,9 @@ mod tests {
         acc.finalize_background_lifecycle();
         let turns = group_into_turns(acc.messages);
         assert!(
-            !turns.iter().any(|t| t
-                .blocks
-                .iter()
-                .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("/model")))),
+            !turns.iter().any(|t| t.blocks.iter().any(
+                |b| matches!(b, ContentBlock::Text { text } if text.contains("/model"))
+            )),
             "the cron owns that reply — the command must not claim its prompt slot"
         );
     }
@@ -8718,10 +8886,9 @@ mod tests {
         }
         acc.finalize_background_lifecycle();
         let turns = group_into_turns(acc.messages);
-        assert!(!turns.iter().any(|t| t
-            .blocks
-            .iter()
-            .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("/model")))));
+        assert!(!turns.iter().any(|t| t.blocks.iter().any(
+            |b| matches!(b, ContentBlock::Text { text } if text.contains("/model"))
+        )));
     }
 
     /// A client-only command stays hidden even when the CLI writes several
@@ -8765,10 +8932,9 @@ mod tests {
         let turns = group_into_turns(acc.messages);
         let roles: Vec<_> = turns.iter().map(role_name).collect();
         assert_eq!(roles, vec!["user", "assistant"]);
-        assert!(!turns.iter().any(|t| t
-            .blocks
-            .iter()
-            .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("/model")))));
+        assert!(!turns.iter().any(|t| t.blocks.iter().any(
+            |b| matches!(b, ContentBlock::Text { text } if text.contains("/model"))
+        )));
     }
 
     #[test]
@@ -9355,9 +9521,7 @@ mod tests {
     /// The `<note>` of an agent notification, word for word as CLI 2.1.296 and
     /// 2.1.300 write it (`enqueueAgentNotification`).
     const INTERIM_WAITING_NOTE: &str = "This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.";
-
     const FINAL_AGENT_NOTE: &str = "A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.";
-
     /// What 2.1.300 adds to the note when messages reached the agent too late.
     const LATE_MESSAGES_NOTE: &str = " One or more messages sent to this agent arrived after this run's last step, too late for the result below. The agent is being resumed with them and will notify again. Wait for that notification before resending.";
 
@@ -9787,7 +9951,7 @@ mod tests {
     }
 
     /// #948: built with an agent's launch env, the parser reads where THAT
-    /// env puts the agent's files, not where HouHub's own environment does.
+    /// env puts the agent's files, not where houhub's own environment does.
     #[test]
     fn for_env_reads_the_config_dir_of_the_launch_env() {
         let env = AgentEnv::with_overrides(&[("CLAUDE_CONFIG_DIR", "/relocated/claude")]);
@@ -9795,18 +9959,5 @@ mod tests {
             ClaudeParser::for_env(&env).base_dir,
             PathBuf::from("/relocated/claude").join("projects")
         );
-    }
-
-    #[test]
-    fn parses_model_capacity_suffix() {
-        assert_eq!(
-            parse_model_capacity_suffix("claude-sonnet-4-6[1.5M]"),
-            Some(1_500_000)
-        );
-        assert_eq!(
-            parse_model_capacity_suffix("claude-opus-4-6 [500k]"),
-            Some(500_000)
-        );
-        assert_eq!(parse_model_capacity_suffix("claude-sonnet-4-6"), None);
     }
 }

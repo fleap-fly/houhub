@@ -1,14 +1,157 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  aliasToolInputKeys,
   claudeCodeMarksSubagent,
   codexMarksPlanReview,
   extractClaudeCodeMetaTitle,
   extractClaudeCodeSkillName,
   inferLiveToolName,
   normalizeToolName,
+  PARENT_TOOL_CALL_META_KEY,
   toolCallMovedToBackground,
 } from "./tool-call-normalization"
+
+describe("aliasToolInputKeys", () => {
+  it("fills the canonical names OpenCode spells in camelCase", () => {
+    // The live wire shape of an OpenCode `write` / `edit` call: its ACP adapter
+    // forwards the tool's own camelCase arguments, so the Write card found no
+    // `file_path` and rendered "unknown" under a header naming the file.
+    expect(
+      aliasToolInputKeys({
+        filePath: "src/app/minimal/page.tsx",
+        content: "export const A = 1\n",
+      })
+    ).toEqual({
+      filePath: "src/app/minimal/page.tsx",
+      file_path: "src/app/minimal/page.tsx",
+      content: "export const A = 1\n",
+    })
+
+    expect(
+      aliasToolInputKeys({
+        filePath: "src/app.ts",
+        oldString: "a",
+        newString: "b",
+        replaceAll: true,
+      })
+    ).toMatchObject({
+      file_path: "src/app.ts",
+      old_string: "a",
+      new_string: "b",
+      replace_all: true,
+    })
+  })
+
+  it("never overrides what the agent actually sent", () => {
+    const input = { filePath: "camel.ts", file_path: "snake.ts" }
+    expect(aliasToolInputKeys(input)).toBe(input)
+  })
+
+  it("is a no-op (same reference) on already-canonical and unrelated input", () => {
+    // History is normalized in Rust, and snake_case agents never trip this —
+    // returning the same object keeps `useMemo` consumers from re-rendering.
+    const canonical = { file_path: "a.ts", old_string: "x", new_string: "y" }
+    expect(aliasToolInputKeys(canonical)).toBe(canonical)
+
+    const unrelated = { command: "pnpm test" }
+    expect(aliasToolInputKeys(unrelated)).toBe(unrelated)
+
+    expect(aliasToolInputKeys(null)).toBeNull()
+  })
+
+  it("ignores an alias whose value is null", () => {
+    const input = { filePath: null, content: "x" }
+    expect(aliasToolInputKeys(input)).toBe(input)
+  })
+})
+
+describe("inferLiveToolName on OpenCode's code-mode execute frames", () => {
+  // A `session/load` replay opens a call with its input already present, so
+  // the frame carries no stamped OpenCode name — only its `execute` title.
+  const replay = (code: string) =>
+    inferLiveToolName({
+      title: "execute",
+      kind: "other",
+      rawInput: JSON.stringify({ code }),
+      meta: null,
+    })
+
+  it("keeps the execute identity when the script quotes a patch", () => {
+    // The delegated task is text; the patch marker in it is no patch call.
+    expect(
+      replay(
+        "await tools['houhub-mcp'].delegate_to_agent({agent_type:'codex',task:`Apply this patch:\n*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch`})"
+      )
+    ).toBe("bash")
+    expect(replay("return 1 + 1")).toBe("bash")
+  })
+
+  it("leaves other tools to the input heuristics", () => {
+    expect(
+      inferLiveToolName({
+        title: "apply_patch",
+        rawInput: JSON.stringify({ input: "*** Begin Patch\n*** End Patch" }),
+        meta: null,
+      })
+    ).toBe("apply_patch")
+    // A script under another title is not OpenCode's code-mode tool.
+    expect(
+      inferLiveToolName({
+        title: "browser_run_code",
+        rawInput: JSON.stringify({ code: "*** Begin Patch" }),
+        meta: null,
+      })
+    ).toBe("apply_patch")
+    // Nor is an `execute` whose `code` is no script.
+    expect(
+      inferLiveToolName({
+        title: "execute",
+        rawInput: JSON.stringify({ code: 42, input: "*** Begin Patch" }),
+        meta: null,
+      })
+    ).toBe("apply_patch")
+  })
+})
+
+describe("OpenCode 2 tool names", () => {
+  // OpenCode 2.2.0's opening frames state the tool as the ACP `name`, which the
+  // backend stamps as `_meta.opencode.toolName` (live capture).
+  const opening = (name: string) =>
+    inferLiveToolName({
+      title: name,
+      kind: "other",
+      rawInput: "{}",
+      meta: { opencode: { toolName: name } },
+    })
+
+  it("maps the renamed tools to their cards", () => {
+    expect(normalizeToolName("patch")).toBe("apply_patch")
+    expect(normalizeToolName("subagent")).toBe("agent")
+    expect(normalizeToolName("shell")).toBe("bash")
+    expect(opening("patch")).toBe("apply_patch")
+    expect(opening("subagent")).toBe("agent")
+    expect(opening("shell")).toBe("bash")
+  })
+
+  it("names a sub-agent's call from the stamp, not its prefixed title", () => {
+    expect(
+      inferLiveToolName({
+        title: "read",
+        kind: "read",
+        rawInput: JSON.stringify({ path: "hello.txt" }),
+        meta: {
+          "opencode/child-session": {
+            id: "ses_child",
+            title: "Probe child task",
+          },
+          opencode: { toolName: "read" },
+          [PARENT_TOOL_CALL_META_KEY]: "call_main_9_11",
+        },
+      })
+    ).toBe("read")
+  })
+})
 
 describe("inferLiveToolName meta.claudeCode.toolName override", () => {
   it("returns memory_recall for synthesized recall events without rawInput", () => {
@@ -56,10 +199,7 @@ describe("inferLiveToolName meta.claudeCode.toolName override", () => {
         kind: "other",
         rawInput: "{}",
         meta: {
-          "houhub.delegation": {
-            status: "running",
-            child_conversation_id: 42,
-          },
+          "houhub.delegation": { status: "running", child_conversation_id: 42 },
         },
       })
     ).toBe("delegate_to_agent")
@@ -67,7 +207,7 @@ describe("inferLiveToolName meta.claudeCode.toolName override", () => {
 
   it("keeps input-shape priority for calls without delegation meta", () => {
     // A generic "MCP: tool" call WITHOUT the broker meta must stay generic —
-    // the delegation resolution is scoped to the HouHub-minted marker.
+    // the delegation resolution is scoped to the houhub-minted marker.
     expect(
       inferLiveToolName({
         title: "MCP: tool",
@@ -248,6 +388,82 @@ describe("inferLiveToolName meta.claudeCode.toolName override", () => {
         },
       })
     ).toBe("delegate_to_agent")
+  })
+
+  it("names a live Monitor a monitor, not the shell command its input looks like", () => {
+    // claude-agent-acp 0.98.0's live frame, recorded: the `command` key made
+    // the input-shape rule call it "bash" while it ran, and the transcript's
+    // raw name made it a generic "Monitor" on reload.
+    const live = inferLiveToolName({
+      title: "Monitor",
+      kind: "other",
+      rawInput: JSON.stringify({
+        command: "for i in 1 2 3; do echo event-$i; sleep 2; done",
+        description: "probe monitor",
+      }),
+      meta: { claudeCode: { toolName: "Monitor" } },
+    })
+    expect(live).toBe("monitor")
+    expect(normalizeToolName("Monitor")).toBe(live)
+    // A WebSocket monitor has no command at all.
+    expect(
+      inferLiveToolName({
+        title: "Monitor",
+        kind: "other",
+        rawInput: JSON.stringify({
+          ws: { url: "wss://ci.example.com/events" },
+          description: "CI events",
+        }),
+        meta: { claudeCode: { toolName: "Monitor" } },
+      })
+    ).toBe("monitor")
+    // Without the meta name, a command-shaped input is still a command.
+    expect(
+      inferLiveToolName({
+        title: "Monitor",
+        kind: "other",
+        rawInput: JSON.stringify({ command: "tail -f log" }),
+        meta: null,
+      })
+    ).toBe("bash")
+  })
+
+  it("gives a sandbox network request one name in either spelling", () => {
+    const live = inferLiveToolName({
+      title: "SandboxNetworkAccess",
+      kind: "other",
+      rawInput: JSON.stringify({ host: "example.com" }),
+      meta: { claudeCode: { toolName: "SandboxNetworkAccess" } },
+    })
+    expect(live).toBe("sandboxnetworkaccess")
+    expect(normalizeToolName("SandboxNetworkAccess")).toBe(live)
+    expect(normalizeToolName("sandboxnetworkaccess")).toBe(live)
+  })
+
+  it("keeps a sandbox network request by its meta name, whatever its input carries", () => {
+    // `{host}` matches no input shape today; the meta name is what keeps the
+    // call from being read as another tool once its input does (a `url`
+    // reads as a web fetch). The title is the host, as the request has it.
+    const rawInput = JSON.stringify({
+      host: "example.com",
+      url: "https://example.com/",
+    })
+    expect(
+      inferLiveToolName({
+        title: "example.com",
+        kind: "other",
+        rawInput,
+        meta: { claudeCode: { toolName: "SandboxNetworkAccess" } },
+      })
+    ).toBe("sandboxnetworkaccess")
+    expect(
+      inferLiveToolName({
+        title: "example.com",
+        kind: "other",
+        rawInput,
+        meta: null,
+      })
+    ).toBe("webfetch")
   })
 
   it("still classifies a {task_id} tool as task when no Claude Code meta is present", () => {
@@ -440,7 +656,7 @@ describe("inferLiveToolName query-bearing MCP calls", () => {
 })
 
 describe("normalizeToolName collapses delegate_to_agent across hosts", () => {
-  // The HouHub multi-agent delegation MCP tool is named the same across hosts
+  // The houhub multi-agent delegation MCP tool is named the same across hosts
   // (`delegate_to_agent`) but each host serializes the server prefix
   // differently: Claude Code uses `mcp__<server>__`, Codex live ACP uses
   // `<server>/`, others use `.` or `:`. All forms must collapse to the
@@ -535,6 +751,23 @@ describe("normalizeToolName collapses ask_user_question across hosts", () => {
 
   it("does not match a suffix without a separator", () => {
     expect(normalizeToolName("xask_user_question")).not.toBe("question")
+  })
+})
+
+describe("normalizeToolName maps Antigravity's native ask_question", () => {
+  it("collapses the bare name its history parser keeps", () => {
+    expect(normalizeToolName("ask_question")).toBe("question")
+  })
+
+  // A host-prefixed `ask_question` is a third-party MCP tool — DeepWiki's takes
+  // `{repoName, question}` — which the question card cannot render.
+  it.each([
+    "mcp__deepwiki__ask_question",
+    "deepwiki/ask_question",
+    "deepwiki_ask_question",
+    "deepwiki: ask_question",
+  ])("leaves %s to its own card", (input) => {
+    expect(normalizeToolName(input)).not.toBe("question")
   })
 })
 
@@ -893,7 +1126,9 @@ describe("inferLiveToolName Grok plan-mode via x.ai/tool.kind", () => {
     expect(normalizeToolName(name)).toBe("exitplanmode")
   })
 
-  it("does not hijack other Grok tools carrying x.ai/tool metadata", () => {
+  it("does NOT hijack other Grok tools carrying x.ai/tool meta", () => {
+    // A non-plan-mode Grok tool (run_terminal_command, kind "execute") keeps its
+    // normal resolution — the plan-mode shortcut is scoped to enter/exit_plan.
     expect(
       inferLiveToolName({
         title: "run_terminal_command",
@@ -1052,7 +1287,7 @@ describe("normalizeToolName codex command-action titles", () => {
 
 describe("inferLiveToolName codex plan_review marker", () => {
   it("classifies the seeded plan-review call from _meta.codex.kind", () => {
-    // codex-acp ≥1.1.8 (#351): HouHub seeds this tool call from the permission
+    // codex-acp ≥1.1.8 (#351): houhub seeds this tool call from the permission
     // request, so it has no rawInput and its title is a question. Only the
     // marker identifies it.
     expect(

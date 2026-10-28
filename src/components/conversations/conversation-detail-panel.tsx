@@ -1,14 +1,10 @@
 "use client"
 
 import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-} from "react"
+  shouldSeedConversation,
+  useFolderTabsStore,
+} from "@/stores/folder-tabs-store"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertCircle,
   Check,
@@ -36,21 +32,20 @@ import { ActivityLiveProvider } from "@/components/message/activity/activity-liv
 import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { FolderTabsEmptyState } from "@/components/conversations/folder-tabs-empty-state"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import {
   groupOfTab,
+  useVisibleConversationTabs,
+  useVisibleConversationLayout,
+  shellGroupOfTab,
   isReparentUnmount,
   reparentedViewRuntimeConversationId,
   trackConversationView,
 } from "@/stores/tab-store"
 import { computeRects, leafIds } from "@/lib/tab-group-layout"
 import { useTaskContext } from "@/contexts/task-context"
-import {
-  cn,
-  copyTextFromMenu,
-  copyTextToClipboard,
-  randomUUID,
-} from "@/lib/utils"
+import { cn, copyTextToClipboard, randomUUID } from "@/lib/utils"
 import { buildAskPrompt, buildQuotedMarkdown } from "@/lib/message-quote"
 import {
   ASK_SELECTION_PARKED_EVENT,
@@ -69,7 +64,6 @@ import { useAdvertisedGoalActions } from "@/hooks/use-goal-actions"
 import { ConversationShell } from "@/components/chat/conversation-shell"
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
 import { PiProjectTrustBanner } from "@/components/chat/pi-project-trust-banner"
-import { BackgroundTasksChip } from "@/components/chat/background-tasks-chip"
 import { FeedbackNotesDisplay } from "@/components/chat/feedback-notes-display"
 import { FeedbackDialog } from "@/components/chat/feedback-dialog"
 import { AgentDiagnosticsDialog } from "@/components/settings/agent-diagnostics-dialog"
@@ -385,7 +379,11 @@ const ConversationTabView = memo(function ConversationTabView({
     null
   )
   const [hasSentMessage, setHasSentMessage] = useState(false)
-  const [quickActionInject, setQuickActionInject] =
+  // One inbox for everything pushed into this tab's composer from outside it:
+  // welcome-page quick actions (replace) and quoted transcript selections
+  // (append). Exactly one composer is mounted at a time — the welcome one or the
+  // docked one — so a single slot can serve both.
+  const [composerInject, setComposerInject] =
     useState<ComposerInjectContent | null>(null)
 
   const hasPersistedConversation = dbConversationId != null
@@ -1004,9 +1002,14 @@ const ConversationTabView = memo(function ConversationTabView({
 
   useEffect(() => {
     if (effectiveConversationId <= 0) return
-    // Only write a real id. During a detail reload `detail` is temporarily
-    // null; clearing the already-resolved runtime id would make the next
-    // reconnect start a new ACP session and orphan the conversation history.
+    // Only ever WRITE a real id — never clear one. `detail` is null while a
+    // (re)fetch is in flight, and writing null then would wipe a session id the
+    // connSessionId effect below had already resolved. That store value is one
+    // of the two sources `externalId` (and therefore the sessionId passed to
+    // acp_connect) resolves from, so clearing it can turn a reconnect into
+    // session/new and strand the conversation's history. Nothing ever nulls a
+    // row's external_id, and switching conversations changes the store key
+    // rather than clearing this one, so there is no case that needs the clear.
     const persisted = detail?.summary.external_id
     if (!persisted) return
     setExternalId(effectiveConversationId, persisted)
@@ -1752,17 +1755,19 @@ const ConversationTabView = memo(function ConversationTabView({
   const isWelcomeMode = showDraftHeader
 
   const handleQuickAction = useCallback((payload: ComposerInjectContent) => {
-    setQuickActionInject(payload)
+    setComposerInject(payload)
   }, [])
 
-  const handleQuickActionConsumed = useCallback(() => {
-    setQuickActionInject(null)
+  const handleComposerInjectConsumed = useCallback(() => {
+    setComposerInject(null)
   }, [])
 
+  // Quote a transcript selection into the composer. A fresh object every time so
+  // quoting the same passage twice still re-fires the composer's inject effect.
   const handleQuoteSelection = useCallback((selected: string) => {
     const quoted = buildQuotedMarkdown(selected)
     if (!quoted) return
-    setQuickActionInject({ text: quoted, mode: "append" })
+    setComposerInject({ text: quoted, mode: "append" })
   }, [])
 
   /**
@@ -1883,10 +1888,12 @@ const ConversationTabView = memo(function ConversationTabView({
     closeTab(tabId)
   }, [closeTab, folder, openNewConversationTab, tabId, workingDirForConnection])
 
-  // Some load failures include a shell command that restores the archived
-  // session (currently `codex unarchive <id>`). Keep that exact command
-  // copyable even when the conversation/folder is no longer available for the
-  // other recovery actions.
+  // Some load failures come with a shell command that undoes them (today:
+  // `codex unarchive <id>`). The banner names it in prose, but prose here is
+  // one ellipsized line — so offer the exact string as a copy action too,
+  // rather than asking the user to retype a session id they may not even be
+  // able to see. Read off the connection, which is where the connections
+  // layer parks it beside the localized message.
   const recoveryCommand = conn.loadErrorCommand
   const [commandCopied, setCommandCopied] = useState(false)
   const copiedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1905,11 +1912,19 @@ const ConversationTabView = memo(function ConversationTabView({
     copiedResetRef.current = setTimeout(() => setCommandCopied(false), 1500)
   }, [recoveryCommand])
 
-  // A failed `session/load` must leave the local transcript readable while
-  // making the unavailable composer actionable. The recovery controls live in
-  // the same dock as the input, so Reload/New conversation never hide history.
+  // A session/load failure no longer hijacks the whole message area (the
+  // transcript stays readable — see message-list-view's blockingLoadError);
+  // instead the failure lands here, as a banner docked where the composer
+  // sits, carrying the same Reload / New session recovery actions. Persisted
+  // conversations only: drafts never session/load.
   const acpLoadErrorBanner =
     hasPersistedConversation && acpLoadError ? (
+      // `flex-wrap` + a message floor, because the actions are all `shrink-0`
+      // and the row has no other give: without them a third action pushes the
+      // message to zero width and shoves "New conversation" outside the
+      // banner (measured: 34-172px past the edge at 320-384px, worse in
+      // French/German). Wrapping costs a second row only when the panel is
+      // actually too narrow — at >=700px this lays out exactly as before.
       <div
         role="alert"
         className="flex w-full flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
@@ -1921,6 +1936,11 @@ const ConversationTabView = memo(function ConversationTabView({
         >
           {acpLoadError}
         </span>
+        {/* Deliberately outside `canShowDetailErrorActions`: that gate exists
+            because Reload refetches the DB detail and New session opens a tab
+            in the folder, so both need a conversation id and a folder. Copying
+            a string needs neither — withholding the one recovery the user can
+            still act on would be the wrong call. */}
         {recoveryCommand && (
           <button
             type="button"
@@ -2082,8 +2102,10 @@ const ConversationTabView = memo(function ConversationTabView({
     [acpActions, tabId]
   )
 
-  // The docked composer is the only place a quote can land. Keep the quote
-  // action hidden while the welcome state or a load error has removed it.
+  // The docked composer is the only place a quote can land, so the selection
+  // bubble offers "quote" exactly when that composer is on screen (see
+  // `hideInput` below). Without a composer the inject would never be consumed
+  // and the action would silently do nothing.
   const composerAvailable = !isWelcomeMode && !acpLoadError
 
   // Arrow-key history source: read lazily when the user actually steps into
@@ -2267,7 +2289,6 @@ const ConversationTabView = memo(function ConversationTabView({
             agentType={selectedAgent}
             workingDir={workingDirForConnection}
           />
-          <BackgroundTasksChip contextKey={tabId} />
         </>
       }
       status={connStatus}
@@ -2318,6 +2339,8 @@ const ConversationTabView = memo(function ConversationTabView({
       attachmentTabId={tabId}
       draftStorageKey={draftStorageKey}
       hideInput={isWelcomeMode || Boolean(acpLoadError)}
+      injectContent={composerInject}
+      onInjectConsumed={handleComposerInjectConsumed}
       composerBanner={acpLoadErrorBanner}
       feedbackList={
         feedback.showList ? (
@@ -2460,8 +2483,8 @@ const ConversationTabView = memo(function ConversationTabView({
                   feedback.featureEnabled ? feedback.openDialog : undefined
                 }
                 feedbackAddDisabled={!feedback.canSubmit}
-                injectContent={quickActionInject}
-                onInjectConsumed={handleQuickActionConsumed}
+                injectContent={composerInject}
+                onInjectConsumed={handleComposerInjectConsumed}
                 flush
                 tall
               />
@@ -2589,9 +2612,17 @@ export function ConversationDetailPanel() {
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const tabs = useTabStore((s) => s.tabs)
+  const tabsFollowFolder = useFolderTabsStore((s) => s.enabled)
+  const visibleTabs = useVisibleConversationTabs()
+  const visibleLayout = useVisibleConversationLayout()
+  const visibleTabIds = useMemo(
+    () => new Set(visibleTabs.map((tab) => tab.id)),
+    [visibleTabs]
+  )
   const activeTabId = useTabStore((s) => s.activeTabId)
   const groupLayout = useTabStore((s) => s.groupLayout)
   const groupOf = useTabStore((s) => s.groupOf)
+  const groupViews = useTabStore((s) => s.groupViews)
   const groupSelection = useTabStore((s) => s.groupSelection)
   const tileByGroup = useTabStore((s) => s.tileByGroup)
   // Narrow: only the drop-TARGET group id (for the shell highlight ring) — the
@@ -2709,68 +2740,6 @@ export function ConversationDetailPanel() {
     }))
   }, [activeConversationTab])
 
-  const [contextMenuSelectedText, setContextMenuSelectedText] = useState("")
-  const savedSelectionRangeRef = useRef<Range | null>(null)
-  const isContextMenuOpenRef = useRef(false)
-
-  const handleContextMenuOpenChange = useCallback((open: boolean) => {
-    isContextMenuOpenRef.current = open
-    if (!open) {
-      savedSelectionRangeRef.current = null
-      return
-    }
-    const selection = window.getSelection()
-    const text = selection?.toString() ?? ""
-    setContextMenuSelectedText(text)
-    savedSelectionRangeRef.current =
-      selection && selection.rangeCount > 0 && !selection.isCollapsed
-        ? selection.getRangeAt(0).cloneRange()
-        : null
-  }, [])
-
-  const handleContextMenuTriggerPointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.button !== 2) return
-      const selection = window.getSelection()
-      if (selection && !selection.isCollapsed) {
-        event.preventDefault()
-      }
-    },
-    []
-  )
-
-  useEffect(() => {
-    const handler = () => {
-      if (!isContextMenuOpenRef.current) return
-      const range = savedSelectionRangeRef.current
-      if (!range) return
-      if (
-        !document.contains(range.startContainer) ||
-        !document.contains(range.endContainer)
-      ) {
-        savedSelectionRangeRef.current = null
-        return
-      }
-      const selection = window.getSelection()
-      if (!selection) return
-      if (selection.toString().length > 0) return
-      selection.removeAllRanges()
-      selection.addRange(range)
-    }
-    document.addEventListener("selectionchange", handler)
-    return () => document.removeEventListener("selectionchange", handler)
-  }, [])
-
-  const handleCopySelectedText = useCallback(async () => {
-    if (!contextMenuSelectedText) return
-    const ok = await copyTextFromMenu(contextMenuSelectedText)
-    if (ok) {
-      toast.success(t("copyTextSuccess"))
-    } else {
-      toast.error(t("copyTextFailed"))
-    }
-  }, [contextMenuSelectedText, t])
-
   const handleNewConversation = useCallback(() => {
     if (!folder) return
     // Right-click "new conversation" inside a conversation tab: keep the
@@ -2829,8 +2798,9 @@ export function ConversationDetailPanel() {
     const session = getRuntimeSession(activeConversationTab.conversationId)
     if (!session?.detail) return null
     let detail = session.detail
-    // The active view may contain only a tail window. Exports must include the
-    // complete transcript, so fetch the full detail when older pages exist.
+    // The loaded detail may be a tail WINDOW (paginated loading); an export
+    // must cover the whole transcript, so fetch the legacy full response on
+    // demand. The window is full when it starts at offset 0.
     if (isWindowedDetail(detail) && detail.turns_offset > 0) {
       detail = await getFolderConversation(
         session.dbConversationId ?? activeConversationTab.conversationId
@@ -2898,13 +2868,21 @@ export function ConversationDetailPanel() {
   useEffect(() => {
     if (!folder) return
 
-    if (hasNoTabs) {
+    if (
+      shouldSeedConversation(useFolderTabsStore.getState().enabled, hasNoTabs)
+    ) {
       openNewConversationTab(
         folder.id,
         newConversation?.workingDir ?? folder.path
       )
     }
-  }, [folder, hasNoTabs, newConversation?.workingDir, openNewConversationTab])
+  }, [
+    folder,
+    hasNoTabs,
+    newConversation?.workingDir,
+    openNewConversationTab,
+    tabsFollowFolder,
+  ])
 
   // Split-group render model: the layout tree only ever produces PERCENTAGE
   // RECTS — every group shell is an absolutely-positioned SIBLING keyed by its
@@ -2912,16 +2890,23 @@ export function ConversationDetailPanel() {
   // style changes and a tab that stays in its group is never reparented (a
   // reparent would remount the view and tear down a live streaming response).
   const { groups: groupRects, handles: groupHandles } = useMemo(
-    () => computeRects(groupLayout),
-    [groupLayout]
+    () => computeRects(visibleLayout),
+    [visibleLayout]
   )
-  const orderedGroupIds = useMemo(() => leafIds(groupLayout), [groupLayout])
-  const isSplit = orderedGroupIds.length > 1
+  const isSplit = leafIds(visibleLayout).length > 1
+  // Every tab sits in its own view's group shell (`shellGroupOfTab`): the
+  // folder views not on screen keep their shells, hidden, so a folder switch
+  // reparents nothing. Shells come in id order — a fixed order whatever view
+  // is on screen, so a switch never moves one (a moved node resets every
+  // transcript inside it); new shells only ever insert.
   const tabsByGroup = useMemo(() => {
     const byGroup = new Map<string, typeof tabs>()
-    for (const groupId of orderedGroupIds) byGroup.set(groupId, [])
+    for (const groupId of leafIds(groupLayout)) byGroup.set(groupId, [])
+    const state = { rawTabs: tabs, groupOf, groupLayout, groupViews }
     for (const tab of tabs) {
-      const groupId = groupOfTab(groupOf, groupLayout, tab.id)
+      const groupId = visibleTabIds.has(tab.id)
+        ? groupOfTab(groupOf, groupLayout, tab.id)
+        : shellGroupOfTab(state, tab.id)
       const bucket = byGroup.get(groupId)
       if (bucket) {
         bucket.push(tab)
@@ -2930,7 +2915,11 @@ export function ConversationDetailPanel() {
       }
     }
     return byGroup
-  }, [tabs, groupOf, groupLayout, orderedGroupIds])
+  }, [tabs, groupOf, groupLayout, groupViews, visibleTabIds])
+  const orderedGroupIds = useMemo(
+    () => [...tabsByGroup.keys()].sort(),
+    [tabsByGroup]
+  )
 
   const tileTabRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const groupContainerRef = useRef<HTMLDivElement | null>(null)
@@ -2944,12 +2933,14 @@ export function ConversationDetailPanel() {
         .filter(
           (groupId) =>
             tileByGroup[groupId] &&
-            (tabsByGroup.get(groupId)?.length ?? 0) > 1 &&
+            (tabsByGroup.get(groupId) ?? []).filter((tab) =>
+              visibleTabIds.has(tab.id)
+            ).length > 1 &&
             groupSelection[groupId] != null
         )
         .map((groupId) => groupSelection[groupId])
         .join("|"),
-    [orderedGroupIds, tileByGroup, tabsByGroup, groupSelection]
+    [orderedGroupIds, tileByGroup, tabsByGroup, groupSelection, visibleTabIds]
   )
   useEffect(() => {
     if (!tiledSelectionKey) return
@@ -2973,7 +2964,7 @@ export function ConversationDetailPanel() {
   }, [tabs])
 
   if (hasNoTabs) {
-    return null
+    return tabsFollowFolder ? <FolderTabsEmptyState /> : null
   }
 
   const renderTabWrapper = (
@@ -2982,9 +2973,10 @@ export function ConversationDetailPanel() {
     groupId: string,
     canTileG: boolean
   ) => {
-    const active = tab.id === activeTabId
+    const inScope = visibleTabIds.has(tab.id)
+    const active = inScope && tab.id === activeTabId
     // Visible = tiled (all group members shown) or the group's selected tab.
-    const visible = canTileG || tab.id === groupSelection[groupId]
+    const visible = inScope && (canTileG || tab.id === groupSelection[groupId])
     const folderPath = allFolders.find((f) => f.id === tab.folderId)?.path
     const view = (
       <ConversationTabView
@@ -3015,14 +3007,16 @@ export function ConversationDetailPanel() {
         data-tile-scroll-item=""
         style={canTileG ? { order: indexInGroup } : undefined}
         className={cn(
-          canTileG
-            ? cn(
-                "relative h-full min-w-[24rem] flex-1 overflow-hidden",
-                indexInGroup > 0 && "border-l border-border/50"
-              )
-            : visible
-              ? "h-full"
-              : "conversation-tab-hidden absolute inset-0 invisible pointer-events-none"
+          !inScope
+            ? "conversation-tab-hidden absolute inset-0 invisible pointer-events-none"
+            : canTileG
+              ? cn(
+                  "relative h-full min-w-[24rem] flex-1 overflow-hidden",
+                  indexInGroup > 0 && "border-l border-border/50"
+                )
+              : visible
+                ? "h-full"
+                : "conversation-tab-hidden absolute inset-0 invisible pointer-events-none"
         )}
         onPointerDownCapture={
           visible && !active ? () => switchTab(tab.id) : undefined
@@ -3039,7 +3033,7 @@ export function ConversationDetailPanel() {
             body — so without this it went on painting over whichever tab the
             user switched to. The flag is additive, so a visible tab inside a
             covered workspace stays hidden. */}
-        <OverlayHostHiddenProvider hidden={!canTileG && !visible}>
+        <OverlayHostHiddenProvider hidden={!visible}>
           {view}
         </OverlayHostHiddenProvider>
       </div>
@@ -3049,10 +3043,13 @@ export function ConversationDetailPanel() {
   // Plain function (NOT a component defined in render — that type identity
   // would change every render and remount the whole shell subtree).
   const renderGroupShell = (groupId: string) => {
-    const rect = groupRects.get(groupId)
-    if (!rect) return null
+    const inScope = groupRects.has(groupId)
+    const rect = groupRects.get(groupId) ?? { x: 0, y: 0, w: 100, h: 100 }
     const groupTabs = tabsByGroup.get(groupId) ?? []
-    const canTileG = !!tileByGroup[groupId] && groupTabs.length > 1
+    const visibleGroupTabs = groupTabs.filter((tab) =>
+      visibleTabIds.has(tab.id)
+    )
+    const canTileG = !!tileByGroup[groupId] && visibleGroupTabs.length > 1
     // Only the TOP-edge strips sit under the fixed corner overlays (the split
     // layout has no title-bar row above them) — the leftmost/rightmost of that
     // row carry the corner reserves the unsplit strip row normally provides.
@@ -3063,8 +3060,8 @@ export function ConversationDetailPanel() {
     // The group's SELECTED tab drives its header — each split group keeps the
     // full "tabs + conversation title bar" pairing of the unsplit layout.
     const selTab =
-      groupTabs.find((tab) => tab.id === groupSelection[groupId]) ??
-      groupTabs[0] ??
+      visibleGroupTabs.find((tab) => tab.id === groupSelection[groupId]) ??
+      visibleGroupTabs[0] ??
       null
     const selTabFolder = selTab
       ? allFolders.find((f) => f.id === selTab.folderId)
@@ -3083,6 +3080,8 @@ export function ConversationDetailPanel() {
           top: `${rect.y}%`,
           width: `${rect.w}%`,
           height: `${rect.h}%`,
+          visibility: inScope ? undefined : "hidden",
+          pointerEvents: inScope ? undefined : "none",
         }}
       >
         {/* While split, each group owns its own strip (the workspace layout's
@@ -3172,19 +3171,22 @@ export function ConversationDetailPanel() {
             status={activeTab.status as ConversationStatus | undefined}
           />
         )}
-        <ContextMenu onOpenChange={handleContextMenuOpenChange}>
+        <ContextMenu>
           <ContextMenuTrigger asChild>
             <div
               ref={groupContainerRef}
               className="relative min-h-0 flex-1 overflow-hidden"
-              onPointerDown={handleContextMenuTriggerPointerDown}
             >
               {/* Flat sibling shells keyed by stable group id + divider
                   overlays — stable across every split/tile flip, otherwise
                   sibling tabs remount and a live streaming response is torn
                   down. */}
               {orderedGroupIds.map((groupId) => renderGroupShell(groupId))}
+              {/* The handles resize the on-screen view's own layout (a
+                  folder's, while tabs follow the folder), which the visible
+                  one only differs from before the tab set is known. */}
               {isSplit &&
+                visibleLayout === groupLayout &&
                 groupHandles.map((handle) => (
                   <GroupSplitHandle
                     key={`${handle.splitId}:${handle.index}`}
@@ -3193,17 +3195,16 @@ export function ConversationDetailPanel() {
                     onResize={resizeGroupSplit}
                   />
                 ))}
+              {/* The selected folder has nothing open: every shell above is
+                  hidden, other folders' live tabs included. */}
+              {tabsFollowFolder && visibleTabs.length === 0 && (
+                <div className="absolute inset-0">
+                  <FolderTabsEmptyState />
+                </div>
+              )}
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent>
-            <ContextMenuItem
-              disabled={!contextMenuSelectedText}
-              onSelect={handleCopySelectedText}
-            >
-              <Copy className="h-4 w-4" />
-              {t("copyText")}
-            </ContextMenuItem>
-            <ContextMenuSeparator />
             <ContextMenuItem
               disabled={!folder?.path}
               onSelect={handleNewConversation}

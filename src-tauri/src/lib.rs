@@ -14,106 +14,60 @@
 #![cfg_attr(all(test, debug_assertions), allow(linker_messages))]
 
 pub mod acp;
-
 pub mod acp_transcript;
-
 pub use acp::{
     idle_sweep_task, idle_timeout_from_env, lifecycle_subscriber_task, SWEEP_INTERVAL_SECS,
 };
-
 pub use acp::scratch_dir::scratch_sweep_task;
-
 pub use network::proxy::init_proxy_from_db;
-
 mod app_error;
-
 #[cfg(all(feature = "tauri-runtime", target_os = "macos"))]
 mod app_menu;
-
 pub mod app_state;
-
 pub mod appimage_env;
-
 pub mod automation;
-
 pub mod backgrounds;
-
 /// Built-in browser. Only its wire types and its grant rules compile in server
 /// mode — see `browser/mod.rs` for why those two, and only those two.
 pub mod browser;
-
 pub mod chat_channel;
-
 /// The `houhub-cli` binary's client side (feature `cli-bin`).
 #[cfg(feature = "cli-bin")]
 pub mod cli;
-
 pub mod cli_run;
-
 pub mod commands;
-
 pub mod commit_message;
-
 pub mod computer;
-
 pub mod db;
-
 pub mod deep_link;
-
 pub mod folder_links;
-
 pub mod forge;
-
 pub mod git_credential;
-
 pub mod git_repo;
-
 pub mod intern;
-
 pub mod keyring_store;
-
 pub mod logging;
-
 pub mod models;
-
 mod network;
-
 pub mod office_watch;
-
 pub mod parsers;
-
 pub mod paths;
-
 pub mod pet_sessions;
-
 pub mod pet_state_mapper;
-
 pub mod pets;
-
 #[cfg(feature = "tauri-runtime")]
 pub mod preferences;
-
 pub mod process;
-
 #[cfg(all(feature = "tauri-runtime", target_os = "macos"))]
 mod relaunch;
-
 pub mod runtime_lock;
-
 pub mod supervise;
-
 mod terminal;
-
 pub mod turn_timings;
-
 pub mod update;
-
 pub mod web;
-
 pub mod work_task;
-
 pub mod workspace_state;
-
 pub mod workspace_transfer;
 
 /// Sweep stale ACP binary cache trash created by the rename-aside fallback in
@@ -131,7 +85,7 @@ pub fn sweep_acp_binary_trash() {
 ///
 /// Deletes only directories whose recorded owner is positively confirmed dead
 /// (or is this process and not live — see `acp::scratch_dir`), and never leaves
-/// HouHub's own `houhub-acp/` subtree, so a peer HouHub instance's work and any
+/// houhub's own `houhub-acp/` subtree, so a peer houhub instance's work and any
 /// other application's temp files are both out of reach by construction.
 pub fn sweep_acp_scratch_dirs() {
     crate::acp::scratch_dir::sweep_foreign_orphans();
@@ -143,34 +97,36 @@ mod tauri_app {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use crate::acp::manager::ConnectionManager;
-
     use crate::chat_channel::manager::ChatChannelManager;
-
     use crate::commands::{
-        acp as acp_commands, app_update as app_update_commands, assistants as assistant_commands,
-        automation as automation_commands, background as background_commands, backup,
-        browser as browser_commands, canvas as canvas_commands,
+        acp as acp_commands, app_update as app_update_commands,
+        assistants as assistant_commands, automation as automation_commands,
+        background as background_commands, backup,
+        browser as browser_commands,
+        canvas as canvas_commands,
         chat_authoring as chat_authoring_commands, chat_channel as chat_channel_commands,
-        clipboard as clipboard_commands, commit_message as commit_message_commands, config_sync,
-        conversation_tags, conversations, custom_skills as custom_skills_commands,
+        clipboard as clipboard_commands,
+        commit_message as commit_message_commands,
+        config_sync,
+        conversation_tags,
+        conversations,
+        custom_skills as custom_skills_commands,
         deepseek_settings as deepseek_settings_commands, delegation as delegation_commands,
         experts as experts_commands, feedback as feedback_commands, file_io, folder_commands,
-        folder_links, folders, forge as forge_commands, houflow as houflow_commands, local_command,
-        logging as logging_commands, mcp as mcp_commands,
-        model_provider as model_provider_commands, notification,
-        office_tools as office_tools_commands, open_in, pet as pet_commands, project_boot,
+        folder_links, local_command, office_tools as office_tools_commands, open_in,
+        folders, logging as logging_commands, mcp as mcp_commands,
+        model_provider as model_provider_commands, notification, pet as pet_commands, project_boot,
         question as question_commands, quick_messages as quick_messages_commands,
-        remote_proxy as remote_proxy_commands, remote_workspace as remote_workspace_commands,
-        science as science_commands, session_info as session_info_commands, system_settings,
-        terminal as terminal_commands, token_usage as token_usage_commands, version_control,
-        windows, work_task as work_task_commands, workbench as workbench_commands,
+        remote_proxy as remote_proxy_commands,
+        remote_workspace as remote_workspace_commands, science as science_commands,
+        session_info as session_info_commands,
+        system_settings, terminal as terminal_commands,
+        token_usage as token_usage_commands,
+        forge as forge_commands, version_control, windows, work_task as work_task_commands,
         workspace_state as workspace_state_commands, workspace_windows,
     };
-
     use crate::terminal::manager::TerminalManager;
-
     use crate::{db, git_credential, network, paths, process, web};
-
     use tauri::Manager;
 
     static APP_QUITTING: AtomicBool = AtomicBool::new(false);
@@ -367,7 +323,7 @@ mod tauri_app {
             CloseWindowBehavior::Ask => {
                 let count = running_terminals(&app);
                 if !prompt("ask", count) {
-                    // Fall back to the behavior HouHub has always had. Exiting
+                    // Fall back to the behavior houhub has always had. Exiting
                     // on a press the user never got to answer would discard
                     // work; hiding discards nothing.
                     hide();
@@ -583,7 +539,6 @@ mod tauri_app {
         unsafe { std::env::remove_var(RENDERING_OVERRIDE_OWNED_ENV) };
     }
 
-    #[cfg_attr(mobile, tauri::mobile_entry_point)]
     pub fn run() {
         // Ahead of the logging init, which is otherwise the first statement
         // here: `init_desktop` builds a `tracing_appender::non_blocking` file
@@ -639,6 +594,11 @@ mod tauri_app {
         // flush on a graceful exit.
         let _log_guard = crate::logging::init::init_desktop();
 
+        // macOS must not pause the process every agent session runs through
+        // when memory runs out (see the function).
+        #[cfg(target_os = "macos")]
+        process::opt_out_of_low_swap_suspension();
+
         if let Err(err) = fix_path_env::fix() {
             tracing::error!("[PATH] fix_path_env failed: {err}");
         }
@@ -649,8 +609,7 @@ mod tauri_app {
         // After the PATH fixes above, which rewrite PATH.
         if let (Some(data_dir), Ok(exe)) = (&desktop_data_dir, std::env::current_exe()) {
             let local = dirs::data_local_dir().map(|d| d.join(&context.config().identifier));
-            if let Some(layout) =
-                crate::cli_run::shim::plan_desktop(data_dir, local.as_deref(), &exe)
+            if let Some(layout) = crate::cli_run::shim::plan_desktop(data_dir, local.as_deref(), &exe)
             {
                 layout.export();
                 layout.remember();
@@ -669,9 +628,9 @@ mod tauri_app {
         // initialization. The callback runs in the *original* process.
         //
         // Skipped in debug builds so a locally-built `cargo run` instance
-        // can run alongside an installed release build of HouHub during
+        // can run alongside an installed release build of houhub during
         // development. Debug desktop builds use an isolated SQLite file, but
-        // they still share other `app.houhub` data-dir artifacts with release.
+        // they still share other `com.houflow.houhub` data-dir artifacts with release.
         #[cfg(not(debug_assertions))]
         let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Second launches on Windows/Linux carry `houhub://…` on argv.
@@ -688,7 +647,7 @@ mod tauri_app {
             // window is built and re-add the native title bar on top of the
             // app's own toolbar — the Linux "double title bar".
             //
-            // Computer use's strip and action marker are placed by HouHub each
+            // Computer use's strip and action marker are placed by houhub each
             // time they are made and must never come back where (or as
             // visible as) a previous run left them.
             .plugin(
@@ -715,7 +674,7 @@ mod tauri_app {
             // "Launch at login". LaunchAgent rather than AppleScript on macOS:
             // writing `~/Library/LaunchAgents/houhub.plist` needs no Automation
             // consent prompt, where scripting System Events does. No extra
-            // startup args — an auto-started HouHub is the same app the user
+            // startup args — an auto-started houhub is the same app the user
             // would have launched by hand.
             //
             // With one difference on macOS: a houhub started at login is the
@@ -731,7 +690,7 @@ mod tauri_app {
             // an entry in place: GNOME sets `X-GNOME-Autostart-enabled=false`
             // inside the .desktop file the plugin would overwrite from a fixed
             // template. Refreshing would therefore silently undo a disable the
-            // user made outside HouHub. Re-toggling the setting rewrites the
+            // user made outside houhub. Re-toggling the setting rewrites the
             // path, which is the same repair with consent attached.
             //
             // Two accepted defects live in `auto-launch`, which this plugin
@@ -1093,6 +1052,16 @@ mod tauri_app {
                         )
                         .await;
                     });
+                }
+
+                // Keeps the Codex model list houhub published current (a provider
+                // list past its age, a codex upgraded outside houhub) and clears
+                // what a release left behind. One per process; mirrored in
+                // `bin/houhub_server.rs`.
+                if let Some(scheduler) = crate::acp::codex_catalog_refresh::build(
+                    web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                ) {
+                    tauri::async_runtime::spawn(crate::acp::codex_catalog_refresh::run(scheduler));
                 }
 
                 // Label worktree folders registered before aliases were seeded at
@@ -1500,10 +1469,9 @@ mod tauri_app {
                     tauri::async_runtime::spawn(crate::automation::run_automation_engine(engine));
                 }
 
-                // Work-task engine: drives the todo → review → merge pipeline
-                // and owns task worktrees. It is elected independently from
-                // automations so desktop and standalone server share the same
-                // single-writer semantics.
+                // Work-task engine: drives the todo→…→done pipeline, settles
+                // runs off the event bus, recovers merges from git truth on
+                // boot. One per process; mirrored in `bin/houhub_server.rs`.
                 if let Some(engine) = crate::work_task::build_task_engine(
                     crate::db::AppDatabase {
                         conn: app.state::<crate::db::AppDatabase>().conn.clone(),
@@ -1833,14 +1801,6 @@ mod tauri_app {
                 }
             })
             .invoke_handler(tauri::generate_handler![
-                // 0.39 additions we now wire up (the merge kept upstream's
-                // commands but our handler list did not register them).
-                commit_message_commands::git_generate_commit_message,
-                commit_message_commands::git_generate_commit_message_cancel,
-                commit_message_commands::get_commit_message_settings,
-                commit_message_commands::set_commit_message_settings,
-                commit_message_commands::delete_commit_message_settings,
-                local_command::run_local_command,
                 browser_commands::browser_capabilities,
                 browser_commands::browser_open_tab,
                 browser_commands::browser_close,
@@ -1988,6 +1948,11 @@ mod tauri_app {
                 folders::git_show_file,
                 folders::git_show_file_base64,
                 folders::git_commit,
+                commit_message_commands::git_generate_commit_message,
+                commit_message_commands::git_generate_commit_message_cancel,
+                commit_message_commands::get_commit_message_settings,
+                commit_message_commands::set_commit_message_settings,
+                commit_message_commands::delete_commit_message_settings,
                 folders::git_rollback_file,
                 folders::git_add_files,
                 folders::git_list_all_branches,
@@ -2212,9 +2177,8 @@ mod tauri_app {
                 acp_commands::acp_update_agent_env,
                 acp_commands::acp_update_agent_config,
                 acp_commands::acp_update_hermes_config,
+                acp_commands::acp_update_claude_model_picker,
                 acp_commands::acp_update_kimi_code_config,
-                acp_commands::acp_fetch_kimi_models,
-                acp_commands::acp_test_model_provider,
                 deepseek_settings_commands::acp_load_deepseek_model_catalog,
                 deepseek_settings_commands::acp_update_deepseek_model_catalog,
                 acp_commands::acp_update_pi_config,
@@ -2248,8 +2212,17 @@ mod tauri_app {
                 acp_commands::opencode_list_plugins,
                 acp_commands::opencode_provider_catalog,
                 acp_commands::codex_bundled_catalog,
-                acp_commands::opencode_install_plugins,
-                acp_commands::opencode_uninstall_plugin,
+                crate::commands::opencode_credentials::opencode_list_integrations,
+                crate::commands::opencode_credentials::opencode_connect_key,
+                crate::commands::opencode_credentials::opencode_disconnect_provider,
+                crate::commands::codex_catalog::codex_catalog_plan_preview,
+                crate::commands::codex_catalog::codex_fetch_endpoint_catalog,
+                crate::commands::codex_catalog::codex_endpoint_catalog_published,
+                crate::commands::codex_catalog::codex_endpoint_catalog_cached,
+                crate::commands::codex_catalog::codex_endpoint_catalog_status,
+                crate::commands::codex_catalog::codex_refresh_endpoint_catalog,
+                acp_commands::opencode_add_plugin,
+                acp_commands::opencode_remove_plugin,
                 acp_commands::codex_request_device_code,
                 acp_commands::codex_poll_device_code,
                 experts_commands::experts_list,
@@ -2303,6 +2276,7 @@ mod tauri_app {
                 folder_commands::delete_folder_command,
                 folder_commands::reorder_folder_commands,
                 folder_commands::bootstrap_folder_commands_from_package_json,
+                local_command::run_local_command,
                 quick_messages_commands::quick_messages_list,
                 quick_messages_commands::quick_messages_create,
                 quick_messages_commands::quick_messages_update,
@@ -2445,41 +2419,7 @@ mod tauri_app {
                 model_provider_commands::create_model_provider,
                 model_provider_commands::update_model_provider,
                 model_provider_commands::delete_model_provider,
-                houflow_commands::houflow_load_auth_secret,
-                houflow_commands::houflow_save_auth_secret,
-                houflow_commands::houflow_clear_auth_secret,
-                houflow_commands::houflow_control_http_call,
-                houflow_commands::houflow_oauth_loopback_listen,
-                houflow_commands::houflow_sync_managed_gateway,
-                houflow_commands::houflow_connector_status,
-                houflow_commands::houflow_connector_login,
-                houflow_commands::houflow_connector_up,
-                houflow_commands::houflow_connector_down,
-                houflow_commands::houflow_connector_heartbeat,
-                houflow_commands::houflow_connector_autostart,
-                houflow_commands::houflow_connector_logs,
-                houflow_commands::houflow_connector_commands,
-                houflow_commands::houflow_connector_sync_local_agents,
-                workbench_commands::workbench_begin_device_auth,
-                workbench_commands::workbench_poll_device_auth,
-                workbench_commands::workbench_get_session,
-                workbench_commands::workbench_list_projects,
-                workbench_commands::workbench_set_active_project,
-                workbench_commands::workbench_sign_out,
-                workbench_commands::workbench_space_list,
-                workbench_commands::workbench_space_usage,
-                workbench_commands::workbench_space_download_url,
-                workbench_commands::workbench_space_create_folder,
-                workbench_commands::workbench_space_presign_upload,
-                workbench_commands::workbench_space_complete_upload,
-                workbench_commands::workbench_space_delete_file,
-                workbench_commands::workbench_ai_list_assistants,
-                workbench_commands::workbench_ai_list_sessions,
-                workbench_commands::workbench_ai_create_session,
-                workbench_commands::workbench_ai_get_session,
-                workbench_commands::workbench_ai_send_message,
-                workbench_commands::workbench_open_suite,
-                workbench_commands::workbench_list_client_suites,
+                model_provider_commands::list_provider_models,
                 web::start_web_server,
                 web::stop_web_server,
                 web::get_web_server_status,
@@ -2524,6 +2464,5 @@ mod tauri_app {
 
 #[cfg(feature = "tauri-runtime")]
 pub use tauri_app::run;
-
 #[cfg(feature = "tauri-runtime")]
 pub(crate) use tauri_app::shut_down;

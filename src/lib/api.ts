@@ -90,6 +90,13 @@ import type {
   CursorModelsResult,
   QoderAuthStatus,
   CodexModelInfo,
+  CodexCatalogLookup,
+  CodexCatalogRequest,
+  CodexPlanPreview,
+  ProviderModelList,
+  ProviderModelsRequest,
+  CodexCatalogStatus,
+  CodexEndpointCatalogView,
   AgentSkillScope,
   AgentSkillLayout,
   AgentSkillItem,
@@ -195,8 +202,11 @@ import type {
   WebhookConfig,
   ModelProviderInfo,
   UpdateModelProviderResult,
-  PluginCheckSummary,
+  OpencodePluginList,
   OpenCodeCatalogProvider,
+  OpenCodeConnectKeyRequest,
+  OpenCodeCredentialChange,
+  OpenCodeIntegration,
   QuickMessage,
   OfficecliInfo,
   OfficecliSkill,
@@ -632,7 +642,6 @@ export async function acpUpdateAgentPreferences(
     enabled: boolean
     env: Record<string, string>
     config_json?: string | null
-    opencode_auth_json?: string | null
     codex_auth_json?: string | null
     codex_config_toml?: string | null
   }
@@ -642,7 +651,6 @@ export async function acpUpdateAgentPreferences(
     enabled: params.enabled,
     env: params.env,
     configJson: params.config_json ?? null,
-    opencodeAuthJson: params.opencode_auth_json ?? null,
     codexAuthJson: params.codex_auth_json ?? null,
     codexConfigToml: params.codex_config_toml ?? null,
   })
@@ -672,12 +680,15 @@ export async function acpUpdateAgentConfig(
   agentType: AgentType,
   params: {
     config_json?: string | null
-    opencode_auth_json?: string | null
     codex_auth_json?: string | null
     codex_config_toml?: string | null
-    /** Compact structured codex model list; backend regenerates the
-     * `model_catalog_json` catalog files from it (config.toml keys are patched
-     * into `codex_config_toml` text by the caller). */
+    /** The config.toml text the draft was loaded from: a key houhub manages
+     * (`model_catalog_json`, root `model` while a catalog is published) that
+     * differs from it was edited by hand, and the save is refused. */
+    codex_config_toml_baseline?: string | null
+    /** Compact structured codex model list. The backend publishes what it
+     * makes (catalog file, `model_catalog_json`, root `model`) through one
+     * commit; callers send config.toml without patching those keys. */
     codex_model_catalog?: string | null
     /** Codex sandbox / approval controls; merged onto the on-disk config.toml
      * server-side. Governs the turns codex starts itself (/goal, /review,
@@ -697,9 +708,9 @@ export async function acpUpdateAgentConfig(
   return getTransport().call("acp_update_agent_config", {
     agentType,
     configJson: params.config_json ?? null,
-    opencodeAuthJson: params.opencode_auth_json ?? null,
     codexAuthJson: params.codex_auth_json ?? null,
     codexConfigToml: params.codex_config_toml ?? null,
+    codexConfigTomlBaseline: params.codex_config_toml_baseline ?? null,
     codexModelCatalog: params.codex_model_catalog ?? null,
     codexSandbox: params.codex_sandbox ?? null,
     grokConfigToml: params.grok_config_toml ?? null,
@@ -809,59 +820,6 @@ export async function acpUpdateKimiCodeConfig(params: {
 }
 
 /**
- * List the models an API key + endpoint can access (GET `<baseUrl>/models`).
- * Validates the key and powers the Kimi settings model picker; throws with the
- * provider's error message on failure.
- */
-export async function acpFetchKimiModels(params: {
-  baseUrl: string
-  apiKey: string
-}): Promise<string[]> {
-  return getTransport().call("acp_fetch_kimi_models", {
-    baseUrl: params.baseUrl,
-    apiKey: params.apiKey,
-  })
-}
-
-/** Fetch model ids from an OpenAI-compatible endpoint for the model-provider UI. */
-export async function fetchOpenAiCompatibleModels(params: {
-  baseUrl: string
-  apiKey: string
-}): Promise<string[]> {
-  return getTransport().call("acp_fetch_kimi_models", {
-    baseUrl: params.baseUrl,
-    apiKey: params.apiKey,
-  })
-}
-
-/** Outcome of testing a model provider with a real chat completion. */
-export interface ModelProviderTestOutcome {
-  success: boolean
-  latencyMs: number
-  error: string | null
-  preview: string | null
-}
-
-/**
- * Probe a provider with a one-shot chat completion.
- *
- * Routed through the backend rather than the renderer: the desktop webview runs
- * on `tauri://localhost`, so a direct cross-origin POST to a provider endpoint
- * is blocked by CORS, and in server mode the key would have to live in the page.
- */
-export async function testModelProvider(params: {
-  baseUrl: string
-  apiKey: string
-  model: string
-}): Promise<ModelProviderTestOutcome> {
-  return getTransport().call("acp_test_model_provider", {
-    baseUrl: params.baseUrl,
-    apiKey: params.apiKey,
-    model: params.model,
-  })
-}
-
-/**
  * Apply a structured Pi config update. Merge-writes pi's native
  * `~/.pi/agent/settings.json` (`defaultProvider` / `defaultModel` /
  * `defaultThinkingLevel`) and, when an API key is supplied,
@@ -884,6 +842,9 @@ export async function acpUpdatePiConfig(params: {
     reasoning: boolean
     thinkingLevelMap: Record<string, string | null>
   }
+  /** The custom provider's whole model list (the chosen model always kept);
+   * omit to add the model to whatever the list holds. */
+  customModels?: string[]
 }): Promise<void> {
   return getTransport().call("acp_update_pi_config", {
     provider: params.provider,
@@ -893,6 +854,7 @@ export async function acpUpdatePiConfig(params: {
     customBaseUrl: params.customBaseUrl ?? null,
     customApi: params.customApi ?? null,
     modelReasoning: params.modelReasoning ?? null,
+    customModels: params.customModels ?? null,
   })
 }
 
@@ -1089,13 +1051,13 @@ export type AntigravityLoginOutcome = {
   /** The agent's own words when it refused; `null` on success. */
   message: string | null
   /**
-   * Whether the same link still works. True only when HouHub rejected the paste
+   * Whether the same link still works. True only when houhub rejected the paste
    * itself — the agent never saw it, so the consent already given is still good
    * and only the paste needs fixing. False once the redirect went out: the
    * agent's listener answers exactly one request.
    */
   retryable: boolean
-  /** Where the credential landed, when HouHub can name the file. */
+  /** Where the credential landed, when houhub can name the file. */
   credentialPath: string | null
 }
 
@@ -1103,7 +1065,7 @@ export type AntigravityLoginOutcome = {
  * Begin signing in to Antigravity on a machine with no browser.
  *
  * Antigravity authenticates through a loopback browser flow the AGENT runs, so
- * on a headless server (HouHub deployed on Linux, no desktop) the first session
+ * on a headless server (houhub deployed on Linux, no desktop) the first session
  * opens a browser that does not exist and then blocks for five minutes. This
  * runs the same flow out of band and hands back the link, so the consent can
  * happen in whatever browser the user does have.
@@ -1127,9 +1089,9 @@ export async function acpAntigravityLoginStart(
  * Finish that sign-in with the address the browser was redirected to.
  *
  * That address points at `127.0.0.1` on the *server*, which the user's browser
- * cannot reach — HouHub can, so it performs the redirect on their behalf. Only
+ * cannot reach — houhub can, so it performs the redirect on their behalf. Only
  * the OAuth parameters are taken from the paste; the target itself comes from
- * the link HouHub issued.
+ * the link houhub issued.
  */
 export async function acpAntigravityLoginFinish(
   handle: string,
@@ -1508,7 +1470,7 @@ export async function acpPreflight(
   })
 }
 
-export async function opencodeListPlugins(): Promise<PluginCheckSummary> {
+export async function opencodeListPlugins(): Promise<OpencodePluginList> {
   return getTransport().call("opencode_list_plugins", {})
 }
 
@@ -1532,20 +1494,90 @@ export async function codexBundledCatalog(
   })
 }
 
-export async function opencodeInstallPlugins(
-  taskId: string,
-  names?: string[] | null
-): Promise<void> {
-  return getTransport().call("opencode_install_plugins", {
-    names: names ?? null,
-    taskId,
+/** Every integration OpenCode 2 knows (providers, mostly), with how each is
+ *  connected. Asked of OpenCode itself, with the environment a session would
+ *  launch it with; never carries a secret. Needs OpenCode 2 installed. */
+export async function opencodeListIntegrations(): Promise<
+  OpenCodeIntegration[]
+> {
+  return getTransport().call("opencode_list_integrations", {})
+}
+
+/** Store an API key for an OpenCode integration in OpenCode's own credential
+ *  store. Returns the integrations as that leaves them, and how many running
+ *  OpenCode sessions need a restart to use it. */
+export async function opencodeConnectKey(
+  request: OpenCodeConnectKeyRequest
+): Promise<OpenCodeCredentialChange> {
+  return getTransport().call("opencode_connect_key", { request })
+}
+
+/** Remove every credential OpenCode stores for an integration. */
+export async function opencodeDisconnectProvider(
+  integrationId: string
+): Promise<OpenCodeCredentialChange> {
+  return getTransport().call("opencode_disconnect_provider", {
+    integrationId,
   })
 }
 
-export async function opencodeUninstallPlugin(
-  name: string
-): Promise<PluginCheckSummary> {
-  return getTransport().call("opencode_uninstall_plugin", { name })
+/** Fetch a provider's model list for the settings page, without publishing
+ *  it (the next save does). A native catalog is checked by the codex that
+ *  would run; the answer is cached for that save. */
+export async function codexFetchEndpointCatalog(
+  params: CodexCatalogRequest
+): Promise<CodexEndpointCatalogView> {
+  return getTransport().call("codex_fetch_endpoint_catalog", { params })
+}
+
+/** What saving this Codex draft would make of the keys houhub manages. Never
+ *  fetches, checks or writes. */
+export async function codexCatalogPlanPreview(params: {
+  configToml: string
+  authJson?: string | null
+  modelList?: string | null
+}): Promise<CodexPlanPreview> {
+  return getTransport().call("codex_catalog_plan_preview", { params })
+}
+
+/** The published provider list, when it answers this request. */
+export async function codexEndpointCatalogPublished(
+  params: CodexCatalogRequest
+): Promise<CodexCatalogLookup> {
+  return getTransport().call("codex_endpoint_catalog_published", { params })
+}
+
+/** The cached answer to exactly this request. Never fetches. */
+export async function codexEndpointCatalogCached(
+  params: CodexCatalogRequest
+): Promise<CodexCatalogLookup> {
+  return getTransport().call("codex_endpoint_catalog_cached", { params })
+}
+
+/** What is published under houhub's CODEX_HOME, and how refreshing it goes. */
+export async function codexEndpointCatalogStatus(): Promise<CodexCatalogStatus> {
+  return getTransport().call("codex_endpoint_catalog_status", {})
+}
+
+/** "Refresh now": fetch the provider list whatever its age and publish what
+ *  the current settings make of it. */
+export async function codexRefreshEndpointCatalog(): Promise<CodexCatalogStatus> {
+  return getTransport().call("codex_refresh_endpoint_catalog", {})
+}
+
+/** Declare `spec` in OpenCode's `plugins`; OpenCode installs a package plugin
+ *  itself the next time a session starts. */
+export async function opencodeAddPlugin(
+  spec: string
+): Promise<OpencodePluginList> {
+  return getTransport().call("opencode_add_plugin", { spec })
+}
+
+/** Remove every declaration of `spec` from OpenCode's plugin lists. */
+export async function opencodeRemovePlugin(
+  spec: string
+): Promise<OpencodePluginList> {
+  return getTransport().call("opencode_remove_plugin", { spec })
 }
 
 export async function acpListAgentSkills(params: {
@@ -4083,12 +4115,6 @@ export async function workTaskStart(id: number): Promise<void> {
   return getTransport().call("work_task_start", { id })
 }
 
-export async function workTaskStartAll(
-  folderId: number | null
-): Promise<number> {
-  return getTransport().call("work_task_start_all", { folderId })
-}
-
 /**
  * failed → queued. `note` (optional) reaches the retry prompt, and `blocks`
  * carries whatever the note box attached out of band (images, pasted bytes) —
@@ -4197,30 +4223,37 @@ export async function workTaskMerge(
   })
 }
 
-/** Accept a reviewed forge-sourced task by pushing it back: an issue's task
- *  publishes its branch and opens (or adopts) a pull request, a pull request's
- *  task pushes onto that pull request's own branch (where `title`/`draft` are
- *  ignored — nothing is created). Resolves with the pull request URL.
+/** Accept a reviewed task by delivering it to a forge: an issue's task — or a
+ *  task with no forge provenance, on its project's `origin` — publishes its
+ *  branch and opens (or adopts) a pull request; a pull request's task pushes
+ *  onto that pull request's own branch, and so does a task whose earlier
+ *  delivery opened one it stayed in review after (`title`/`draft` are ignored
+ *  there — nothing is created). Resolves with the pull request URL.
  *
  *  Unlike the merge dispatch this awaits the WHOLE operation — no agent runs,
  *  just a push and two REST calls — so a rejection is the real reason and the
  *  task is already back in review by the time it surfaces.
  *
- *  `deleteWorktree` takes the checkout along once the delivery lands — the
- *  same offer the merge and complete acceptances make. It rides on the
- *  delivery: a removal that fails leaves a retryable cleanup mark on the card
- *  and this call still resolves with the URL. */
+ *  `markDone` finishes the task; `false` keeps it in review with the pull
+ *  request recorded, for another round on the same branch.
+ *
+ *  `deleteWorktree` takes the checkout along once a delivery that finishes
+ *  the task lands — the same offer the merge and complete acceptances make.
+ *  It rides on the delivery: a removal that fails leaves a retryable cleanup
+ *  mark on the card and this call still resolves with the URL. */
 export async function workTaskDeliverPr(
   id: number,
   prTitle: string | null,
   draft: boolean,
-  deleteWorktree: boolean
+  deleteWorktree: boolean,
+  markDone: boolean
 ): Promise<string> {
   return getTransport().call("work_task_deliver_pr", {
     id,
     prTitle,
     draft,
     deleteWorktree,
+    markDone,
   })
 }
 
@@ -5470,19 +5503,15 @@ export async function createModelProvider(params: {
   name: string
   apiUrl: string
   apiKey: string
-  agentType?: string
-  agentTypes?: string[]
+  agentType: string
   model?: string | null
-  models?: string[]
 }): Promise<ModelProviderInfo> {
   return getTransport().call("create_model_provider", {
     name: params.name,
     apiUrl: params.apiUrl,
     apiKey: params.apiKey,
-    agentType: params.agentType ?? null,
-    agentTypes: params.agentTypes ?? null,
+    agentType: params.agentType,
     model: params.model ?? null,
-    models: params.models ?? null,
   })
 }
 
@@ -5492,9 +5521,7 @@ export async function updateModelProvider(params: {
   apiUrl?: string | null
   apiKey?: string | null
   agentType?: string | null
-  agentTypes?: string[] | null
   model?: string | null
-  models?: string[] | null
 }): Promise<UpdateModelProviderResult> {
   return getTransport().call("update_model_provider", {
     id: params.id,
@@ -5502,14 +5529,28 @@ export async function updateModelProvider(params: {
     apiUrl: params.apiUrl ?? null,
     apiKey: params.apiKey ?? null,
     agentType: params.agentType ?? null,
-    agentTypes: params.agentTypes ?? null,
     model: params.model ?? null,
-    models: params.models ?? null,
   })
 }
 
 export async function deleteModelProvider(id: number): Promise<void> {
   return getTransport().call("delete_model_provider", { id })
+}
+
+/** Keep the /model picker ids houhub adds for an unbound Claude agent; returns
+ *  how many running sessions now need a restart. */
+export async function acpUpdateClaudeModelPicker(
+  models: string[]
+): Promise<number> {
+  return getTransport().call("acp_update_claude_model_picker", { models })
+}
+
+/** The models a provider lists, asked the way the agent itself would ask.
+ *  Fails with a `providerModels.<code>` i18n key. */
+export async function listProviderModels(
+  params: ProviderModelsRequest
+): Promise<ProviderModelList> {
+  return getTransport().call("list_provider_models", { params })
 }
 
 // ─── Delegation settings ───────────────────────────────────────────────
@@ -6149,88 +6190,12 @@ export async function rollbackToSnapshot(snapshotId: string): Promise<unknown> {
   return getTransport().call("backup_rollback", { snapshotId })
 }
 
-/** Discard a staged restore that has not yet been applied. */
+/**
+ * Discard a staged restore that was never applied. The escape hatch when the
+ * restart after staging never happened and every retry hits `alreadyPending`.
+ */
 export async function discardPendingRestore(): Promise<boolean> {
   return getTransport().call<boolean>("backup_discard_pending", {})
-}
-
-// Houflow managed gateway and local connector integration.
-
-export interface HouflowManagedGatewaySyncResult {
-  providers: ModelProviderInfo[]
-  boundAgentTypes: AgentType[]
-  skippedAgentTypes: AgentType[]
-}
-
-export async function syncHouflowManagedGateway(params: {
-  providerName?: string | null
-  providerType?: string | null
-  apiUrl: string
-  apiKey: string
-  defaultModel?: string | null
-  bindAgents?: boolean | null
-  models: string[]
-}): Promise<HouflowManagedGatewaySyncResult> {
-  return getTransport().call("houflow_sync_managed_gateway", {
-    providerName: params.providerName ?? null,
-    providerType: params.providerType ?? null,
-    apiUrl: params.apiUrl,
-    apiKey: params.apiKey,
-    defaultModel: params.defaultModel ?? null,
-    bindAgents: params.bindAgents ?? null,
-    models: params.models,
-  })
-}
-
-export interface HouflowConnectorLocalAgentSyncInput {
-  localAgentRef: string
-  provider: string
-  name: string
-  runtimeProvider?: string | null
-  runtimeRunner?: boolean | null
-  workingDirectory?: string | null
-  skillsDirectory?: string | null
-  useDefaultSkillsDirectory?: boolean | null
-  capabilities?: string[] | null
-}
-
-export interface HouflowConnectorSyncLocalAgentsResult {
-  agents: unknown[]
-  heartbeat: unknown | null
-  status: unknown
-}
-
-export interface HouflowConnectorStatusResult {
-  installed: boolean
-  executable: string | null
-  version: unknown | null
-  snapshot: unknown | null
-  diagnosis: unknown | null
-  error: string | null
-}
-
-export async function getHouflowConnectorStatus(): Promise<HouflowConnectorStatusResult> {
-  return getTransport().call("houflow_connector_status")
-}
-
-export async function startHouflowConnector(): Promise<unknown> {
-  return getTransport().call("houflow_connector_up", undefined, {
-    timeoutMs: 30_000,
-  })
-}
-
-export async function syncHouflowConnectorLocalAgents(params: {
-  agents: HouflowConnectorLocalAgentSyncInput[]
-  heartbeat?: boolean | null
-}): Promise<HouflowConnectorSyncLocalAgentsResult> {
-  return getTransport().call(
-    "houflow_connector_sync_local_agents",
-    {
-      agents: params.agents,
-      heartbeat: params.heartbeat ?? true,
-    },
-    { timeoutMs: 120_000 }
-  )
 }
 
 // ── Forge workbench (Issues/PR) ────────────────────────────────────────────
@@ -6611,4 +6576,126 @@ export async function forgeAutoScanNow(
   folderId: number
 ): Promise<ForgeAutoScanReport> {
   return getTransport().call("forge_auto_scan_now", { folderId })
+}
+
+export interface ModelProviderTestOutcome {
+  success: boolean
+  latencyMs: number
+  error: string | null
+  preview: string | null
+}
+
+export interface HouflowManagedGatewaySyncResult {
+  providers: ModelProviderInfo[]
+  boundAgentTypes: AgentType[]
+  skippedAgentTypes: AgentType[]
+}
+
+export interface HouflowConnectorStatusResult {
+  installed: boolean
+  executable: string | null
+  version: unknown | null
+  snapshot: unknown | null
+  diagnosis: unknown | null
+  error: string | null
+}
+
+export interface HouflowConnectorLocalAgentSyncInput {
+  localAgentRef: string
+  provider: string
+  name: string
+  runtimeProvider?: string | null
+  runtimeRunner?: boolean | null
+  workingDirectory?: string | null
+  skillsDirectory?: string | null
+  useDefaultSkillsDirectory?: boolean | null
+  capabilities?: string[] | null
+}
+
+export interface HouflowConnectorSyncLocalAgentsResult {
+  agents: unknown[]
+  heartbeat: unknown | null
+  status: unknown
+}
+
+export async function fetchOpenAiCompatibleModels(params: {
+  baseUrl: string
+  apiKey: string
+}): Promise<string[]> {
+  return getTransport().call("acp_fetch_kimi_models", {
+    baseUrl: params.baseUrl,
+    apiKey: params.apiKey,
+  })
+}
+
+export async function testModelProvider(params: {
+  baseUrl: string
+  apiKey: string
+  model: string
+}): Promise<ModelProviderTestOutcome> {
+  return getTransport().call("acp_test_model_provider", {
+    baseUrl: params.baseUrl,
+    apiKey: params.apiKey,
+    model: params.model,
+  })
+}
+
+export async function acpFetchKimiModels(params: {
+  baseUrl: string
+  apiKey: string
+}): Promise<string[]> {
+  return getTransport().call("acp_fetch_kimi_models", {
+    baseUrl: params.baseUrl,
+    apiKey: params.apiKey,
+  })
+}
+
+export async function workTaskStartAll(
+  folderId: number | null
+): Promise<number> {
+  return getTransport().call("work_task_start_all", { folderId })
+}
+
+export async function syncHouflowManagedGateway(params: {
+  providerName?: string | null
+  providerType?: string | null
+  apiUrl: string
+  apiKey: string
+  defaultModel?: string | null
+  bindAgents?: boolean | null
+  models: string[]
+}): Promise<HouflowManagedGatewaySyncResult> {
+  return getTransport().call("houflow_sync_managed_gateway", {
+    providerName: params.providerName ?? null,
+    providerType: params.providerType ?? null,
+    apiUrl: params.apiUrl,
+    apiKey: params.apiKey,
+    defaultModel: params.defaultModel ?? null,
+    bindAgents: params.bindAgents ?? null,
+    models: params.models,
+  })
+}
+
+export async function getHouflowConnectorStatus(): Promise<HouflowConnectorStatusResult> {
+  return getTransport().call("houflow_connector_status")
+}
+
+export async function startHouflowConnector(): Promise<unknown> {
+  return getTransport().call("houflow_connector_up", undefined, {
+    timeoutMs: 30_000,
+  })
+}
+
+export async function syncHouflowConnectorLocalAgents(params: {
+  agents: HouflowConnectorLocalAgentSyncInput[]
+  heartbeat?: boolean | null
+}): Promise<HouflowConnectorSyncLocalAgentsResult> {
+  return getTransport().call(
+    "houflow_connector_sync_local_agents",
+    {
+      agents: params.agents,
+      heartbeat: params.heartbeat ?? true,
+    },
+    { timeoutMs: 120_000 }
+  )
 }

@@ -146,7 +146,7 @@ describe("parseHouHubReferenceUri", () => {
     })
   })
 
-  it("parses a skill uri, preserving its literal invocation prefix", () => {
+  it("parses a skill uri, moving the label's leading `/`·`$` into the prefix", () => {
     expect(
       parseHouHubReferenceUri("houhub://skill/review", "/review")
     ).toMatchObject({
@@ -154,9 +154,12 @@ describe("parseHouHubReferenceUri", () => {
       id: "review",
       label: "review",
       uri: "houhub://skill/review",
+      // The stripped trigger is kept so re-serializing the badge emits the
+      // same `/review` token it was parsed from.
       meta: { invocationPrefix: "/" },
     })
-    // `$` must stay `$` when a restored badge is serialized again.
+    // The `$` prefix ($skill / Codex expert) is stripped — and kept — the same
+    // way, so a `$deploy` token never re-serializes to `/deploy`.
     expect(
       parseHouHubReferenceUri("houhub://skill/deploy", "$deploy")
     ).toMatchObject({
@@ -168,6 +171,7 @@ describe("parseHouHubReferenceUri", () => {
   it("falls back to the bare id for an empty skill label", () => {
     expect(parseHouHubReferenceUri("houhub://skill/deploy", "")).toMatchObject({
       label: "deploy",
+      // No literal token to read a trigger from → serializer's `/` default.
       meta: null,
     })
   })
@@ -238,5 +242,22 @@ describe("an embedded reference uri that carries its ref", () => {
       label: "Page screenshot",
       uri,
     })
+  })
+})
+
+it("preserves MiniMax Code agent and session references", () => {
+  expect(
+    parseHouHubReferenceUri("houhub://agent/minimax_code", "@MiniMax Code")
+  ).toMatchObject({
+    refType: "agent",
+    label: "MiniMax Code",
+    meta: { agentType: "minimax_code" },
+  })
+  expect(
+    parseHouHubReferenceUri("houhub://session/minimax_code_session-123", "")
+  ).toMatchObject({
+    refType: "session",
+    id: "minimax_code_session-123",
+    meta: { agentType: "minimax_code" },
   })
 })

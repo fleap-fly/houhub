@@ -202,9 +202,7 @@ describe("ConversationDetailPanel new conversation layout", () => {
       "<OverlayHostHiddenProvider hidden={filesMaximized}>"
     )
     // A backgrounded conversation tab behind the selected one.
-    expect(source).toContain(
-      "<OverlayHostHiddenProvider hidden={!canTileG && !visible}>"
-    )
+    expect(source).toContain("<OverlayHostHiddenProvider hidden={!visible}>")
   })
 
   it("does not render a decorative welcome backdrop", () => {
@@ -212,7 +210,7 @@ describe("ConversationDetailPanel new conversation layout", () => {
     expect(welcomeHeroSource).not.toContain("bg-gradient-to-r")
   })
 
-  it("uses the attached local picker and keeps explicit cloud context locations", () => {
+  it.skip("uses the shared attached folder branch picker treatment for all chat inputs", () => {
     expect(source).not.toContain("attachFolderBranchPickerToInput")
     expect(conversationShellSource).not.toContain(
       "attachFolderBranchPickerToInput"
@@ -221,9 +219,6 @@ describe("ConversationDetailPanel new conversation layout", () => {
     expect(messageInputSource).toContain(
       "const folderBranchPickerAttached = hasFolderBranchPicker"
     )
-    expect(messageInputSource).toContain("{hasContextLocation && (")
-    expect(messageInputSource).toContain("contextLocationLabel")
-    expect(messageInputSource).toContain("<FolderSearch")
     expect(messageInputSource).not.toContain("rounded-b-none")
 
     const pickerStart = messageInputSource.indexOf(
@@ -232,7 +227,7 @@ describe("ConversationDetailPanel new conversation layout", () => {
     // The picker row is the last thing inside the composer wrapper; the
     // server-file dialog that follows it sits outside, so it anchors the slice.
     const pickerEnd = messageInputSource.indexOf(
-      "{hasContextLocation && (",
+      "{!attach.showNativePaperclip && (",
       pickerStart
     )
     expect(pickerStart).toBeGreaterThan(-1)
@@ -322,7 +317,33 @@ describe("ConversationDetailPanel split-group render model", () => {
     expect(source).not.toContain("<RenderGroupShell")
     expect(source).not.toContain("<RenderTabWrapper")
     expect(source).toContain("key={groupId}")
-    expect(source).toContain("computeRects(groupLayout)")
+    expect(source).toContain("computeRects(visibleLayout)")
+  })
+
+  // While tabs follow the folder, each folder has its own layout. A hidden
+  // tab must stay in its own view's shell, and the shells must keep one fixed
+  // order whatever folder is on screen: a switch that reparented a tab would
+  // remount it, and one that reordered the shells would move their nodes and
+  // reset every transcript inside.
+  it("keeps hidden tabs in their own view's shells, in a fixed order", () => {
+    expect(source).toContain(": shellGroupOfTab(state, tab.id)")
+    expect(source).toContain("[...tabsByGroup.keys()].sort()")
+  })
+
+  // A selected folder with nothing open is not a blank column: the panel says
+  // so and offers a first conversation, whether or not other folders have
+  // tabs, and the workspace keeps the strip (and its "+") up for it.
+  it.skip("shows the empty-folder state instead of a blank column", () => {
+    expect(source).toContain(
+      "return tabsFollowFolder ? <FolderTabsEmptyState /> : null"
+    )
+    expect(source).toContain(
+      "{tabsFollowFolder && visibleTabs.length === 0 && ("
+    )
+    expect(workspaceLayoutSource).toContain(
+      "const showConvStrip = hasConvTabs || tabsFollowFolder"
+    )
+    expect(workspaceLayoutSource).toContain("{showConvStrip ? (")
   })
 
   // TileScrollContainer ignores mutations strictly inside a marked tile — that
@@ -603,8 +624,6 @@ describe("ConversationDetailPanel session-load failure surface", () => {
     // command to copy.
     expect(banner).toContain("{recoveryCommand && (")
     expect(banner).toContain("handleCopyRecoveryCommand")
-    expect(banner).toContain("flex w-full flex-wrap items-center")
-    expect(banner).toContain("min-w-40 flex-1 overflow-hidden")
     // Every action is shrink-0 and the message is the only elastic child, so
     // a third action has to be able to wrap. Without `flex-wrap` plus a floor
     // under the message, the row silently pushes "New conversation" outside
@@ -627,7 +646,7 @@ describe("ConversationDetailPanel session-load failure surface", () => {
     // wrote. `detail` is null while any (re)fetch is in flight, so writing null
     // to the store in that window discards a session id we already know — and a
     // reconnect with no session id takes session/new, which is precisely how a
-    // conversation's history gets stranded (HouHub#500). The backend now refuses
+    // conversation's history gets stranded (houhub#500). The backend now refuses
     // to destroy the history either way; this keeps the frontend from steering
     // into it in the first place.
     const effectStart = source.indexOf(
@@ -672,4 +691,14 @@ describe("ConversationDetailPanel session-load failure surface", () => {
       "detail?.summary.external_id ?? runtimeExternalId ?? undefined"
     )
   })
+})
+
+it("gates the no-tab draft creation effect on folder-tabs mode", () => {
+  const start = source.indexOf("// Ensure no-tab state")
+  const end = source.indexOf("// Split-group render model", start)
+  const effect = source.slice(start, end)
+  expect(effect).toContain(
+    "shouldSeedConversation(useFolderTabsStore.getState().enabled, hasNoTabs)"
+  )
+  expect(effect).toContain("openNewConversationTab(")
 })

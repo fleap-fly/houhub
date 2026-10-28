@@ -1,44 +1,28 @@
 use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
-
 use std::fs::OpenOptions;
-
 use std::hash::{Hash, Hasher};
-
 use std::io::Write;
-
 use std::path::{Component, Path, PathBuf};
-
 use std::process::Stdio;
-
 use std::sync::LazyLock;
-
 use std::time::UNIX_EPOCH;
 
 use base64::Engine as _;
-
 use ignore::WalkBuilder;
-
 use serde::Serialize;
 
 use tokio::sync::Semaphore;
-
 use walkdir::WalkDir;
 
 #[cfg(feature = "tauri-runtime")]
 use tauri::Manager;
 
 use crate::app_error::AppCommandError;
-
 use crate::db::error::DbError;
-
 use crate::db::service::{folder_group_service, folder_service};
-
 use crate::db::AppDatabase;
-
 use crate::models::GitCredentials;
-
 use crate::models::{FolderDetail, FolderGroupDetail, FolderHistoryEntry, SidebarLayoutEntry};
-
 use crate::web::event_bridge::EventEmitter;
 
 /// Configure a git command for remote operations:
@@ -158,7 +142,11 @@ pub struct GitStatusEntry {
 pub struct GitBranchList {
     pub local: Vec<String>,
     pub remote: Vec<String>,
+    /// Branches checked out in some *other* worktree than the queried path.
     pub worktree_branches: Vec<String>,
+    /// The branch checked out in the repo's main working tree, when that is not
+    /// the queried path itself. It appears in `worktree_branches` like any other
+    /// — but its checkout is the repo, so it can neither be deleted nor removed.
     pub main_worktree_branch: Option<String>,
 }
 
@@ -174,11 +162,18 @@ pub struct WorktreeResolution {
     pub folder_id: Option<i32>,
 }
 
+/// What [`git_remove_worktree_core`] actually did, so the caller can report it
+/// without re-probing git.
 #[derive(Debug, Serialize)]
 pub struct GitWorktreeRemoval {
+    /// The worktree directory that was removed — `None` when the branch had no
+    /// registered worktree left (a retry after a partially applied removal).
     pub worktree_path: Option<String>,
+    /// Whether the branch was deleted too (always `false` when not requested).
     pub branch_deleted: bool,
+    /// The registered folder dropped along with the directory, if there was one.
     pub folder_id: Option<i32>,
+    /// Conversations re-parented onto the project folder by that drop.
     pub reparented: u32,
 }
 
@@ -477,7 +472,10 @@ pub(crate) fn ensure_pushable_branch_name(branch: &str) -> Result<(), AppCommand
 /// `show-ref --verify` deliberately, NOT `rev-parse --verify`: the latter takes
 /// a revision EXPRESSION, so `main^` and `main@{1}` would both resolve and slip
 /// through. `show-ref --verify` only accepts an exact ref path.
-async fn ensure_local_branch_exists(path: &str, branch: &str) -> Result<(), AppCommandError> {
+async fn ensure_local_branch_exists(
+    path: &str,
+    branch: &str,
+) -> Result<(), AppCommandError> {
     let output = crate::process::tokio_command("git")
         .args([
             "show-ref",
@@ -490,9 +488,8 @@ async fn ensure_local_branch_exists(path: &str, branch: &str) -> Result<(), AppC
         .await
         .map_err(AppCommandError::io)?;
     if !output.status.success() {
-        return Err(
-            AppCommandError::not_found("Branch not found").with_detail(format!("branch={branch}"))
-        );
+        return Err(AppCommandError::not_found("Branch not found")
+            .with_detail(format!("branch={branch}")));
     }
     Ok(())
 }
@@ -968,10 +965,7 @@ pub async fn delete_folder_group_core(
     if !removed {
         return Err(AppCommandError::not_found("Folder group not found"));
     }
-    emit_folder_group_change(
-        emitter,
-        crate::web::event_bridge::FolderGroupChange::Deleted { id: group_id },
-    );
+    emit_folder_group_change(emitter, crate::web::event_bridge::FolderGroupChange::Deleted { id: group_id });
     // Members moved back to the top level, so their rows changed too.
     emit_folder_group_change(emitter, crate::web::event_bridge::FolderGroupChange::Layout);
     Ok(())
@@ -1383,7 +1377,10 @@ pub struct GitHeadInfo {
     pub short_sha: Option<String>,
 }
 
-async fn git_output(path: &str, args: &[&str]) -> Result<std::process::Output, AppCommandError> {
+async fn git_output(
+    path: &str,
+    args: &[&str],
+) -> Result<std::process::Output, AppCommandError> {
     crate::process::tokio_command("git")
         .args(args)
         .current_dir(path)
@@ -2525,7 +2522,7 @@ pub async fn git_status(
         .filter(|l| !l.is_empty())
         .map(|line| {
             let status = line[..2].trim().to_string();
-            let file = unquote_git_path(&line[3..]);
+            let file = unquote_status_path(&line[3..]);
             GitStatusEntry { status, file }
         })
         .collect();
@@ -2557,7 +2554,11 @@ pub async fn git_diff(path: String, file: Option<String>) -> Result<String, AppC
         args.push(f.clone());
     }
 
+    // Unquoted paths, as `git_status` asks for: the overview's file list is
+    // read from these headers, and its "view diff" / "open file" ask for the
+    // file by the name found there — an octal-escaped one names no file.
     let output = crate::process::tokio_command("git")
+        .args(["-c", "core.quotePath=false"])
         .args(&args)
         .current_dir(&path)
         .output()
@@ -2572,6 +2573,7 @@ pub async fn git_diff(path: String, file: Option<String>) -> Result<String, AppC
             fallback_args.push(f.clone());
         }
         let fallback = crate::process::tokio_command("git")
+            .args(["-c", "core.quotePath=false"])
             .args(&fallback_args)
             .current_dir(&path)
             .output()
@@ -2609,7 +2611,9 @@ pub async fn git_diff_with_branch(
         args.push(f.clone());
     }
 
+    // Unquoted paths — see `git_diff`.
     let output = crate::process::tokio_command("git")
+        .args(["-c", "core.quotePath=false"])
         .args(&args)
         .current_dir(&path)
         .output()
@@ -2647,7 +2651,9 @@ pub async fn git_show_diff(
         args.push(f.clone());
     }
 
+    // Unquoted paths — see `git_diff`.
     let output = crate::process::tokio_command("git")
+        .args(["-c", "core.quotePath=false"])
         .args(&args)
         .current_dir(&path)
         .output()
@@ -2754,9 +2760,7 @@ pub async fn git_show_file_base64(
         .map_err(AppCommandError::io)?;
 
     let oid = if oid_output.status.success() {
-        String::from_utf8_lossy(&oid_output.stdout)
-            .trim()
-            .to_string()
+        String::from_utf8_lossy(&oid_output.stdout).trim().to_string()
     } else {
         String::new()
     };
@@ -2803,9 +2807,7 @@ pub async fn git_show_file_base64(
         .map_err(|_| {
             AppCommandError::external_command(
                 "git cat-file returned an unreadable object size",
-                String::from_utf8_lossy(&size_output.stdout)
-                    .trim()
-                    .to_string(),
+                String::from_utf8_lossy(&size_output.stdout).trim().to_string(),
             )
         })?;
 
@@ -3234,8 +3236,8 @@ pub async fn git_list_all_branches(path: String) -> Result<GitBranchList, AppCom
         _ => vec![],
     };
 
-    // Parse worktree entries, excluding the current worktree (path itself),
-    // while retaining the repository checkout's branch for removal guards.
+    // Worktree entries, excluding the queried path's own checkout. git reports
+    // the main working tree first, which is how it is singled out here.
     let (worktree_branches, main_worktree_branch) = match wt_output {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -3338,17 +3340,7 @@ pub async fn resolve_worktree_folder_core(
     };
 
     let canonical_wt = std::fs::canonicalize(&wt_path).unwrap_or_else(|_| PathBuf::from(&wt_path));
-
-    let folders = folder_service::list_all_folder_details(&db.conn)
-        .await
-        .map_err(AppCommandError::from)?;
-    let folder_id = folders
-        .into_iter()
-        .find(|f| {
-            let canon = std::fs::canonicalize(&f.path).unwrap_or_else(|_| PathBuf::from(&f.path));
-            canon == canonical_wt
-        })
-        .map(|f| f.id);
+    let folder_id = folder_at_path(db, &canonical_wt).await?.map(|f| f.id);
 
     Ok(WorktreeResolution {
         path: Some(canonical_wt.to_string_lossy().to_string()),
@@ -3356,6 +3348,11 @@ pub async fn resolve_worktree_folder_core(
     })
 }
 
+/// The registered folder whose path points at `path`, if any. Both sides are
+/// canonicalized so a symlinked or non-canonical registration still matches the
+/// path git reports — but the folder is returned with its own recorded path,
+/// which is the one the rest of the app (and every conversation's `origin_cwd`)
+/// is written in terms of.
 async fn folder_at_path(
     db: &AppDatabase,
     path: &Path,
@@ -3363,10 +3360,9 @@ async fn folder_at_path(
     let folders = folder_service::list_all_folder_details(&db.conn)
         .await
         .map_err(AppCommandError::from)?;
-    Ok(folders.into_iter().find(|folder| {
-        let canonical =
-            std::fs::canonicalize(&folder.path).unwrap_or_else(|_| PathBuf::from(&folder.path));
-        canonical == path
+    Ok(folders.into_iter().find(|f| {
+        let canon = std::fs::canonicalize(&f.path).unwrap_or_else(|_| PathBuf::from(&f.path));
+        canon == path
     }))
 }
 
@@ -3380,6 +3376,29 @@ pub async fn resolve_worktree_folder(
     resolve_worktree_folder_core(&db, repo_path, branch).await
 }
 
+/// Remove the git worktree that has `branch_name` checked out, optionally
+/// deleting the branch and the worktree's registered folder with it.
+///
+/// This is the only way a worktree branch can be deleted at all: `git branch -d`
+/// refuses point blank while a worktree holds the ref ("cannot delete branch 'x'
+/// used by worktree at '…'"), so the checkout has to go first.
+///
+/// Order is load-bearing and each step is tolerant of already having been done,
+/// because a partially applied removal is retried by re-calling this with
+/// `force`:
+/// 1. `worktree remove` (`--force` also discards uncommitted/untracked files).
+///    A branch with no worktree left is not an error — it is what a retry sees.
+/// 2. When `delete_branch`, the folder convergence runs *before* the branch is
+///    deleted, so a refused `branch -d` doesn't strand a folder pointing at a
+///    directory that is already gone.
+/// 3. `branch -d` (or `-D` under `force`, which a worktree branch normally needs
+///    since its commits are unmerged).
+///
+/// Refused outright while a to-do task is mid-run or mid-merge inside the
+/// worktree — `--force` would otherwise delete a live agent's working tree.
+///
+/// `source_folder_id` is the folder the caller is acting from; it only supplies
+/// the re-parent target when the worktree folder has no recorded root.
 pub async fn git_remove_worktree_core(
     emitter: &EventEmitter,
     db: &AppDatabase,
@@ -3390,6 +3409,7 @@ pub async fn git_remove_worktree_core(
     force: bool,
 ) -> Result<GitWorktreeRemoval, AppCommandError> {
     ensure_git_repo(&repo_path)?;
+
     let listed = crate::process::tokio_command("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(&repo_path)
@@ -3399,13 +3419,14 @@ pub async fn git_remove_worktree_core(
     if !listed.status.success() {
         return Err(git_command_error("worktree list", &listed.stderr));
     }
-
     let entries = parse_worktrees(&String::from_utf8_lossy(&listed.stdout));
+    // `git worktree list` always reports the main working tree first.
     let main_path = entries.first().map(|(path, _)| path.clone());
     let hosting = entries
         .into_iter()
         .find(|(_, branch)| branch.as_deref() == Some(branch_name.as_str()))
         .map(|(path, _)| path);
+
     let mut removal = GitWorktreeRemoval {
         worktree_path: None,
         branch_deleted: false,
@@ -3414,14 +3435,16 @@ pub async fn git_remove_worktree_core(
     };
 
     if let Some(worktree_path) = hosting {
-        let canonical =
-            std::fs::canonicalize(&worktree_path).unwrap_or_else(|_| PathBuf::from(&worktree_path));
+        let canonical = std::fs::canonicalize(&worktree_path)
+            .unwrap_or_else(|_| PathBuf::from(&worktree_path));
         if main_path.as_deref() == Some(worktree_path.as_str()) {
             return Err(
                 AppCommandError::invalid_input("The main working tree cannot be removed")
                     .with_detail(worktree_path),
             );
         }
+        // Removing the tree the caller is working in would pull the ground out
+        // from under the open session; git's own refusal is less legible.
         let canonical_repo =
             std::fs::canonicalize(&repo_path).unwrap_or_else(|_| PathBuf::from(&repo_path));
         if canonical == canonical_repo {
@@ -3431,7 +3454,13 @@ pub async fn git_remove_worktree_core(
             .with_detail(worktree_path));
         }
 
+        // Resolve the folder while the directory still exists — canonicalizing
+        // its path afterwards would no longer match anything.
         let wt_folder = folder_at_path(db, &canonical).await?;
+
+        // A to-do task mid-run or mid-merge is working inside this directory:
+        // removing it (and `--force` would) yanks the tree out from under a live
+        // agent. The task card's own removal refuses the same statuses.
         if let Some(folder) = &wt_folder {
             let busy = crate::db::service::work_task_service::tasks_blocking_worktree_removal(
                 &db.conn, folder.id,
@@ -3440,7 +3469,7 @@ pub async fn git_remove_worktree_core(
             .map_err(AppCommandError::from)?;
             if !busy.is_empty() {
                 return Err(AppCommandError::invalid_input(
-                    "A to-do task is still working in this worktree - cancel or finish it first",
+                    "A to-do task is still working in this worktree — cancel or finish it first",
                 )
                 .with_detail(busy.join(", ")));
             }
@@ -3461,6 +3490,8 @@ pub async fn git_remove_worktree_core(
             if Path::new(&worktree_path).exists() {
                 return Err(git_command_error("worktree remove", &removed.stderr));
             }
+            // The directory was deleted behind git's back — drop the stale
+            // registration so it can't block the branch delete below.
             let pruned = crate::process::tokio_command("git")
                 .args(["worktree", "prune"])
                 .current_dir(&repo_path)
@@ -3473,20 +3504,31 @@ pub async fn git_remove_worktree_core(
         }
         removal.worktree_path = Some(worktree_path.clone());
 
+        // Only the "delete everything" variant drops the folder: removing just
+        // the checkout is how you free a branch while keeping the workspace
+        // entry (and its sessions) for a worktree you intend to recreate. For
+        // the same reason that variant leaves a settled task's `worktree_folder_id`
+        // pointing here — recreating the directory makes the link whole again,
+        // and detaching it now would cost the task its merge path.
         if delete_branch {
-            if let Some(folder) = wt_folder {
+            if let Some(wt_folder) = wt_folder {
                 if let Some(project_folder_id) =
-                    reparent_target(db, folder.id, source_folder_id).await
+                    reparent_target(db, wt_folder.id, source_folder_id).await
                 {
+                    // Stamp `origin_cwd` with the folder's OWN path, not git's
+                    // canonicalization of it: the agents that fall back to
+                    // matching on `origin_cwd ?? folder.path` were pointed at
+                    // the registered spelling, and a `/private/var` vs `/var`
+                    // rewrite would silently stop matching.
                     removal.reparented = converge_removed_worktree_folder(
                         db,
                         emitter,
-                        folder.id,
+                        wt_folder.id,
                         project_folder_id,
-                        &folder.path,
+                        &wt_folder.path,
                     )
                     .await;
-                    removal.folder_id = Some(folder.id);
+                    removal.folder_id = Some(wt_folder.id);
                 }
             }
         }
@@ -3500,45 +3542,61 @@ pub async fn git_remove_worktree_core(
             .output()
             .await
             .map_err(AppCommandError::io)?;
-        if !deleted.status.success()
-            && !String::from_utf8_lossy(&deleted.stderr)
-                .to_lowercase()
-                .contains("not found")
-        {
-            return Err(git_command_error(
-                &format!("branch {flag}"),
-                &deleted.stderr,
-            ));
+        if !deleted.status.success() {
+            // "not found" means an earlier attempt already got it.
+            let stderr = String::from_utf8_lossy(&deleted.stderr).to_lowercase();
+            if !stderr.contains("not found") {
+                return Err(git_command_error(
+                    &format!("branch {flag}"),
+                    &deleted.stderr,
+                ));
+            }
         }
         removal.branch_deleted = true;
     }
+
     Ok(removal)
 }
 
+/// Where a removed worktree folder's conversations belong: the root repo folder
+/// it was created from, falling back to the caller's own root when the row has
+/// no recorded parent. `None` means there is nowhere safe to move them, and the
+/// caller must leave the folder alone rather than orphan its sessions.
 async fn reparent_target(
     db: &AppDatabase,
     worktree_folder_id: i32,
     source_folder_id: i32,
 ) -> Option<i32> {
-    let recorded_parent = folder_service::get_folder_by_id(&db.conn, worktree_folder_id)
+    let recorded = folder_service::get_folder_by_id(&db.conn, worktree_folder_id)
         .await
         .ok()
         .flatten()
-        .and_then(|folder| folder.parent_id);
-    let target = match recorded_parent {
+        .and_then(|f| f.parent_id);
+    let target = match recorded {
         Some(parent_id) => Some(parent_id),
-        None if source_folder_id > 0 => {
-            folder_service::get_folder_by_id(&db.conn, source_folder_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|folder| folder.parent_id.unwrap_or(folder.id))
-        }
+        None if source_folder_id > 0 => folder_service::get_folder_by_id(&db.conn, source_folder_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|source| source.parent_id.unwrap_or(source.id)),
         None => None,
     };
     target.filter(|id| *id != worktree_folder_id)
 }
 
+/// Converge DB + clients once a worktree directory is off disk: its
+/// conversations move to `project_folder_id` (stamped with `origin_cwd` so
+/// history still resolves), its tabs close, its folder row is soft-deleted, any
+/// to-do task pointing at it is detached, and every client is told. Returns the
+/// number of conversations moved.
+///
+/// Write order matters — conversations first, so they are never left pointing at
+/// a folder that has already vanished — and each step ends in a broadcast,
+/// because a removal no client hears about is a removal no client shows: the
+/// sidebar keeps the dead worktree until the next full `fetchFolders`.
+///
+/// The work-task engine runs the same sequence for the worktree it minted
+/// (`converge_worktree_removal`), wrapped in its own task bookkeeping.
 async fn converge_removed_worktree_folder(
     db: &AppDatabase,
     emitter: &EventEmitter,
@@ -3558,40 +3616,46 @@ async fn converge_removed_worktree_folder(
     .unwrap_or(0) as u32;
 
     match tab_service::delete_folder_tabs_and_bump(&db.conn, worktree_folder_id).await {
-        Ok(invalidation) => {
-            if let Some(tabs) = invalidation.emit {
+        Ok(inv) => {
+            if let Some(tabs) = inv.emit {
                 crate::web::event_bridge::emit_event(
                     emitter,
                     crate::web::event_bridge::TABS_CHANGED_EVENT,
                     crate::web::event_bridge::TabsChanged {
-                        version: invalidation.version,
+                        version: inv.version,
                         origin: "server".to_string(),
                         tabs,
                     },
                 );
             }
         }
-        Err(error) => {
-            tracing::warn!("[folders] tab cleanup failed for folder {worktree_folder_id}: {error}")
+        Err(e) => {
+            tracing::warn!("[folders] tab cleanup failed for folder {worktree_folder_id}: {e}")
         }
     }
 
+    // Announce the folder drop only when the row really is gone, so a failed
+    // write can't leave clients disagreeing with what a refetch would return.
     let folder_gone = match folder_service::soft_delete_folder(&db.conn, worktree_folder_id).await {
         Ok(()) => true,
-        Err(error) => {
-            tracing::warn!(
-                "[folders] worktree folder {worktree_folder_id} soft-delete failed: {error}"
-            );
+        Err(e) => {
+            tracing::warn!("[folders] worktree folder {worktree_folder_id} soft-delete failed: {e}");
             false
         }
     };
+
+    // A settled to-do task may own this worktree (its card offers a cleanup and
+    // a diff that would now only fail). The engine detaches the ones it removes
+    // itself; this detaches the ones removed out from under it.
     let detached = work_task_service::clear_worktree_by_folder(&db.conn, worktree_folder_id)
         .await
-        .unwrap_or_else(|error| {
-            tracing::warn!("[folders] task detach failed for folder {worktree_folder_id}: {error}");
+        .unwrap_or_else(|e| {
+            tracing::warn!("[folders] task detach failed for folder {worktree_folder_id}: {e}");
             Vec::new()
         });
 
+    // Conversations first: this starts every client's refetch, so the moved rows
+    // have the shortest possible window with no folder to render under.
     crate::web::event_bridge::emit_event(
         emitter,
         crate::web::event_bridge::CONVERSATIONS_BULK_CHANGED_EVENT,
@@ -4058,14 +4122,10 @@ const FILE_TREE_IGNORED_DIRS: &[&str] = &[".git", "__pycache__"];
 
 /// Hard limit: refuse to open files larger than 50 MB in the text editor.
 const FILE_OPEN_HARD_LIMIT: usize = 50_000_000;
-
 /// Save limit: refuse to save content larger than 50 MB.
 const FILE_SAVE_HARD_LIMIT: usize = 50_000_000;
-
 const FILE_BASE64_DEFAULT_MAX_BYTES: usize = 20_000_000;
-
 const FILE_BASE64_MAX_BYTES: usize = 100_000_000;
-
 const FILE_IO_MAX_CONCURRENT_OPS: usize = 8;
 
 static FILE_IO_SEMAPHORE: LazyLock<Semaphore> =
@@ -4089,7 +4149,80 @@ fn unquote_git_path(path: &str) -> String {
     }
 }
 
-pub(crate) fn resolve_tree_path(root: &Path, rel_path: &str) -> Result<PathBuf, AppCommandError> {
+/// [`unquote_git_path`] for the path field of a `git status --porcelain=v1`
+/// line, which for a rename or copy is `<from> -> <to>` with EACH side quoted
+/// on its own. Status quotes a path that has a space in it, so moving
+/// `my notes.md` reads `"my notes.md" -> "notes/my notes.md"`, and unquoting
+/// the field as one string would keep the inner quotes
+/// (`my notes.md" -> "notes/my notes.md`).
+fn unquote_status_path(field: &str) -> String {
+    let field = field.trim();
+    let sides = match field.strip_prefix('"') {
+        // The closing quote of a quoted `<from>`: inside the quotes git
+        // escapes `"` and `\` with a backslash, so skip whatever follows one.
+        Some(quoted) => {
+            let mut close = None;
+            let mut chars = quoted.char_indices();
+            while let Some((i, c)) = chars.next() {
+                match c {
+                    '\\' => {
+                        chars.next();
+                    }
+                    '"' => {
+                        close = Some(i + 2);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            close.and_then(|end| {
+                field[end..]
+                    .strip_prefix(" -> ")
+                    .map(|to| (&field[..end], to))
+            })
+        }
+        // An unquoted `<from>` has no space in it (status would have quoted
+        // it), so the first ` -> ` is the separator.
+        None => field.split_once(" -> "),
+    };
+    match sides {
+        Some((from, to)) => format!("{} -> {}", unquote_git_path(from), unquote_git_path(to)),
+        None => unquote_git_path(field),
+    }
+}
+
+/// Both sides of a rename as `git diff --numstat` prints it: `old => new`, or
+/// with the part they share factored out of braces, `src/{old => new}/main.rs`.
+/// `None` for a path that is not written as a rename.
+///
+/// Around the braces git keeps the `/` that ends the shared prefix and the one
+/// that starts the shared suffix, so a side left empty by a move up a directory
+/// (`docs/{sub => }/moved.txt`) would join them into `docs//moved.txt`.
+pub(crate) fn numstat_rename_sides(path: &str) -> Option<(String, String)> {
+    if let (Some(open), Some(close)) = (path.find('{'), path.rfind('}')) {
+        if open < close {
+            let (prefix, suffix) = (&path[..open], &path[close + 1..]);
+            if let Some((old, new)) = path[open + 1..close].split_once(" => ") {
+                let side = |middle: &str| {
+                    let suffix = if middle.is_empty() {
+                        suffix.strip_prefix('/').unwrap_or(suffix)
+                    } else {
+                        suffix
+                    };
+                    format!("{prefix}{middle}{suffix}")
+                };
+                return Some((side(old), side(new)));
+            }
+        }
+    }
+    path.rsplit_once(" => ")
+        .map(|(old, new)| (old.to_string(), new.to_string()))
+}
+
+pub(crate) fn resolve_tree_path(
+    root: &Path,
+    rel_path: &str,
+) -> Result<PathBuf, AppCommandError> {
     let rel = Path::new(rel_path);
     if rel.is_absolute() {
         return Err(AppCommandError::invalid_input("Path must be relative"));
@@ -5295,14 +5428,17 @@ pub async fn read_workspace_file_base64(
         // read race: the original `target` symlink can't be re-resolved (we use
         // the canonical path), a final-component symlink swapped in after the
         // check makes the open fail, and metadata/read never re-look-up the path.
-        let canonical_root = std::fs::canonicalize(&root).map_err(AppCommandError::io)?;
-        let canonical_target = std::fs::canonicalize(&target).map_err(AppCommandError::io)?;
+        let canonical_root =
+            std::fs::canonicalize(&root).map_err(AppCommandError::io)?;
+        let canonical_target =
+            std::fs::canonicalize(&target).map_err(AppCommandError::io)?;
         if !is_within_workspace(&canonical_root, &canonical_target) {
             return Err(AppCommandError::invalid_input(
                 "Path is outside workspace root",
             ));
         }
-        let mut file = open_no_follow(&canonical_target).map_err(AppCommandError::io)?;
+        let mut file =
+            open_no_follow(&canonical_target).map_err(AppCommandError::io)?;
         let metadata = file.metadata().map_err(AppCommandError::io)?;
         if !metadata.is_file() {
             return Err(AppCommandError::invalid_input("Path is not a file"));
@@ -6394,7 +6530,10 @@ async fn get_unpushed_hashes(
             .current_dir(path)
             .output()
             .await
-            .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+            .map(|o| {
+                o.status.success()
+                    && !String::from_utf8_lossy(&o.stdout).trim().is_empty()
+            })
             .unwrap_or(false);
         let mut rev_args = vec!["rev-list".to_string(), limit_arg.clone()];
         if let Some(a) = author.filter(|a| !a.is_empty()) {
@@ -6589,6 +6728,2127 @@ async fn get_unpushed_hashes(
     Ok((Some(hashes), has_upstream))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::fresh_in_memory_db;
+    use crate::models::agent::AgentType;
+
+    /// The frontend reads `symlink` as an optional boolean, and the tree
+    /// snapshot is rebroadcast over the WebSocket on every filesystem change —
+    /// so the flag must be present when true and *absent* (not `false`) on the
+    /// overwhelming majority of directories.
+    #[test]
+    fn file_tree_dir_serializes_the_symlink_flag_only_when_set() {
+        let plain = serde_json::to_value(FileTreeNode::Dir {
+            name: "src".into(),
+            path: "src".into(),
+            children: vec![],
+            symlink: false,
+        })
+        .expect("serialize");
+        assert_eq!(plain["kind"], "dir");
+        assert!(
+            plain.get("symlink").is_none(),
+            "an ordinary directory must not pay for the flag: {plain}"
+        );
+
+        let linked = serde_json::to_value(FileTreeNode::Dir {
+            name: "kb".into(),
+            path: "kb".into(),
+            children: vec![],
+            symlink: true,
+        })
+        .expect("serialize");
+        assert_eq!(linked["symlink"], true);
+    }
+
+    #[test]
+    fn git_author_match_pattern_anchors_and_escapes() {
+        // Anchored to the name start + trailing " <" so it can't match a longer
+        // name or the email portion.
+        assert_eq!(git_author_match_pattern("Alice"), "^Alice <");
+        // BRE metacharacters are backslash-escaped...
+        assert_eq!(git_author_match_pattern("a.b*c"), "^a\\.b\\*c <");
+        assert_eq!(git_author_match_pattern("na[me]"), "^na\\[me\\] <");
+        assert_eq!(
+            git_author_match_pattern("back\\slash"),
+            "^back\\\\slash <"
+        );
+        // ...but `|` is literal in BRE, so a name like `程相|cx` is left as-is.
+        assert_eq!(git_author_match_pattern("程相|cx"), "^程相|cx <");
+    }
+
+    #[test]
+    fn filter_shortlog_authors_matches_dedupes_and_caps() {
+        // Real shortlog rows: a space-padded count, a tab, then `Name <email>`.
+        let out = "    10\tAlice <alice@example.com>\n     5\tBob <bob@example.com>\n     3\tAlice <alice@other.com>\n     1\tCarol <carol@example.com>\n";
+        // Case-insensitive substring on the name; the same name under two emails
+        // collapses to a single entry (first/most-frequent wins).
+        assert_eq!(filter_shortlog_authors(out, "ali", 20), vec!["Alice"]);
+        assert_eq!(filter_shortlog_authors(out, "B", 20), vec!["Bob"]);
+        // Empty / whitespace query → no candidates.
+        assert!(filter_shortlog_authors(out, "  ", 20).is_empty());
+        // The limit caps the result count.
+        let many = "   3\tAaa <a@x>\n   2\tAab <b@x>\n   1\tAac <c@x>\n";
+        assert_eq!(filter_shortlog_authors(many, "aa", 2), vec!["Aaa", "Aab"]);
+    }
+
+    #[test]
+    fn emit_folder_upsert_broadcasts_on_folder_channel() {
+        // A headlessly-created folder must reach every client on
+        // `folder://changed` carrying its full detail, so the sidebar can place a
+        // conversation produced inside it without a re-fetch.
+        use crate::db::entities::folder::FolderKind;
+        use crate::web::event_bridge::{WebEventBroadcaster, FOLDER_CHANGED_EVENT};
+        use std::sync::Arc;
+
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut rx = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+
+        emit_folder_upsert(
+            &emitter,
+            FolderDetail {
+                id: 7,
+                name: "repo-automation-3-run-9".to_string(),
+                path: "/home/me/repo-automation-3-run-9".to_string(),
+                git_branch: Some("automation/3/run-9".to_string()),
+                default_agent_type: None,
+                last_opened_at: chrono::Utc::now(),
+                sort_order: 0,
+                color: "inherit".to_string(),
+                parent_id: Some(1),
+                kind: FolderKind::Regular,
+                alias: None,
+                group_id: None,
+            },
+        );
+
+        let evt = rx.try_recv().expect("folder upsert should broadcast");
+        let p = &*evt.payload;
+        assert_eq!(evt.channel, FOLDER_CHANGED_EVENT);
+        assert_eq!(p["kind"], "upsert");
+        assert_eq!(p["folder"]["id"], 7);
+        assert_eq!(p["folder"]["parent_id"], 1);
+    }
+
+    /// Create `rel` (relative to `root`) as a file, making parent dirs.
+    fn write_file(root: &std::path::Path, rel: &str, contents: &str) {
+        let full = root.join(rel);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).expect("create parent dirs");
+        }
+        std::fs::write(full, contents).expect("write file");
+    }
+
+    #[tokio::test]
+    async fn list_workspace_files_includes_deep_and_prunes_ignored() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+
+        // A file nested 12 levels deep — beyond the old hardcoded depth-10 cap
+        // this command replaces. It must still be discovered (the core fix).
+        let deep_rel = "a/b/c/d/e/f/g/h/i/j/k/deep.txt";
+        write_file(root, deep_rel, "deep");
+
+        // Gitignore rules must be honored even without a real git repo
+        // (`require_git(false)`), pruning ignored trees during the walk.
+        write_file(root, ".gitignore", "node_modules/\nignored.txt\n");
+        write_file(root, "node_modules/pkg/index.js", "junk");
+        write_file(root, "ignored.txt", "junk");
+
+        // The hardcoded ignores (mirroring FILE_TREE_IGNORED_DIRS) must be pruned.
+        write_file(root, ".git/config", "[core]");
+        write_file(root, "src/.DS_Store", "junk");
+
+        // A normal file that must survive.
+        write_file(root, "src/main.rs", "fn main() {}");
+
+        let entries = list_workspace_files(root.to_string_lossy().to_string())
+            .await
+            .expect("list_workspace_files");
+        let paths: std::collections::HashSet<&str> =
+            entries.iter().map(|e| e.path.as_str()).collect();
+
+        // Deep and normal files are reachable.
+        assert!(
+            paths.contains(deep_rel),
+            "deep file must be listed, got {paths:?}"
+        );
+        assert!(paths.contains("src/main.rs"), "normal file must be listed");
+
+        // Gitignored entries are pruned during traversal.
+        assert!(
+            !paths.iter().any(|p| p.starts_with("node_modules")),
+            "gitignored node_modules must be pruned, got {paths:?}"
+        );
+        assert!(
+            !paths.contains("ignored.txt"),
+            "gitignored file must be pruned"
+        );
+
+        // Hardcoded ignores are pruned.
+        // Precisely the `.git` dir / its contents — not `.gitignore`, which is
+        // intentionally listed.
+        assert!(
+            !paths.iter().any(|p| *p == ".git" || p.starts_with(".git/")),
+            ".git dir must be pruned, got {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.ends_with(".DS_Store")),
+            ".DS_Store must be pruned"
+        );
+
+        // Intermediate directory entries are emitted alongside files — the
+        // `@`-mention picker relies on directories being present.
+        assert!(
+            entries.iter().any(
+                |e| e.path == "a" && matches!(e.kind, WorkspaceEntryKind::Dir)
+            ),
+            "directory entries must be present"
+        );
+    }
+
+    /// Run a git command in `dir`, supplying identity via env so the test does
+    /// not depend on (or mutate) the developer's global git config.
+    fn git_run(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_git_head_reports_branch_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run(dir.path(), &["init", "-q"]);
+        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "c1"]);
+        git_run(dir.path(), &["checkout", "-q", "-b", "feature"]);
+
+        let info = resolve_git_head(dir.path().to_str().unwrap())
+            .await
+            .expect("resolve");
+        assert_eq!(
+            info,
+            GitHeadInfo {
+                is_repo: true,
+                branch: Some("feature".into()),
+                detached: false,
+                short_sha: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_git_head_detects_detached_head() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run(dir.path(), &["init", "-q"]);
+        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "c1"]);
+        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "c2"]);
+        git_run(dir.path(), &["checkout", "-q", "HEAD~1"]);
+
+        let info = resolve_git_head(dir.path().to_str().unwrap())
+            .await
+            .expect("resolve");
+        assert!(info.is_repo, "detached HEAD is still a repo");
+        assert!(info.detached, "must be flagged detached");
+        assert_eq!(info.branch, None, "no branch when detached");
+        assert!(
+            info.short_sha.as_deref().is_some_and(|s| !s.is_empty()),
+            "detached HEAD should expose a short sha, got {:?}",
+            info.short_sha
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_git_head_handles_non_repo() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let info = resolve_git_head(dir.path().to_str().unwrap())
+            .await
+            .expect("resolve");
+        assert_eq!(
+            info,
+            GitHeadInfo {
+                is_repo: false,
+                branch: None,
+                detached: false,
+                short_sha: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_git_head_handles_unborn_branch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run(dir.path(), &["init", "-q"]);
+
+        let info = resolve_git_head(dir.path().to_str().unwrap())
+            .await
+            .expect("resolve");
+        assert!(info.is_repo, "freshly-initialized repo is a repo");
+        assert!(!info.detached, "unborn branch is not detached");
+        assert!(
+            info.branch.is_some(),
+            "unborn branch should resolve a name, got {:?}",
+            info.branch
+        );
+    }
+
+    #[tokio::test]
+    async fn get_git_branch_stays_none_on_detached_head() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run(dir.path(), &["init", "-q"]);
+        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "c1"]);
+        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "c2"]);
+        git_run(dir.path(), &["checkout", "-q", "HEAD~1"]);
+
+        // The legacy `Option<String>` contract intentionally reports no branch
+        // for a detached HEAD; git-log default selection and compare rely on it.
+        assert_eq!(
+            get_git_branch(dir.path().to_str().unwrap().to_string())
+                .await
+                .expect("branch"),
+            None
+        );
+    }
+
+    /// Like `git_run` but returns the command's trimmed stdout (e.g. a resolved
+    /// commit hash), with the same isolated identity/config env.
+    fn git_capture(dir: &std::path::Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// What the hook `refusing_hook` installs writes to stderr as it refuses.
+    const HOOK_REFUSAL: &str = "refused by the test pre-commit hook";
+
+    /// Point the repository at a pre-commit hook that runs `script` and then
+    /// refuses the commit, whatever hooks path the user's own config names:
+    /// the repository's setting wins.
+    fn refusing_hook(root: &std::path::Path, script: &str) {
+        let hooks = root.join(".test-hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-commit");
+        std::fs::write(
+            &hook,
+            format!("#!/bin/sh\n{script}\necho '{HOOK_REFUSAL}' >&2\nexit 1\n"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        git_run(root, &["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    }
+
+    /// Commit `files` as the app does and return git's stderr from the
+    /// refusal. `git_commit_core` runs git with this process's environment,
+    /// not `git_run`'s, and git looks for an author before it runs pre-commit:
+    /// without one in the repository's own config, a machine that has none
+    /// configured (a CI runner) would refuse every commit before the hook ran.
+    async fn refused_commit(path: &std::path::Path, files: &[&str]) -> String {
+        git_run(path, &["config", "user.name", "t"]);
+        git_run(path, &["config", "user.email", "t@example.com"]);
+        let db = fresh_in_memory_db().await;
+        let files: Vec<String> = files.iter().map(|f| f.to_string()).collect();
+        match git_commit_core(
+            &EventEmitter::Noop,
+            None,
+            &db.conn,
+            path.to_str().unwrap(),
+            "feat: refused",
+            &files,
+        )
+        .await
+        {
+            Ok(_) => panic!("the commit went through"),
+            Err(err) => err.detail.unwrap_or(err.message),
+        }
+    }
+
+    /// A commit refused after its `git add` gives back the files that add
+    /// brought into the index, so a later commit with another pick can't take
+    /// them. What the index held before stays; so does a new file restaged
+    /// (here by the hook) or edited since, whose staged content would be lost.
+    #[tokio::test]
+    async fn a_refused_commit_gives_back_the_new_files_it_staged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        git_run(root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("tracked.txt"), "one\n").unwrap();
+        git_run(root, &["add", "tracked.txt"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+        std::fs::write(root.join("tracked.txt"), "one\ntwo\n").unwrap();
+        for file in ["picked.txt", "restaged.txt", "edited.txt", "staged.txt"] {
+            std::fs::write(root.join(file), "new\n").unwrap();
+        }
+        git_run(root, &["add", "staged.txt"]);
+        refusing_hook(
+            root,
+            "echo changed > restaged.txt && git add restaged.txt\necho changed > edited.txt",
+        );
+
+        let files = [
+            "edited.txt",
+            "picked.txt",
+            "restaged.txt",
+            "staged.txt",
+            "tracked.txt",
+        ];
+        let refusal = refused_commit(root, &files).await;
+        assert!(refusal.contains(HOOK_REFUSAL), "{refusal}");
+
+        let status = git_capture(root, &["status", "--porcelain=v1", "-uall"]);
+        let lines: Vec<&str> = status.lines().collect();
+        assert!(lines.contains(&"?? picked.txt"), "{status}");
+        assert!(lines.contains(&"A  restaged.txt"), "{status}");
+        assert!(lines.contains(&"AM edited.txt"), "{status}");
+        assert!(lines.contains(&"A  staged.txt"), "{status}");
+        // A tracked file is never taken out of the index, only re-staged.
+        assert!(lines.contains(&"M  tracked.txt"), "{status}");
+    }
+
+    /// A file another process committed between the refusal and the clean-up
+    /// stays as committed: what goes back is HEAD's, never a deletion.
+    #[tokio::test]
+    async fn giving_back_a_file_committed_meanwhile_leaves_it_committed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        git_run(root, &["init", "-q", "-b", "main"]);
+        git_run(root, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        std::fs::write(root.join("f.txt"), "x\n").unwrap();
+        git_run(root, &["add", "f.txt"]);
+        let path = root.to_str().unwrap();
+        let added = index_entries(path, &[to_git_literal_pathspec("f.txt")])
+            .await
+            .expect("index entries");
+        git_run(root, &["commit", "-q", "-m", "another process"]);
+
+        unstage_added_files(path, &added).await;
+        assert_eq!(
+            git_capture(root, &["status", "--porcelain=v1", "-uall"]),
+            ""
+        );
+    }
+
+    /// Below the repository root, what goes back is what the add actually
+    /// staged: its pathspecs resolve against the folder, the index's paths
+    /// against the root.
+    #[tokio::test]
+    async fn a_refused_commit_below_the_root_gives_back_what_its_add_staged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        git_run(root, &["init", "-q", "-b", "main"]);
+        git_run(root, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let folder = root.join("pkg");
+        std::fs::create_dir_all(folder.join("src")).unwrap();
+        std::fs::write(folder.join("src/new.txt"), "new\n").unwrap();
+        refusing_hook(root, ":");
+
+        let refusal = refused_commit(&folder, &["src/new.txt"]).await;
+        assert!(refusal.contains(HOOK_REFUSAL), "{refusal}");
+        let status = git_capture(root, &["status", "--porcelain=v1", "-uall"]);
+        assert!(
+            status.lines().any(|l| l == "?? pkg/src/new.txt"),
+            "{status}"
+        );
+    }
+
+    // All-branches push status: with no remote-tracking refs every listed commit
+    // is a definite "not pushed" (never the old unknown/None), and the classified
+    // set walks the same `--all` universe as the log so a tag-only commit shown in
+    // the log is covered too (a `--branches`-only walk would miss it → wrongly
+    // "pushed").
+    #[tokio::test]
+    async fn git_log_all_branches_no_remote_marks_every_commit_not_pushed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c1"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c2"]);
+        // A tag-only commit: create c3, tag it, then move the branch back so c3 is
+        // reachable only via refs/tags — shown by `git log --all` but absent from
+        // `--branches`.
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c3"]);
+        let c3 = git_capture(p, &["rev-parse", "HEAD"]);
+        git_run(p, &["tag", "v1"]);
+        git_run(p, &["reset", "-q", "--hard", "HEAD~1"]);
+
+        let result = git_log(
+            p.to_string_lossy().to_string(),
+            None,        // limit
+            None,        // branch
+            None,        // remote
+            None,        // skip
+            None,        // author
+            Some(true),  // all_branches
+            Some(false), // with_files
+        )
+        .await
+        .expect("git_log");
+
+        assert!(
+            result.entries.iter().any(|e| e.full_hash == c3),
+            "tag-only commit must be listed (proves the --all universe is walked)"
+        );
+        for e in &result.entries {
+            assert_eq!(
+                e.pushed,
+                Some(false),
+                "commit {} must read not-pushed, got {:?}",
+                e.hash,
+                e.pushed
+            );
+        }
+        assert!(!result.has_upstream, "no remotes → has_upstream=false");
+    }
+
+    // A commit reachable from a remote-tracking ref reads "pushed"; commits ahead
+    // of it read "not pushed". The remote-tracking ref is faked with update-ref so
+    // the test needs no network.
+    #[tokio::test]
+    async fn git_log_all_branches_marks_remote_reachable_commits_pushed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c1"]);
+        let c1 = git_capture(p, &["rev-parse", "HEAD"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c2"]);
+        let c2 = git_capture(p, &["rev-parse", "HEAD"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c3"]);
+        let c3 = git_capture(p, &["rev-parse", "HEAD"]);
+        // "Pushed up to c2" without a network: point a remote-tracking ref at c2.
+        git_run(p, &["update-ref", "refs/remotes/origin/main", &c2]);
+
+        let result = git_log(
+            p.to_string_lossy().to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+            Some(false),
+        )
+        .await
+        .expect("git_log");
+
+        let pushed_of = |hash: &str| {
+            result
+                .entries
+                .iter()
+                .find(|e| e.full_hash == hash)
+                .unwrap_or_else(|| panic!("commit {hash} missing from log"))
+                .pushed
+        };
+        assert_eq!(pushed_of(&c1), Some(true), "c1 is on the remote → pushed");
+        assert_eq!(pushed_of(&c2), Some(true), "c2 is the remote tip → pushed");
+        assert_eq!(
+            pushed_of(&c3),
+            Some(false),
+            "c3 is ahead of the remote → not pushed"
+        );
+        assert!(result.has_upstream, "a remote-tracking ref → has_upstream");
+    }
+
+    // An author-filtered match that sits past the status rev-list's `-{limit}`
+    // window in unfiltered history must still be classified: the status walk
+    // applies the same `--author` filter as the log, so the sparse match stays
+    // inside the window. An unfiltered walk would drop it and mislabel it
+    // "pushed".
+    #[tokio::test]
+    async fn git_log_all_branches_author_match_past_window_stays_not_pushed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q"]);
+        git_run(
+            p,
+            &[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "a1",
+                "--author=Alice <alice@example.com>",
+            ],
+        );
+        let alice = git_capture(p, &["rev-parse", "HEAD"]);
+        // Six Bob commits push Alice (the root) to rank 7, past a `-5` window.
+        for i in 0..6 {
+            let msg = format!("b{i}");
+            git_run(
+                p,
+                &[
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    &msg,
+                    "--author=Bob <bob@example.com>",
+                ],
+            );
+        }
+
+        let result = git_log(
+            p.to_string_lossy().to_string(),
+            Some(5),                   // limit → status window is `-5`
+            None,
+            None,
+            None,
+            Some("Alice".to_string()), // author filter
+            Some(true),
+            Some(false),
+        )
+        .await
+        .expect("git_log");
+
+        assert_eq!(result.entries.len(), 1, "only the one Alice commit matches");
+        let e = &result.entries[0];
+        assert_eq!(e.full_hash, alice);
+        assert_eq!(
+            e.pushed,
+            Some(false),
+            "author-filtered match past the unfiltered window must read not-pushed"
+        );
+    }
+
+    // The git-log tab's dynamic "current branch" filter sends the literal `HEAD`
+    // rev. Push status must resolve it to the CHECKED-OUT branch, i.e. read the
+    // same as selecting that branch by name. Taken literally it would look up
+    // `refs/remotes/origin/HEAD` — the remote's default branch — and mislabel a
+    // feature branch's already-pushed commits "not pushed" whenever the branch
+    // has no upstream configured.
+    #[tokio::test]
+    async fn git_log_head_rev_scores_push_status_against_the_checked_out_branch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q", "-b", "main"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let base = git_capture(p, &["rev-parse", "HEAD"]);
+        // A cloned repo's remote HEAD (origin/main) plus a feature branch that is
+        // fully pushed to origin/feature but has NO upstream configured — the
+        // combination that made the literal-HEAD comparison wrong. Remote-tracking
+        // refs are faked with update-ref so the test needs no network.
+        git_run(p, &["update-ref", "refs/remotes/origin/main", &base]);
+        git_run(p, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+        git_run(p, &["checkout", "-q", "-b", "feature"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "f1"]);
+        let f1 = git_capture(p, &["rev-parse", "HEAD"]);
+        git_run(p, &["update-ref", "refs/remotes/origin/feature", &f1]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "f2"]);
+        let f2 = git_capture(p, &["rev-parse", "HEAD"]);
+
+        let by_head = git_log(
+            p.to_string_lossy().to_string(),
+            None,
+            Some("HEAD".to_string()), // the dynamic current-branch filter
+            None,
+            None,
+            None,
+            Some(false),
+            Some(false),
+        )
+        .await
+        .expect("git_log HEAD");
+
+        let pushed_of = |result: &GitLogResult, hash: &str| {
+            result
+                .entries
+                .iter()
+                .find(|e| e.full_hash == hash)
+                .unwrap_or_else(|| panic!("commit {hash} missing from log"))
+                .pushed
+        };
+        assert_eq!(
+            pushed_of(&by_head, &f1),
+            Some(true),
+            "f1 is on origin/feature → pushed (not scored against origin/HEAD)"
+        );
+        assert_eq!(
+            pushed_of(&by_head, &f2),
+            Some(false),
+            "f2 is ahead of origin/feature → not pushed"
+        );
+
+        // …and it agrees with selecting the same branch by name.
+        let by_name = git_log(
+            p.to_string_lossy().to_string(),
+            None,
+            Some("feature".to_string()),
+            None,
+            None,
+            None,
+            Some(false),
+            Some(false),
+        )
+        .await
+        .expect("git_log feature");
+        assert_eq!(
+            by_head
+                .entries
+                .iter()
+                .map(|e| (e.full_hash.clone(), e.pushed))
+                .collect::<Vec<_>>(),
+            by_name
+                .entries
+                .iter()
+                .map(|e| (e.full_hash.clone(), e.pushed))
+                .collect::<Vec<_>>(),
+            "the HEAD rev must read exactly like the branch it points at"
+        );
+    }
+
+    // A detached HEAD has no branch, so push status is genuinely unknown — the
+    // literal `HEAD` rev must not fall back to comparing against the remote's
+    // default branch (which would report a definite, wrong badge).
+    #[tokio::test]
+    async fn git_log_head_rev_reports_unknown_push_status_when_detached() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q", "-b", "main"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c1"]);
+        let c1 = git_capture(p, &["rev-parse", "HEAD"]);
+        git_run(p, &["update-ref", "refs/remotes/origin/main", &c1]);
+        git_run(p, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c2"]);
+        git_run(p, &["checkout", "-q", "--detach"]);
+
+        let result = git_log(
+            p.to_string_lossy().to_string(),
+            None,
+            Some("HEAD".to_string()),
+            None,
+            None,
+            None,
+            Some(false),
+            Some(false),
+        )
+        .await
+        .expect("git_log HEAD detached");
+
+        assert!(
+            !result.entries.is_empty(),
+            "a detached HEAD still logs its history"
+        );
+        for e in &result.entries {
+            assert_eq!(
+                e.pushed, None,
+                "commit {} must read unknown while detached, got {:?}",
+                e.hash, e.pushed
+            );
+        }
+    }
+
+    /// A 1x1 transparent PNG: real binary bytes (NUL inside the IHDR length),
+    /// so it exercises the path `git_show_file` refuses.
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    #[tokio::test]
+    async fn git_show_file_base64_returns_committed_binary_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q", "-b", "main"]);
+        std::fs::write(p.join("logo.png"), TINY_PNG).expect("write png");
+        git_run(p, &["add", "logo.png"]);
+        git_run(p, &["commit", "-q", "-m", "add logo"]);
+        // Working tree diverges from HEAD; the command must read the ref, not
+        // the file on disk.
+        std::fs::write(p.join("logo.png"), b"not a png").expect("overwrite png");
+
+        let blob = git_show_file_base64(
+            p.to_string_lossy().to_string(),
+            "logo.png".to_string(),
+            None,
+            None,
+        )
+        .await
+        .expect("show blob");
+
+        assert!(blob.exists, "committed file must exist at HEAD");
+        assert!(!blob.too_large);
+        assert_eq!(blob.byte_size, TINY_PNG.len() as u64);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&blob.data)
+                .expect("decode base64"),
+            TINY_PNG,
+            "bytes must round-trip unmodified"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_show_file_base64_reports_missing_path_without_erroring() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q", "-b", "main"]);
+        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c1"]);
+
+        let blob = git_show_file_base64(
+            p.to_string_lossy().to_string(),
+            "added-later.png".to_string(),
+            None,
+            None,
+        )
+        .await
+        .expect("missing path is not an error");
+
+        assert!(!blob.exists, "an added file has no original side");
+        assert!(
+            !blob.ref_missing,
+            "HEAD resolved fine — it is the path that is not there"
+        );
+        assert!(blob.data.is_empty());
+        assert_eq!(blob.byte_size, 0);
+    }
+
+    #[tokio::test]
+    async fn git_show_file_base64_separates_a_missing_ref_from_a_missing_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q", "-b", "main"]);
+        std::fs::write(p.join("logo.png"), TINY_PNG).expect("write png");
+        git_run(p, &["add", "logo.png"]);
+        git_run(p, &["commit", "-q", "-m", "add logo"]);
+
+        // A revision that does not resolve is not evidence that the file was
+        // added — the caller must be able to tell the two apart.
+        let gone = git_show_file_base64(
+            p.to_string_lossy().to_string(),
+            "logo.png".to_string(),
+            Some("deleted-branch".to_string()),
+            None,
+        )
+        .await
+        .expect("unresolvable ref is reported, not raised");
+
+        assert!(!gone.exists);
+        assert!(gone.ref_missing, "the revision is what went missing");
+
+        // The parent of the root commit: also unresolvable, and this is exactly
+        // the case where "nothing came before" is the truthful reading.
+        let root = git_capture(p, &["rev-parse", "HEAD"]);
+        let before_root = git_show_file_base64(
+            p.to_string_lossy().to_string(),
+            "logo.png".to_string(),
+            Some(format!("{}~1", root.trim())),
+            None,
+        )
+        .await
+        .expect("root commit has no parent");
+
+        assert!(!before_root.exists);
+        assert!(before_root.ref_missing);
+    }
+
+    #[tokio::test]
+    async fn git_show_file_base64_flags_a_shallow_boundary_parent_as_missing() {
+        // A shallow clone's oldest commit keeps its `parent` header, but the
+        // graft hides that object: `rev-parse` cannot resolve it and
+        // `rev-list --parents` reports none. git's own diff reads such a commit
+        // as all-additions, and the commit-diff callers follow it by opting
+        // into `missingRefIsAbsent`; the command's job is only to report
+        // truthfully that the revision did not resolve.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let origin = dir.path().join("origin");
+        std::fs::create_dir(&origin).expect("mkdir origin");
+        git_run(&origin, &["init", "-q", "-b", "main"]);
+        std::fs::write(origin.join("logo.png"), TINY_PNG).expect("write png");
+        git_run(&origin, &["add", "logo.png"]);
+        git_run(&origin, &["commit", "-q", "-m", "c1"]);
+        std::fs::write(origin.join("logo.png"), b"changed").expect("rewrite png");
+        git_run(&origin, &["add", "logo.png"]);
+        git_run(&origin, &["commit", "-q", "-m", "c2"]);
+
+        let shallow = dir.path().join("shallow");
+        git_run(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                "--depth",
+                "1",
+                &format!("file://{}", origin.to_string_lossy()),
+                &shallow.to_string_lossy(),
+            ],
+        );
+
+        let head = git_capture(&shallow, &["rev-parse", "HEAD"]);
+        let blob = git_show_file_base64(
+            shallow.to_string_lossy().to_string(),
+            "logo.png".to_string(),
+            Some(format!("{}~1", head.trim())),
+            None,
+        )
+        .await
+        .expect("a truncated history is reported, not raised");
+
+        assert!(!blob.exists);
+        assert!(
+            blob.ref_missing,
+            "the parent revision is unreachable in a shallow clone"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_show_file_base64_skips_bytes_over_the_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        git_run(p, &["init", "-q", "-b", "main"]);
+        std::fs::write(p.join("big.png"), vec![0u8; 8_000]).expect("write big");
+        git_run(p, &["add", "big.png"]);
+        git_run(p, &["commit", "-q", "-m", "add big"]);
+
+        // 4_096 is the floor the clamp allows, and the blob is comfortably over it.
+        let blob = git_show_file_base64(
+            p.to_string_lossy().to_string(),
+            "big.png".to_string(),
+            None,
+            Some(4_096),
+        )
+        .await
+        .expect("show blob");
+
+        assert!(blob.exists, "the blob is there, we just refused to load it");
+        assert!(blob.too_large);
+        assert!(blob.data.is_empty(), "no bytes when over the cap");
+        assert_eq!(blob.byte_size, 8_000, "size is reported anyway");
+    }
+
+    #[tokio::test]
+    async fn add_folder_to_history_core_derives_name_from_path() {
+        let db = fresh_in_memory_db().await;
+        let entry = add_folder_to_history_core(&db, "/tmp/houhub-test-project".into())
+            .await
+            .expect("add folder");
+        assert_eq!(entry.name, "houhub-test-project");
+        assert_eq!(entry.path, "/tmp/houhub-test-project");
+    }
+
+    #[tokio::test]
+    async fn add_folder_to_history_core_upserts_on_duplicate_path() {
+        let db = fresh_in_memory_db().await;
+        let path = "/tmp/houhub-dup-test".to_string();
+        let first = add_folder_to_history_core(&db, path.clone())
+            .await
+            .expect("add 1st");
+        let second = add_folder_to_history_core(&db, path.clone())
+            .await
+            .expect("add 2nd");
+        assert_eq!(first.id, second.id, "duplicate path must reuse id");
+
+        let history = load_folder_history_core(&db).await.expect("history");
+        assert_eq!(
+            history.iter().filter(|f| f.path == path).count(),
+            1,
+            "no duplicate rows for same path"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_folder_from_history_core_soft_deletes() {
+        let db = fresh_in_memory_db().await;
+        let path = "/tmp/houhub-remove-test".to_string();
+        add_folder_to_history_core(&db, path.clone())
+            .await
+            .expect("add");
+        remove_folder_from_history_core(&db, path.clone())
+            .await
+            .expect("remove");
+        let history = load_folder_history_core(&db).await.expect("history");
+        assert!(
+            history.iter().all(|f| f.path != path),
+            "soft-deleted folder must not appear in list"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_folder_by_id_core_errors_when_missing() {
+        let db = fresh_in_memory_db().await;
+        let err = open_folder_by_id_core(&db, 99_999)
+            .await
+            .expect_err("missing id should error");
+        // Either the not_found wrapper (when set_folder_open returns Ok(()) on no-op)
+        // or the underlying DbError propagates — both are acceptable for "missing".
+        let msg = format!("{err:?}");
+        assert!(
+            msg.to_lowercase().contains("not found") || msg.to_lowercase().contains("99999"),
+            "expected not-found-ish error, got: {msg}"
+        );
+    }
+
+    /// A delegated child's `working_dir` is whatever the agent picked — a PR
+    /// checkout under /tmp, a throwaway worktree. It needs a folder row (the
+    /// conversation's `folder_id`, and the cwd a resume reads back), but it must
+    /// not become a project in the user's sidebar. Both cwd lookups ignore
+    /// `is_open`, so a closed row serves the delegation fully.
+    #[tokio::test]
+    async fn ensure_folder_for_path_creates_a_closed_row() {
+        let db = fresh_in_memory_db().await;
+        let entry = folder_service::ensure_folder_for_path(&db.conn, "/tmp/houhub-pr666")
+            .await
+            .expect("ensure folder");
+
+        let open = list_open_folder_details_core(&db).await.expect("open list");
+        assert!(
+            !open.iter().any(|f| f.id == entry.id),
+            "an agent's scratch cwd must not land in the workspace folder list"
+        );
+
+        // ...but it is still fully resolvable, which is all the delegation needs.
+        assert!(
+            folder_service::get_folder_by_id(&db.conn, entry.id)
+                .await
+                .expect("by id")
+                .is_some(),
+            "resume resolves the child's cwd through get_folder_by_id"
+        );
+        let all = list_all_folder_details_core(&db).await.expect("all list");
+        assert!(all.iter().any(|f| f.id == entry.id));
+    }
+
+    /// Two callers making the row of one new path at once — the runs of a
+    /// `houhub-cli -a x -a y` in a new workspace, delegations into a new cwd —
+    /// both get it: the one that lost the insert reads the winner's.
+    #[tokio::test]
+    async fn ensure_folder_for_path_made_twice_at_once_is_one_row() {
+        let db = fresh_in_memory_db().await;
+        let path = "/tmp/houhub-ensure-race";
+        let (a, b) = tokio::join!(
+            folder_service::ensure_folder_for_path(&db.conn, path),
+            folder_service::ensure_folder_for_path(&db.conn, path),
+        );
+        let (a, b) = (a.expect("first"), b.expect("second"));
+        assert_eq!(a.id, b.id);
+        let all = list_all_folder_details_core(&db).await.expect("all list");
+        assert_eq!(all.iter().filter(|f| f.path == path).count(), 1);
+    }
+
+    /// The overwhelmingly common case: the child runs in the same folder as its
+    /// parent. That folder is already open and must stay exactly as it was —
+    /// including `last_opened_at`, which orders the folder history and has no
+    /// business being bumped by a background delegation.
+    #[tokio::test]
+    async fn ensure_folder_for_path_leaves_an_open_folder_untouched() {
+        let db = fresh_in_memory_db().await;
+        let opened = open_folder_core(&db, "/tmp/houhub-ensure-open".into())
+            .await
+            .expect("open folder");
+
+        let entry = folder_service::ensure_folder_for_path(&db.conn, "/tmp/houhub-ensure-open")
+            .await
+            .expect("ensure folder");
+
+        assert_eq!(entry.id, opened.id, "the existing row is reused");
+        assert_eq!(
+            entry.last_opened_at, opened.last_opened_at,
+            "a background delegation must not reorder the folder history"
+        );
+        let open = list_open_folder_details_core(&db).await.expect("open list");
+        assert!(
+            open.iter().any(|f| f.id == opened.id),
+            "an already-open folder stays open"
+        );
+    }
+
+    /// The regression this replaced `add_folder` for: that helper flips
+    /// `is_open = true` on an existing row, so delegating into a folder the user
+    /// had closed put it back in their sidebar behind their back.
+    #[tokio::test]
+    async fn ensure_folder_for_path_does_not_reopen_a_closed_folder() {
+        let db = fresh_in_memory_db().await;
+        let opened = open_folder_core(&db, "/tmp/houhub-ensure-closed".into())
+            .await
+            .expect("open folder");
+        folder_service::set_folder_open(&db.conn, opened.id, false)
+            .await
+            .expect("close folder");
+
+        folder_service::ensure_folder_for_path(&db.conn, "/tmp/houhub-ensure-closed")
+            .await
+            .expect("ensure folder");
+
+        let open = list_open_folder_details_core(&db).await.expect("open list");
+        assert!(
+            !open.iter().any(|f| f.id == opened.id),
+            "a folder the user closed stays closed"
+        );
+    }
+
+    /// `deleted_at` is the one field that must be cleared: both cwd lookups
+    /// filter on it, so leaving a soft-deleted row deleted would break the very
+    /// resume the row is created for. Reviving it must still not open it.
+    #[tokio::test]
+    async fn ensure_folder_for_path_revives_a_soft_deleted_row_but_leaves_it_closed() {
+        let db = fresh_in_memory_db().await;
+        let opened = open_folder_core(&db, "/tmp/houhub-ensure-deleted".into())
+            .await
+            .expect("open folder");
+        remove_folder_from_history_core(&db, "/tmp/houhub-ensure-deleted".into())
+            .await
+            .expect("soft delete");
+        assert!(
+            folder_service::get_folder_by_id(&db.conn, opened.id)
+                .await
+                .expect("by id")
+                .is_none(),
+            "precondition: a soft-deleted row is invisible to cwd resolution"
+        );
+
+        let entry = folder_service::ensure_folder_for_path(&db.conn, "/tmp/houhub-ensure-deleted")
+            .await
+            .expect("ensure folder");
+
+        assert_eq!(entry.id, opened.id, "the same row is revived, not a new one");
+        assert!(
+            folder_service::get_folder_by_id(&db.conn, opened.id)
+                .await
+                .expect("by id")
+                .is_some(),
+            "cwd resolution works again"
+        );
+        let open = list_open_folder_details_core(&db).await.expect("open list");
+        assert!(
+            !open.iter().any(|f| f.id == opened.id),
+            "reviving the row must not put it back in the sidebar"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_worktree_folder_core_records_parent_as_root() {
+        let db = fresh_in_memory_db().await;
+        let root = open_folder_core(&db, "/tmp/houhub-wt-root".into())
+            .await
+            .expect("open root");
+        assert_eq!(root.parent_id, None, "root folder has no parent");
+
+        let wt = open_worktree_folder_core(&db, "/tmp/houhub-wt-a".into(), root.id)
+            .await
+            .expect("open worktree");
+        assert_eq!(
+            wt.parent_id,
+            Some(root.id),
+            "worktree records its source root folder"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_worktree_folder_core_flattens_nested_worktrees() {
+        let db = fresh_in_memory_db().await;
+        let root = open_folder_core(&db, "/tmp/houhub-wt-flat-root".into())
+            .await
+            .expect("open root");
+        let child = open_worktree_folder_core(&db, "/tmp/houhub-wt-flat-1".into(), root.id)
+            .await
+            .expect("open child worktree");
+        // A worktree created *from* the child must still point at the root, not
+        // the intermediate child.
+        let grandchild = open_worktree_folder_core(&db, "/tmp/houhub-wt-flat-2".into(), child.id)
+            .await
+            .expect("open grandchild worktree");
+        assert_eq!(child.parent_id, Some(root.id));
+        assert_eq!(
+            grandchild.parent_id,
+            Some(root.id),
+            "worktree of a worktree flattens to the original root"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_worktree_folder_core_unknown_source_is_root() {
+        let db = fresh_in_memory_db().await;
+        let wt = open_worktree_folder_core(&db, "/tmp/houhub-wt-orphan".into(), 0)
+            .await
+            .expect("open worktree with no source");
+        assert_eq!(
+            wt.parent_id, None,
+            "non-positive / unknown source degrades to a top-level folder"
+        );
+    }
+
+    /// The point of seeding: a worktree's directory name says far less about it
+    /// than the branch it holds, so registering one labels it by branch.
+    #[tokio::test]
+    async fn open_worktree_folder_core_labels_the_folder_with_its_branch() {
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+        let root = open_folder_core(&db, repo).await.expect("root");
+
+        let wt = open_worktree_folder_core(&db, wt_path, root.id)
+            .await
+            .expect("worktree folder");
+
+        assert_eq!(
+            wt.alias.as_deref(),
+            Some("wt"),
+            "the fresh worktree folder is labeled with its checked-out branch"
+        );
+    }
+
+    /// Re-registering a worktree is routine — a task retry re-creating its
+    /// checkout, an automation re-resolving the same directory — and must never
+    /// undo the name the user gave it in the sidebar.
+    #[tokio::test]
+    async fn open_worktree_folder_core_keeps_a_user_alias_on_re_register() {
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+        let root = open_folder_core(&db, repo).await.expect("root");
+        let wt = open_worktree_folder_core(&db, wt_path.clone(), root.id)
+            .await
+            .expect("worktree folder");
+        update_folder_alias_core(&db, wt.id, Some("Payment rewrite".into()))
+            .await
+            .expect("user renames it");
+
+        let again = open_worktree_folder_core(&db, wt_path, root.id)
+            .await
+            .expect("re-register the same worktree");
+
+        assert_eq!(again.id, wt.id, "same folder row");
+        assert_eq!(
+            again.alias.as_deref(),
+            Some("Payment rewrite"),
+            "the user's name survives re-registration"
+        );
+    }
+
+    /// The seed is best-effort: a directory git knows nothing about (or that is
+    /// gone entirely) still registers, just without a label — the sidebar then
+    /// falls back to the directory name as it always did.
+    #[tokio::test]
+    async fn open_worktree_folder_core_leaves_a_non_repo_unlabeled() {
+        let db = fresh_in_memory_db().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let plain = dir
+            .path()
+            .join("not-a-repo")
+            .to_str()
+            .expect("utf-8 path")
+            .to_string();
+        std::fs::create_dir_all(&plain).expect("mkdir");
+
+        let wt = open_worktree_folder_core(&db, plain, 0)
+            .await
+            .expect("registers anyway");
+
+        assert_eq!(wt.alias, None, "no branch to label it with");
+    }
+
+    /// Worktrees registered before seeding existed keep showing their directory
+    /// name forever without this — the whole reason the backfill exists.
+    #[tokio::test]
+    async fn backfill_labels_an_already_registered_worktree() {
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+        let root = open_folder_core(&db, repo).await.expect("root");
+        let wt = open_worktree_folder_core(&db, wt_path, root.id)
+            .await
+            .expect("worktree folder");
+        // Back to the pre-seeding state: a worktree folder row with no alias.
+        update_folder_alias_core(&db, wt.id, None)
+            .await
+            .expect("clear the alias");
+
+        let labeled = backfill_worktree_folder_aliases(&test_emitter(), &db).await;
+
+        assert_eq!(labeled, 1);
+        assert_eq!(
+            get_folder_core(&db, wt.id)
+                .await
+                .expect("folder")
+                .alias
+                .as_deref(),
+            Some("wt")
+        );
+        assert_eq!(
+            get_folder_core(&db, root.id).await.expect("root").alias,
+            None,
+            "the root repo is not a worktree and is left alone"
+        );
+    }
+
+    /// A `folder://changed` Upsert means "insert-or-replace in the OPEN folder
+    /// list", so announcing a closed folder would put one the user removed from
+    /// the workspace back in their sidebar. Label it anyway — reopening it later
+    /// should already read as the branch — but stay silent about it.
+    #[tokio::test]
+    async fn backfill_labels_a_closed_worktree_without_announcing_it() {
+        use crate::web::event_bridge::WebEventBroadcaster;
+
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+        let root = open_folder_core(&db, repo.clone()).await.expect("root");
+        let open_wt = open_worktree_folder_core(&db, wt_path, root.id)
+            .await
+            .expect("open worktree folder");
+        let (_dir2, repo2, wt_path2) = repo_with_worktree();
+        let root2 = open_folder_core(&db, repo2).await.expect("second root");
+        let closed_wt = open_worktree_folder_core(&db, wt_path2, root2.id)
+            .await
+            .expect("worktree folder to close");
+        // Back to the pre-seeding state for both, then close the second one the
+        // way the UI does (the row stays alive, just out of the workspace).
+        for id in [open_wt.id, closed_wt.id] {
+            update_folder_alias_core(&db, id, None)
+                .await
+                .expect("clear the alias");
+        }
+        let broadcaster = std::sync::Arc::new(WebEventBroadcaster::new());
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+        remove_folder_from_workspace_core(&emitter, &db, closed_wt.id)
+            .await
+            .expect("close the folder");
+
+        // Subscribe only now, so the queue holds just the backfill's events.
+        let mut rx = broadcaster.subscribe();
+        let labeled = backfill_worktree_folder_aliases(&emitter, &db).await;
+
+        // Both rows get the label…
+        assert_eq!(labeled, 2);
+        for id in [open_wt.id, closed_wt.id] {
+            assert_eq!(
+                get_folder_core(&db, id).await.expect("folder").alias,
+                Some("wt".to_string()),
+                "every worktree row is labeled, open or not"
+            );
+        }
+        // …but only the open one is announced.
+        let mut announced = Vec::new();
+        while let Ok(evt) = rx.try_recv() {
+            if evt.channel == crate::web::event_bridge::FOLDER_CHANGED_EVENT {
+                let p = &*evt.payload;
+                if p["kind"] == "upsert" {
+                    announced.push(p["folder"]["id"].as_i64().unwrap_or(-1) as i32);
+                }
+            }
+        }
+        assert_eq!(
+            announced,
+            vec![open_wt.id],
+            "a closed folder must not be broadcast back into the sidebar"
+        );
+    }
+
+    /// The backfill decides whether to announce a folder by re-reading it, not
+    /// from the snapshot its work list was built from — otherwise closing a
+    /// folder while the backfill walks (one git call per folder, so the window is
+    /// real) still announces it and puts it back in the sidebar. This is that
+    /// re-read: the same id that was announceable a moment ago no longer is.
+    #[tokio::test]
+    async fn a_folder_closed_after_enumeration_is_no_longer_announceable() {
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+        let root = open_folder_core(&db, repo).await.expect("root");
+        let wt = open_worktree_folder_core(&db, wt_path, root.id)
+            .await
+            .expect("worktree folder");
+
+        // Enumeration-time reading: open, so this row would be announced.
+        assert!(folder_service::get_open_folder_by_id(&db.conn, wt.id)
+            .await
+            .expect("query")
+            .is_some());
+
+        // The user closes it mid-walk.
+        remove_folder_from_workspace_core(&test_emitter(), &db, wt.id)
+            .await
+            .expect("close the folder");
+
+        assert!(
+            folder_service::get_open_folder_by_id(&db.conn, wt.id)
+                .await
+                .expect("query")
+                .is_none(),
+            "a folder closed since enumeration must not be announced"
+        );
+        // Still a live row the backfill may label — just silently.
+        assert!(get_folder_core(&db, wt.id).await.is_ok());
+    }
+
+    /// A second launch must be a no-op — both for folders it already labeled and
+    /// for ones the user has since named.
+    #[tokio::test]
+    async fn backfill_skips_folders_that_already_have_a_label() {
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+        let root = open_folder_core(&db, repo).await.expect("root");
+        let wt = open_worktree_folder_core(&db, wt_path, root.id)
+            .await
+            .expect("worktree folder");
+        update_folder_alias_core(&db, wt.id, Some("Payment rewrite".into()))
+            .await
+            .expect("user renames it");
+
+        assert_eq!(
+            backfill_worktree_folder_aliases(&test_emitter(), &db).await,
+            0
+        );
+        assert_eq!(
+            get_folder_core(&db, wt.id)
+                .await
+                .expect("folder")
+                .alias
+                .as_deref(),
+            Some("Payment rewrite")
+        );
+    }
+
+    /// A repo with one commit on `main` plus a linked worktree at `<dir>/wt`
+    /// holding branch `wt`. Returns `(tempdir, repo_path, worktree_path)`.
+    fn repo_with_worktree() -> (tempfile::TempDir, String, String) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run(dir.path(), &["init", "-q", "-b", "main"]);
+        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let wt_path = dir.path().join("wt");
+        let wt_str = wt_path.to_str().expect("utf-8 path").to_string();
+        git_run(dir.path(), &["worktree", "add", "-q", "-b", "wt", &wt_str]);
+        let repo = dir.path().to_str().expect("utf-8 path").to_string();
+        (dir, repo, wt_str)
+    }
+
+    fn test_emitter() -> EventEmitter {
+        EventEmitter::test_web_only(std::sync::Arc::new(
+            crate::web::event_bridge::WebEventBroadcaster::new(),
+        ))
+    }
+
+    /// Spell a path git printed and one we resolved ourselves the same way
+    /// before comparing them. git reports the fully resolved location (on
+    /// macOS `/var` is a symlink into `/private/var`) with `/` separators,
+    /// while `fs::canonicalize` on Windows hands back the verbatim
+    /// `\\?\C:\…` form of what git prints as `C:/…`. Resolve, drop the
+    /// verbatim prefix, settle on forward slashes.
+    fn comparable_path(path: &str) -> String {
+        let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+        crate::paths::simplify_verbatim_path(&resolved)
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+
+    /// The bug this command exists for: git flatly refuses to delete a branch a
+    /// worktree has checked out, so the branch selector's "delete branch" could
+    /// only ever report an error. Removing the checkout first is the fix.
+    #[tokio::test]
+    async fn remove_worktree_deletes_a_branch_plain_delete_cannot() {
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+
+        let refused = git_delete_branch(repo.clone(), "wt".into(), false)
+            .await
+            .expect_err("git refuses a branch held by a worktree");
+        assert!(
+            format!("{refused:?}").contains("used by worktree"),
+            "expected git's worktree refusal, got: {refused:?}"
+        );
+
+        // Resolve ours the way git resolves its own — while the directory is
+        // still there to resolve.
+        let canonical_wt = comparable_path(&wt_path);
+
+        let removal = git_remove_worktree_core(
+            &test_emitter(),
+            &db,
+            repo.clone(),
+            "wt".into(),
+            0,
+            true,
+            false,
+        )
+        .await
+        .expect("worktree + branch removal");
+
+        assert_eq!(
+            removal.worktree_path.as_deref().map(comparable_path),
+            Some(canonical_wt),
+            "reports the directory it removed"
+        );
+        assert!(removal.branch_deleted);
+        assert!(!Path::new(&wt_path).exists(), "worktree directory is gone");
+        let branches = git_list_all_branches(repo).await.expect("branches");
+        assert_eq!(branches.local, vec!["main".to_string()]);
+        assert!(branches.worktree_branches.is_empty());
+    }
+
+    /// The "worktree only" variant frees the checkout but is not a branch
+    /// delete: the commits — and the workspace folder you may want to recreate
+    /// the worktree under — survive.
+    #[tokio::test]
+    async fn remove_worktree_without_branch_keeps_branch_and_folder() {
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+        let root = open_folder_core(&db, repo.clone()).await.expect("root");
+        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
+            .await
+            .expect("worktree folder");
+
+        let removal = git_remove_worktree_core(
+            &test_emitter(),
+            &db,
+            repo.clone(),
+            "wt".into(),
+            root.id,
+            false,
+            false,
+        )
+        .await
+        .expect("worktree removal");
+
+        assert!(!removal.branch_deleted);
+        assert_eq!(removal.folder_id, None);
+        assert!(!Path::new(&wt_path).exists());
+        let branches = git_list_all_branches(repo).await.expect("branches");
+        assert!(
+            branches.local.contains(&"wt".to_string()),
+            "the branch outlives its worktree"
+        );
+        assert!(
+            folder_service::get_folder_by_id(&db.conn, wt_folder.id)
+                .await
+                .expect("lookup")
+                .is_some(),
+            "the workspace folder outlives its worktree"
+        );
+    }
+
+    /// Deleting everything also drops the workspace folder — and its sessions
+    /// have to land somewhere first, or they are orphaned under a folder no
+    /// client can fetch.
+    #[tokio::test]
+    async fn remove_worktree_with_branch_rehomes_sessions_then_drops_the_folder() {
+        use crate::db::service::conversation_service;
+        use crate::models::agent::AgentType;
+
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+        let root = open_folder_core(&db, repo.clone()).await.expect("root");
+        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
+            .await
+            .expect("worktree folder");
+        let conv =
+            conversation_service::create(&db.conn, wt_folder.id, AgentType::ClaudeCode, None, None)
+                .await
+                .expect("conversation");
+
+        let removal = git_remove_worktree_core(
+            &test_emitter(),
+            &db,
+            repo,
+            "wt".into(),
+            root.id,
+            true,
+            false,
+        )
+        .await
+        .expect("worktree + branch removal");
+
+        assert_eq!(removal.folder_id, Some(wt_folder.id));
+        assert_eq!(removal.reparented, 1);
+        assert!(
+            folder_service::get_folder_by_id(&db.conn, wt_folder.id)
+                .await
+                .expect("lookup")
+                .is_none(),
+            "the workspace folder goes with the branch"
+        );
+        let moved = conversation_service::get_by_id(&db.conn, conv.id)
+            .await
+            .expect("conversation row");
+        assert_eq!(moved.folder_id, root.id);
+        assert_eq!(
+            moved.origin_cwd.as_deref(),
+            Some(wt_path.as_str()),
+            "the session remembers where it actually ran"
+        );
+    }
+
+    /// Seed a to-do task that owns `wt_folder_id` as its worktree.
+    async fn seed_task_on_worktree(
+        db: &AppDatabase,
+        project_folder_id: i32,
+        wt_folder_id: i32,
+    ) -> i32 {
+        use crate::db::service::work_task_service;
+
+        let task = work_task_service::create(
+            &db.conn,
+            crate::models::WorkTaskDraft {
+                folder_id: project_folder_id,
+                title: "fix login".to_string(),
+                config: serde_json::json!({
+                    "display_text": "fix login",
+                    "prompt_blocks": [{ "type": "text", "text": "fix login" }],
+                }),
+            },
+        )
+        .await
+        .expect("task");
+        work_task_service::attach_worktree(&db.conn, task.id, wt_folder_id, "main", "abc", "wt")
+            .await
+            .expect("attach worktree");
+        task.id
+    }
+
+    /// The branch selector cannot tell a to-do task's worktree from any other,
+    /// so a task that has settled must not be left advertising a checkout that
+    /// is gone — its card would offer a cleanup and a diff that can only fail.
+    #[tokio::test]
+    async fn remove_worktree_detaches_the_task_that_owned_it() {
+        use crate::db::service::work_task_service;
+
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+        let root = open_folder_core(&db, repo.clone()).await.expect("root");
+        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
+            .await
+            .expect("worktree folder");
+        let task_id = seed_task_on_worktree(&db, root.id, wt_folder.id).await;
+
+        git_remove_worktree_core(
+            &test_emitter(),
+            &db,
+            repo,
+            "wt".into(),
+            root.id,
+            true,
+            false,
+        )
+        .await
+        .expect("worktree + branch removal");
+
+        let after = work_task_service::get_model(&db.conn, task_id)
+            .await
+            .expect("task row");
+        assert_eq!(after.worktree_folder_id, None);
+    }
+
+    /// A task mid-run is working inside that directory right now. `--force`
+    /// would happily delete it out from under the live agent, so the refusal
+    /// has to come before git is asked — exactly as the task card's own
+    /// "remove worktree" refuses these statuses.
+    #[tokio::test]
+    async fn remove_worktree_refuses_while_a_task_is_running_in_it() {
+        use crate::db::entities::work_task::WorkTaskStatus;
+
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = repo_with_worktree();
+        let root = open_folder_core(&db, repo.clone()).await.expect("root");
+        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
+            .await
+            .expect("worktree folder");
+        let task_id = seed_task_on_worktree(&db, root.id, wt_folder.id).await;
+        // Straight to `running` — the real transition chain would need a live
+        // engine, and only the status matters here.
+        {
+            use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
+            let row = crate::db::entities::work_task::Entity::find_by_id(task_id)
+                .one(&db.conn)
+                .await
+                .expect("query")
+                .expect("task row");
+            let mut active = row.into_active_model();
+            active.status = Set(WorkTaskStatus::Running);
+            active.update(&db.conn).await.expect("mark running");
+        }
+
+        // Even the destructive variant, which is the one that would succeed.
+        let err = git_remove_worktree_core(
+            &test_emitter(),
+            &db,
+            repo.clone(),
+            "wt".into(),
+            root.id,
+            true,
+            true,
+        )
+        .await
+        .expect_err("a running task must block the removal");
+        assert!(
+            format!("{err:?}").contains("still working in this worktree"),
+            "expected a busy-task refusal, got: {err:?}"
+        );
+        assert!(Path::new(&wt_path).exists(), "the working tree survives");
+        let branches = git_list_all_branches(repo).await.expect("branches");
+        assert!(branches.local.contains(&"wt".to_string()));
+    }
+
+    /// Seen from a linked worktree, the repo's own checkout is just another
+    /// entry in `worktree_branches` — and the branch selector would offer to
+    /// remove it. Naming it separately is what lets the UI leave it alone.
+    #[tokio::test]
+    async fn list_all_branches_names_the_main_working_tree_branch() {
+        let (_dir, repo, wt_path) = repo_with_worktree();
+
+        let from_main = git_list_all_branches(repo).await.expect("from main tree");
+        assert_eq!(from_main.worktree_branches, vec!["wt".to_string()]);
+        assert_eq!(
+            from_main.main_worktree_branch, None,
+            "the queried path IS the main tree — it is not one of the others"
+        );
+
+        let from_worktree = git_list_all_branches(wt_path)
+            .await
+            .expect("from linked worktree");
+        assert_eq!(from_worktree.worktree_branches, vec!["main".to_string()]);
+        assert_eq!(
+            from_worktree.main_worktree_branch.as_deref(),
+            Some("main"),
+            "and from over here it is the one entry that can't be removed"
+        );
+    }
+
+    /// The main working tree hosts the repo itself — removing it would take the
+    /// project with it, so it is refused before git is asked.
+    #[tokio::test]
+    async fn remove_worktree_refuses_the_main_working_tree() {
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, _wt_path) = repo_with_worktree();
+
+        let err = git_remove_worktree_core(
+            &test_emitter(),
+            &db,
+            repo.clone(),
+            "main".into(),
+            0,
+            true,
+            false,
+        )
+        .await
+        .expect_err("main working tree must be refused");
+        assert!(
+            format!("{err:?}").contains("main working tree"),
+            "expected a main-working-tree refusal, got: {err:?}"
+        );
+        let branches = git_list_all_branches(repo).await.expect("branches");
+        assert!(branches.local.contains(&"main".to_string()));
+    }
+
+    #[test]
+    fn parse_worktrees_extracts_path_branch_pairs() {
+        // Main tree + a linked worktree + a detached worktree, trailing blank line.
+        let stdout = "\
+worktree /repo/main
+HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+branch refs/heads/main
+
+worktree /repo/wt-feature
+HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+branch refs/heads/feature-x
+
+worktree /repo/wt-detached
+HEAD cccccccccccccccccccccccccccccccccccccccc
+detached
+
+";
+        let entries = parse_worktrees(stdout);
+        assert_eq!(
+            entries,
+            vec![
+                ("/repo/main".to_string(), Some("main".to_string())),
+                (
+                    "/repo/wt-feature".to_string(),
+                    Some("feature-x".to_string())
+                ),
+                ("/repo/wt-detached".to_string(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_worktrees_flushes_trailing_block_without_blank_line() {
+        // No terminating blank line on the last block (git omits it at EOF here).
+        let stdout = "\
+worktree /repo/main
+HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+branch refs/heads/main";
+        let entries = parse_worktrees(stdout);
+        assert_eq!(
+            entries,
+            vec![("/repo/main".to_string(), Some("main".to_string()))]
+        );
+    }
+
+    #[test]
+    fn parse_worktrees_handles_empty_and_bare() {
+        assert!(parse_worktrees("").is_empty());
+        // A bare repo entry carries no branch.
+        let entries = parse_worktrees("worktree /repo/bare\nbare\n\n");
+        assert_eq!(entries, vec![("/repo/bare".to_string(), None)]);
+    }
+
+    #[tokio::test]
+    async fn open_folder_core_preserves_existing_worktree_parent() {
+        let db = fresh_in_memory_db().await;
+        let root = open_folder_core(&db, "/tmp/houhub-wt-preserve-root".into())
+            .await
+            .expect("open root");
+        let wt = open_worktree_folder_core(&db, "/tmp/houhub-wt-preserve".into(), root.id)
+            .await
+            .expect("open worktree");
+        assert_eq!(wt.parent_id, Some(root.id));
+        // A plain reopen of the same path must not clear the recorded parent.
+        let reopened = open_folder_core(&db, "/tmp/houhub-wt-preserve".into())
+            .await
+            .expect("reopen plain");
+        assert_eq!(
+            reopened.parent_id,
+            Some(root.id),
+            "plain open_folder must preserve an existing worktree parent"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_worktree_folder_core_unknown_source_demotes_existing_to_root() {
+        let db = fresh_in_memory_db().await;
+        let root = open_folder_core(&db, "/tmp/houhub-wt-demote-root".into())
+            .await
+            .expect("open root");
+        let path = "/tmp/houhub-wt-demote".to_string();
+        let wt = open_worktree_folder_core(&db, path.clone(), root.id)
+            .await
+            .expect("open worktree");
+        assert_eq!(wt.parent_id, Some(root.id));
+        // Reopening the same path as a worktree with an unknown source writes the
+        // authoritative value (top-level) rather than keeping the stale parent.
+        let demoted = open_worktree_folder_core(&db, path, 0)
+            .await
+            .expect("reopen worktree with no source");
+        assert_eq!(
+            demoted.parent_id, None,
+            "explicit worktree open with unknown source demotes to top-level"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_folder_color_core_roundtrips() {
+        let db = fresh_in_memory_db().await;
+        let entry = add_folder_to_history_core(&db, "/tmp/houhub-color-test".into())
+            .await
+            .expect("add");
+        let updated = update_folder_color_core(&db, entry.id, "#ff8800".into())
+            .await
+            .expect("update color");
+        assert_eq!(updated.color, "#ff8800");
+        let read_back = get_folder_core(&db, entry.id).await.expect("get");
+        assert_eq!(read_back.color, "#ff8800");
+    }
+
+    #[tokio::test]
+    async fn update_folder_default_agent_core_set_then_clear() {
+        use crate::web::event_bridge::{WebEventBroadcaster, WORK_TASK_CHANGED_EVENT};
+        use std::sync::Arc;
+
+        let db = fresh_in_memory_db().await;
+        let entry = add_folder_to_history_core(&db, "/tmp/houhub-agent-test".into())
+            .await
+            .expect("add");
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut rx = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+
+        let set =
+            update_folder_default_agent_core(&emitter, &db, entry.id, Some(AgentType::ClaudeCode))
+                .await
+                .expect("set agent");
+        assert_eq!(set.default_agent_type, Some(AgentType::ClaudeCode));
+        // The default is the last layer a work task inherits, and the boards
+        // resolve it live — so the change has to reach them (web clients
+        // included) rather than wait for an unrelated task event.
+        let evt = rx.try_recv().expect("default agent should nudge the tasks");
+        assert_eq!(evt.channel, WORK_TASK_CHANGED_EVENT);
+        assert_eq!(evt.payload["kind"], "settings");
+        assert_eq!(evt.payload["folder_id"], entry.id);
+
+        let cleared = update_folder_default_agent_core(&emitter, &db, entry.id, None)
+            .await
+            .expect("clear agent");
+        assert_eq!(cleared.default_agent_type, None);
+        // Clearing it changes the inherited value just as much as setting it.
+        assert_eq!(
+            rx.try_recv()
+                .expect("clearing should nudge too")
+                .payload["kind"],
+            "settings"
+        );
+    }
+
+    #[tokio::test]
+    async fn move_file_tree_entry_moves_file_into_subdir() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::write(root.path().join("a.txt"), b"x").expect("write");
+        std::fs::create_dir(root.path().join("sub")).expect("mkdir");
+
+        let new_rel = move_file_tree_entry(
+            root.path().to_string_lossy().into_owned(),
+            "a.txt".to_string(),
+            "sub".to_string(),
+        )
+        .await
+        .expect("move");
+
+        assert_eq!(new_rel.replace('\\', "/"), "sub/a.txt");
+        assert!(!root.path().join("a.txt").exists());
+        assert!(root.path().join("sub/a.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn move_file_tree_entry_moves_back_to_root() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::create_dir(root.path().join("sub")).expect("mkdir");
+        std::fs::write(root.path().join("sub/a.txt"), b"x").expect("write");
+
+        let new_rel = move_file_tree_entry(
+            root.path().to_string_lossy().into_owned(),
+            "sub/a.txt".to_string(),
+            String::new(),
+        )
+        .await
+        .expect("move to root");
+
+        assert_eq!(new_rel, "a.txt");
+        assert!(root.path().join("a.txt").exists());
+        assert!(!root.path().join("sub/a.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn move_file_tree_entry_rejects_move_into_own_descendant() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::create_dir_all(root.path().join("src/inner")).expect("mkdir");
+
+        let res = move_file_tree_entry(
+            root.path().to_string_lossy().into_owned(),
+            "src".to_string(),
+            "src/inner".to_string(),
+        )
+        .await;
+        assert!(res.is_err(), "moving a dir into its own descendant must fail");
+        assert!(root.path().join("src/inner").is_dir(), "source untouched");
+    }
+
+    #[tokio::test]
+    async fn move_file_tree_entry_rejects_existing_target() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::write(root.path().join("a.txt"), b"1").expect("write");
+        std::fs::create_dir(root.path().join("sub")).expect("mkdir");
+        std::fs::write(root.path().join("sub/a.txt"), b"2").expect("write");
+
+        let res = move_file_tree_entry(
+            root.path().to_string_lossy().into_owned(),
+            "a.txt".to_string(),
+            "sub".to_string(),
+        )
+        .await;
+        assert!(res.is_err(), "name collision in destination must fail");
+        assert!(root.path().join("a.txt").exists(), "source untouched");
+    }
+
+    #[tokio::test]
+    async fn move_file_tree_entry_same_parent_is_noop() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::create_dir(root.path().join("sub")).expect("mkdir");
+        std::fs::write(root.path().join("sub/a.txt"), b"x").expect("write");
+
+        let rel = move_file_tree_entry(
+            root.path().to_string_lossy().into_owned(),
+            "sub/a.txt".to_string(),
+            "sub".to_string(),
+        )
+        .await
+        .expect("no-op move");
+        assert_eq!(rel, "sub/a.txt");
+        assert!(root.path().join("sub/a.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn move_file_tree_entry_rejects_parent_escape() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::write(root.path().join("a.txt"), b"x").expect("write");
+
+        let res = move_file_tree_entry(
+            root.path().to_string_lossy().into_owned(),
+            "a.txt".to_string(),
+            "../evil".to_string(),
+        )
+        .await;
+        assert!(res.is_err(), "dest containing '..' must be rejected");
+    }
+
+    #[test]
+    fn unquote_status_path_unquotes_each_side_of_a_rename() {
+        assert_eq!(unquote_status_path("src/main.rs"), "src/main.rs");
+        assert_eq!(unquote_status_path("\"with space.txt\""), "with space.txt");
+        assert_eq!(
+            unquote_status_path("d/旧.txt -> d/新.txt"),
+            "d/旧.txt -> d/新.txt"
+        );
+        assert_eq!(
+            unquote_status_path("\"d/old name.txt\" -> \"d/new name.txt\""),
+            "d/old name.txt -> d/new name.txt"
+        );
+        assert_eq!(
+            unquote_status_path("plain.txt -> \"with space.txt\""),
+            "plain.txt -> with space.txt"
+        );
+        assert_eq!(
+            unquote_status_path("\"with space.txt\" -> plain.txt"),
+            "with space.txt -> plain.txt"
+        );
+        // An escaped quote inside the first side does not end it. (The sides
+        // keep git's escapes, as `unquote_git_path` always has.)
+        assert_eq!(
+            unquote_status_path(r#""q\" -> x.txt" -> "y z.txt""#),
+            r#"q\" -> x.txt -> y z.txt"#
+        );
+    }
+
+    #[test]
+    fn numstat_rename_sides_reads_both_sides() {
+        let sides = |raw: &str| numstat_rename_sides(raw);
+        let pair = |old: &str, new: &str| Some((old.to_string(), new.to_string()));
+        assert_eq!(sides("src/main.rs"), None);
+        assert_eq!(sides("src/{a}.rs"), None);
+        assert_eq!(sides("old.rs => new.rs"), pair("old.rs", "new.rs"));
+        assert_eq!(
+            sides("src/{old => new}/main.rs"),
+            pair("src/old/main.rs", "src/new/main.rs")
+        );
+        assert_eq!(
+            sides("d/{old name.txt => new name.txt}"),
+            pair("d/old name.txt", "d/new name.txt")
+        );
+        assert_eq!(sides("{a => b}/x.rs"), pair("a/x.rs", "b/x.rs"));
+        // An emptied side: into a directory, and up out of one.
+        assert_eq!(
+            sides("src/{ => sub}/main.rs"),
+            pair("src/main.rs", "src/sub/main.rs")
+        );
+        assert_eq!(
+            sides("src/{sub => }/main.rs"),
+            pair("src/sub/main.rs", "src/main.rs")
+        );
+    }
+
+    /// Init a repo for the tests below, with the config the code under test
+    /// would otherwise read from the developer's machine pinned repo-locally
+    /// (the one layer both this helper and that code read): git's default
+    /// `core.quotePath`, which a global `false` would hide the bugs behind,
+    /// and no CRLF conversion, which Git for Windows turns on system-wide.
+    fn init_quoting_fixture(root: &std::path::Path) {
+        git_run(root, &["init", "-q", "-b", "main"]);
+        git_run(root, &["config", "core.quotePath", "true"]);
+        git_run(root, &["config", "core.autocrlf", "false"]);
+        git_run(root, &["config", "status.renames", "true"]);
+    }
+
+    /// Status quotes a path that has a space in it, and a rename quotes its two
+    /// sides separately: the whole field unquoted as one string read
+    /// `d/old name.txt" -> "d/new name.txt`, so the Git panel showed the
+    /// rename as `"d/new name.txt` and asked for that file by that name.
+    #[tokio::test]
+    async fn git_status_unquotes_both_sides_of_a_rename() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        init_quoting_fixture(root);
+        std::fs::create_dir(root.join("d")).expect("mkdir");
+        std::fs::write(root.join("d").join("old name.txt"), "1\n2\n3\n").expect("write");
+        std::fs::write(root.join("d").join("旧.txt"), "1\n2\n3\n").expect("write");
+        git_run(root, &["add", "-A"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+        git_run(root, &["mv", "d/old name.txt", "d/new name.txt"]);
+        git_run(root, &["mv", "d/旧.txt", "d/新.txt"]);
+
+        let entries = git_status(root.to_str().expect("utf-8 path").to_string(), Some(true))
+            .await
+            .expect("status");
+        let files: Vec<(&str, &str)> = entries
+            .iter()
+            .map(|e| (e.status.as_str(), e.file.as_str()))
+            .collect();
+        assert_eq!(
+            files,
+            [
+                ("R", "d/old name.txt -> d/new name.txt"),
+                ("R", "d/旧.txt -> d/新.txt"),
+            ]
+        );
+    }
+
+    /// The diff overviews (working tree, branch, commit) list their files by
+    /// the paths in the patch headers, and "view diff" / "open file" ask for a
+    /// file by that path — so a header has to name a non-ASCII file as itself,
+    /// not by git's default octal escapes.
+    #[tokio::test]
+    async fn diff_headers_name_a_non_ascii_path_as_itself() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root.to_str().expect("utf-8 path").to_string();
+        init_quoting_fixture(root);
+        std::fs::create_dir(root.join("docs")).expect("mkdir");
+        std::fs::write(root.join("docs").join("需求.md"), "one\n").expect("write");
+        git_run(root, &["add", "-A"]);
+        // Not a `+++ b/…` match: a developer's `diff.mnemonicPrefix` or
+        // `diff.noprefix` changes the prefix, and the name is the point here.
+        let names_itself = |patch: &str| patch.contains("docs/需求.md") && !patch.contains("\\351");
+
+        // No commit yet: `diff HEAD` fails and the `--cached` fallback answers.
+        let unborn = git_diff(path.clone(), None).await.expect("unborn diff");
+        assert!(names_itself(&unborn), "{unborn}");
+
+        git_run(root, &["commit", "-q", "-m", "base"]);
+        git_run(root, &["branch", "base"]);
+        std::fs::write(root.join("docs").join("需求.md"), "one\ntwo\n").expect("write");
+        let working = git_diff(path.clone(), None).await.expect("working diff");
+        assert!(names_itself(&working), "{working}");
+        let one = git_diff(path.clone(), Some("docs/需求.md".to_string()))
+            .await
+            .expect("file diff");
+        assert!(names_itself(&one), "{one}");
+
+        git_run(root, &["commit", "-q", "-am", "edit"]);
+        let commit = git_show_diff(path.clone(), "HEAD".to_string(), None)
+            .await
+            .expect("commit diff");
+        assert!(names_itself(&commit), "{commit}");
+        let branch = git_diff_with_branch(path, "base".to_string(), None)
+            .await
+            .expect("branch diff");
+        assert!(names_itself(&branch), "{branch}");
+    }
+}
+
 // Symlink confinement that `read_workspace_file_base64` relies on. Unix-only
 // because it uses real filesystem symlinks.
 #[cfg(all(test, unix))]
@@ -6615,7 +8875,8 @@ mod workspace_confinement_tests {
         let root = tempfile::tempdir().expect("root");
         let outside = tempfile::tempdir().expect("outside");
         std::fs::write(outside.path().join("secret"), b"top").expect("write");
-        symlink(outside.path().join("secret"), root.path().join("link")).expect("symlink");
+        symlink(outside.path().join("secret"), root.path().join("link"))
+            .expect("symlink");
         // The canonical target resolves outside the root, so the read is denied
         // even though `root/link` is lexically inside the workspace.
         let res = read_workspace_file_base64(
@@ -6624,10 +8885,7 @@ mod workspace_confinement_tests {
             None,
         )
         .await;
-        assert!(
-            res.is_err(),
-            "symlink escaping the workspace must be rejected"
-        );
+        assert!(res.is_err(), "symlink escaping the workspace must be rejected");
     }
 
     /// The strict predicate, applied the way the guarded call sites apply it:
@@ -6673,10 +8931,7 @@ mod workspace_confinement_tests {
             "sub".to_string(),
         )
         .await;
-        assert!(
-            res.is_err(),
-            "must not clobber a dangling destination symlink"
-        );
+        assert!(res.is_err(), "must not clobber a dangling destination symlink");
         assert!(
             std::fs::symlink_metadata(root.path().join("sub/a.txt")).is_ok(),
             "dangling symlink must remain intact",
@@ -6688,7 +8943,11 @@ mod workspace_confinement_tests {
     async fn move_file_tree_entry_moves_a_symlink_entry() {
         let root = tempfile::tempdir().expect("root");
         std::fs::write(root.path().join("target.txt"), b"x").expect("write");
-        symlink(root.path().join("target.txt"), root.path().join("link.txt")).expect("symlink");
+        symlink(
+            root.path().join("target.txt"),
+            root.path().join("link.txt"),
+        )
+        .expect("symlink");
         std::fs::create_dir(root.path().join("sub")).expect("mkdir");
 
         let new_rel = move_file_tree_entry(
@@ -6700,8 +8959,8 @@ mod workspace_confinement_tests {
         .expect("move symlink");
         assert_eq!(new_rel.replace('\\', "/"), "sub/link.txt");
         // The moved entry is still a symlink (the link itself moved, not its target).
-        let meta =
-            std::fs::symlink_metadata(root.path().join("sub/link.txt")).expect("moved link exists");
+        let meta = std::fs::symlink_metadata(root.path().join("sub/link.txt"))
+            .expect("moved link exists");
         assert!(meta.file_type().is_symlink(), "entry stays a symlink");
         assert!(!root.path().join("link.txt").exists(), "old link gone");
     }
@@ -7477,2002 +9736,5 @@ mod workspace_confinement_tests {
             !strictly_within(root.path(), &root.path().join("api/ok.txt")),
             "revoking the link revokes access"
         );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::db::test_helpers::fresh_in_memory_db;
-
-    use crate::models::agent::AgentType;
-
-    /// The frontend reads `symlink` as an optional boolean, and the tree
-    /// snapshot is rebroadcast over the WebSocket on every filesystem change —
-    /// so the flag must be present when true and *absent* (not `false`) on the
-    /// overwhelming majority of directories.
-    #[test]
-    fn file_tree_dir_serializes_the_symlink_flag_only_when_set() {
-        let plain = serde_json::to_value(FileTreeNode::Dir {
-            name: "src".into(),
-            path: "src".into(),
-            children: vec![],
-            symlink: false,
-        })
-        .expect("serialize");
-        assert_eq!(plain["kind"], "dir");
-        assert!(
-            plain.get("symlink").is_none(),
-            "an ordinary directory must not pay for the flag: {plain}"
-        );
-
-        let linked = serde_json::to_value(FileTreeNode::Dir {
-            name: "kb".into(),
-            path: "kb".into(),
-            children: vec![],
-            symlink: true,
-        })
-        .expect("serialize");
-        assert_eq!(linked["symlink"], true);
-    }
-
-    #[test]
-    fn git_author_match_pattern_anchors_and_escapes() {
-        // Anchored to the name start + trailing " <" so it can't match a longer
-        // name or the email portion.
-        assert_eq!(git_author_match_pattern("Alice"), "^Alice <");
-        // BRE metacharacters are backslash-escaped...
-        assert_eq!(git_author_match_pattern("a.b*c"), "^a\\.b\\*c <");
-        assert_eq!(git_author_match_pattern("na[me]"), "^na\\[me\\] <");
-        assert_eq!(git_author_match_pattern("back\\slash"), "^back\\\\slash <");
-        // ...but `|` is literal in BRE, so a name like `程相|cx` is left as-is.
-        assert_eq!(git_author_match_pattern("程相|cx"), "^程相|cx <");
-    }
-
-    #[test]
-    fn filter_shortlog_authors_matches_dedupes_and_caps() {
-        // Real shortlog rows: a space-padded count, a tab, then `Name <email>`.
-        let out = "    10\tAlice <alice@example.com>\n     5\tBob <bob@example.com>\n     3\tAlice <alice@other.com>\n     1\tCarol <carol@example.com>\n";
-        // Case-insensitive substring on the name; the same name under two emails
-        // collapses to a single entry (first/most-frequent wins).
-        assert_eq!(filter_shortlog_authors(out, "ali", 20), vec!["Alice"]);
-        assert_eq!(filter_shortlog_authors(out, "B", 20), vec!["Bob"]);
-        // Empty / whitespace query → no candidates.
-        assert!(filter_shortlog_authors(out, "  ", 20).is_empty());
-        // The limit caps the result count.
-        let many = "   3\tAaa <a@x>\n   2\tAab <b@x>\n   1\tAac <c@x>\n";
-        assert_eq!(filter_shortlog_authors(many, "aa", 2), vec!["Aaa", "Aab"]);
-    }
-
-    #[test]
-    fn emit_folder_upsert_broadcasts_on_folder_channel() {
-        // A headlessly-created folder must reach every client on
-        // `folder://changed` carrying its full detail, so the sidebar can place a
-        // conversation produced inside it without a re-fetch.
-        use crate::db::entities::folder::FolderKind;
-        use crate::web::event_bridge::{WebEventBroadcaster, FOLDER_CHANGED_EVENT};
-        use std::sync::Arc;
-
-        let broadcaster = Arc::new(WebEventBroadcaster::new());
-        let mut rx = broadcaster.subscribe();
-        let emitter = EventEmitter::test_web_only(broadcaster.clone());
-
-        emit_folder_upsert(
-            &emitter,
-            FolderDetail {
-                id: 7,
-                name: "repo-automation-3-run-9".to_string(),
-                path: "/home/me/repo-automation-3-run-9".to_string(),
-                git_branch: Some("automation/3/run-9".to_string()),
-                default_agent_type: None,
-                last_opened_at: chrono::Utc::now(),
-                sort_order: 0,
-                color: "inherit".to_string(),
-                parent_id: Some(1),
-                kind: FolderKind::Regular,
-                alias: None,
-                group_id: None,
-            },
-        );
-
-        let evt = rx.try_recv().expect("folder upsert should broadcast");
-        let p = &*evt.payload;
-        assert_eq!(evt.channel, FOLDER_CHANGED_EVENT);
-        assert_eq!(p["kind"], "upsert");
-        assert_eq!(p["folder"]["id"], 7);
-        assert_eq!(p["folder"]["parent_id"], 1);
-    }
-
-    /// Create `rel` (relative to `root`) as a file, making parent dirs.
-    fn write_file(root: &std::path::Path, rel: &str, contents: &str) {
-        let full = root.join(rel);
-        if let Some(parent) = full.parent() {
-            std::fs::create_dir_all(parent).expect("create parent dirs");
-        }
-        std::fs::write(full, contents).expect("write file");
-    }
-
-    #[tokio::test]
-    async fn list_workspace_files_includes_deep_and_prunes_ignored() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path();
-
-        // A file nested 12 levels deep — beyond the old hardcoded depth-10 cap
-        // this command replaces. It must still be discovered (the core fix).
-        let deep_rel = "a/b/c/d/e/f/g/h/i/j/k/deep.txt";
-        write_file(root, deep_rel, "deep");
-
-        // Gitignore rules must be honored even without a real git repo
-        // (`require_git(false)`), pruning ignored trees during the walk.
-        write_file(root, ".gitignore", "node_modules/\nignored.txt\n");
-        write_file(root, "node_modules/pkg/index.js", "junk");
-        write_file(root, "ignored.txt", "junk");
-
-        // The hardcoded ignores (mirroring FILE_TREE_IGNORED_DIRS) must be pruned.
-        write_file(root, ".git/config", "[core]");
-        write_file(root, "src/.DS_Store", "junk");
-
-        // A normal file that must survive.
-        write_file(root, "src/main.rs", "fn main() {}");
-
-        let entries = list_workspace_files(root.to_string_lossy().to_string())
-            .await
-            .expect("list_workspace_files");
-        let paths: std::collections::HashSet<&str> =
-            entries.iter().map(|e| e.path.as_str()).collect();
-
-        // Deep and normal files are reachable.
-        assert!(
-            paths.contains(deep_rel),
-            "deep file must be listed, got {paths:?}"
-        );
-        assert!(paths.contains("src/main.rs"), "normal file must be listed");
-
-        // Gitignored entries are pruned during traversal.
-        assert!(
-            !paths.iter().any(|p| p.starts_with("node_modules")),
-            "gitignored node_modules must be pruned, got {paths:?}"
-        );
-        assert!(
-            !paths.contains("ignored.txt"),
-            "gitignored file must be pruned"
-        );
-
-        // Hardcoded ignores are pruned.
-        // Precisely the `.git` dir / its contents — not `.gitignore`, which is
-        // intentionally listed.
-        assert!(
-            !paths.iter().any(|p| *p == ".git" || p.starts_with(".git/")),
-            ".git dir must be pruned, got {paths:?}"
-        );
-        assert!(
-            !paths.iter().any(|p| p.ends_with(".DS_Store")),
-            ".DS_Store must be pruned"
-        );
-
-        // Intermediate directory entries are emitted alongside files — the
-        // `@`-mention picker relies on directories being present.
-        assert!(
-            entries
-                .iter()
-                .any(|e| e.path == "a" && matches!(e.kind, WorkspaceEntryKind::Dir)),
-            "directory entries must be present"
-        );
-    }
-
-    /// Run a git command in `dir`, supplying identity via env so the test does
-    /// not depend on (or mutate) the developer's global git config.
-    fn git_run(dir: &std::path::Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@example.com")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@example.com")
-            .output()
-            .expect("spawn git");
-        assert!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_git_head_reports_branch_name() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        git_run(dir.path(), &["init", "-q"]);
-        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "c1"]);
-        git_run(dir.path(), &["checkout", "-q", "-b", "feature"]);
-
-        let info = resolve_git_head(dir.path().to_str().unwrap())
-            .await
-            .expect("resolve");
-        assert_eq!(
-            info,
-            GitHeadInfo {
-                is_repo: true,
-                branch: Some("feature".into()),
-                detached: false,
-                short_sha: None,
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_git_head_detects_detached_head() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        git_run(dir.path(), &["init", "-q"]);
-        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "c1"]);
-        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "c2"]);
-        git_run(dir.path(), &["checkout", "-q", "HEAD~1"]);
-
-        let info = resolve_git_head(dir.path().to_str().unwrap())
-            .await
-            .expect("resolve");
-        assert!(info.is_repo, "detached HEAD is still a repo");
-        assert!(info.detached, "must be flagged detached");
-        assert_eq!(info.branch, None, "no branch when detached");
-        assert!(
-            info.short_sha.as_deref().is_some_and(|s| !s.is_empty()),
-            "detached HEAD should expose a short sha, got {:?}",
-            info.short_sha
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_git_head_handles_non_repo() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let info = resolve_git_head(dir.path().to_str().unwrap())
-            .await
-            .expect("resolve");
-        assert_eq!(
-            info,
-            GitHeadInfo {
-                is_repo: false,
-                branch: None,
-                detached: false,
-                short_sha: None,
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_git_head_handles_unborn_branch() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        git_run(dir.path(), &["init", "-q"]);
-
-        let info = resolve_git_head(dir.path().to_str().unwrap())
-            .await
-            .expect("resolve");
-        assert!(info.is_repo, "freshly-initialized repo is a repo");
-        assert!(!info.detached, "unborn branch is not detached");
-        assert!(
-            info.branch.is_some(),
-            "unborn branch should resolve a name, got {:?}",
-            info.branch
-        );
-    }
-
-    #[tokio::test]
-    async fn get_git_branch_stays_none_on_detached_head() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        git_run(dir.path(), &["init", "-q"]);
-        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "c1"]);
-        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "c2"]);
-        git_run(dir.path(), &["checkout", "-q", "HEAD~1"]);
-
-        // The legacy `Option<String>` contract intentionally reports no branch
-        // for a detached HEAD; git-log default selection and compare rely on it.
-        assert_eq!(
-            get_git_branch(dir.path().to_str().unwrap().to_string())
-                .await
-                .expect("branch"),
-            None
-        );
-    }
-
-    /// Like `git_run` but returns the command's trimmed stdout (e.g. a resolved
-    /// commit hash), with the same isolated identity/config env.
-    fn git_capture(dir: &std::path::Path, args: &[&str]) -> String {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@example.com")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@example.com")
-            .output()
-            .expect("spawn git");
-        assert!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    }
-
-    /// What the hook `refusing_hook` installs writes to stderr as it refuses.
-    const HOOK_REFUSAL: &str = "refused by the test pre-commit hook";
-
-    /// Point the repository at a pre-commit hook that runs `script` and then
-    /// refuses the commit, whatever hooks path the user's own config names:
-    /// the repository's setting wins.
-    fn refusing_hook(root: &std::path::Path, script: &str) {
-        let hooks = root.join(".test-hooks");
-        std::fs::create_dir_all(&hooks).unwrap();
-        let hook = hooks.join("pre-commit");
-        std::fs::write(
-            &hook,
-            format!("#!/bin/sh\n{script}\necho '{HOOK_REFUSAL}' >&2\nexit 1\n"),
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        git_run(root, &["config", "core.hooksPath", hooks.to_str().unwrap()]);
-    }
-
-    /// Commit `files` as the app does and return git's stderr from the
-    /// refusal. `git_commit_core` runs git with this process's environment,
-    /// not `git_run`'s, and git looks for an author before it runs pre-commit:
-    /// without one in the repository's own config, a machine that has none
-    /// configured (a CI runner) would refuse every commit before the hook ran.
-    async fn refused_commit(path: &std::path::Path, files: &[&str]) -> String {
-        git_run(path, &["config", "user.name", "t"]);
-        git_run(path, &["config", "user.email", "t@example.com"]);
-        let db = fresh_in_memory_db().await;
-        let files: Vec<String> = files.iter().map(|f| f.to_string()).collect();
-        match git_commit_core(
-            &EventEmitter::Noop,
-            None,
-            &db.conn,
-            path.to_str().unwrap(),
-            "feat: refused",
-            &files,
-        )
-        .await
-        {
-            Ok(_) => panic!("the commit went through"),
-            Err(err) => err.detail.unwrap_or(err.message),
-        }
-    }
-
-    /// A commit refused after its `git add` gives back the files that add
-    /// brought into the index, so a later commit with another pick can't take
-    /// them. What the index held before stays; so does a new file restaged
-    /// (here by the hook) or edited since, whose staged content would be lost.
-    #[tokio::test]
-    async fn a_refused_commit_gives_back_the_new_files_it_staged() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path();
-        git_run(root, &["init", "-q", "-b", "main"]);
-        std::fs::write(root.join("tracked.txt"), "one\n").unwrap();
-        git_run(root, &["add", "tracked.txt"]);
-        git_run(root, &["commit", "-q", "-m", "base"]);
-        std::fs::write(root.join("tracked.txt"), "one\ntwo\n").unwrap();
-        for file in ["picked.txt", "restaged.txt", "edited.txt", "staged.txt"] {
-            std::fs::write(root.join(file), "new\n").unwrap();
-        }
-        git_run(root, &["add", "staged.txt"]);
-        refusing_hook(
-            root,
-            "echo changed > restaged.txt && git add restaged.txt\necho changed > edited.txt",
-        );
-
-        let files = [
-            "edited.txt",
-            "picked.txt",
-            "restaged.txt",
-            "staged.txt",
-            "tracked.txt",
-        ];
-        let refusal = refused_commit(root, &files).await;
-        assert!(refusal.contains(HOOK_REFUSAL), "{refusal}");
-
-        let status = git_capture(root, &["status", "--porcelain=v1", "-uall"]);
-        let lines: Vec<&str> = status.lines().collect();
-        assert!(lines.contains(&"?? picked.txt"), "{status}");
-        assert!(lines.contains(&"A  restaged.txt"), "{status}");
-        assert!(lines.contains(&"AM edited.txt"), "{status}");
-        assert!(lines.contains(&"A  staged.txt"), "{status}");
-        // A tracked file is never taken out of the index, only re-staged.
-        assert!(lines.contains(&"M  tracked.txt"), "{status}");
-    }
-
-    /// A file another process committed between the refusal and the clean-up
-    /// stays as committed: what goes back is HEAD's, never a deletion.
-    #[tokio::test]
-    async fn giving_back_a_file_committed_meanwhile_leaves_it_committed() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path();
-        git_run(root, &["init", "-q", "-b", "main"]);
-        git_run(root, &["commit", "-q", "--allow-empty", "-m", "base"]);
-        std::fs::write(root.join("f.txt"), "x\n").unwrap();
-        git_run(root, &["add", "f.txt"]);
-        let path = root.to_str().unwrap();
-        let added = index_entries(path, &[to_git_literal_pathspec("f.txt")])
-            .await
-            .expect("index entries");
-        git_run(root, &["commit", "-q", "-m", "another process"]);
-
-        unstage_added_files(path, &added).await;
-        assert_eq!(
-            git_capture(root, &["status", "--porcelain=v1", "-uall"]),
-            ""
-        );
-    }
-
-    /// Below the repository root, what goes back is what the add actually
-    /// staged: its pathspecs resolve against the folder, the index's paths
-    /// against the root.
-    #[tokio::test]
-    async fn a_refused_commit_below_the_root_gives_back_what_its_add_staged() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path();
-        git_run(root, &["init", "-q", "-b", "main"]);
-        git_run(root, &["commit", "-q", "--allow-empty", "-m", "base"]);
-        let folder = root.join("pkg");
-        std::fs::create_dir_all(folder.join("src")).unwrap();
-        std::fs::write(folder.join("src/new.txt"), "new\n").unwrap();
-        refusing_hook(root, ":");
-
-        let refusal = refused_commit(&folder, &["src/new.txt"]).await;
-        assert!(refusal.contains(HOOK_REFUSAL), "{refusal}");
-        let status = git_capture(root, &["status", "--porcelain=v1", "-uall"]);
-        assert!(
-            status.lines().any(|l| l == "?? pkg/src/new.txt"),
-            "{status}"
-        );
-    }
-
-    // All-branches push status: with no remote-tracking refs every listed commit
-    // is a definite "not pushed" (never the old unknown/None), and the classified
-    // set walks the same `--all` universe as the log so a tag-only commit shown in
-    // the log is covered too (a `--branches`-only walk would miss it → wrongly
-    // "pushed").
-    #[tokio::test]
-    async fn git_log_all_branches_no_remote_marks_every_commit_not_pushed() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let p = dir.path();
-        git_run(p, &["init", "-q"]);
-        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c1"]);
-        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c2"]);
-        // A tag-only commit: create c3, tag it, then move the branch back so c3 is
-        // reachable only via refs/tags — shown by `git log --all` but absent from
-        // `--branches`.
-        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c3"]);
-        let c3 = git_capture(p, &["rev-parse", "HEAD"]);
-        git_run(p, &["tag", "v1"]);
-        git_run(p, &["reset", "-q", "--hard", "HEAD~1"]);
-
-        let result = git_log(
-            p.to_string_lossy().to_string(),
-            None,        // limit
-            None,        // branch
-            None,        // remote
-            None,        // skip
-            None,        // author
-            Some(true),  // all_branches
-            Some(false), // with_files
-        )
-        .await
-        .expect("git_log");
-
-        assert!(
-            result.entries.iter().any(|e| e.full_hash == c3),
-            "tag-only commit must be listed (proves the --all universe is walked)"
-        );
-        for e in &result.entries {
-            assert_eq!(
-                e.pushed,
-                Some(false),
-                "commit {} must read not-pushed, got {:?}",
-                e.hash,
-                e.pushed
-            );
-        }
-        assert!(!result.has_upstream, "no remotes → has_upstream=false");
-    }
-
-    // A commit reachable from a remote-tracking ref reads "pushed"; commits ahead
-    // of it read "not pushed". The remote-tracking ref is faked with update-ref so
-    // the test needs no network.
-    #[tokio::test]
-    async fn git_log_all_branches_marks_remote_reachable_commits_pushed() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let p = dir.path();
-        git_run(p, &["init", "-q"]);
-        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c1"]);
-        let c1 = git_capture(p, &["rev-parse", "HEAD"]);
-        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c2"]);
-        let c2 = git_capture(p, &["rev-parse", "HEAD"]);
-        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c3"]);
-        let c3 = git_capture(p, &["rev-parse", "HEAD"]);
-        // "Pushed up to c2" without a network: point a remote-tracking ref at c2.
-        git_run(p, &["update-ref", "refs/remotes/origin/main", &c2]);
-
-        let result = git_log(
-            p.to_string_lossy().to_string(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(true),
-            Some(false),
-        )
-        .await
-        .expect("git_log");
-
-        let pushed_of = |hash: &str| {
-            result
-                .entries
-                .iter()
-                .find(|e| e.full_hash == hash)
-                .unwrap_or_else(|| panic!("commit {hash} missing from log"))
-                .pushed
-        };
-        assert_eq!(pushed_of(&c1), Some(true), "c1 is on the remote → pushed");
-        assert_eq!(pushed_of(&c2), Some(true), "c2 is the remote tip → pushed");
-        assert_eq!(
-            pushed_of(&c3),
-            Some(false),
-            "c3 is ahead of the remote → not pushed"
-        );
-        assert!(result.has_upstream, "a remote-tracking ref → has_upstream");
-    }
-
-    // An author-filtered match that sits past the status rev-list's `-{limit}`
-    // window in unfiltered history must still be classified: the status walk
-    // applies the same `--author` filter as the log, so the sparse match stays
-    // inside the window. An unfiltered walk would drop it and mislabel it
-    // "pushed".
-    #[tokio::test]
-    async fn git_log_all_branches_author_match_past_window_stays_not_pushed() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let p = dir.path();
-        git_run(p, &["init", "-q"]);
-        git_run(
-            p,
-            &[
-                "commit",
-                "-q",
-                "--allow-empty",
-                "-m",
-                "a1",
-                "--author=Alice <alice@example.com>",
-            ],
-        );
-        let alice = git_capture(p, &["rev-parse", "HEAD"]);
-        // Six Bob commits push Alice (the root) to rank 7, past a `-5` window.
-        for i in 0..6 {
-            let msg = format!("b{i}");
-            git_run(
-                p,
-                &[
-                    "commit",
-                    "-q",
-                    "--allow-empty",
-                    "-m",
-                    &msg,
-                    "--author=Bob <bob@example.com>",
-                ],
-            );
-        }
-
-        let result = git_log(
-            p.to_string_lossy().to_string(),
-            Some(5), // limit → status window is `-5`
-            None,
-            None,
-            None,
-            Some("Alice".to_string()), // author filter
-            Some(true),
-            Some(false),
-        )
-        .await
-        .expect("git_log");
-
-        assert_eq!(result.entries.len(), 1, "only the one Alice commit matches");
-        let e = &result.entries[0];
-        assert_eq!(e.full_hash, alice);
-        assert_eq!(
-            e.pushed,
-            Some(false),
-            "author-filtered match past the unfiltered window must read not-pushed"
-        );
-    }
-
-    // The git-log tab's dynamic "current branch" filter sends the literal `HEAD`
-    // rev. Push status must resolve it to the CHECKED-OUT branch, i.e. read the
-    // same as selecting that branch by name. Taken literally it would look up
-    // `refs/remotes/origin/HEAD` — the remote's default branch — and mislabel a
-    // feature branch's already-pushed commits "not pushed" whenever the branch
-    // has no upstream configured.
-    #[tokio::test]
-    async fn git_log_head_rev_scores_push_status_against_the_checked_out_branch() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let p = dir.path();
-        git_run(p, &["init", "-q", "-b", "main"]);
-        git_run(p, &["commit", "-q", "--allow-empty", "-m", "base"]);
-        let base = git_capture(p, &["rev-parse", "HEAD"]);
-        // A cloned repo's remote HEAD (origin/main) plus a feature branch that is
-        // fully pushed to origin/feature but has NO upstream configured — the
-        // combination that made the literal-HEAD comparison wrong. Remote-tracking
-        // refs are faked with update-ref so the test needs no network.
-        git_run(p, &["update-ref", "refs/remotes/origin/main", &base]);
-        git_run(
-            p,
-            &[
-                "symbolic-ref",
-                "refs/remotes/origin/HEAD",
-                "refs/remotes/origin/main",
-            ],
-        );
-        git_run(p, &["checkout", "-q", "-b", "feature"]);
-        git_run(p, &["commit", "-q", "--allow-empty", "-m", "f1"]);
-        let f1 = git_capture(p, &["rev-parse", "HEAD"]);
-        git_run(p, &["update-ref", "refs/remotes/origin/feature", &f1]);
-        git_run(p, &["commit", "-q", "--allow-empty", "-m", "f2"]);
-        let f2 = git_capture(p, &["rev-parse", "HEAD"]);
-
-        let by_head = git_log(
-            p.to_string_lossy().to_string(),
-            None,
-            Some("HEAD".to_string()), // the dynamic current-branch filter
-            None,
-            None,
-            None,
-            Some(false),
-            Some(false),
-        )
-        .await
-        .expect("git_log HEAD");
-
-        let pushed_of = |result: &GitLogResult, hash: &str| {
-            result
-                .entries
-                .iter()
-                .find(|e| e.full_hash == hash)
-                .unwrap_or_else(|| panic!("commit {hash} missing from log"))
-                .pushed
-        };
-        assert_eq!(
-            pushed_of(&by_head, &f1),
-            Some(true),
-            "f1 is on origin/feature → pushed (not scored against origin/HEAD)"
-        );
-        assert_eq!(
-            pushed_of(&by_head, &f2),
-            Some(false),
-            "f2 is ahead of origin/feature → not pushed"
-        );
-
-        // …and it agrees with selecting the same branch by name.
-        let by_name = git_log(
-            p.to_string_lossy().to_string(),
-            None,
-            Some("feature".to_string()),
-            None,
-            None,
-            None,
-            Some(false),
-            Some(false),
-        )
-        .await
-        .expect("git_log feature");
-        assert_eq!(
-            by_head
-                .entries
-                .iter()
-                .map(|e| (e.full_hash.clone(), e.pushed))
-                .collect::<Vec<_>>(),
-            by_name
-                .entries
-                .iter()
-                .map(|e| (e.full_hash.clone(), e.pushed))
-                .collect::<Vec<_>>(),
-            "the HEAD rev must read exactly like the branch it points at"
-        );
-    }
-
-    // A detached HEAD has no branch, so push status is genuinely unknown — the
-    // literal `HEAD` rev must not fall back to comparing against the remote's
-    // default branch (which would report a definite, wrong badge).
-    #[tokio::test]
-    async fn git_log_head_rev_reports_unknown_push_status_when_detached() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let p = dir.path();
-        git_run(p, &["init", "-q", "-b", "main"]);
-        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c1"]);
-        let c1 = git_capture(p, &["rev-parse", "HEAD"]);
-        git_run(p, &["update-ref", "refs/remotes/origin/main", &c1]);
-        git_run(
-            p,
-            &[
-                "symbolic-ref",
-                "refs/remotes/origin/HEAD",
-                "refs/remotes/origin/main",
-            ],
-        );
-        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c2"]);
-        git_run(p, &["checkout", "-q", "--detach"]);
-
-        let result = git_log(
-            p.to_string_lossy().to_string(),
-            None,
-            Some("HEAD".to_string()),
-            None,
-            None,
-            None,
-            Some(false),
-            Some(false),
-        )
-        .await
-        .expect("git_log HEAD detached");
-
-        assert!(
-            !result.entries.is_empty(),
-            "a detached HEAD still logs its history"
-        );
-        for e in &result.entries {
-            assert_eq!(
-                e.pushed, None,
-                "commit {} must read unknown while detached, got {:?}",
-                e.hash, e.pushed
-            );
-        }
-    }
-
-    /// A 1x1 transparent PNG: real binary bytes (NUL inside the IHDR length),
-    /// so it exercises the path `git_show_file` refuses.
-    const TINY_PNG: &[u8] = &[
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
-        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
-        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
-        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
-        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
-    ];
-
-    #[tokio::test]
-    async fn git_show_file_base64_returns_committed_binary_bytes() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let p = dir.path();
-        git_run(p, &["init", "-q", "-b", "main"]);
-        std::fs::write(p.join("logo.png"), TINY_PNG).expect("write png");
-        git_run(p, &["add", "logo.png"]);
-        git_run(p, &["commit", "-q", "-m", "add logo"]);
-        // Working tree diverges from HEAD; the command must read the ref, not
-        // the file on disk.
-        std::fs::write(p.join("logo.png"), b"not a png").expect("overwrite png");
-
-        let blob = git_show_file_base64(
-            p.to_string_lossy().to_string(),
-            "logo.png".to_string(),
-            None,
-            None,
-        )
-        .await
-        .expect("show blob");
-
-        assert!(blob.exists, "committed file must exist at HEAD");
-        assert!(!blob.too_large);
-        assert_eq!(blob.byte_size, TINY_PNG.len() as u64);
-        assert_eq!(
-            base64::engine::general_purpose::STANDARD
-                .decode(&blob.data)
-                .expect("decode base64"),
-            TINY_PNG,
-            "bytes must round-trip unmodified"
-        );
-    }
-
-    #[tokio::test]
-    async fn git_show_file_base64_reports_missing_path_without_erroring() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let p = dir.path();
-        git_run(p, &["init", "-q", "-b", "main"]);
-        git_run(p, &["commit", "-q", "--allow-empty", "-m", "c1"]);
-
-        let blob = git_show_file_base64(
-            p.to_string_lossy().to_string(),
-            "added-later.png".to_string(),
-            None,
-            None,
-        )
-        .await
-        .expect("missing path is not an error");
-
-        assert!(!blob.exists, "an added file has no original side");
-        assert!(
-            !blob.ref_missing,
-            "HEAD resolved fine — it is the path that is not there"
-        );
-        assert!(blob.data.is_empty());
-        assert_eq!(blob.byte_size, 0);
-    }
-
-    #[tokio::test]
-    async fn git_show_file_base64_separates_a_missing_ref_from_a_missing_path() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let p = dir.path();
-        git_run(p, &["init", "-q", "-b", "main"]);
-        std::fs::write(p.join("logo.png"), TINY_PNG).expect("write png");
-        git_run(p, &["add", "logo.png"]);
-        git_run(p, &["commit", "-q", "-m", "add logo"]);
-
-        // A revision that does not resolve is not evidence that the file was
-        // added — the caller must be able to tell the two apart.
-        let gone = git_show_file_base64(
-            p.to_string_lossy().to_string(),
-            "logo.png".to_string(),
-            Some("deleted-branch".to_string()),
-            None,
-        )
-        .await
-        .expect("unresolvable ref is reported, not raised");
-
-        assert!(!gone.exists);
-        assert!(gone.ref_missing, "the revision is what went missing");
-
-        // The parent of the root commit: also unresolvable, and this is exactly
-        // the case where "nothing came before" is the truthful reading.
-        let root = git_capture(p, &["rev-parse", "HEAD"]);
-        let before_root = git_show_file_base64(
-            p.to_string_lossy().to_string(),
-            "logo.png".to_string(),
-            Some(format!("{}~1", root.trim())),
-            None,
-        )
-        .await
-        .expect("root commit has no parent");
-
-        assert!(!before_root.exists);
-        assert!(before_root.ref_missing);
-    }
-
-    #[tokio::test]
-    async fn git_show_file_base64_flags_a_shallow_boundary_parent_as_missing() {
-        // A shallow clone's oldest commit keeps its `parent` header, but the
-        // graft hides that object: `rev-parse` cannot resolve it and
-        // `rev-list --parents` reports none. git's own diff reads such a commit
-        // as all-additions, and the commit-diff callers follow it by opting
-        // into `missingRefIsAbsent`; the command's job is only to report
-        // truthfully that the revision did not resolve.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let origin = dir.path().join("origin");
-        std::fs::create_dir(&origin).expect("mkdir origin");
-        git_run(&origin, &["init", "-q", "-b", "main"]);
-        std::fs::write(origin.join("logo.png"), TINY_PNG).expect("write png");
-        git_run(&origin, &["add", "logo.png"]);
-        git_run(&origin, &["commit", "-q", "-m", "c1"]);
-        std::fs::write(origin.join("logo.png"), b"changed").expect("rewrite png");
-        git_run(&origin, &["add", "logo.png"]);
-        git_run(&origin, &["commit", "-q", "-m", "c2"]);
-
-        let shallow = dir.path().join("shallow");
-        git_run(
-            dir.path(),
-            &[
-                "clone",
-                "-q",
-                "--depth",
-                "1",
-                &format!("file://{}", origin.to_string_lossy()),
-                &shallow.to_string_lossy(),
-            ],
-        );
-
-        let head = git_capture(&shallow, &["rev-parse", "HEAD"]);
-        let blob = git_show_file_base64(
-            shallow.to_string_lossy().to_string(),
-            "logo.png".to_string(),
-            Some(format!("{}~1", head.trim())),
-            None,
-        )
-        .await
-        .expect("a truncated history is reported, not raised");
-
-        assert!(!blob.exists);
-        assert!(
-            blob.ref_missing,
-            "the parent revision is unreachable in a shallow clone"
-        );
-    }
-
-    #[tokio::test]
-    async fn git_show_file_base64_skips_bytes_over_the_cap() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let p = dir.path();
-        git_run(p, &["init", "-q", "-b", "main"]);
-        std::fs::write(p.join("big.png"), vec![0u8; 8_000]).expect("write big");
-        git_run(p, &["add", "big.png"]);
-        git_run(p, &["commit", "-q", "-m", "add big"]);
-
-        // 4_096 is the floor the clamp allows, and the blob is comfortably over it.
-        let blob = git_show_file_base64(
-            p.to_string_lossy().to_string(),
-            "big.png".to_string(),
-            None,
-            Some(4_096),
-        )
-        .await
-        .expect("show blob");
-
-        assert!(blob.exists, "the blob is there, we just refused to load it");
-        assert!(blob.too_large);
-        assert!(blob.data.is_empty(), "no bytes when over the cap");
-        assert_eq!(blob.byte_size, 8_000, "size is reported anyway");
-    }
-
-    #[tokio::test]
-    async fn add_folder_to_history_core_derives_name_from_path() {
-        let db = fresh_in_memory_db().await;
-        let entry = add_folder_to_history_core(&db, "/tmp/houhub-test-project".into())
-            .await
-            .expect("add folder");
-        assert_eq!(entry.name, "houhub-test-project");
-        assert_eq!(entry.path, "/tmp/houhub-test-project");
-    }
-
-    #[tokio::test]
-    async fn add_folder_to_history_core_upserts_on_duplicate_path() {
-        let db = fresh_in_memory_db().await;
-        let path = "/tmp/houhub-dup-test".to_string();
-        let first = add_folder_to_history_core(&db, path.clone())
-            .await
-            .expect("add 1st");
-        let second = add_folder_to_history_core(&db, path.clone())
-            .await
-            .expect("add 2nd");
-        assert_eq!(first.id, second.id, "duplicate path must reuse id");
-
-        let history = load_folder_history_core(&db).await.expect("history");
-        assert_eq!(
-            history.iter().filter(|f| f.path == path).count(),
-            1,
-            "no duplicate rows for same path"
-        );
-    }
-
-    #[tokio::test]
-    async fn remove_folder_from_history_core_soft_deletes() {
-        let db = fresh_in_memory_db().await;
-        let path = "/tmp/houhub-remove-test".to_string();
-        add_folder_to_history_core(&db, path.clone())
-            .await
-            .expect("add");
-        remove_folder_from_history_core(&db, path.clone())
-            .await
-            .expect("remove");
-        let history = load_folder_history_core(&db).await.expect("history");
-        assert!(
-            history.iter().all(|f| f.path != path),
-            "soft-deleted folder must not appear in list"
-        );
-    }
-
-    #[tokio::test]
-    async fn open_folder_by_id_core_errors_when_missing() {
-        let db = fresh_in_memory_db().await;
-        let err = open_folder_by_id_core(&db, 99_999)
-            .await
-            .expect_err("missing id should error");
-        // Either the not_found wrapper (when set_folder_open returns Ok(()) on no-op)
-        // or the underlying DbError propagates — both are acceptable for "missing".
-        let msg = format!("{err:?}");
-        assert!(
-            msg.to_lowercase().contains("not found") || msg.to_lowercase().contains("99999"),
-            "expected not-found-ish error, got: {msg}"
-        );
-    }
-
-    /// A delegated child's `working_dir` is whatever the agent picked — a PR
-    /// checkout under /tmp, a throwaway worktree. It needs a folder row (the
-    /// conversation's `folder_id`, and the cwd a resume reads back), but it must
-    /// not become a project in the user's sidebar. Both cwd lookups ignore
-    /// `is_open`, so a closed row serves the delegation fully.
-    #[tokio::test]
-    async fn ensure_folder_for_path_creates_a_closed_row() {
-        let db = fresh_in_memory_db().await;
-        let entry = folder_service::ensure_folder_for_path(&db.conn, "/tmp/houhub-pr666")
-            .await
-            .expect("ensure folder");
-
-        let open = list_open_folder_details_core(&db).await.expect("open list");
-        assert!(
-            !open.iter().any(|f| f.id == entry.id),
-            "an agent's scratch cwd must not land in the workspace folder list"
-        );
-
-        // ...but it is still fully resolvable, which is all the delegation needs.
-        assert!(
-            folder_service::get_folder_by_id(&db.conn, entry.id)
-                .await
-                .expect("by id")
-                .is_some(),
-            "resume resolves the child's cwd through get_folder_by_id"
-        );
-        let all = list_all_folder_details_core(&db).await.expect("all list");
-        assert!(all.iter().any(|f| f.id == entry.id));
-    }
-
-    /// Two callers making the row of one new path at once — the runs of a
-    /// `houhub-cli -a x -a y` in a new workspace, delegations into a new cwd —
-    /// both get it: the one that lost the insert reads the winner's.
-    #[tokio::test]
-    async fn ensure_folder_for_path_made_twice_at_once_is_one_row() {
-        let db = fresh_in_memory_db().await;
-        let path = "/tmp/houhub-ensure-race";
-        let (a, b) = tokio::join!(
-            folder_service::ensure_folder_for_path(&db.conn, path),
-            folder_service::ensure_folder_for_path(&db.conn, path),
-        );
-        let (a, b) = (a.expect("first"), b.expect("second"));
-        assert_eq!(a.id, b.id);
-        let all = list_all_folder_details_core(&db).await.expect("all list");
-        assert_eq!(all.iter().filter(|f| f.path == path).count(), 1);
-    }
-
-    /// The overwhelmingly common case: the child runs in the same folder as its
-    /// parent. That folder is already open and must stay exactly as it was —
-    /// including `last_opened_at`, which orders the folder history and has no
-    /// business being bumped by a background delegation.
-    #[tokio::test]
-    async fn ensure_folder_for_path_leaves_an_open_folder_untouched() {
-        let db = fresh_in_memory_db().await;
-        let opened = open_folder_core(&db, "/tmp/houhub-ensure-open".into())
-            .await
-            .expect("open folder");
-
-        let entry = folder_service::ensure_folder_for_path(&db.conn, "/tmp/houhub-ensure-open")
-            .await
-            .expect("ensure folder");
-
-        assert_eq!(entry.id, opened.id, "the existing row is reused");
-        assert_eq!(
-            entry.last_opened_at, opened.last_opened_at,
-            "a background delegation must not reorder the folder history"
-        );
-        let open = list_open_folder_details_core(&db).await.expect("open list");
-        assert!(
-            open.iter().any(|f| f.id == opened.id),
-            "an already-open folder stays open"
-        );
-    }
-
-    /// The regression this replaced `add_folder` for: that helper flips
-    /// `is_open = true` on an existing row, so delegating into a folder the user
-    /// had closed put it back in their sidebar behind their back.
-    #[tokio::test]
-    async fn ensure_folder_for_path_does_not_reopen_a_closed_folder() {
-        let db = fresh_in_memory_db().await;
-        let opened = open_folder_core(&db, "/tmp/houhub-ensure-closed".into())
-            .await
-            .expect("open folder");
-        folder_service::set_folder_open(&db.conn, opened.id, false)
-            .await
-            .expect("close folder");
-
-        folder_service::ensure_folder_for_path(&db.conn, "/tmp/houhub-ensure-closed")
-            .await
-            .expect("ensure folder");
-
-        let open = list_open_folder_details_core(&db).await.expect("open list");
-        assert!(
-            !open.iter().any(|f| f.id == opened.id),
-            "a folder the user closed stays closed"
-        );
-    }
-
-    /// `deleted_at` is the one field that must be cleared: both cwd lookups
-    /// filter on it, so leaving a soft-deleted row deleted would break the very
-    /// resume the row is created for. Reviving it must still not open it.
-    #[tokio::test]
-    async fn ensure_folder_for_path_revives_a_soft_deleted_row_but_leaves_it_closed() {
-        let db = fresh_in_memory_db().await;
-        let opened = open_folder_core(&db, "/tmp/houhub-ensure-deleted".into())
-            .await
-            .expect("open folder");
-        remove_folder_from_history_core(&db, "/tmp/houhub-ensure-deleted".into())
-            .await
-            .expect("soft delete");
-        assert!(
-            folder_service::get_folder_by_id(&db.conn, opened.id)
-                .await
-                .expect("by id")
-                .is_none(),
-            "precondition: a soft-deleted row is invisible to cwd resolution"
-        );
-
-        let entry = folder_service::ensure_folder_for_path(&db.conn, "/tmp/houhub-ensure-deleted")
-            .await
-            .expect("ensure folder");
-
-        assert_eq!(
-            entry.id, opened.id,
-            "the same row is revived, not a new one"
-        );
-        assert!(
-            folder_service::get_folder_by_id(&db.conn, opened.id)
-                .await
-                .expect("by id")
-                .is_some(),
-            "cwd resolution works again"
-        );
-        let open = list_open_folder_details_core(&db).await.expect("open list");
-        assert!(
-            !open.iter().any(|f| f.id == opened.id),
-            "reviving the row must not put it back in the sidebar"
-        );
-    }
-
-    #[tokio::test]
-    async fn open_worktree_folder_core_records_parent_as_root() {
-        let db = fresh_in_memory_db().await;
-        let root = open_folder_core(&db, "/tmp/houhub-wt-root".into())
-            .await
-            .expect("open root");
-        assert_eq!(root.parent_id, None, "root folder has no parent");
-
-        let wt = open_worktree_folder_core(&db, "/tmp/houhub-wt-a".into(), root.id)
-            .await
-            .expect("open worktree");
-        assert_eq!(
-            wt.parent_id,
-            Some(root.id),
-            "worktree records its source root folder"
-        );
-    }
-
-    #[tokio::test]
-    async fn open_worktree_folder_core_flattens_nested_worktrees() {
-        let db = fresh_in_memory_db().await;
-        let root = open_folder_core(&db, "/tmp/houhub-wt-flat-root".into())
-            .await
-            .expect("open root");
-        let child = open_worktree_folder_core(&db, "/tmp/houhub-wt-flat-1".into(), root.id)
-            .await
-            .expect("open child worktree");
-        // A worktree created *from* the child must still point at the root, not
-        // the intermediate child.
-        let grandchild = open_worktree_folder_core(&db, "/tmp/houhub-wt-flat-2".into(), child.id)
-            .await
-            .expect("open grandchild worktree");
-        assert_eq!(child.parent_id, Some(root.id));
-        assert_eq!(
-            grandchild.parent_id,
-            Some(root.id),
-            "worktree of a worktree flattens to the original root"
-        );
-    }
-
-    #[tokio::test]
-    async fn open_worktree_folder_core_unknown_source_is_root() {
-        let db = fresh_in_memory_db().await;
-        let wt = open_worktree_folder_core(&db, "/tmp/houhub-wt-orphan".into(), 0)
-            .await
-            .expect("open worktree with no source");
-        assert_eq!(
-            wt.parent_id, None,
-            "non-positive / unknown source degrades to a top-level folder"
-        );
-    }
-
-    /// The point of seeding: a worktree's directory name says far less about it
-    /// than the branch it holds, so registering one labels it by branch.
-    #[tokio::test]
-    async fn open_worktree_folder_core_labels_the_folder_with_its_branch() {
-        let db = fresh_in_memory_db().await;
-        let (_dir, repo, wt_path) = repo_with_worktree();
-        let root = open_folder_core(&db, repo).await.expect("root");
-
-        let wt = open_worktree_folder_core(&db, wt_path, root.id)
-            .await
-            .expect("worktree folder");
-
-        assert_eq!(
-            wt.alias.as_deref(),
-            Some("wt"),
-            "the fresh worktree folder is labeled with its checked-out branch"
-        );
-    }
-
-    /// Re-registering a worktree is routine — a task retry re-creating its
-    /// checkout, an automation re-resolving the same directory — and must never
-    /// undo the name the user gave it in the sidebar.
-    #[tokio::test]
-    async fn open_worktree_folder_core_keeps_a_user_alias_on_re_register() {
-        let db = fresh_in_memory_db().await;
-        let (_dir, repo, wt_path) = repo_with_worktree();
-        let root = open_folder_core(&db, repo).await.expect("root");
-        let wt = open_worktree_folder_core(&db, wt_path.clone(), root.id)
-            .await
-            .expect("worktree folder");
-        update_folder_alias_core(&db, wt.id, Some("Payment rewrite".into()))
-            .await
-            .expect("user renames it");
-
-        let again = open_worktree_folder_core(&db, wt_path, root.id)
-            .await
-            .expect("re-register the same worktree");
-
-        assert_eq!(again.id, wt.id, "same folder row");
-        assert_eq!(
-            again.alias.as_deref(),
-            Some("Payment rewrite"),
-            "the user's name survives re-registration"
-        );
-    }
-
-    /// The seed is best-effort: a directory git knows nothing about (or that is
-    /// gone entirely) still registers, just without a label — the sidebar then
-    /// falls back to the directory name as it always did.
-    #[tokio::test]
-    async fn open_worktree_folder_core_leaves_a_non_repo_unlabeled() {
-        let db = fresh_in_memory_db().await;
-        let dir = tempfile::tempdir().expect("tempdir");
-        let plain = dir
-            .path()
-            .join("not-a-repo")
-            .to_str()
-            .expect("utf-8 path")
-            .to_string();
-        std::fs::create_dir_all(&plain).expect("mkdir");
-
-        let wt = open_worktree_folder_core(&db, plain, 0)
-            .await
-            .expect("registers anyway");
-
-        assert_eq!(wt.alias, None, "no branch to label it with");
-    }
-
-    /// Worktrees registered before seeding existed keep showing their directory
-    /// name forever without this — the whole reason the backfill exists.
-    #[tokio::test]
-    async fn backfill_labels_an_already_registered_worktree() {
-        let db = fresh_in_memory_db().await;
-        let (_dir, repo, wt_path) = repo_with_worktree();
-        let root = open_folder_core(&db, repo).await.expect("root");
-        let wt = open_worktree_folder_core(&db, wt_path, root.id)
-            .await
-            .expect("worktree folder");
-        // Back to the pre-seeding state: a worktree folder row with no alias.
-        update_folder_alias_core(&db, wt.id, None)
-            .await
-            .expect("clear the alias");
-
-        let labeled = backfill_worktree_folder_aliases(&test_emitter(), &db).await;
-
-        assert_eq!(labeled, 1);
-        assert_eq!(
-            get_folder_core(&db, wt.id)
-                .await
-                .expect("folder")
-                .alias
-                .as_deref(),
-            Some("wt")
-        );
-        assert_eq!(
-            get_folder_core(&db, root.id).await.expect("root").alias,
-            None,
-            "the root repo is not a worktree and is left alone"
-        );
-    }
-
-    /// A `folder://changed` Upsert means "insert-or-replace in the OPEN folder
-    /// list", so announcing a closed folder would put one the user removed from
-    /// the workspace back in their sidebar. Label it anyway — reopening it later
-    /// should already read as the branch — but stay silent about it.
-    #[tokio::test]
-    async fn backfill_labels_a_closed_worktree_without_announcing_it() {
-        use crate::web::event_bridge::WebEventBroadcaster;
-
-        let db = fresh_in_memory_db().await;
-        let (_dir, repo, wt_path) = repo_with_worktree();
-        let root = open_folder_core(&db, repo.clone()).await.expect("root");
-        let open_wt = open_worktree_folder_core(&db, wt_path, root.id)
-            .await
-            .expect("open worktree folder");
-        let (_dir2, repo2, wt_path2) = repo_with_worktree();
-        let root2 = open_folder_core(&db, repo2).await.expect("second root");
-        let closed_wt = open_worktree_folder_core(&db, wt_path2, root2.id)
-            .await
-            .expect("worktree folder to close");
-        // Back to the pre-seeding state for both, then close the second one the
-        // way the UI does (the row stays alive, just out of the workspace).
-        for id in [open_wt.id, closed_wt.id] {
-            update_folder_alias_core(&db, id, None)
-                .await
-                .expect("clear the alias");
-        }
-        let broadcaster = std::sync::Arc::new(WebEventBroadcaster::new());
-        let emitter = EventEmitter::test_web_only(broadcaster.clone());
-        remove_folder_from_workspace_core(&emitter, &db, closed_wt.id)
-            .await
-            .expect("close the folder");
-
-        // Subscribe only now, so the queue holds just the backfill's events.
-        let mut rx = broadcaster.subscribe();
-        let labeled = backfill_worktree_folder_aliases(&emitter, &db).await;
-
-        // Both rows get the label…
-        assert_eq!(labeled, 2);
-        for id in [open_wt.id, closed_wt.id] {
-            assert_eq!(
-                get_folder_core(&db, id).await.expect("folder").alias,
-                Some("wt".to_string()),
-                "every worktree row is labeled, open or not"
-            );
-        }
-        // …but only the open one is announced.
-        let mut announced = Vec::new();
-        while let Ok(evt) = rx.try_recv() {
-            if evt.channel == crate::web::event_bridge::FOLDER_CHANGED_EVENT {
-                let p = &*evt.payload;
-                if p["kind"] == "upsert" {
-                    announced.push(p["folder"]["id"].as_i64().unwrap_or(-1) as i32);
-                }
-            }
-        }
-        assert_eq!(
-            announced,
-            vec![open_wt.id],
-            "a closed folder must not be broadcast back into the sidebar"
-        );
-    }
-
-    /// The backfill decides whether to announce a folder by re-reading it, not
-    /// from the snapshot its work list was built from — otherwise closing a
-    /// folder while the backfill walks (one git call per folder, so the window is
-    /// real) still announces it and puts it back in the sidebar. This is that
-    /// re-read: the same id that was announceable a moment ago no longer is.
-    #[tokio::test]
-    async fn a_folder_closed_after_enumeration_is_no_longer_announceable() {
-        let db = fresh_in_memory_db().await;
-        let (_dir, repo, wt_path) = repo_with_worktree();
-        let root = open_folder_core(&db, repo).await.expect("root");
-        let wt = open_worktree_folder_core(&db, wt_path, root.id)
-            .await
-            .expect("worktree folder");
-
-        // Enumeration-time reading: open, so this row would be announced.
-        assert!(folder_service::get_open_folder_by_id(&db.conn, wt.id)
-            .await
-            .expect("query")
-            .is_some());
-
-        // The user closes it mid-walk.
-        remove_folder_from_workspace_core(&test_emitter(), &db, wt.id)
-            .await
-            .expect("close the folder");
-
-        assert!(
-            folder_service::get_open_folder_by_id(&db.conn, wt.id)
-                .await
-                .expect("query")
-                .is_none(),
-            "a folder closed since enumeration must not be announced"
-        );
-        // Still a live row the backfill may label — just silently.
-        assert!(get_folder_core(&db, wt.id).await.is_ok());
-    }
-
-    /// A second launch must be a no-op — both for folders it already labeled and
-    /// for ones the user has since named.
-    #[tokio::test]
-    async fn backfill_skips_folders_that_already_have_a_label() {
-        let db = fresh_in_memory_db().await;
-        let (_dir, repo, wt_path) = repo_with_worktree();
-        let root = open_folder_core(&db, repo).await.expect("root");
-        let wt = open_worktree_folder_core(&db, wt_path, root.id)
-            .await
-            .expect("worktree folder");
-        update_folder_alias_core(&db, wt.id, Some("Payment rewrite".into()))
-            .await
-            .expect("user renames it");
-
-        assert_eq!(
-            backfill_worktree_folder_aliases(&test_emitter(), &db).await,
-            0
-        );
-        assert_eq!(
-            get_folder_core(&db, wt.id)
-                .await
-                .expect("folder")
-                .alias
-                .as_deref(),
-            Some("Payment rewrite")
-        );
-    }
-
-    /// A repo with one commit on `main` plus a linked worktree at `<dir>/wt`
-    /// holding branch `wt`. Returns `(tempdir, repo_path, worktree_path)`.
-    fn repo_with_worktree() -> (tempfile::TempDir, String, String) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        git_run(dir.path(), &["init", "-q", "-b", "main"]);
-        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "base"]);
-        let wt_path = dir.path().join("wt");
-        let wt_str = wt_path.to_str().expect("utf-8 path").to_string();
-        git_run(dir.path(), &["worktree", "add", "-q", "-b", "wt", &wt_str]);
-        let repo = dir.path().to_str().expect("utf-8 path").to_string();
-        (dir, repo, wt_str)
-    }
-
-    fn test_emitter() -> EventEmitter {
-        EventEmitter::test_web_only(std::sync::Arc::new(
-            crate::web::event_bridge::WebEventBroadcaster::new(),
-        ))
-    }
-
-    /// Spell a path git printed and one we resolved ourselves the same way
-    /// before comparing them. git reports the fully resolved location (on
-    /// macOS `/var` is a symlink into `/private/var`) with `/` separators,
-    /// while `fs::canonicalize` on Windows hands back the verbatim
-    /// `\\?\C:\…` form of what git prints as `C:/…`. Resolve, drop the
-    /// verbatim prefix, settle on forward slashes.
-    fn comparable_path(path: &str) -> String {
-        let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
-        crate::paths::simplify_verbatim_path(&resolved)
-            .to_string_lossy()
-            .replace('\\', "/")
-    }
-
-    /// The bug this command exists for: git flatly refuses to delete a branch a
-    /// worktree has checked out, so the branch selector's "delete branch" could
-    /// only ever report an error. Removing the checkout first is the fix.
-    #[tokio::test]
-    async fn remove_worktree_deletes_a_branch_plain_delete_cannot() {
-        let db = fresh_in_memory_db().await;
-        let (_dir, repo, wt_path) = repo_with_worktree();
-
-        let refused = git_delete_branch(repo.clone(), "wt".into(), false)
-            .await
-            .expect_err("git refuses a branch held by a worktree");
-        let refusal = format!("{refused:?}");
-        assert!(
-            refusal.contains("used by worktree") || refusal.contains("checked out at"),
-            "expected git's worktree refusal, got: {refused:?}"
-        );
-
-        // Resolve ours the way git resolves its own — while the directory is
-        // still there to resolve.
-        let canonical_wt = comparable_path(&wt_path);
-
-        let removal = git_remove_worktree_core(
-            &test_emitter(),
-            &db,
-            repo.clone(),
-            "wt".into(),
-            0,
-            true,
-            false,
-        )
-        .await
-        .expect("worktree + branch removal");
-
-        assert_eq!(
-            removal.worktree_path.as_deref().map(comparable_path),
-            Some(canonical_wt),
-            "reports the directory it removed"
-        );
-        assert!(removal.branch_deleted);
-        assert!(!Path::new(&wt_path).exists(), "worktree directory is gone");
-        let branches = git_list_all_branches(repo).await.expect("branches");
-        assert_eq!(branches.local, vec!["main".to_string()]);
-        assert!(branches.worktree_branches.is_empty());
-    }
-
-    /// The "worktree only" variant frees the checkout but is not a branch
-    /// delete: the commits — and the workspace folder you may want to recreate
-    /// the worktree under — survive.
-    #[tokio::test]
-    async fn remove_worktree_without_branch_keeps_branch_and_folder() {
-        let db = fresh_in_memory_db().await;
-        let (_dir, repo, wt_path) = repo_with_worktree();
-        let root = open_folder_core(&db, repo.clone()).await.expect("root");
-        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
-            .await
-            .expect("worktree folder");
-
-        let removal = git_remove_worktree_core(
-            &test_emitter(),
-            &db,
-            repo.clone(),
-            "wt".into(),
-            root.id,
-            false,
-            false,
-        )
-        .await
-        .expect("worktree removal");
-
-        assert!(!removal.branch_deleted);
-        assert_eq!(removal.folder_id, None);
-        assert!(!Path::new(&wt_path).exists());
-        let branches = git_list_all_branches(repo).await.expect("branches");
-        assert!(
-            branches.local.contains(&"wt".to_string()),
-            "the branch outlives its worktree"
-        );
-        assert!(
-            folder_service::get_folder_by_id(&db.conn, wt_folder.id)
-                .await
-                .expect("lookup")
-                .is_some(),
-            "the workspace folder outlives its worktree"
-        );
-    }
-
-    /// Deleting everything also drops the workspace folder — and its sessions
-    /// have to land somewhere first, or they are orphaned under a folder no
-    /// client can fetch.
-    #[tokio::test]
-    async fn remove_worktree_with_branch_rehomes_sessions_then_drops_the_folder() {
-        use crate::db::service::conversation_service;
-        use crate::models::agent::AgentType;
-
-        let db = fresh_in_memory_db().await;
-        let (_dir, repo, wt_path) = repo_with_worktree();
-        let root = open_folder_core(&db, repo.clone()).await.expect("root");
-        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
-            .await
-            .expect("worktree folder");
-        let conv =
-            conversation_service::create(&db.conn, wt_folder.id, AgentType::ClaudeCode, None, None)
-                .await
-                .expect("conversation");
-
-        let removal = git_remove_worktree_core(
-            &test_emitter(),
-            &db,
-            repo,
-            "wt".into(),
-            root.id,
-            true,
-            false,
-        )
-        .await
-        .expect("worktree + branch removal");
-
-        assert_eq!(removal.folder_id, Some(wt_folder.id));
-        assert_eq!(removal.reparented, 1);
-        assert!(
-            folder_service::get_folder_by_id(&db.conn, wt_folder.id)
-                .await
-                .expect("lookup")
-                .is_none(),
-            "the workspace folder goes with the branch"
-        );
-        let moved = conversation_service::get_by_id(&db.conn, conv.id)
-            .await
-            .expect("conversation row");
-        assert_eq!(moved.folder_id, root.id);
-        assert_eq!(
-            moved.origin_cwd.as_deref(),
-            Some(wt_path.as_str()),
-            "the session remembers where it actually ran"
-        );
-    }
-
-    /// Seed a to-do task that owns `wt_folder_id` as its worktree.
-    async fn seed_task_on_worktree(
-        db: &AppDatabase,
-        project_folder_id: i32,
-        wt_folder_id: i32,
-    ) -> i32 {
-        use crate::db::service::work_task_service;
-
-        let task = work_task_service::create(
-            &db.conn,
-            crate::models::WorkTaskDraft {
-                folder_id: project_folder_id,
-                title: "fix login".to_string(),
-                config: serde_json::json!({
-                    "display_text": "fix login",
-                    "prompt_blocks": [{ "type": "text", "text": "fix login" }],
-                }),
-            },
-        )
-        .await
-        .expect("task");
-        work_task_service::attach_worktree(&db.conn, task.id, wt_folder_id, "main", "abc", "wt")
-            .await
-            .expect("attach worktree");
-        task.id
-    }
-
-    /// The branch selector cannot tell a to-do task's worktree from any other,
-    /// so a task that has settled must not be left advertising a checkout that
-    /// is gone — its card would offer a cleanup and a diff that can only fail.
-    #[tokio::test]
-    async fn remove_worktree_detaches_the_task_that_owned_it() {
-        use crate::db::service::work_task_service;
-
-        let db = fresh_in_memory_db().await;
-        let (_dir, repo, wt_path) = repo_with_worktree();
-        let root = open_folder_core(&db, repo.clone()).await.expect("root");
-        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
-            .await
-            .expect("worktree folder");
-        let task_id = seed_task_on_worktree(&db, root.id, wt_folder.id).await;
-
-        git_remove_worktree_core(
-            &test_emitter(),
-            &db,
-            repo,
-            "wt".into(),
-            root.id,
-            true,
-            false,
-        )
-        .await
-        .expect("worktree + branch removal");
-
-        let after = work_task_service::get_model(&db.conn, task_id)
-            .await
-            .expect("task row");
-        assert_eq!(after.worktree_folder_id, None);
-    }
-
-    /// A task mid-run is working inside that directory right now. `--force`
-    /// would happily delete it out from under the live agent, so the refusal
-    /// has to come before git is asked — exactly as the task card's own
-    /// "remove worktree" refuses these statuses.
-    #[tokio::test]
-    async fn remove_worktree_refuses_while_a_task_is_running_in_it() {
-        use crate::db::entities::work_task::WorkTaskStatus;
-
-        let db = fresh_in_memory_db().await;
-        let (_dir, repo, wt_path) = repo_with_worktree();
-        let root = open_folder_core(&db, repo.clone()).await.expect("root");
-        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
-            .await
-            .expect("worktree folder");
-        let task_id = seed_task_on_worktree(&db, root.id, wt_folder.id).await;
-        // Straight to `running` — the real transition chain would need a live
-        // engine, and only the status matters here.
-        {
-            use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
-            let row = crate::db::entities::work_task::Entity::find_by_id(task_id)
-                .one(&db.conn)
-                .await
-                .expect("query")
-                .expect("task row");
-            let mut active = row.into_active_model();
-            active.status = Set(WorkTaskStatus::Running);
-            active.update(&db.conn).await.expect("mark running");
-        }
-
-        // Even the destructive variant, which is the one that would succeed.
-        let err = git_remove_worktree_core(
-            &test_emitter(),
-            &db,
-            repo.clone(),
-            "wt".into(),
-            root.id,
-            true,
-            true,
-        )
-        .await
-        .expect_err("a running task must block the removal");
-        assert!(
-            format!("{err:?}").contains("still working in this worktree"),
-            "expected a busy-task refusal, got: {err:?}"
-        );
-        assert!(Path::new(&wt_path).exists(), "the working tree survives");
-        let branches = git_list_all_branches(repo).await.expect("branches");
-        assert!(branches.local.contains(&"wt".to_string()));
-    }
-
-    /// Seen from a linked worktree, the repo's own checkout is just another
-    /// entry in `worktree_branches` — and the branch selector would offer to
-    /// remove it. Naming it separately is what lets the UI leave it alone.
-    #[tokio::test]
-    async fn list_all_branches_names_the_main_working_tree_branch() {
-        let (_dir, repo, wt_path) = repo_with_worktree();
-
-        let from_main = git_list_all_branches(repo).await.expect("from main tree");
-        assert_eq!(from_main.worktree_branches, vec!["wt".to_string()]);
-        assert_eq!(
-            from_main.main_worktree_branch, None,
-            "the queried path IS the main tree — it is not one of the others"
-        );
-
-        let from_worktree = git_list_all_branches(wt_path)
-            .await
-            .expect("from linked worktree");
-        assert_eq!(from_worktree.worktree_branches, vec!["main".to_string()]);
-        assert_eq!(
-            from_worktree.main_worktree_branch.as_deref(),
-            Some("main"),
-            "and from over here it is the one entry that can't be removed"
-        );
-    }
-
-    /// The main working tree hosts the repo itself — removing it would take the
-    /// project with it, so it is refused before git is asked.
-    #[tokio::test]
-    async fn remove_worktree_refuses_the_main_working_tree() {
-        let db = fresh_in_memory_db().await;
-        let (_dir, repo, _wt_path) = repo_with_worktree();
-
-        let err = git_remove_worktree_core(
-            &test_emitter(),
-            &db,
-            repo.clone(),
-            "main".into(),
-            0,
-            true,
-            false,
-        )
-        .await
-        .expect_err("main working tree must be refused");
-        assert!(
-            format!("{err:?}").contains("main working tree"),
-            "expected a main-working-tree refusal, got: {err:?}"
-        );
-        let branches = git_list_all_branches(repo).await.expect("branches");
-        assert!(branches.local.contains(&"main".to_string()));
-    }
-
-    #[test]
-    fn parse_worktrees_extracts_path_branch_pairs() {
-        // Main tree + a linked worktree + a detached worktree, trailing blank line.
-        let stdout = "\
-worktree /repo/main
-HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-branch refs/heads/main
-
-worktree /repo/wt-feature
-HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-branch refs/heads/feature-x
-
-worktree /repo/wt-detached
-HEAD cccccccccccccccccccccccccccccccccccccccc
-detached
-
-";
-        let entries = parse_worktrees(stdout);
-        assert_eq!(
-            entries,
-            vec![
-                ("/repo/main".to_string(), Some("main".to_string())),
-                (
-                    "/repo/wt-feature".to_string(),
-                    Some("feature-x".to_string())
-                ),
-                ("/repo/wt-detached".to_string(), None),
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_worktrees_flushes_trailing_block_without_blank_line() {
-        // No terminating blank line on the last block (git omits it at EOF here).
-        let stdout = "\
-worktree /repo/main
-HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-branch refs/heads/main";
-        let entries = parse_worktrees(stdout);
-        assert_eq!(
-            entries,
-            vec![("/repo/main".to_string(), Some("main".to_string()))]
-        );
-    }
-
-    #[test]
-    fn parse_worktrees_handles_empty_and_bare() {
-        assert!(parse_worktrees("").is_empty());
-        // A bare repo entry carries no branch.
-        let entries = parse_worktrees("worktree /repo/bare\nbare\n\n");
-        assert_eq!(entries, vec![("/repo/bare".to_string(), None)]);
-    }
-
-    #[tokio::test]
-    async fn open_folder_core_preserves_existing_worktree_parent() {
-        let db = fresh_in_memory_db().await;
-        let root = open_folder_core(&db, "/tmp/houhub-wt-preserve-root".into())
-            .await
-            .expect("open root");
-        let wt = open_worktree_folder_core(&db, "/tmp/houhub-wt-preserve".into(), root.id)
-            .await
-            .expect("open worktree");
-        assert_eq!(wt.parent_id, Some(root.id));
-        // A plain reopen of the same path must not clear the recorded parent.
-        let reopened = open_folder_core(&db, "/tmp/houhub-wt-preserve".into())
-            .await
-            .expect("reopen plain");
-        assert_eq!(
-            reopened.parent_id,
-            Some(root.id),
-            "plain open_folder must preserve an existing worktree parent"
-        );
-    }
-
-    #[tokio::test]
-    async fn open_worktree_folder_core_unknown_source_demotes_existing_to_root() {
-        let db = fresh_in_memory_db().await;
-        let root = open_folder_core(&db, "/tmp/houhub-wt-demote-root".into())
-            .await
-            .expect("open root");
-        let path = "/tmp/houhub-wt-demote".to_string();
-        let wt = open_worktree_folder_core(&db, path.clone(), root.id)
-            .await
-            .expect("open worktree");
-        assert_eq!(wt.parent_id, Some(root.id));
-        // Reopening the same path as a worktree with an unknown source writes the
-        // authoritative value (top-level) rather than keeping the stale parent.
-        let demoted = open_worktree_folder_core(&db, path, 0)
-            .await
-            .expect("reopen worktree with no source");
-        assert_eq!(
-            demoted.parent_id, None,
-            "explicit worktree open with unknown source demotes to top-level"
-        );
-    }
-
-    #[tokio::test]
-    async fn update_folder_color_core_roundtrips() {
-        let db = fresh_in_memory_db().await;
-        let entry = add_folder_to_history_core(&db, "/tmp/houhub-color-test".into())
-            .await
-            .expect("add");
-        let updated = update_folder_color_core(&db, entry.id, "#ff8800".into())
-            .await
-            .expect("update color");
-        assert_eq!(updated.color, "#ff8800");
-        let read_back = get_folder_core(&db, entry.id).await.expect("get");
-        assert_eq!(read_back.color, "#ff8800");
-    }
-
-    #[tokio::test]
-    async fn update_folder_default_agent_core_set_then_clear() {
-        use crate::web::event_bridge::{WebEventBroadcaster, WORK_TASK_CHANGED_EVENT};
-        use std::sync::Arc;
-
-        let db = fresh_in_memory_db().await;
-        let entry = add_folder_to_history_core(&db, "/tmp/houhub-agent-test".into())
-            .await
-            .expect("add");
-        let broadcaster = Arc::new(WebEventBroadcaster::new());
-        let mut rx = broadcaster.subscribe();
-        let emitter = EventEmitter::test_web_only(broadcaster.clone());
-
-        let set =
-            update_folder_default_agent_core(&emitter, &db, entry.id, Some(AgentType::ClaudeCode))
-                .await
-                .expect("set agent");
-        assert_eq!(set.default_agent_type, Some(AgentType::ClaudeCode));
-        // The default is the last layer a work task inherits, and the boards
-        // resolve it live — so the change has to reach them (web clients
-        // included) rather than wait for an unrelated task event.
-        let evt = rx.try_recv().expect("default agent should nudge the tasks");
-        assert_eq!(evt.channel, WORK_TASK_CHANGED_EVENT);
-        assert_eq!(evt.payload["kind"], "settings");
-        assert_eq!(evt.payload["folder_id"], entry.id);
-
-        let cleared = update_folder_default_agent_core(&emitter, &db, entry.id, None)
-            .await
-            .expect("clear agent");
-        assert_eq!(cleared.default_agent_type, None);
-        // Clearing it changes the inherited value just as much as setting it.
-        assert_eq!(
-            rx.try_recv().expect("clearing should nudge too").payload["kind"],
-            "settings"
-        );
-    }
-
-    #[tokio::test]
-    async fn move_file_tree_entry_moves_file_into_subdir() {
-        let root = tempfile::tempdir().expect("root");
-        std::fs::write(root.path().join("a.txt"), b"x").expect("write");
-        std::fs::create_dir(root.path().join("sub")).expect("mkdir");
-
-        let new_rel = move_file_tree_entry(
-            root.path().to_string_lossy().into_owned(),
-            "a.txt".to_string(),
-            "sub".to_string(),
-        )
-        .await
-        .expect("move");
-
-        assert_eq!(new_rel.replace('\\', "/"), "sub/a.txt");
-        assert!(!root.path().join("a.txt").exists());
-        assert!(root.path().join("sub/a.txt").exists());
-    }
-
-    #[tokio::test]
-    async fn move_file_tree_entry_moves_back_to_root() {
-        let root = tempfile::tempdir().expect("root");
-        std::fs::create_dir(root.path().join("sub")).expect("mkdir");
-        std::fs::write(root.path().join("sub/a.txt"), b"x").expect("write");
-
-        let new_rel = move_file_tree_entry(
-            root.path().to_string_lossy().into_owned(),
-            "sub/a.txt".to_string(),
-            String::new(),
-        )
-        .await
-        .expect("move to root");
-
-        assert_eq!(new_rel, "a.txt");
-        assert!(root.path().join("a.txt").exists());
-        assert!(!root.path().join("sub/a.txt").exists());
-    }
-
-    #[tokio::test]
-    async fn move_file_tree_entry_rejects_move_into_own_descendant() {
-        let root = tempfile::tempdir().expect("root");
-        std::fs::create_dir_all(root.path().join("src/inner")).expect("mkdir");
-
-        let res = move_file_tree_entry(
-            root.path().to_string_lossy().into_owned(),
-            "src".to_string(),
-            "src/inner".to_string(),
-        )
-        .await;
-        assert!(
-            res.is_err(),
-            "moving a dir into its own descendant must fail"
-        );
-        assert!(root.path().join("src/inner").is_dir(), "source untouched");
-    }
-
-    #[tokio::test]
-    async fn move_file_tree_entry_rejects_existing_target() {
-        let root = tempfile::tempdir().expect("root");
-        std::fs::write(root.path().join("a.txt"), b"1").expect("write");
-        std::fs::create_dir(root.path().join("sub")).expect("mkdir");
-        std::fs::write(root.path().join("sub/a.txt"), b"2").expect("write");
-
-        let res = move_file_tree_entry(
-            root.path().to_string_lossy().into_owned(),
-            "a.txt".to_string(),
-            "sub".to_string(),
-        )
-        .await;
-        assert!(res.is_err(), "name collision in destination must fail");
-        assert!(root.path().join("a.txt").exists(), "source untouched");
-    }
-
-    #[tokio::test]
-    async fn move_file_tree_entry_same_parent_is_noop() {
-        let root = tempfile::tempdir().expect("root");
-        std::fs::create_dir(root.path().join("sub")).expect("mkdir");
-        std::fs::write(root.path().join("sub/a.txt"), b"x").expect("write");
-
-        let rel = move_file_tree_entry(
-            root.path().to_string_lossy().into_owned(),
-            "sub/a.txt".to_string(),
-            "sub".to_string(),
-        )
-        .await
-        .expect("no-op move");
-        assert_eq!(rel, "sub/a.txt");
-        assert!(root.path().join("sub/a.txt").exists());
-    }
-
-    #[tokio::test]
-    async fn move_file_tree_entry_rejects_parent_escape() {
-        let root = tempfile::tempdir().expect("root");
-        std::fs::write(root.path().join("a.txt"), b"x").expect("write");
-
-        let res = move_file_tree_entry(
-            root.path().to_string_lossy().into_owned(),
-            "a.txt".to_string(),
-            "../evil".to_string(),
-        )
-        .await;
-        assert!(res.is_err(), "dest containing '..' must be rejected");
     }
 }

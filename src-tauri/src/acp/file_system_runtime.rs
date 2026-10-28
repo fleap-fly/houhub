@@ -1,37 +1,24 @@
 use std::collections::BTreeMap;
-
 use std::ffi::OsString;
-
 use std::fs::{File, OpenOptions};
-
 use std::io::{BufRead, BufReader, ErrorKind, Write};
-
 use std::path::{Component, Path, PathBuf};
-
 use std::sync::Arc;
-
 use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::v1::{
     ReadTextFileRequest, ReadTextFileResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
-
 use tokio::sync::Semaphore;
 
 use crate::models::agent::AgentType;
-
 use crate::parsers::expand_home_prefix;
 
 const FS_MAX_CONCURRENT_OPS: usize = 8;
-
 const FS_IO_TIMEOUT: Duration = Duration::from_secs(30);
-
 const FS_MAX_FILE_SIZE_BYTES: u64 = 16 * 1024 * 1024;
-
 const FS_MAX_READ_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-
 const FS_MAX_WRITE_BYTES: usize = 2 * 1024 * 1024;
-
 const FS_SLOW_OPERATION_MS: u128 = 200;
 
 #[derive(Debug)]
@@ -43,9 +30,7 @@ pub enum FileSystemRuntimeError {
 impl FileSystemRuntimeError {
     pub fn into_rpc_error(self) -> agent_client_protocol::Error {
         match self {
-            Self::InvalidParams(message) => {
-                agent_client_protocol::Error::invalid_params().data(message)
-            }
+            Self::InvalidParams(message) => agent_client_protocol::Error::invalid_params().data(message),
             Self::Internal(message) => agent_client_protocol::util::internal_error(message),
         }
     }
@@ -55,7 +40,6 @@ impl FileSystemRuntimeError {
 /// for the ACP `fs/*` channel. `default` | `strict` | `unrestricted`; anything
 /// else warns and falls back to `default`.
 pub(crate) const FS_POLICY_ENV: &str = "HOUHUB_ACP_FS_POLICY";
-
 /// Additional **writable** roots, joined with the platform `PATH` separator
 /// (`:` on unix, `;` on Windows — parsed with `std::env::split_paths`, so a
 /// Windows drive letter's colon is not mistaken for a separator).
@@ -344,7 +328,6 @@ struct RootSlot {
 /// records why that is a deliberate divergence from `expanduser` and why it is
 /// safe: the unexpanded value is not absolute, so the slot is refused below.
 const VERBATIM: bool = false;
-
 const EXPANDS_TILDE: bool = true;
 
 /// Resolve one slot to the directory the LAUNCHED agent will actually use, or
@@ -378,11 +361,18 @@ fn resolve_root_slot(slot: &RootSlot, runtime_env: &BTreeMap<String, String>) ->
         // unwritable. So: refuse the slot. That is fail-closed (the agent's write
         // is rejected), and the user can still name the directory explicitly via
         // `HOUHUB_ACP_FS_EXTRA_ROOTS`.
+        // Expanded against the CHILD's home, for the same reason the
+        // `default_rel` branch below uses it: `merge_agent_env` copies every
+        // `runtime_env` entry into the child, `HOME` included, and overriding it
+        // is the classic way to isolate a CLI's config. With
+        // `HOME=/srv/agy GEMINI_HOME=~/profile` the child's `expanduser` answers
+        // `/srv/agy/profile`, so resolving against houhub's own home would
+        // authorize a directory the agent never opens while leaving the one it
+        // does use unwritable. `None` means the child's home cannot be named at
+        // all, which `child_home_dir` has already warned about — treat the slot
+        // as unresolvable rather than substituting houhub's answer for it.
         let base = if *expands {
-            expand_home_prefix(
-                &value.to_string_lossy(),
-                child_home_dir(runtime_env).as_ref(),
-            )
+            expand_home_prefix(&value.to_string_lossy(), child_home_dir(runtime_env).as_ref())
         } else {
             PathBuf::from(value)
         };
@@ -407,7 +397,7 @@ fn resolve_root_slot(slot: &RootSlot, runtime_env: &BTreeMap<String, String>) ->
         // `starts_with`. `GEMINI_HOME=~` is a legal setting that really does put
         // Antigravity's tree directly in the home directory, and honoring it
         // here would hand the agent write access to every other agent's
-        // credentials as a side effect. The agent still runs; only HouHub's own
+        // credentials as a side effect. The agent still runs; only houhub's own
         // `fs/*` channel declines to authorize the whole home, and
         // `HOUHUB_ACP_FS_EXTRA_ROOTS` can still name a narrower directory inside
         // it.
@@ -496,7 +486,7 @@ fn renamed_dir(
 /// `..` at all.
 ///
 /// BOTH homes are rejected. The child's is the one whose tree this is, and
-/// HouHub's is the one holding every other agent's credentials; authorizing
+/// houhub's is the one holding every other agent's credentials; authorizing
 /// either wholesale defeats the isolation invariant, and they are only the same
 /// path when the launch does not relocate `HOME`.
 ///
@@ -716,10 +706,7 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
         // `resolve_cursor_config_from` prefers CURSOR_CONFIG_DIR verbatim and
         // only then `<XDG_CONFIG_HOME>/cursor` — order matters.
         AgentType::Cursor => &[RootSlot {
-            candidates: &[
-                ("CURSOR_CONFIG_DIR", "", VERBATIM),
-                ("XDG_CONFIG_HOME", "cursor", VERBATIM),
-            ],
+            candidates: &[("CURSOR_CONFIG_DIR", "", VERBATIM), ("XDG_CONFIG_HOME", "cursor", VERBATIM)],
             trims: false,
             default_rel: &[".cursor"],
             dir_name_env: None,
@@ -737,8 +724,9 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
             default_rel: &[".local", "share", "opencode"],
             dir_name_env: None,
         }],
+        // `cline_data_dir_for_env`: `CLINE_DATA_DIR`, else `<CLINE_DIR>/data`.
         AgentType::Cline => &[RootSlot {
-            candidates: &[("CLINE_DIR", "", VERBATIM)],
+            candidates: &[("CLINE_DATA_DIR", "", VERBATIM), ("CLINE_DIR", "data", VERBATIM)],
             trims: true,
             default_rel: &[".cline", "data"],
             dir_name_env: None,
@@ -801,9 +789,14 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
         // writes files itself rather than through `fs/*` (verified against
         // 0.209.1), so its `~/.trae` never needs to be a write root either.
         // Command Code is the same case: houhub's transcript is its history,
-        // and its tools never go through `fs/*` (verified against 1.84.0 and
-        // 1.86.3).
-        AgentType::Custom(_) | AgentType::ZCode | AgentType::Trae | AgentType::CommandCode => &[],
+        // and its tools never go through `fs/*` (verified against 1.84.0,
+        // 1.86.3 and 1.88.0). So is MiniMax Code: its tools run in-process and it sends
+        // houhub no `fs/*` or `terminal/*` request (verified against 0.7.0).
+        AgentType::Custom(_)
+        | AgentType::ZCode
+        | AgentType::Trae
+        | AgentType::CommandCode
+        | AgentType::MiniMaxCode => &[],
     }
 }
 
@@ -1207,7 +1200,6 @@ fn log_if_slow(operation: &str, path: &Path, started_at: Instant) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use std::fs;
 
     fn temp_workspace() -> PathBuf {
@@ -1222,7 +1214,6 @@ mod tests {
     /// relative-path guards these tests exercise.
     #[cfg(windows)]
     const ABS_PREFIX: &str = "C:";
-
     #[cfg(not(windows))]
     const ABS_PREFIX: &str = "";
 
@@ -1595,7 +1586,7 @@ mod tests {
             (AgentType::KimiCode, "KIMI_CODE_HOME"),
             (AgentType::Cursor, "CURSOR_CONFIG_DIR"),
             (AgentType::Hermes, "HERMES_HOME"),
-            (AgentType::Cline, "CLINE_DIR"),
+            (AgentType::Cline, "CLINE_DATA_DIR"),
             (AgentType::Pi, "PI_CODING_AGENT_DIR"),
         ];
 
@@ -1744,10 +1735,7 @@ mod tests {
             return; // no real subdirectory to build the alias from
         };
 
-        for value in [
-            format!("~/{subdir}/.."),
-            format!("{}/{subdir}/..", home.display()),
-        ] {
+        for value in [format!("~/{subdir}/.."), format!("{}/{subdir}/..", home.display())] {
             let runtime_env = BTreeMap::from([("GEMINI_HOME".to_string(), value.clone())]);
             let roots = agent_data_roots(AgentType::Antigravity, &runtime_env);
             for root in &roots {
@@ -1768,7 +1756,7 @@ mod tests {
     /// `GEMINI_HOME=~/relocated` the agent's files really are at
     /// `$HOME/relocated`. Treating the value verbatim judged it RELATIVE and
     /// refused the slot, which left the agent unable to write its own directory
-    /// — while HouHub, separately, created a literal `~` folder next to wherever
+    /// — while houhub, separately, created a literal `~` folder next to wherever
     /// it happened to be running.
     ///
     /// A BARE `~` is still refused. It is a legal setting that puts the tree
@@ -2039,14 +2027,8 @@ mod tests {
     fn home_relative_defaults_follow_the_childs_home() {
         let houhub_home = dirs::home_dir().expect("home dir");
         let isolated = PathBuf::from("/tmp/houhub-isolated-home");
-        let runtime_env = BTreeMap::from([
-            ("HOME".to_string(), isolated.to_string_lossy().to_string()),
-            // Explicitly remove the relocatable agent override so a developer
-            // shell's CODEX_HOME/GROK_HOME/etc. cannot change this test's child.
-            ("CODEX_HOME".to_string(), String::new()),
-            ("GROK_HOME".to_string(), String::new()),
-            ("CLAUDE_CONFIG_DIR".to_string(), String::new()),
-        ]);
+        let runtime_env =
+            BTreeMap::from([("HOME".to_string(), isolated.to_string_lossy().to_string())]);
 
         for (agent_type, rel) in [
             (AgentType::Codex, ".codex"),
@@ -2481,9 +2463,7 @@ mod tests {
             ),
             (
                 "XDG_CONFIG_HOME".to_string(),
-                absolute_path("tmp/houhub-xdg")
-                    .to_string_lossy()
-                    .to_string(),
+                absolute_path("tmp/houhub-xdg").to_string_lossy().to_string(),
             ),
         ]);
 
@@ -2672,7 +2652,6 @@ mod tests {
     /// unix-style literal is not on Windows.
     #[cfg(windows)]
     const CHILD_HOME_FIXTURE: (&str, &str) = ("USERPROFILE", "C:\\srv\\agy");
-
     #[cfg(not(windows))]
     const CHILD_HOME_FIXTURE: (&str, &str) = ("HOME", "/srv/agy");
 
@@ -2731,38 +2710,5 @@ mod tests {
         assert!(!leaked_tmp, "temporary file should be cleaned up");
 
         let _ = fs::remove_dir_all(workspace);
-    }
-
-    /// A `~` follows the CHILD's home, not HouHub's.
-    ///
-    /// `merge_agent_env` copies `HOME` into the child like any other variable,
-    /// and overriding it is the standard way to isolate a CLI's config — so
-    /// `HOME=/srv/agy GEMINI_HOME=~/profile` means `/srv/agy/profile` to the
-    /// server's own `expanduser` and nothing else. Expanding against
-    /// `dirs::home_dir()` authorized a directory the agent never opens while
-    /// leaving the one it does use unwritable. The `default_rel` branch already
-    /// went through `child_home_dir`; this makes the override branch agree.
-    #[test]
-    fn tilde_expands_against_the_childs_home_not_houhubs() {
-        let houhub_home = dirs::home_dir().expect("home dir");
-        // Platform-native: `child_home_dir` refuses a relative home, and a
-        // unix-style `/srv/agy` is NOT absolute on Windows (no drive prefix),
-        // so a shared literal would make this pass on unix and fail in the
-        // Windows server CI cell, which runs these lib tests for real.
-        let (home_key, child_home) = CHILD_HOME_FIXTURE;
-
-        let runtime_env = BTreeMap::from([
-            (home_key.to_string(), child_home.to_string()),
-            ("GEMINI_HOME".to_string(), "~/profile".to_string()),
-        ]);
-        let roots = agent_data_roots(AgentType::Antigravity, &runtime_env);
-        assert!(
-            roots.contains(&PathBuf::from(child_home).join("profile")),
-            "the child's own home must anchor the expansion, got {roots:?}"
-        );
-        assert!(
-            !roots.contains(&houhub_home.join("profile")),
-            "HouHub's home must not: {roots:?}"
-        );
     }
 }

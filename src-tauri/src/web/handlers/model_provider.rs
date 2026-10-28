@@ -18,10 +18,8 @@ pub struct CreateModelProviderParams {
     pub name: String,
     pub api_url: String,
     pub api_key: String,
-    pub agent_type: Option<String>,
-    pub agent_types: Option<Vec<String>>,
+    pub agent_type: String,
     pub model: Option<String>,
-    pub models: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -32,9 +30,7 @@ pub struct UpdateModelProviderParams {
     pub api_url: Option<String>,
     pub api_key: Option<String>,
     pub agent_type: Option<String>,
-    pub agent_types: Option<Vec<String>>,
     pub model: Option<String>,
-    pub models: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -58,19 +54,13 @@ pub async fn create_model_provider(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<CreateModelProviderParams>,
 ) -> Result<Json<ModelProviderInfo>, AppCommandError> {
-    let agent_types = params
-        .agent_types
-        .filter(|items| !items.is_empty())
-        .or_else(|| params.agent_type.map(|item| vec![item]))
-        .unwrap_or_default();
-    let result = mp_commands::create_model_provider_with_agent_types_core(
+    let result = mp_commands::create_model_provider_core(
         &state.db,
         params.name,
         params.api_url,
         params.api_key,
-        agent_types,
+        params.agent_type,
         params.model,
-        params.models,
     )
     .await?;
     Ok(Json(result))
@@ -89,9 +79,7 @@ pub async fn update_model_provider(
         params.api_url,
         params.api_key,
         params.agent_type,
-        params.agent_types,
         params.model,
-        params.models,
         &state.emitter,
     )
     .await?;
@@ -104,4 +92,18 @@ pub async fn delete_model_provider(
 ) -> Result<Json<()>, AppCommandError> {
     mp_commands::delete_model_provider_core(&state.db, params.id).await?;
     Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+pub struct ListProviderModelsBody {
+    pub params: mp_commands::ListProviderModelsParams,
+}
+
+pub async fn list_provider_models(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<ListProviderModelsBody>,
+) -> Result<Json<crate::acp::provider_models::ModelList>, AppCommandError> {
+    mp_commands::list_provider_models_core(&state.db, &state.data_dir, body.params)
+        .await
+        .map(Json)
 }

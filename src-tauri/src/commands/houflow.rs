@@ -496,9 +496,7 @@ pub async fn houflow_sync_managed_gateway_core(
                 Some(api_url.clone()),
                 Some(api_key.clone()),
                 None,
-                None,
                 Some(model.clone().unwrap_or_default()),
-                Some(models.clone()),
                 emitter,
             )
             .await?
@@ -513,16 +511,28 @@ pub async fn houflow_sync_managed_gateway_core(
             ModelProviderInfo::from(provider)
         }
         None => {
-            model_provider_commands::create_model_provider_with_agent_types_core(
+            let first_agent_type = agent_types
+                .first()
+                .map(|t| agent_type_id(*t))
+                .transpose()?
+                .unwrap_or_default();
+            let created = model_provider_commands::create_model_provider_core(
                 db,
                 provider_name.clone(),
                 api_url.clone(),
                 api_key.clone(),
-                agent_type_ids,
+                first_agent_type,
                 model.clone(),
-                Some(models.clone()),
             )
-            .await?
+            .await?;
+            let row = model_provider_service::update_agent_types(
+                &db.conn,
+                created.id,
+                agent_type_ids.clone(),
+            )
+            .await
+            .map_err(AppCommandError::from)?;
+            ModelProviderInfo::from(row)
         }
     };
 
@@ -540,13 +550,13 @@ pub async fn houflow_sync_managed_gateway_core(
                 .and_then(|row| row.env_json.as_deref())
                 .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(raw).ok())
                 .unwrap_or_default();
-            acp::acp_update_agent_env_preserving_enabled_and_refresh(
+            let enabled = setting.as_ref().map(|row| row.enabled).unwrap_or(false);
+            acp::acp_update_agent_env_core(
                 agent_type,
+                enabled,
                 env,
                 Some(provider.id),
                 db,
-                manager,
-                data_dir,
                 emitter,
             )
             .await

@@ -21,8 +21,29 @@
 //!
 //! macOS is the same bug two orders of magnitude smaller: that build is not
 //! PyInstaller, but it still drops ~172 KB of read-only resource files into
-//! `TMPDIR` per launch and still leaks them when killed. So the isolation is
-//! applied to every agent launch on every platform rather than special-cased.
+//! `TMPDIR` per launch and still leaks them when killed. So off Windows the
+//! isolation is applied to every agent launch rather than special-cased.
+//!
+//! # Why Windows isolates only the agents that need it
+//!
+//! On Windows `TMP` does not stay inside the process tree that was given it.
+//! Git for Windows' default `/etc/fstab` mounts `/tmp` as `usertemp`, which the
+//! MSYS2 runtime resolves with `GetTempPathW` in whichever MSYS process of the
+//! user starts FIRST, then keeps in per-user shared memory until the last one
+//! exits. An agent that runs shell commands itself starts them with its own
+//! `TMP`, so whenever one of them was the user's first MSYS process, the launch
+//! directory became `/tmp` for every MSYS program the user ran — other
+//! sessions' shells and the user's own Git Bash included — and pointed at
+//! nothing once that launch was reclaimed, for as long as any MSYS process
+//! lived (#1025: `bash.exe: warning: could not find /tmp, please create!` on
+//! every command, and what had been written to `/tmp` deleted with the launch).
+//!
+//! Every agent paid that, and only one that unpacks itself into the temp
+//! directory gained anything, so on Windows [`isolates`] keeps the redirect for
+//! those alone ([`unpacks_into_temp_on_windows`]). For them it is still the only
+//! lever there is: the bootloader and MSYS read the same `GetTempPathW`, so such
+//! a session whose tree starts the user's first MSYS process still lends `/tmp`
+//! its launch directory.
 //!
 //! # Invariants
 //!
@@ -43,12 +64,11 @@
 //! (which fails on an existing name).
 
 use std::collections::HashSet;
-
 use std::path::{Path, PathBuf};
-
 use std::sync::{Mutex, OnceLock};
-
 use std::time::Duration;
+
+use crate::models::agent::AgentType;
 
 /// Directory under the temp root that houhub owns outright. Every sweep is
 /// confined to this subtree, which is what makes it safe to delete without
@@ -81,7 +101,6 @@ const ROOT_ENV: &str = "HOUHUB_ACP_TMP_ROOT";
 /// `libc`, and a second copy would be a number nothing verifies.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) const SUN_PATH_CAP: usize = 108;
-
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 pub(crate) const SUN_PATH_CAP: usize = 104;
 
@@ -146,6 +165,33 @@ pub fn isolation_enabled() -> bool {
         std::env::var(ISOLATION_ENV).as_deref(),
         Ok("0") | Ok("false") | Ok("FALSE") | Ok("off")
     )
+}
+
+/// Whether a launch of `agent` gets a scratch directory: never with
+/// [`ISOLATION_ENV`] off, always off Windows, and on Windows only for an agent
+/// that unpacks itself into the temp directory — the module docs say what a
+/// per-launch `TMP` costs everyone else there.
+fn isolates(agent: AgentType) -> bool {
+    isolation_enabled() && isolates_on(cfg!(windows), agent)
+}
+
+/// [`isolates`] with the platform handed in and the escape hatch left out, so
+/// both platforms' answers are testable on either.
+fn isolates_on(windows: bool, agent: AgentType) -> bool {
+    !windows || unpacks_into_temp_on_windows(agent)
+}
+
+/// Agents whose Windows build unpacks itself into the temp directory on every
+/// launch and cleans up only on a graceful exit: the leak this module exists
+/// for. Antigravity's server is a PyInstaller onefile (its registry entry
+/// records each version checked).
+///
+/// An allowlist rather than a list of agents that run Git Bash, because what a
+/// redirect breaks depends on which programs a session happens to start, not on
+/// the agent: any agent's commands can start Git's `bash.exe`, or `git` itself
+/// can start its `ssh.exe`.
+fn unpacks_into_temp_on_windows(agent: AgentType) -> bool {
+    matches!(agent, AgentType::Antigravity)
 }
 
 /// A scratch root is only usable if a child can still bind a unix socket
@@ -453,8 +499,9 @@ async fn remove_with_retries(name: String, path: PathBuf) {
     }
 }
 
-/// Create a scratch directory for one launch, or `None` when isolation is off
-/// or the directory cannot be created.
+/// Create a scratch directory for one launch of `agent`, or `None` when that
+/// launch is not isolated (see [`isolates`]) or the directory cannot be
+/// created.
 ///
 /// `None` is a normal outcome, not an error: the caller leaves
 /// `TMP`/`TEMP`/`TMPDIR` alone and the child uses the system temp directory
@@ -462,8 +509,8 @@ async fn remove_with_retries(name: String, path: PathBuf) {
 /// make a scratch directory — and it WOULD fail if the variables were set to a
 /// path that does not exist, because the PyInstaller bootloader only creates
 /// its own `_MEIxxxxxx` leaf, not the parents above it.
-pub fn create() -> Option<LaunchScratch> {
-    if !isolation_enabled() {
+pub fn create(agent: AgentType) -> Option<LaunchScratch> {
+    if !isolates(agent) {
         return None;
     }
     let root = scratch_root();
@@ -573,10 +620,7 @@ fn verify_root_is_ours(root: &Path) -> std::io::Result<()> {
     if meta.uid() != us {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            format!(
-                "scratch root belongs to uid {}, not to us ({us})",
-                meta.uid()
-            ),
+            format!("scratch root belongs to uid {}, not to us ({us})", meta.uid()),
         ));
     }
     // Ours, but reachable by others — a root left behind by a houhub that
@@ -849,12 +893,7 @@ pub fn probe_pid(pid: u32) -> PidState {
 /// spawn, so the agent has no pid yet. It is what lets a startup sweep tell
 /// "some other houhub owns this" from "its owner is gone".
 fn new_dir_name(pid: u32) -> String {
-    let suffix: String = uuid::Uuid::new_v4()
-        .simple()
-        .to_string()
-        .chars()
-        .take(8)
-        .collect();
+    let suffix: String = uuid::Uuid::new_v4().simple().to_string().chars().take(8).collect();
     format!("{pid}-{suffix}")
 }
 
@@ -1060,9 +1099,7 @@ mod tests {
         // `create` mints a new name on this error rather than adopting the
         // directory, so it has to keep arriving as `AlreadyExists`.
         assert_eq!(
-            create_leaf(&leaf)
-                .expect_err("second create must fail")
-                .kind(),
+            create_leaf(&leaf).expect_err("second create must fail").kind(),
             std::io::ErrorKind::AlreadyExists
         );
     }
@@ -1114,9 +1151,7 @@ mod tests {
         ));
         // The ambient root, wherever this machine's temp_dir points.
         assert!(is_inside_sweep_scope(
-            &std::env::temp_dir()
-                .join(SCRATCH_NAMESPACE)
-                .join("4242-deadbeef")
+            &std::env::temp_dir().join(SCRATCH_NAMESPACE).join("4242-deadbeef")
         ));
         // A plain per-user temp path is NOT in scope: a socket there must keep
         // the ordinary placement. Constructed, not read, so it holds on every
@@ -1193,10 +1228,7 @@ mod tests {
 
         sweep_foreign_orphans_in(&[alias], &adopted);
 
-        assert!(
-            adopted.exists(),
-            "the dir this process lives in must survive"
-        );
+        assert!(adopted.exists(), "the dir this process lives in must survive");
         assert!(
             !orphan.exists(),
             "and the guard must not cost a real orphan its reclaim"
@@ -1239,12 +1271,7 @@ mod tests {
         for (probe, in_scope) in probes.iter().zip(in_scope) {
             let deleted = !probe.exists();
             let is_bystander = probe.to_string_lossy().ends_with("-bystander.sock");
-            assert_eq!(
-                deleted,
-                !is_bystander,
-                "{} deleted: {deleted}",
-                probe.display()
-            );
+            assert_eq!(deleted, !is_bystander, "{} deleted: {deleted}", probe.display());
             assert_eq!(
                 in_scope,
                 deleted,
@@ -1272,10 +1299,7 @@ mod tests {
 
         sweep_own_orphans_in(&[root.path().to_path_buf()], &temp_dir);
 
-        assert!(
-            adopted.exists(),
-            "the dir this process lives in must survive"
-        );
+        assert!(adopted.exists(), "the dir this process lives in must survive");
         assert!(
             !orphan.exists(),
             "and the guard must not cost a real orphan its reclaim"
@@ -1301,13 +1325,13 @@ mod tests {
     #[test]
     fn pid_parser_rejects_foreign_names() {
         for name in [
-            "_MEI123456",     // another PyInstaller app
-            "not-a-pid",      // suffix is not hex
-            "123-abc",        // suffix too short
-            "123-0123456789", // suffix too long
-            "123",            // no suffix at all
-            "",               // empty
-            "-deadbeef",      // no pid
+            "_MEI123456",          // another PyInstaller app
+            "not-a-pid",           // suffix is not hex
+            "123-abc",             // suffix too short
+            "123-0123456789",      // suffix too long
+            "123",                 // no suffix at all
+            "",                    // empty
+            "-deadbeef",           // no pid
             // The broker socket's own names never match; the danger is the
             // PARENT directory they sit in going with a sweep.
             "houhub-delegation-16527.sock",
@@ -1363,10 +1387,7 @@ mod tests {
             released: false,
         });
 
-        assert!(
-            !is_registered(&name),
-            "a dropped name must not stay claimed"
-        );
+        assert!(!is_registered(&name), "a dropped name must not stay claimed");
         assert!(!path.exists(), "and the directory must be gone");
     }
 
@@ -1414,6 +1435,46 @@ mod tests {
                 "{variant} must be dropped on Windows and kept on Unix"
             );
         }
+    }
+
+    /// #1025. On Windows a per-launch `TMP` becomes Git Bash's `/tmp` for the
+    /// user's whole session and dangles once the launch is reclaimed, so there
+    /// only an agent that unpacks itself into temp is given one: a single
+    /// built-in, and no custom agent.
+    #[test]
+    fn on_windows_only_an_agent_that_unpacks_into_temp_is_isolated() {
+        let isolated: Vec<AgentType> = crate::models::agent::BUILTIN_AGENT_TYPES
+            .iter()
+            .copied()
+            .filter(|agent| isolates_on(true, *agent))
+            .collect();
+        assert_eq!(isolated, [AgentType::Antigravity]);
+        assert!(!isolates_on(true, AgentType::Custom("custom-agent")));
+    }
+
+    /// Off Windows `TMPDIR` reaches nothing beyond the launch's own process
+    /// tree, so every agent keeps its scratch directory there.
+    #[test]
+    fn off_windows_every_agent_is_isolated() {
+        for agent in crate::models::agent::BUILTIN_AGENT_TYPES
+            .iter()
+            .copied()
+            .chain([AgentType::Custom("custom-agent")])
+        {
+            assert!(
+                isolates_on(false, agent),
+                "{agent:?} must keep its scratch dir"
+            );
+        }
+    }
+
+    /// Where the rule takes effect: a Windows launch of an agent that does not
+    /// unpack into temp is handed no directory, so its `TMP` reaches the child
+    /// untouched. `create` answers before touching the disk.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_launch_that_is_not_isolated_gets_no_scratch_dir() {
+        assert!(create(AgentType::ClaudeCode).is_none());
     }
 
     #[test]

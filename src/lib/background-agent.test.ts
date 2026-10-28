@@ -68,7 +68,7 @@ describe("isAsyncLaunchAckText", () => {
   it("matches the live wire ack and nothing else", () => {
     expect(
       isAsyncLaunchAckText(
-        "Async agent launched successfully. (This tool result is internal metadata...)\nagentId: a793c..."
+        "Async agent launched successfully. (This tool result is internal metadata…)\nagentId: a793c…"
       )
     ).toBe(true)
     expect(isAsyncLaunchAckText("Sub-agent finished: all tests pass")).toBe(
@@ -76,44 +76,28 @@ describe("isAsyncLaunchAckText", () => {
     )
     expect(isAsyncLaunchAckText(null)).toBe(false)
   })
-})
 
-describe("hasTranscriptOverlay", () => {
-  it("is true only for the agent whose transcript watcher is armed", () => {
-    // Mirrors `background_watch.rs::spawn_if_claude`, which returns None for
-    // every other agent — so nothing produces `background_activity` overlay
-    // turns for them and their out-of-turn content renders nowhere.
-    expect(hasTranscriptOverlay("claude_code")).toBe(true)
-    for (const agent of ["code_buddy", "codex", "gemini", "custom:acme"]) {
-      expect(hasTranscriptOverlay(agent)).toBe(false)
-    }
-  })
-})
-
-describe("isOutOfTurnContentEvent", () => {
-  it("accepts new turn material", () => {
-    expect(isOutOfTurnContentEvent({ type: "content_delta", text: "hi" })).toBe(
-      true
-    )
-    expect(isOutOfTurnContentEvent({ type: "thinking", text: "hmm" })).toBe(
-      true
-    )
-    // No text field at all, and none needed: a tool call IS the material.
-    expect(isOutOfTurnContentEvent({ type: "tool_call" })).toBe(true)
+  it("matches OpenCode 2's background subagent acknowledgement", () => {
+    // packages/core/src/tool/plugin/subagent.ts `backgroundResult`, 2.2.0.
+    expect(
+      isAsyncLaunchAckText(
+        "The subagent is working in the background (sessionID: ses_e825797d9ffeJ5H3F2cPQH0euo). You will be notified automatically when it finishes."
+      )
+    ).toBe(true)
   })
 
-  it("rejects revisions of material already on screen", () => {
-    expect(isOutOfTurnContentEvent({ type: "tool_call_update" })).toBe(false)
-    expect(isOutOfTurnContentEvent({ type: "plan_update" })).toBe(false)
-    expect(isOutOfTurnContentEvent({ type: "turn_complete" })).toBe(false)
-  })
-
-  it("rejects empty deltas — a re-read would surface nothing", () => {
-    expect(isOutOfTurnContentEvent({ type: "content_delta", text: "" })).toBe(
-      false
-    )
-    expect(isOutOfTurnContentEvent({ type: "thinking", text: "" })).toBe(false)
-    expect(isOutOfTurnContentEvent({ type: "content_delta" })).toBe(false)
+  it("matches Grok's spawn_subagent background ack (leading position only)", () => {
+    expect(
+      isAsyncLaunchAckText(
+        'Subagent started in background.\nsubagent_id: 019f9432-e0d8-74c3-bd02-0772c4e04a65\ntype: explore\n\nUse get_command_or_subagent_output with task_ids=["019f9432…"] and timeout_ms to wait for results.'
+      )
+    ).toBe(true)
+    // Anchored at the start: a result that merely QUOTES the ack is not a launch.
+    expect(
+      isAsyncLaunchAckText(
+        "The tool said: Subagent started in background.\nsubagent_id: x"
+      )
+    ).toBe(false)
   })
 })
 

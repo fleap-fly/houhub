@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
@@ -272,7 +271,8 @@ pub(super) fn json_value_size(value: &serde_json::Value) -> usize {
         serde_json::Value::String(s) => json_str_len(s),
         serde_json::Value::Array(items) => {
             // `[` + elements + `,` between them + `]`.
-            2 + items.len().saturating_sub(1) + items.iter().map(json_value_size).sum::<usize>()
+            2 + items.len().saturating_sub(1)
+                + items.iter().map(json_value_size).sum::<usize>()
         }
         serde_json::Value::Object(map) => {
             // `{` + `"key":value` pairs + `,` between them + `}`.
@@ -445,8 +445,10 @@ fn estimate_envelope_size(envelope: &EventEnvelope) -> usize {
                 + blocks.len().saturating_sub(1)
                 + blocks.iter().map(user_block_size).sum::<usize>()
         }
-        // Background activity may carry whole transcript turns and large tool
-        // results, so size it structurally without serializing under the lock.
+        // Carries whole parsed transcript turns (tool outputs, rebuilt diffs —
+        // potentially large), so it is sized structurally like the other large
+        // variants: letting it hit the serialize-fallback would re-introduce
+        // exactly the locked-hot-path serialization this estimator replaced.
         AcpEvent::BackgroundActivity {
             session_id,
             turns,
@@ -481,16 +483,25 @@ fn estimate_envelope_size(envelope: &EventEnvelope) -> usize {
     base + payload
 }
 
+/// Structural size for one parsed-transcript turn carried on
+/// [`AcpEvent::BackgroundActivity`]. Mirrors `user_block_size`'s approach:
+/// escape-aware strings plus deliberately generous fixed overheads per
+/// object, so `estimate >= serialized` holds for every field combination
+/// (asserted by `estimate_never_undercounts_serialized_for_background_activity`).
 fn message_turn_size(turn: &crate::models::message::MessageTurn) -> usize {
+    // Keys + role tag + two RFC3339 timestamps (~46 B each with keys) + the
+    // full `usage` object (4 u64 fields, ≤ ~130 B) + `duration_ms`.
     384 + json_str_len(&turn.id)
         + opt_str_size(&turn.model)
         + turn.blocks.len().saturating_sub(1)
         + turn.blocks.iter().map(content_block_size).sum::<usize>()
 }
 
+/// Structural size for one `ContentBlock` inside a transcript turn.
 fn content_block_size(block: &crate::models::message::ContentBlock) -> usize {
     use crate::models::message::ContentBlock as CB;
     match block {
+        // `{"type":"text","text":…}` / `{"type":"thinking","text":…}`
         CB::Text { text } | CB::Thinking { text } => 32 + json_str_len(text),
         // `{"type":"turn_error","message":…}`
         CB::TurnError { message } => 40 + json_str_len(message),
@@ -504,10 +515,10 @@ fn content_block_size(block: &crate::models::message::ContentBlock) -> usize {
             image,
         } => {
             64 + opt_str_size(revised_prompt)
-                + image.as_ref().map_or(0, |image| {
-                    64 + json_str_len(&image.data)
-                        + json_str_len(&image.mime_type)
-                        + opt_str_size(&image.uri)
+                + image.as_ref().map_or(0, |img| {
+                    64 + json_str_len(&img.data)
+                        + json_str_len(&img.mime_type)
+                        + opt_str_size(&img.uri)
                 })
         }
         CB::ToolUse {
@@ -538,10 +549,10 @@ fn content_block_size(block: &crate::models::message::ContentBlock) -> usize {
                 + agent_stats.as_ref().map_or(0, agent_stats_size)
                 + images
                     .iter()
-                    .map(|image| {
-                        64 + json_str_len(&image.data)
-                            + json_str_len(&image.mime_type)
-                            + opt_str_size(&image.uri)
+                    .map(|img| {
+                        64 + json_str_len(&img.data)
+                            + json_str_len(&img.mime_type)
+                            + opt_str_size(&img.uri)
                     })
                     .sum::<usize>()
         }
@@ -561,10 +572,10 @@ fn agent_stats_size(stats: &crate::models::message::AgentExecutionStats) -> usiz
         + stats
             .tool_calls
             .iter()
-            .map(|call| {
-                96 + json_str_len(&call.tool_name)
-                    + opt_str_size(&call.input_preview)
-                    + opt_str_size(&call.output_preview)
+            .map(|c| {
+                96 + json_str_len(&c.tool_name)
+                    + opt_str_size(&c.input_preview)
+                    + opt_str_size(&c.output_preview)
             })
             .sum::<usize>()
         // `{"type":…,"text":…}` or `{"type":…,"childIndex":<≤20 digits>}`
@@ -584,10 +595,7 @@ mod tests {
         Arc::new(EventEnvelope {
             seq,
             connection_id: "c".into(),
-            payload: AcpEvent::ContentDelta {
-                text: text.into(),
-                parent_tool_use_id: None,
-            },
+            payload: AcpEvent::ContentDelta { text: text.into(), parent_tool_use_id: None },
         })
     }
 
@@ -799,10 +807,7 @@ mod tests {
             "escape-aware estimate {est} must trip the cap like serialized {serialized}"
         );
         // Never undercount the serialized envelope (the per-event cap invariant).
-        assert!(
-            est >= serialized,
-            "estimate {est} < serialized {serialized}"
-        );
+        assert!(est >= serialized, "estimate {est} < serialized {serialized}");
     }
 
     #[test]
@@ -829,10 +834,7 @@ mod tests {
             est > RECENT_EVENT_MAX_BYTES,
             "comma-aware estimate {est} must trip the cap like serialized {serialized}"
         );
-        assert!(
-            est >= serialized,
-            "estimate {est} < serialized {serialized}"
-        );
+        assert!(est >= serialized, "estimate {est} < serialized {serialized}");
     }
 
     #[test]
@@ -1016,7 +1018,7 @@ mod tests {
                     tool_name: "Bash".into(),
                     input_preview: Some("{\"command\":\"pnpm build\"}".into()),
                     status: None,
-                    meta: Some(serde_json::json!({"HouHub.delegation": {"status": "running"}})),
+                    meta: Some(serde_json::json!({"houhub.delegation": {"status": "running"}})),
                 },
                 ContentBlock::ToolResult {
                     tool_use_id: Some("toolu_01ABC".into()),
@@ -1082,7 +1084,7 @@ mod tests {
             duration_ms: Some(u64::MAX),
             model: Some("claude-sonnet-5[1m]".into()),
             completed_at: Some(chrono::Utc::now()),
-            agent_message_id: None,
+        agent_message_id: None,
         };
         let env = Arc::new(EventEnvelope {
             seq: u64::MAX,
@@ -1100,7 +1102,6 @@ mod tests {
                         // Escape-heavy + large, to exercise the estimate's
                         // coverage of the (previously omitted) `result` field.
                         result: Some("Build \"log\"\n\t".repeat(2048)),
-                        wire_visible: false,
                         // Serialized only when set: the fixed per-entry
                         // overhead must cover its key too.
                         interim: true,
@@ -1111,7 +1112,6 @@ mod tests {
                         summary: None,
                         tool_use_id: None,
                         result: None,
-                        wire_visible: false,
                         interim: false,
                     },
                 ],
@@ -1210,10 +1210,7 @@ mod tests {
             },
         });
         let serialized = serde_json::to_vec(&*env).expect("serialize").len();
-        assert!(
-            serialized > RECENT_EVENT_MAX_BYTES,
-            "serialized {serialized}"
-        );
+        assert!(serialized > RECENT_EVENT_MAX_BYTES, "serialized {serialized}");
         assert!(
             estimate_envelope_size(&env) > RECENT_EVENT_MAX_BYTES,
             "estimate must trip the cap like serialized {serialized}"
@@ -1239,10 +1236,7 @@ mod tests {
             },
         });
         let serialized = serde_json::to_vec(&*env).expect("serialize").len();
-        assert!(
-            serialized > RECENT_EVENT_MAX_BYTES,
-            "serialized {serialized}"
-        );
+        assert!(serialized > RECENT_EVENT_MAX_BYTES, "serialized {serialized}");
         assert!(estimate_envelope_size(&env) > RECENT_EVENT_MAX_BYTES);
     }
 
@@ -1260,10 +1254,7 @@ mod tests {
             tool_update_with_image(1, evil.clone()),
         ] {
             let serialized = serde_json::to_vec(&*env).expect("serialize").len();
-            assert!(
-                serialized > RECENT_EVENT_MAX_BYTES,
-                "serialized {serialized}"
-            );
+            assert!(serialized > RECENT_EVENT_MAX_BYTES, "serialized {serialized}");
             assert!(
                 estimate_envelope_size(&env) > RECENT_EVENT_MAX_BYTES,
                 "escape-aware image sizing must trip the cap (serialized {serialized})"
@@ -1286,10 +1277,7 @@ mod tests {
             },
         });
         let serialized = serde_json::to_vec(&*env).expect("serialize").len();
-        assert!(
-            serialized > RECENT_EVENT_MAX_BYTES,
-            "serialized {serialized}"
-        );
+        assert!(serialized > RECENT_EVENT_MAX_BYTES, "serialized {serialized}");
         assert!(estimate_envelope_size(&env) > RECENT_EVENT_MAX_BYTES);
         assert_ge_serialized(&env);
     }

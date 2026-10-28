@@ -28,8 +28,8 @@ pub async fn create(
     api_key: String,
     agent_type: String,
     model: Option<String>,
-    models: Vec<String>,
 ) -> Result<model_provider::Model, DbError> {
+    let models = Vec::new();
     create_with_agent_types(
         conn,
         name,
@@ -79,8 +79,8 @@ pub async fn update(
     api_key: Option<String>,
     agent_type: Option<String>,
     model: Option<Option<String>>,
-    models: Option<Vec<String>>,
 ) -> Result<model_provider::Model, DbError> {
+    let models: Option<Vec<String>> = None;
     let model_row = model_provider::Entity::find_by_id(id)
         .one(conn)
         .await?

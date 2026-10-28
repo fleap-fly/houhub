@@ -1,20 +1,16 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-
+use sea_orm::sea_query::Expr;
 use sea_orm::DatabaseConnection;
-
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait,
     IntoActiveModel, QueryFilter, QueryOrder, Set, Statement,
 };
 
 use crate::db::entities::agent_setting;
-
 use crate::db::error::DbError;
-
 use crate::models::agent::AgentType;
-
 use crate::parsers::{AgentEnv, AgentEnvs};
 
 #[derive(Debug, Clone)]
@@ -26,12 +22,12 @@ pub struct AgentDefaultInput {
 
 #[derive(Debug, Clone)]
 pub struct AgentSettingsUpdate {
-    pub enabled: Option<bool>,
+    pub enabled: bool,
     pub env_json: Option<String>,
     pub model_provider_id: Option<i32>,
 }
 
-pub(crate) fn default_enabled(agent_type: AgentType) -> bool {
+fn default_enabled(agent_type: AgentType) -> bool {
     matches!(
         agent_type,
         AgentType::ClaudeCode
@@ -53,6 +49,7 @@ pub(crate) fn default_enabled(agent_type: AgentType) -> bool {
             | AgentType::ZCode
             | AgentType::Trae
             | AgentType::CommandCode
+            | AgentType::MiniMaxCode
             // A user who just registered a custom agent wants to use it.
             | AgentType::Custom(_)
     )
@@ -150,7 +147,7 @@ pub async fn get_by_agent_type(
 /// every history read would mean reading credential files.
 ///
 /// A settings read that fails costs only the overrides: the caller still gets
-/// HouHub's own environment, which is where every history read looked before
+/// houhub's own environment, which is where every history read looked before
 /// the settings were consulted at all.
 pub async fn load_agent_env(conn: &DatabaseConnection, agent_type: AgentType) -> AgentEnv {
     match get_by_agent_type(conn, agent_type).await {
@@ -198,13 +195,36 @@ pub async fn update(
         .ok_or_else(|| DbError::Migration(format!("agent setting not found: {agent_type_str}")))?;
 
     let mut active = model.into_active_model();
-    if let Some(enabled) = patch.enabled {
-        active.enabled = Set(enabled);
-    }
+    active.enabled = Set(patch.enabled);
     active.env_json = Set(patch.env_json);
     active.model_provider_id = Set(patch.model_provider_id);
     active.updated_at = Set(Utc::now());
     active.update(conn).await?;
+    Ok(())
+}
+
+/// Update the enabled flag and env alone, in one statement that leaves the
+/// model provider column out — a binding made meanwhile is never undone.
+pub async fn update_preferences(
+    conn: &DatabaseConnection,
+    agent_type: AgentType,
+    enabled: bool,
+    env_json: Option<String>,
+) -> Result<(), DbError> {
+    let agent_type_str = serde_json::to_string(&agent_type)
+        .map_err(|e| DbError::Migration(format!("agent_type serialize failed: {e}")))?;
+    let updated = agent_setting::Entity::update_many()
+        .col_expr(agent_setting::Column::Enabled, Expr::value(enabled))
+        .col_expr(agent_setting::Column::EnvJson, Expr::value(env_json))
+        .col_expr(agent_setting::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(agent_setting::Column::AgentType.eq(agent_type_str.clone()))
+        .exec(conn)
+        .await?;
+    if updated.rows_affected == 0 {
+        return Err(DbError::Migration(format!(
+            "agent setting not found: {agent_type_str}"
+        )));
+    }
     Ok(())
 }
 
@@ -291,87 +311,6 @@ fn is_sqlite_full_error(err: &DbError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::test_helpers::fresh_in_memory_db;
-
-    #[tokio::test]
-    async fn update_can_preserve_existing_enabled_state() {
-        let db = fresh_in_memory_db().await;
-        ensure_defaults(
-            &db.conn,
-            &[AgentDefaultInput {
-                agent_type: AgentType::Codex,
-                registry_id: "codex".to_string(),
-                default_sort_order: 0,
-            }],
-        )
-        .await
-        .expect("defaults");
-
-        update(
-            &db.conn,
-            AgentType::Codex,
-            AgentSettingsUpdate {
-                enabled: Some(false),
-                env_json: Some("{}".to_string()),
-                model_provider_id: None,
-            },
-        )
-        .await
-        .expect("disable");
-
-        update(
-            &db.conn,
-            AgentType::Codex,
-            AgentSettingsUpdate {
-                enabled: None,
-                env_json: Some(r#"{"OPENAI_API_KEY":"sk-test"}"#.to_string()),
-                model_provider_id: Some(42),
-            },
-        )
-        .await
-        .expect("preserving update");
-
-        let setting = get_by_agent_type(&db.conn, AgentType::Codex)
-            .await
-            .expect("load setting")
-            .expect("codex setting");
-        assert!(!setting.enabled);
-        assert_eq!(setting.model_provider_id, Some(42));
-    }
-
-    #[tokio::test]
-    async fn ensure_defaults_does_not_reenable_disabled_agents() {
-        let db = fresh_in_memory_db().await;
-        let default = AgentDefaultInput {
-            agent_type: AgentType::Codex,
-            registry_id: "codex".to_string(),
-            default_sort_order: 0,
-        };
-        ensure_defaults(&db.conn, std::slice::from_ref(&default))
-            .await
-            .expect("defaults");
-        update(
-            &db.conn,
-            AgentType::Codex,
-            AgentSettingsUpdate {
-                enabled: Some(false),
-                env_json: None,
-                model_provider_id: None,
-            },
-        )
-        .await
-        .expect("disable");
-
-        ensure_defaults(&db.conn, &[default])
-            .await
-            .expect("defaults again");
-
-        let setting = get_by_agent_type(&db.conn, AgentType::Codex)
-            .await
-            .expect("load setting")
-            .expect("codex setting");
-        assert!(!setting.enabled);
-    }
 
     // Every built-in starts enabled. The match above has no catch-all arm for
     // "the rest", so a newly added agent missing from it silently ships

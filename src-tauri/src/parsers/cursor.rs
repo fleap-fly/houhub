@@ -1,19 +1,14 @@
 use std::collections::HashSet;
-
 use std::ffi::OsString;
-
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeZone, Utc};
-
 use rusqlite::{Connection, OpenFlags};
-
 use serde_json::Value;
 
 use crate::models::{
     AgentType, ContentBlock, ConversationDetail, ConversationSummary, MessageTurn, TurnRole,
 };
-
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     merge_context_window_stats, relocate_orphaned_tool_results, structurize_read_tool_output,
@@ -23,7 +18,6 @@ use crate::parsers::{
 /// Caps mirroring the Grok parser: bound a single tool output / input preview
 /// so one noisy command can't bloat a conversation detail payload.
 const CURSOR_TOOL_OUTPUT_CAP: usize = 100_000;
-
 const CURSOR_TOOL_INPUT_CAP: usize = 8_000;
 
 /// Resolve Cursor's config home, mirroring the CLI's own chain:
@@ -60,7 +54,7 @@ fn resolve_cursor_config_from(
 /// Cursor (cursor-agent CLI) stores each conversation as a **SQLite blob
 /// store**. Interactive CLI/IDE chats — and the sub-agent children spawned by
 /// `task` tool calls — are grouped by the MD5 of the resolved working
-/// directory, while ACP sessions (what HouHub drives) live under a flat
+/// directory, while ACP sessions (what houhub drives) live under a flat
 /// per-session root with a JSON sidecar:
 ///
 /// ```text
@@ -102,7 +96,7 @@ fn resolve_cursor_config_from(
 pub struct CursorParser {
     chats_dir: PathBuf,
     acp_sessions_dir: PathBuf,
-    /// Root of HouHub's own per-turn timing journal (`crate::turn_timings`) —
+    /// Root of houhub's own per-turn timing journal (`crate::turn_timings`) —
     /// the fallback clock for turns whose store yields none (thinking+text
     /// only; the ACP store has no message timestamps).
     turn_timings_root: PathBuf,
@@ -114,7 +108,7 @@ impl CursorParser {
     }
 
     /// The history of the Cursor CLI launched with `env`. The turn-timing
-    /// journal is HouHub's own and does not move with it.
+    /// journal is houhub's own and does not move with it.
     pub fn for_env(env: &AgentEnv) -> Self {
         let config_dir = resolve_cursor_config_dir_for_env(env);
         Self {
@@ -186,7 +180,7 @@ impl CursorParser {
             .unwrap_or_default();
 
         let (mut turns, store_clocked) = build_turns(&conn, &state, &meta);
-        // Overlay HouHub's own turn-span journal — recorded live by the ACP
+        // Overlay houhub's own turn-span journal — recorded live by the ACP
         // connection layer. It fills turns the store left clockless (tool-free
         // turns) and replaces tool-span fallback clocks, which only cover the
         // tools, not the whole turn. CLI-native chats simply have no journal
@@ -228,11 +222,7 @@ impl CursorParser {
                 })
             });
         let sidecar = read_sidecar_meta(chat_dir);
-        let title = meta
-            .name
-            .clone()
-            .or_else(|| sidecar.title.clone())
-            .or(title);
+        let title = meta.name.clone().or_else(|| sidecar.title.clone()).or(title);
         let summary = summary_from(chat_id, &meta, &state, &sidecar, title);
 
         Some(ConversationDetail {
@@ -291,7 +281,7 @@ impl AgentParser for CursorParser {
                 self.collect_summary(&chat_dir, &mut conversations);
             }
         }
-        // ACP sessions (HouHub-driven) live under the flat per-uuid root.
+        // ACP sessions (houhub-driven) live under the flat per-uuid root.
         for chat_dir in read_subdirs(&self.acp_sessions_dir) {
             self.collect_summary(&chat_dir, &mut conversations);
         }
@@ -378,11 +368,10 @@ struct ChatMeta {
 }
 
 fn open_store(path: &Path) -> Option<Connection> {
-    // Prefer a read-only handle — HouHub never mutates Cursor's stores.
-    if let Some(conn) = try_open_store(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) {
+    // Prefer a read-only handle — houhub never mutates cursor's stores.
+    if let Some(conn) =
+        try_open_store(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+    {
         return Some(conn);
     }
     // The CLI keeps live stores in WAL mode with most data in `-wal`; after a
@@ -398,7 +387,7 @@ fn open_store(path: &Path) -> Option<Connection> {
 
 fn try_open_store(path: &Path, flags: OpenFlags) -> Option<Connection> {
     let conn = Connection::open_with_flags(path, flags).ok()?;
-    // The CLI may hold the store open while HouHub lists sessions; give reads a
+    // The CLI may hold the store open while houhub lists sessions; give reads a
     // short grace period instead of failing on a transient lock.
     let _ = conn.busy_timeout(std::time::Duration::from_millis(200));
     // Opening is lazy — probe so a handle that cannot actually read (stale WAL
@@ -467,7 +456,9 @@ fn read_chat_meta(conn: &Connection) -> Option<ChatMeta> {
             .get("latestRootBlobId")
             .and_then(Value::as_str)
             .and_then(hex_decode),
-        is_subagent: v.get("subagentInfo").is_some_and(|s| !s.is_null()),
+        is_subagent: v
+            .get("subagentInfo")
+            .is_some_and(|s| !s.is_null()),
     })
 }
 
@@ -606,10 +597,7 @@ mod wire {
                     let end = self.pos.checked_add(8)?;
                     let raw = self.buf.get(self.pos..end)?;
                     self.pos = end;
-                    Some((
-                        field_no,
-                        Val::Fixed64(u64::from_le_bytes(raw.try_into().ok()?)),
-                    ))
+                    Some((field_no, Val::Fixed64(u64::from_le_bytes(raw.try_into().ok()?))))
                 }
                 2 => {
                     let len = usize::try_from(self.varint()?).ok()?;
@@ -843,8 +831,10 @@ fn decode_state(buf: &[u8]) -> DecodedState {
             21 => {
                 if let Some(b) = val.bytes() {
                     if state.repo_path.is_none() {
-                        state.repo_path = wire::first_str(b, 1).filter(|s| !s.trim().is_empty());
-                        state.git_branch = wire::first_str(b, 2).filter(|s| !s.trim().is_empty());
+                        state.repo_path =
+                            wire::first_str(b, 1).filter(|s| !s.trim().is_empty());
+                        state.git_branch =
+                            wire::first_str(b, 2).filter(|s| !s.trim().is_empty());
                     }
                 }
             }
@@ -904,10 +894,12 @@ fn decode_user_images(conn: &Connection, msg: &[u8]) -> Vec<ContentBlock> {
         let Some(image) = wire::first_message(attachment, 1) else {
             continue;
         };
-        let Some(mime_type) = wire::first_str(&image, 7).filter(|m| m.starts_with("image/")) else {
+        let Some(mime_type) = wire::first_str(&image, 7).filter(|m| m.starts_with("image/"))
+        else {
             continue;
         };
-        let Some(bytes) = wire::first_bytes(&image, 1).and_then(|id| read_blob(conn, &id)) else {
+        let Some(bytes) = wire::first_bytes(&image, 1).and_then(|id| read_blob(conn, &id))
+        else {
             continue;
         };
         if bytes.is_empty() {
@@ -922,14 +914,14 @@ fn decode_user_images(conn: &Connection, msg: &[u8]) -> Vec<ContentBlock> {
     out
 }
 
-/// Build HouHub turns from the DAG: one User + one Assistant `MessageTurn` per
+/// Build houhub turns from the DAG: one User + one Assistant `MessageTurn` per
 /// `AgentConversationTurnStructure`; `!`-shell turns render as a user command
 /// turn plus an assistant turn holding the terminal card.
 ///
 /// The second return value indexes the assistant turns whose clock came from
 /// the STORE's own root `turn_timings` (IDE-written chats). Those clocks are
 /// authoritative; everything else — tool-span fallback or no clock at all —
-/// may be upgraded by HouHub's turn-span journal downstream.
+/// may be upgraded by houhub's turn-span journal downstream.
 fn build_turns(
     conn: &Connection,
     state: &DecodedState,
@@ -966,9 +958,7 @@ fn build_turns(
                 if no != 2 {
                     continue;
                 }
-                let Some(step_ref) = val.bytes() else {
-                    continue;
-                };
+                let Some(step_ref) = val.bytes() else { continue };
                 let step = read_blob(conn, step_ref).unwrap_or_else(|| step_ref.to_vec());
                 if want_span {
                     fold_tool_span(&step, &mut span);
@@ -980,9 +970,10 @@ fn build_turns(
             // text steps carry no clock at all, so a tool-free turn stays
             // clockless rather than borrowing a wrong timestamp.
             let ts = span.and_then(|(lo, _)| ms_to_utc(lo)).unwrap_or(ts);
-            let completed_at = completed_at.or_else(|| span.and_then(|(_, hi)| ms_to_utc(hi)));
-            let duration_ms =
-                duration_ms.or_else(|| span.and_then(|(lo, hi)| (hi > lo).then_some(hi - lo)));
+            let completed_at =
+                completed_at.or_else(|| span.and_then(|(_, hi)| ms_to_utc(hi)));
+            let duration_ms = duration_ms
+                .or_else(|| span.and_then(|(lo, hi)| (hi > lo).then_some(hi - lo)));
 
             // --- user prompt (text + attached images) ---
             if let Some(user_ref) = wire::first_bytes(&agent_turn, 1) {
@@ -1006,7 +997,7 @@ fn build_turns(
                         duration_ms: None,
                         model: None,
                         completed_at: None,
-                        agent_message_id: None,
+                    agent_message_id: None,
                     });
                 }
             }
@@ -1023,7 +1014,7 @@ fn build_turns(
                     duration_ms,
                     model: meta.last_used_model.clone(),
                     completed_at,
-                    agent_message_id: None,
+                agent_message_id: None,
                 });
             }
         } else if let Some(shell_turn) = wire::first_message(&turn_bytes, 2) {
@@ -1058,7 +1049,7 @@ fn build_turns(
                 duration_ms: None,
                 model: None,
                 completed_at: None,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             let tool_id = format!("cursor-shell-{i}");
             // proto3 leaves a zero exit code off the wire, so a present result
@@ -1097,7 +1088,7 @@ fn build_turns(
                 duration_ms,
                 model: None,
                 completed_at,
-                agent_message_id: None,
+            agent_message_id: None,
             });
         }
     }
@@ -1108,7 +1099,7 @@ fn build_turns(
     (turns, store_clocked)
 }
 
-/// Merge HouHub's own turn-span journal (`crate::turn_timings`) onto the
+/// Merge houhub's own turn-span journal (`crate::turn_timings`) onto the
 /// store's turns: it fills turns the store left clockless (thinking+text-only
 /// turns have neither root `turn_timings` nor tool `f59`/`f60` stamps) AND
 /// replaces tool-span fallback clocks — the tool span only covers
@@ -1124,7 +1115,7 @@ fn build_turns(
 /// the journal line, and STOP at the first mismatch. The tail anchor is what
 /// makes the dominant divergence safe — turns recorded before the journal
 /// feature existed all sit at the FRONT of a session, so the recorded tail
-/// still aligns; a mid-walk confusion (a crash gap, a turn HouHub never saw)
+/// still aligns; a mid-walk confusion (a crash gap, a turn houhub never saw)
 /// stops the walk instead of scanning, which could misassign spans between
 /// identical prompts. STORE-native clocks (root `turn_timings`, indexed by
 /// `store_clocked` — IDE-written chats) always win: the journal only
@@ -1148,7 +1139,7 @@ fn build_turns(
 /// The hashes a stored user turn's text may have been journaled under.
 ///
 /// The connection hashes the prompt's own text blocks BEFORE it appends
-/// HouHub's internal frames (the `@agent` / `@assistant` routing frames, the
+/// houhub's internal frames (the `@agent` / `@assistant` routing frames, the
 /// assistant brief), while Cursor stores the prompt it received: the user's
 /// text, then each frame, joined by whatever its ACP server puts between
 /// blocks. So the user's text is everything before the first frame, less one
@@ -1186,43 +1177,6 @@ fn user_prompt_hashes(text: &str) -> Vec<String> {
     hashes
 }
 
-/// Merge HouHub's own turn-span journal (`crate::turn_timings`) onto the
-/// store's turns: it fills turns the store left clockless (thinking+text-only
-/// turns have neither root `turn_timings` nor tool `f59`/`f60` stamps) AND
-/// replaces tool-span fallback clocks — the tool span only covers
-/// first-tool-start → last-tool-end (often a sub-second slice of a long
-/// turn), while a matched journal line measured the full prompt → `end_turn`
-/// wall span at the connection. Replacement additionally requires the line
-/// to BRACKET the existing tool span (see the containment guard below), so
-/// a stale line misattributed across identical prompts can only ever reach
-/// turns that had no clock to lose.
-///
-/// Alignment is tail-anchored and hash-verified: walk the user turns and the
-/// journal both **backwards**, pairing while `prompt_hash(user text)` matches
-/// the journal line, and STOP at the first mismatch. The tail anchor is what
-/// makes the dominant divergence safe — turns recorded before the journal
-/// feature existed all sit at the FRONT of a session, so the recorded tail
-/// still aligns; a mid-walk confusion (a crash gap, a turn HouHub never saw)
-/// stops the walk instead of scanning, which could misassign spans between
-/// identical prompts. STORE-native clocks (root `turn_timings`, indexed by
-/// `store_clocked` — IDE-written chats) always win: the journal only
-/// corroborates those pairs.
-///
-/// Identical-prompt runs get an extra equality guard (Codex review): a line
-/// can exist for a turn the store never kept (see the count guard below for
-/// the sources), so a run of same-hash journal entries can be LONGER than
-/// the store's run of same-text turns — hash pairing alone would then hand
-/// that phantom's span to an older identical prompt (image-only prompts all
-/// hash as "" and are the easiest collision). Whenever either side is in a
-/// same-hash run, both runs must have EQUAL length or the walk stops before
-/// assigning anything from that run.
-///
-/// These guards are defense-in-depth, not a proof: two narrow residuals
-/// remain where a WRONG span (not just a missing one) can be assigned — a
-/// clean-`end_turn` turn Cursor failed to persist, and a missing journal
-/// SUFFIX whose stale tail hash-collides with the store's newest turn. Both
-/// are documented in `turn_timings`' module docs; the latter is pinned by
-/// `accepted_residual_missing_tail_lines_can_misattribute_span`.
 fn apply_turn_timing_journal(
     turns: &mut [MessageTurn],
     journal: &[crate::turn_timings::TurnTiming],
@@ -1314,10 +1268,7 @@ fn apply_turn_timing_journal(
         let assistant_idx = (user_idx + 1 < turns.len()
             && matches!(turns[user_idx + 1].role, TurnRole::Assistant))
         .then_some(user_idx + 1);
-        if assistant_idx
-            .map(|a| store_clocked.contains(&a))
-            .unwrap_or(false)
-        {
+        if assistant_idx.map(|a| store_clocked.contains(&a)).unwrap_or(false) {
             continue; // store-native root timing present — journal only corroborates
         }
         let Some(a) = assistant_idx else { continue };
@@ -1421,7 +1372,12 @@ fn decode_step(
 }
 
 /// `agent.v1.ToolCall` oneof field number → tool name, for every variant the
-/// 2026.07.16 CLI models. Undecoded variants still render a named card.
+/// 2026.10.22-27dcf5f CLI models, plus the ones earlier builds stored and
+/// later ones dropped (`update_pr_code_tour` = 50, which the 2026.07.16 CLI
+/// modeled, and the `pi_*` tools 61–67, which 27dcf5f removed), so older
+/// transcripts keep their cards. Undecoded variants still render a named
+/// card; a number missing here drops the call from the history altogether,
+/// although the live session showed it.
 fn tool_name_for_field(no: u32) -> Option<&'static str> {
     Some(match no {
         1 => "shell",
@@ -1482,6 +1438,28 @@ fn tool_name_for_field(no: u32) -> Option<&'static str> {
         67 => "pi_ls",
         68 => "connect_scm",
         69 => "search_conversations",
+        70 => "create_goal",
+        71 => "update_goal",
+        73 => "get_agent_status",
+        74 => "send_to_agent",
+        75 => "read_agent_transcript",
+        76 => "create_agent",
+        77 => "stop_agent",
+        79 => "write_canvas",
+        80 => "read_canvas",
+        81 => "generate_video",
+        82 => "x_search",
+        83 => "get_origin_pr_code_tour",
+        84 => "update_origin_pr_code_tour",
+        85 => "list_tracked_tasks",
+        86 => "create_tracked_tasks",
+        87 => "update_tracked_tasks",
+        88 => "delete_tracked_tasks",
+        89 => "update_tracked_task_statuses",
+        90 => "create_project",
+        91 => "update_tracked_task_tags",
+        93 => "stop_project_updates",
+        94 => "start_project_updates",
         _ => return None,
     })
 }
@@ -1698,8 +1676,9 @@ fn decode_tool_variant(
                     .filter(|(no, _)| *no == 1)
                     .filter_map(|(_, v)| v.bytes().map(<[u8]>::to_vec))
                     .filter_map(|item| {
-                        wire::first_str(&item, 2)
-                            .map(|content| serde_json::json!({ "content": content }))
+                        wire::first_str(&item, 2).map(|content| {
+                            serde_json::json!({ "content": content })
+                        })
                     })
                     .collect();
                 tool.input = Some(serde_json::json!({ "todos": todos }));
@@ -2157,13 +2136,7 @@ mod tests {
         // AgentConversationTurnStructure
         let mut agent_turn = Vec::new();
         field_bytes(1, &user_id, &mut agent_turn);
-        for id in [
-            &step_thinking_id,
-            &step_text_id,
-            &step_shell_id,
-            &step_edit_id,
-            &step_mcp_id,
-        ] {
+        for id in [&step_thinking_id, &step_text_id, &step_shell_id, &step_edit_id, &step_mcp_id] {
             field_bytes(2, id, &mut agent_turn);
         }
         let mut turn = Vec::new();
@@ -2227,7 +2200,9 @@ mod tests {
 
         let user = &detail.turns[0];
         assert!(matches!(user.role, TurnRole::User));
-        assert!(matches!(&user.blocks[0], ContentBlock::Text { text } if text == "帮我构建项目"));
+        assert!(
+            matches!(&user.blocks[0], ContentBlock::Text { text } if text == "帮我构建项目")
+        );
 
         let assistant = &detail.turns[1];
         assert!(matches!(assistant.role, TurnRole::Assistant));
@@ -2311,10 +2286,7 @@ mod tests {
             .expect("mcp tool present");
         assert_eq!(mcp_name, "houhub-mcp__delegate_to_agent");
         let mcp_json: Value = serde_json::from_str(&mcp_input.unwrap()).unwrap();
-        assert_eq!(
-            mcp_json.get("task").and_then(Value::as_str),
-            Some("run build")
-        );
+        assert_eq!(mcp_json.get("task").and_then(Value::as_str), Some("run build"));
         assert_eq!(
             mcp_json.get("agent_type").and_then(Value::as_str),
             Some("codex")
@@ -2488,10 +2460,7 @@ mod tests {
         // two-hop path and return the text verbatim.
         let report_text = "\n# 构建结果\n\n退出码 0：共 3 个路由全部静态预渲染成功，\
                            无警告无错误，构建产物完整可用，总耗时约四十秒。";
-        assert!(
-            report_text.len() > 128,
-            "report must use a two-byte length prefix"
-        );
+        assert!(report_text.len() > 128, "report must use a two-byte length prefix");
         let mut report_inner = Vec::new();
         field_str(1, report_text, &mut report_inner);
         let mut report_wrap = Vec::new();
@@ -2871,7 +2840,7 @@ mod tests {
 
     /// Builds one tool-free `[user text → assistant text]` DAG turn and
     /// returns its blob id. No tool steps → no `f59`/`f60` → natively
-    /// clockless (the case HouHub's timing journal exists for).
+    /// clockless (the case houhub's timing journal exists for).
     fn put_text_only_turn(store: &mut StoreBuilder, user_text: &str, reply: &str) -> Vec<u8> {
         let mut user_msg = Vec::new();
         field_str(1, user_text, &mut user_msg);
@@ -2891,7 +2860,7 @@ mod tests {
 
     /// Tool-free turns have no clock anywhere in the store (no root
     /// `turn_timings`, no tool stamps, no message timestamps — verified on
-    /// real ACP sessions). HouHub's own turn-span journal fills them, and the
+    /// real ACP sessions). houhub's own turn-span journal fills them, and the
     /// alignment is tail-anchored: a leading turn recorded before the journal
     /// feature existed stays honestly clockless.
     #[test]
@@ -2958,7 +2927,7 @@ mod tests {
         );
     }
 
-    /// A routed or briefed prompt reaches Cursor with HouHub's internal frames
+    /// A routed or briefed prompt reaches Cursor with houhub's internal frames
     /// appended after the user's text, while the connection journaled the hash
     /// of the user's text alone. The pairing must see through the frames —
     /// whatever Cursor put between the prompt's blocks — or every such turn
@@ -3017,8 +2986,9 @@ mod tests {
                 },
             );
 
-            let parser =
-                crate::parsers::sanitized(CursorParser::with_base_dir(tmp.path().join("chats")));
+            let parser = crate::parsers::sanitized(CursorParser::with_base_dir(
+                tmp.path().join("chats"),
+            ));
             let detail = parser.get_conversation("acp-frames").unwrap();
             assert_eq!(
                 detail.turns[1].duration_ms,
@@ -3028,11 +2998,7 @@ mod tests {
             let ContentBlock::Text { text } = &detail.turns[0].blocks[0] else {
                 panic!("user text");
             };
-            assert_eq!(
-                text,
-                visible.trim_end(),
-                "the frames are gone from the bubble"
-            );
+            assert_eq!(text, visible.trim_end(), "the frames are gone from the bubble");
         }
     }
 
@@ -3920,7 +3886,7 @@ mod tests {
     }
 
     /// #948: built with an agent's launch env, the parser reads where THAT
-    /// env puts the agent's files, not where HouHub's own environment does.
+    /// env puts the agent's files, not where houhub's own environment does.
     #[test]
     fn for_env_reads_the_config_dir_of_the_launch_env() {
         let env = AgentEnv::with_overrides(&[("CURSOR_CONFIG_DIR", "/relocated/cursor")]);
@@ -3938,5 +3904,64 @@ mod tests {
             CursorParser::for_env(&env).chats_dir,
             PathBuf::from("/relocated/xdg").join("cursor").join("chats")
         );
+    }
+
+    /// The tool variants of `agent.v1.ToolCall` as the 2026.10.22-27dcf5f CLI
+    /// declares it (read off its bundled descriptor). Fields 54, 57, 59 and 60
+    /// of that message are not tools.
+    const CLI_27DCF5F_TOOL_FIELDS: &[u32] = &[
+        1, 3, 4, 5, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30,
+        31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 48, 49, 51, 52, 53, 55, 56,
+        58, 68, 69, 70, 71, 73, 74, 75, 76, 77, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91,
+        93, 94,
+    ];
+
+    /// A variant without a name is dropped from the history, so every one the
+    /// pinned CLI declares needs one, and so do the ones older builds stored.
+    #[test]
+    fn names_every_tool_variant_the_cli_declares() {
+        let dropped_since = [50, 61, 62, 63, 64, 65, 66, 67];
+        for no in CLI_27DCF5F_TOOL_FIELDS.iter().chain(&dropped_since) {
+            assert!(
+                tool_name_for_field(*no).is_some(),
+                "ToolCall field {no} has no name"
+            );
+        }
+        for no in [54, 57, 59, 60] {
+            assert!(
+                tool_name_for_field(no).is_none(),
+                "ToolCall field {no} is not a tool"
+            );
+        }
+    }
+
+    /// Calls of variants newer than the table's first version reach the
+    /// history as named cards rather than vanishing.
+    #[test]
+    fn a_newer_tool_variant_reaches_the_history() {
+        let conn = Connection::open_in_memory().unwrap();
+        let state = DecodedState::default();
+        for (no, name) in [(81, "generate_video"), (94, "start_project_updates")] {
+            let mut args = Vec::new();
+            field_str(1, "x", &mut args);
+            let mut call = Vec::new();
+            field_bytes(1, &args, &mut call);
+            let mut tool = Vec::new();
+            field_bytes(no, &call, &mut tool);
+            field_str(57, &format!("tc-{no}"), &mut tool);
+            let mut blocks = Vec::new();
+            decode_tool_call(&conn, &tool, &state, &mut blocks);
+            match &blocks[..] {
+                [ContentBlock::ToolUse {
+                    tool_use_id,
+                    tool_name,
+                    ..
+                }, ContentBlock::ToolResult { .. }] => {
+                    assert_eq!(tool_name, name);
+                    assert_eq!(tool_use_id.as_deref(), Some(format!("tc-{no}").as_str()));
+                }
+                other => panic!("ToolCall field {no} decoded to {other:?}"),
+            }
+        }
     }
 }

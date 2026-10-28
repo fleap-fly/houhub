@@ -1,9 +1,6 @@
 use std::ffi::{OsStr, OsString};
-
 use std::path::PathBuf;
-
 use std::process::Command;
-
 use std::time::Duration;
 
 #[cfg(windows)]
@@ -16,7 +13,6 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Generous on purpose: the window it covers is another thread's fork→exec gap,
 /// which is microseconds wide when idle but can stretch on a loaded machine.
 const EXEC_BUSY_RETRY_BUDGET: Duration = Duration::from_secs(1);
-
 /// Upper bound on the wait between `ETXTBSY` retries.
 const EXEC_BUSY_MAX_BACKOFF: Duration = Duration::from_millis(25);
 
@@ -159,7 +155,7 @@ fn is_exec_busy(err: &std::io::Error) -> bool {
 /// exec fails with `ETXTBSY` while *any* process holds the target file open for
 /// writing, so a multi-threaded process that writes an executable and then runs
 /// it races itself. Rust opens files `O_CLOEXEC`, but `CLOEXEC` only takes
-/// effect at exec: a `fork()` on another thread — HouHub forks constantly, for
+/// effect at exec: a `fork()` on another thread — houhub forks constantly, for
 /// git, agents, and other terminals — copies the fd table while the write
 /// descriptor is still open, and that inherited copy keeps the file busy until
 /// the forked child reaches its own exec. An agent that writes `build.sh` and
@@ -638,6 +634,93 @@ pub fn ensure_user_npm_prefix_in_path() {
     }
 }
 
+/// `pbi_flags` bits of a process's low-swap action (`PROC_FLAG_PC_MASK` in
+/// `<sys/proc_info.h>`): 0 none, `0x200` throttle, `0x400` suspend, `0x600`
+/// kill.
+#[cfg(target_os = "macos")]
+const PROC_FLAG_PC_MASK: u32 = 0x600;
+
+/// Keep macOS from pausing houhub when the system runs out of memory.
+///
+/// An app LaunchServices starts is marked to be suspended when the compressor
+/// and swap are exhausted (`PROC_FLAG_PC_SUSP`); the kernel then suspends the
+/// marked process with the largest footprint, and only the Force Quit window
+/// or a restart brings it back. houhub is the worst victim there is: every
+/// agent session runs through it, while the agents themselves — whose builds
+/// and tools are what use the memory — keep running, so nothing is freed and
+/// every session hangs on a houhub that no longer answers (kernel log:
+/// `memorystatus: suspending houhub [35261] due to swap exhaustion`).
+///
+/// A process may set its own action (`proc_setpcontrol`, which libproc
+/// exports but leaves out of the public headers, so it is looked up at run
+/// time; without it the launcher's choice stands). With none set, the kernel
+/// passes houhub over.
+#[cfg(target_os = "macos")]
+pub fn opt_out_of_low_swap_suspension() {
+    match clear_low_swap_action() {
+        Ok(Some(0)) => {}
+        Ok(Some(before)) => {
+            tracing::info!("[memory] cleared macOS low-swap action {before:#x} (no pause when memory runs out)")
+        }
+        Ok(None) => {}
+        Err(err) => tracing::warn!(
+            "[memory] macOS may pause houhub when memory runs out; clearing its low-swap action failed: {err}"
+        ),
+    }
+}
+
+/// Clear this process's low-swap action. Returns the action it had (`None`
+/// when it could not be read), or why it could not be cleared.
+#[cfg(target_os = "macos")]
+fn clear_low_swap_action() -> Result<Option<u32>, String> {
+    type SetPcontrolFn = unsafe extern "C" fn(libc::c_int) -> libc::c_int;
+    const PROC_SETPC_NONE: libc::c_int = 0;
+    static NAME: &[u8] = b"proc_setpcontrol\0";
+
+    let before = low_swap_action();
+    if before == Some(0) {
+        return Ok(before);
+    }
+    // SAFETY: RTLD_DEFAULT with a NUL-terminated name; the symbol, when
+    // present, has exactly this signature (libproc, macOS 10.7+).
+    let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, NAME.as_ptr().cast()) };
+    if sym.is_null() {
+        return Err("proc_setpcontrol is not available".to_string());
+    }
+    // SAFETY: `sym` is non-null and has the signature above; the call changes
+    // nothing but this process's own action.
+    let rc = unsafe {
+        let set: SetPcontrolFn = std::mem::transmute(sym);
+        set(PROC_SETPC_NONE)
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    match low_swap_action() {
+        Some(after) if after != 0 => Err(format!("the action is still {after:#x}")),
+        _ => Ok(before),
+    }
+}
+
+/// This process's low-swap action bits, `None` when they cannot be read.
+#[cfg(target_os = "macos")]
+fn low_swap_action() -> Option<u32> {
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: a zeroed `proc_bsdinfo` is a valid out-parameter of `size`
+    // bytes for this flavor.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let read = unsafe {
+        libc::proc_pidinfo(
+            std::process::id() as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    (read == size).then_some(info.pbi_flags & PROC_FLAG_PC_MASK)
+}
+
 /// Read `reader` line-by-line as UTF-8-*lossy* text, invoking `on_line` for each
 /// line (trailing newline trimmed) and returning the accumulated text.
 ///
@@ -693,10 +776,28 @@ where
 #[cfg(test)]
 mod tests {
     use super::{collect_lines_lossy, spawn_retrying_exec_busy, spawn_retrying_exec_busy_within};
-
     use std::io::Cursor;
-
     use std::time::Duration;
+
+    /// The test process stands in for an app LaunchServices started: it marks
+    /// itself "suspend on low swap" the way the launcher marks houhub, and the
+    /// opt-out must leave no action at all.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_low_swap_suspend_mark_is_cleared() {
+        type SetPcontrolFn = unsafe extern "C" fn(libc::c_int) -> libc::c_int;
+        const PROC_SETPC_SUSPEND: libc::c_int = 2;
+        let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"proc_setpcontrol".as_ptr()) };
+        assert!(!sym.is_null(), "libproc exports proc_setpcontrol");
+        let set: SetPcontrolFn = unsafe { std::mem::transmute(sym) };
+        assert_eq!(unsafe { set(PROC_SETPC_SUSPEND) }, 0);
+        assert_eq!(super::low_swap_action(), Some(0x400));
+
+        assert_eq!(super::clear_low_swap_action(), Ok(Some(0x400)));
+        assert_eq!(super::low_swap_action(), Some(0));
+        // Nothing to do the second time.
+        assert_eq!(super::clear_low_swap_action(), Ok(Some(0)));
+    }
 
     #[tokio::test]
     async fn collect_lines_lossy_preserves_lines_around_invalid_utf8() {
@@ -705,7 +806,8 @@ mod tests {
         // `next_line()` loop would abort here and drop "third"; this must not.
         let data = b"first\n\xff\xfe garbage\nthird\n".to_vec();
         let mut seen: Vec<String> = Vec::new();
-        let collected = collect_lines_lossy(Cursor::new(data), |l| seen.push(l.to_string())).await;
+        let collected =
+            collect_lines_lossy(Cursor::new(data), |l| seen.push(l.to_string())).await;
 
         assert_eq!(seen.len(), 3, "all three lines emitted: {seen:?}");
         assert_eq!(seen[0], "first");
@@ -725,7 +827,8 @@ mod tests {
         // newline is still emitted (then EOF stops the loop).
         let data = b"a\r\nb\r\nno-newline".to_vec();
         let mut seen: Vec<String> = Vec::new();
-        let collected = collect_lines_lossy(Cursor::new(data), |l| seen.push(l.to_string())).await;
+        let collected =
+            collect_lines_lossy(Cursor::new(data), |l| seen.push(l.to_string())).await;
 
         assert_eq!(seen, vec!["a", "b", "no-newline"]);
         assert_eq!(collected, "a\nb\nno-newline");
@@ -735,7 +838,8 @@ mod tests {
     async fn collect_lines_lossy_empty_input_yields_nothing() {
         let mut seen: Vec<String> = Vec::new();
         let collected =
-            collect_lines_lossy(Cursor::new(Vec::<u8>::new()), |l| seen.push(l.to_string())).await;
+            collect_lines_lossy(Cursor::new(Vec::<u8>::new()), |l| seen.push(l.to_string()))
+                .await;
 
         assert!(seen.is_empty());
         assert!(collected.is_empty());

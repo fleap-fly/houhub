@@ -5,11 +5,8 @@ use serde::Deserialize;
 use crate::acp::custom_registry::{
     CustomAgentDef, CustomAgentSource, CustomAgentSpec, CustomDistributionKind,
 };
-
 use crate::acp::registry;
-
 use crate::app_error::AppCommandError;
-
 use crate::models::agent::AgentType;
 
 pub const REGISTRY_URL: &str =
@@ -79,9 +76,10 @@ async fn fetch_registry_payload() -> Result<RegistryPayload, AppCommandError> {
         )));
     }
 
-    let text = response.text().await.map_err(|e| {
-        AppCommandError::network(format!("failed to read ACP registry response: {e}"))
-    })?;
+    let text = response
+        .text()
+        .await
+        .map_err(|e| AppCommandError::network(format!("failed to read ACP registry response: {e}")))?;
     serde_json::from_str::<RegistryPayload>(&text).map_err(|e| {
         AppCommandError::configuration_invalid(format!("failed to parse ACP registry JSON: {e}"))
     })
@@ -237,8 +235,9 @@ pub async fn fetch_catalog(
             // Exactly the condition `default_kind_for` uses to pick a channel,
             // so the picker cannot advertise an entry as supported and then
             // fail to add it.
-            let supported_on_platform =
-                kinds.iter().any(|k| kind_runs_here(*k, &item.distribution));
+            let supported_on_platform = kinds
+                .iter()
+                .any(|k| kind_runs_here(*k, &item.distribution));
             RegistryCatalogAgent {
                 builtin: is_builtin_registry_id(&item.id),
                 installed: installed_ids.iter().any(|id| id == &item.id),
@@ -267,11 +266,17 @@ pub async fn fetch_catalog(
 /// id is `kimi-code`, and Qoder as `qoder` against houhub's `qoder-cli`. Kiro is
 /// not in the registry yet, but its vendor's pending entry
 /// (agentclientprotocol/registry#561) is `kiro`, against houhub's `kiro-cli`.
+/// MiniMax Code is published as `minimax-code`, against houhub's
+/// `houhub-minimax-code` (prefixed so a `minimax-code` custom agent added before
+/// the built-in keeps resolving to its own definition). OpenCode publishes its
+/// 2.x line a second time as `opencode-v2` (the same 2.2.0 archives, served from
+/// opencode.ai), which the built-in `opencode` runs since houhub moved to
+/// OpenCode 2; one a user added as a custom agent earlier keeps working.
 ///
 /// Missing an alias is not merely redundant, it is a DEAD entry: the picker
 /// lists the agent as addable, and the add then fails validation because the
 /// id collides with a built-in wire name (`is_valid_custom_agent_id`).
-const BUILTIN_REGISTRY_ALIASES: &[&str] = &["kimi", "qoder", "kiro"];
+const BUILTIN_REGISTRY_ALIASES: &[&str] = &["kimi", "qoder", "kiro", "minimax-code", "opencode-v2"];
 
 /// Whether an id is one of houhub's hand-written built-in agents. Deliberately
 /// does NOT consult the custom registry (unlike `registry::from_registry_id`,
@@ -300,10 +305,7 @@ pub fn catalog_entry_to_def(
     let kind = effective_kind(entry, kind)?;
 
     let mut spec = entry.spec.clone();
-    if let Some(cmd) = cmd_override
-        .map(|c| c.trim().to_string())
-        .filter(|c| !c.is_empty())
-    {
+    if let Some(cmd) = cmd_override.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
         match kind {
             CustomDistributionKind::Npx => {
                 if let Some(npx) = spec.npx.as_mut() {
@@ -342,15 +344,6 @@ pub fn catalog_entry_to_def(
         // toggle is there to fix.
         supports_mcp: true,
     })
-}
-
-#[derive(Debug, Clone)]
-pub struct RegistryAgent {
-    pub agent_type: AgentType,
-    pub registry_id: String,
-    pub name: String,
-    pub description: String,
-    pub version: Option<String>,
 }
 
 #[cfg(test)]
@@ -415,10 +408,7 @@ mod tests {
             r#"{{"npx":{{"package":"kilo@7.4.16"}},"binary":{{"{}":{{"archive":"https://e/k.tgz","cmd":"./kilo"}}}}}}"#,
             registry::current_platform()
         ));
-        assert_eq!(
-            default_kind_for(&spec),
-            Some(CustomDistributionKind::Binary)
-        );
+        assert_eq!(default_kind_for(&spec), Some(CustomDistributionKind::Binary));
         // An explicit choice is still honoured over the default.
         let entry = catalog_entry("kilo", spec);
         let def = catalog_entry_to_def(&entry, Some(CustomDistributionKind::Npx), None)
@@ -477,10 +467,7 @@ mod tests {
         let spec = spec_from(&format!(
             r#"{{"binary":{{"{elsewhere}":{{"archive":"https://e/k.tgz","cmd":"./kilo"}}}}}}"#
         ));
-        assert_eq!(
-            default_kind_for(&spec),
-            Some(CustomDistributionKind::Binary)
-        );
+        assert_eq!(default_kind_for(&spec), Some(CustomDistributionKind::Binary));
         let entry = catalog_entry("kilo", spec);
         let def = catalog_entry_to_def(&entry, None, None).expect("converts");
         assert!(matches!(
@@ -508,6 +495,10 @@ mod tests {
         // `kiro-cli` here).
         assert!(is_builtin_registry_id("kiro"));
         assert!(is_builtin_registry_id("kiro-cli"));
+        // And for MiniMax Code (`minimax-code` upstream, `houhub-minimax-code`
+        // here).
+        assert!(is_builtin_registry_id("minimax-code"));
+        assert!(is_builtin_registry_id("houhub-minimax-code"));
         // Antigravity needs NO alias: houhub's registry id is byte-identical
         // to the one the ACP registry publishes, so the picker resolves it
         // through the built-in table and never offers a duplicate entry.
@@ -519,9 +510,10 @@ mod tests {
     // Why a missing alias is a BUG and not just noise. The entries in the
     // table fail differently, and Qoder and Kiro are the worse kind:
     //
-    // * `kimi` IS a legal custom-agent id (houhub's wire name is `kimi_code`),
+    // * `kimi`, `minimax-code` and `opencode-v2` ARE legal custom-agent ids
+    //   (houhub's wire names are `kimi_code`, `minimax_code` and `open_code`),
     //   so without the alias the picker would let the user add a SECOND,
-    //   redundant Kimi alongside the built-in.
+    //   redundant copy alongside the built-in.
     // * `qoder` and `kiro` are NOT (they are houhub's wire names, blocked
     //   outright), so without the alias the picker lists an entry whose "Add"
     //   button can only ever error — a dead end with no way for the user to
@@ -529,6 +521,10 @@ mod tests {
     #[test]
     fn aliases_that_are_addable_would_duplicate_and_the_rest_would_dead_end() {
         assert!(crate::models::agent::is_valid_custom_agent_id("kimi"));
+        assert!(crate::models::agent::is_valid_custom_agent_id(
+            "minimax-code"
+        ));
+        assert!(crate::models::agent::is_valid_custom_agent_id("opencode-v2"));
         assert!(!crate::models::agent::is_valid_custom_agent_id("qoder"));
         assert!(!crate::models::agent::is_valid_custom_agent_id("kiro"));
         for alias in BUILTIN_REGISTRY_ALIASES {
@@ -585,12 +581,8 @@ mod tests {
             "qwen-code",
             spec_from(r#"{"npx":{"package":"@qwen-code/qwen-code@0.21.0","args":["--acp"]}}"#),
         );
-        let def = catalog_entry_to_def(
-            &entry,
-            Some(CustomDistributionKind::Npx),
-            Some("qwen".into()),
-        )
-        .expect("converts");
+        let def = catalog_entry_to_def(&entry, Some(CustomDistributionKind::Npx), Some("qwen".into()))
+            .expect("converts");
         assert_eq!(def.spec.npx.unwrap().cmd.as_deref(), Some("qwen"));
     }
 

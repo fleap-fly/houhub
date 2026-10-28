@@ -1,115 +1,61 @@
 use sea_orm_migration::prelude::*;
 
 mod m20260211_000001_init;
-
 mod m20260219_000001_folder_command;
-
 mod m20260221_000001_folder_is_open;
-
 mod m20260226_000001_agent_setting;
-
 mod m20260227_000001_folder_parent_branch;
-
 mod m20260330_000001_chat_channel;
-
 mod m20260401_000001_chat_channel_sender_context;
-
 mod m20260404_000001_model_provider;
-
 mod m20260406_000001_agent_setting_model_provider;
-
 mod m20260420_000001_opened_tabs;
-
 mod m20260422_000001_folder_sort_order;
-
 mod m20260423_000001_drop_folder_parent_branch;
-
 mod m20260424_000001_folder_color;
-
 mod m20260424_000002_quick_message;
-
 mod m20260513_000001_remote_workspace_connection;
-
 mod m20260518_000001_model_provider_single_type_and_model;
-
 mod m20260522_000001_delegation_columns;
-
 mod m20260607_000001_folder_parent_id;
-
 mod m20260608_000001_conversation_title_locked;
-
 mod m20260610_000001_conversation_pinned_at;
-
 mod m20260611_000001_folder_is_chat;
-
 mod m20260612_000001_conversation_folder_kind;
-
 mod m20260621_000001_automation;
-
 mod m20260630_000001_conversation_parent_id_index;
-
 mod m20260703_000001_chat_channel_thread_binding;
-
 mod m20260717_000001_folder_alias;
-
 mod m20260726_000001_custom_agent;
-
 mod m20260727_000001_custom_agent_skills;
-
 mod m20260728_000001_custom_agent_skills_dir;
-
 mod m20260728_000002_custom_agent_source;
-
 mod m20260801_000001_work_task;
-
 mod m20260801_000002_work_task_p2;
-
 mod m20260801_000003_work_task_template;
-
 mod m20260803_000001_folder_link;
-
 mod m20260803_000001_token_usage;
-
 mod m20260807_000001_work_task_scheduled_at;
-
 mod m20260808_000001_custom_agent_supports_mcp;
-
 mod m20260817_000001_work_task_conversation_title;
-
 mod m20260818_000001_work_task_source;
-
 mod m20260819_000001_work_task_completion_kind;
-
 mod m20260825_000001_remote_workspace_connection_headers;
-
 mod m20260829_000001_folder_group;
-
 mod m20260830_000001_canvas_node;
-
 mod m20260831_000001_canvas_node_group_grid;
-
 mod m20260907_000001_canvas_node_path;
-
 mod m20260929_000001_canvas_board;
-
 mod m20260930_000001_agent_setting_drop_adapter_channel;
-
 mod m20261006_000001_conversation_tag;
-
 mod m20261015_000001_kiro_builtin_agent;
-
 mod m20261015_000001_work_task_deferred_at;
-
 mod m20261016_000001_assistant;
-
 mod m20261016_000002_conversation_assistant;
-
 mod m20261017_000002_conversation_source;
-
 mod m20261020_000001_folder_command_run_local;
-
 mod m20261022_000001_tool_approval;
-
+mod m20261022_000001_work_task_delivery;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -171,6 +117,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261017_000002_conversation_source::Migration),
             Box::new(m20261020_000001_folder_command_run_local::Migration),
             Box::new(m20261022_000001_tool_approval::Migration),
+            Box::new(m20261022_000001_work_task_delivery::Migration),
         ]
     }
 }

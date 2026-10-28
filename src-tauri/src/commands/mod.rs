@@ -140,3 +140,7 @@ pub mod workspace_windows;
 pub mod houflow;
 
 pub mod workbench;
+
+pub mod codex_catalog;
+
+pub mod opencode_credentials;

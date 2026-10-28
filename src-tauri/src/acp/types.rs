@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -98,7 +97,7 @@ pub struct SessionNotice {
 /// that loaded without one of its components.
 ///
 /// claude-agent-acp gives these no ACP surface — it only writes them to its
-/// stderr — so HouHub reads them off the raw SDK stream it already subscribes to
+/// stderr — so houhub reads them off the raw SDK stream it already subscribes to
 /// (`emitRawSDKMessages`). Field for field the CLI's entry, except that its
 /// `type` is `kind` here, the key the frontend reads.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,22 +194,25 @@ pub struct AsyncTaskRecord {
     pub name: String,
     /// Already FRIENDLY, not the SDK's raw type: claude maps
     /// `local_bash`→`"shell"`, `local_workflow`→`"workflow"`,
-    /// `local_monitor`/`mcp`→`"monitor"`, and anything else to `"task"`; codex
-    /// publishes `"shell"` for every background terminal. Kept a plain string so
-    /// an unmapped future type renders as itself instead of failing to
-    /// deserialize.
+    /// `local_monitor`/`mcp`→`"monitor"`, and anything else to `"task"`; from
+    /// 0.97.0 it names a turn Claude Code started on its own `"turn"`, and from
+    /// 0.98.0 the task of a `Monitor` call (which the SDK reports as
+    /// `local_bash`) `"monitor"`. codex publishes `"shell"` for every
+    /// background terminal. Kept a plain string so an unmapped future type
+    /// renders as itself instead of failing to deserialize.
     pub task_type: String,
     pub description: String,
-    /// Whether this task earns its own transcript card upstream. HouHub renders
+    /// Whether this task earns its own transcript card upstream. houhub renders
     /// the live strip regardless — that is AIR's always-on task panel, and the
     /// strip answers "is it still running", which no transcript card can. Not
     /// currently read by any surface; carried so a client that does want to
     /// distinguish a task already drawn as an ordinary tool call (a background
     /// `Bash` is one) from a standalone job doesn't need a wire change.
     pub show_in_transcript: bool,
-    /// Whether `_session/async_task/stop` is offered. The adapter announces
-    /// `true` for every task it publishes; it is carried rather than assumed so
-    /// a future adapter can withdraw the affordance without a HouHub release.
+    /// Whether `_session/async_task/stop` is offered. Carried rather than
+    /// assumed: claude-agent-acp 0.98.0 announces `false` for a monitor
+    /// (stopping one would only end the agent's wait) and refuses the request,
+    /// while every other task it publishes is `true`.
     pub can_stop: bool,
     /// `running` | `paused` | `completed` | `failed` | `stopped`. Plain string
     /// for the same forward-compatibility reason as `task_type`; treat anything
@@ -296,10 +298,7 @@ impl AsyncTaskDelta {
     pub fn to_record(&self) -> AsyncTaskRecord {
         AsyncTaskRecord {
             task_id: self.task_id.clone(),
-            name: self
-                .name
-                .clone()
-                .unwrap_or_else(|| "Background task".into()),
+            name: self.name.clone().unwrap_or_else(|| "Background task".into()),
             task_type: self.task_type.clone().unwrap_or_else(|| "task".into()),
             description: self.description.clone().unwrap_or_default(),
             show_in_transcript: self.show_in_transcript.unwrap_or(true),
@@ -505,7 +504,11 @@ pub enum AcpEvent {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         parent_tool_use_id: Option<String>,
     },
-    /// Agent-published session title from an ACP session-info update.
+    /// Agent published a live session title via ACP `session_info_update.title`.
+    /// Applied to the conversation row by the lifecycle worker (unlocked titles
+    /// only). The sidebar converges through `conversation://changed`; this event
+    /// itself is not rendered. Omitted when the update carries no title so
+    /// goal-only `session_info_update`s stay off the lifecycle path.
     NativeSessionTitle { title: String },
     /// Claude Code `/clear` rolled the on-disk transcript to a new uuid while
     /// the public ACP session id stayed the same. The watcher adopted the new
@@ -533,7 +536,7 @@ pub enum AcpEvent {
     /// one that was requested.
     ///
     /// `session/set_config_option` is advisory: the agent answers with the option
-    /// list it actually adopted, and HouHub renders that verbatim — so a refused or
+    /// list it actually adopted, and houhub renders that verbatim — so a refused or
     /// downgraded pick reads in the composer as the selector springing back for no
     /// reason. pi does this for a model that never declared `reasoning` (its whole
     /// thinking vocabulary collapses to `off`); grok does it for a model switch
@@ -588,10 +591,10 @@ pub enum AcpEvent {
         /// When present, the frontend renders a localized message keyed on
         /// this code; otherwise it falls back to `message`.
         code: Option<String>,
-        /// Out-of-band diagnostic evidence for errors HouHub *inferred* rather
+        /// Out-of-band diagnostic evidence for errors houhub *inferred* rather
         /// than received — currently the `turn_failed_empty*` family, where the
         /// agent reported success and the wire carried no error at all. Holds
-        /// the turn's agent stderr tail and a summary of updates HouHub failed
+        /// the turn's agent stderr tail and a summary of updates houhub failed
         /// to parse.
         ///
         /// **Already redacted and length-bounded at the source**
@@ -676,7 +679,7 @@ pub enum AcpEvent {
     /// shows each one as a notification: a toast, which for `warning`/`error`
     /// is also kept in the status-bar alert list.
     ///
-    /// Reaches HouHub from the two adapters `build_client_capabilities`
+    /// Reaches houhub from the two adapters `build_client_capabilities`
     /// advertises `session.notices` to: claude-agent-acp (0.81+) and codex-acp
     /// (1.13+). Dropped on the replay seam — a notice has no history position.
     SessionNotice { notice: SessionNotice },
@@ -689,17 +692,17 @@ pub enum AcpEvent {
     /// shows it as a warning notification.
     PluginLoadFailures { failures: Vec<PluginLoadFailure> },
     /// A JetBrains AIR async-task delta (see [`AsyncTaskDelta`]). Emitted for
-    /// every frame HouHub could read; the merge into whole rows happens
+    /// every frame houhub could read; the merge into whole rows happens
     /// identically in `SessionState::apply_event` (which the snapshot is taken
     /// from) and the frontend reducer, so a mid-session attach and a client that
     /// saw every delta agree.
     ///
-    /// Reaches HouHub from the two adapters `build_client_capabilities`
+    /// Reaches houhub from the two adapters `build_client_capabilities`
     /// advertises `asyncTasks` to: claude-agent-acp (0.73+) and codex-acp
-    /// (1.10+) — and from Grok, whose background workflows HouHub translates
+    /// (1.10+) — and from Grok, whose background workflows houhub translates
     /// into the same deltas without advertising anything to it.
     AsyncTask { delta: AsyncTaskDelta },
-    /// `session/load` failed in a way HouHub cannot paper over — the agent has
+    /// `session/load` failed in a way houhub cannot paper over — the agent has
     /// no record of this `session_id`, the session/process died, it is
     /// archived, or another client holds it open. Emitted instead of silently
     /// falling back to `session/new`, so the frontend can surface the failure
@@ -744,20 +747,33 @@ pub enum AcpEvent {
         remote_control: Option<RemoteControlInfo>,
     },
     /// Out-of-turn activity surfaced from the agent's own session transcript
-    /// by the background watcher. Covers async sub-agent/background-shell
-    /// completions and autonomous turns that do not have a reliable ACP wire
-    /// settlement event.
+    /// by the background watcher (`acp::background_watch`; Claude-only today).
+    /// Covers everything that happens OUTSIDE a houhub-driven prompt turn:
+    /// async sub-agent / background-shell `<task-notification>` completions,
+    /// the agent's continued work after them, and cron//loop autonomous turns
+    /// (which never produce ACP wire events at all — see issue #270). The
+    /// transcript is the single render source for out-of-turn content; wire
+    /// updates arriving out-of-turn are dropped by the frontend.
     BackgroundActivity {
         session_id: String,
+        /// Out-of-turn turns parsed from the transcript tail. UPSERT semantics
+        /// keyed by `MessageTurn.id` (`bg-<episode-offset>-<idx>`) — a still-
+        /// growing turn is re-emitted whole on each poll tick that changed it.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         turns: Vec<crate::models::message::MessageTurn>,
-        /// Launched-but-unresolved background tasks accounted from transcript
-        /// acks. Mirrored into `SessionState` to keep the connection alive while
-        /// that work is still running.
+        /// Launched-but-unresolved background tasks (async sub-agents +
+        /// background shell tasks) accounted from transcript acks. Mirrored
+        /// into `SessionState` to exempt the connection from both idle sweeps
+        /// while work is pending.
         outstanding: u32,
+        /// Tasks settled by `<task-notification>` records in this batch — the
+        /// frontend raises one OS notification per entry.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         settled: Vec<BackgroundSettledInfo>,
-        /// Transcript byte offset parsed through at emission.
+        /// Byte offset of the transcript parsed through at emission. The
+        /// frontend retires overlay turns once a detail fetch's
+        /// `transcript_watermark` catches up (`>=`), closing the emit/refetch
+        /// race without cross-namespace id dedup.
         watermark: u64,
     },
     /// A `delegate_to_agent` MCP tool call from the parent agent has spawned a
@@ -808,7 +824,7 @@ pub enum AcpEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assistant_name: Option<String>,
     },
-    /// A human submitted a prompt from the Houhub conversation UI (desktop or
+    /// A human submitted a prompt from the HouHub conversation UI (desktop or
     /// web). Synthetic, notification-only event: it mutates no `SessionState`
     /// field and exists purely to drive the chat-channel "user message" push.
     /// Emitted by `send_prompt_linked` on the genuine UI path only
@@ -886,7 +902,10 @@ pub enum AcpEvent {
     /// clear its "restart to apply" banner. Carried into `SessionState` so a
     /// snapshot attach (web reconnect, window refresh, new tile) recovers the
     /// staleness the one-shot event won't replay for it.
-    SessionConfigStale { stale: bool, kind: ConfigStaleKind },
+    SessionConfigStale {
+        stale: bool,
+        kind: ConfigStaleKind,
+    },
 }
 
 /// One background task settled by a `<task-notification>` transcript record,
@@ -915,13 +934,16 @@ pub struct BackgroundSettledInfo {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// The launching tool call's `tool_use_id` (from the notification's
+    /// `<tool-use-id>`), so the frontend can locate the exact card to flip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_id: Option<String>,
+    /// The notification's `<result>` markdown (capped at
+    /// [`crate::parsers::claude::BACKGROUND_RESULT_MAX_CHARS`], matching the
+    /// cold-parse fold), so the live path renders identically to a cold detail
+    /// parse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
-    /// True when the task reply is already rendered on the held ACP turn.
-    #[serde(default)]
-    pub wire_visible: bool,
     /// The notification says the task will notify again
     /// ([`crate::parsers::claude::task_notification_is_interim`]): the task is
     /// still alive, so it stays in the watcher's outstanding count, the card
@@ -964,7 +986,7 @@ pub enum UserMessageBlock {
 /// prompt back to somebody:
 ///
 /// * the live broadcast, [`user_blocks_from_prompt`] → [`UserMessageBlock`];
-/// * the ACP-native history parser, `parsers::acp_native`, reading HouHub's own
+/// * the ACP-native history parser, `parsers::acp_native`, reading houhub's own
 ///   transcript back off disk;
 /// * the grok history parser, `parsers::grok`, reading grok's `updates.jsonl`.
 ///
@@ -1101,7 +1123,9 @@ pub fn attachment_names_from_prompt(blocks: &[PromptInputBlock]) -> Option<Strin
         .filter_map(|b| match b {
             PromptInputBlock::ResourceLink { name, .. } => Some(name.clone()),
             PromptInputBlock::Resource { uri, .. } => Some(attachment_display_name(uri)),
-            PromptInputBlock::Image { uri, .. } => uri.as_deref().map(attachment_display_name),
+            PromptInputBlock::Image { uri, .. } => {
+                uri.as_deref().map(attachment_display_name)
+            }
             PromptInputBlock::Text { .. } => None,
         })
         .filter(|name| !name.trim().is_empty())
@@ -1239,7 +1263,7 @@ fn escape_link_destination(uri: &str) -> String {
 /// [`project_user_prompt_block`] instead of re-deriving the rule.
 ///
 /// The inverse of `connection::map_prompt_blocks`, and deliberately lenient —
-/// it reads bytes written by older builds of HouHub and by other agents' stores:
+/// it reads bytes written by older builds of houhub and by other agents' stores:
 ///
 /// * `mimeType` **and** legacy snake_case `mime_type`;
 /// * an embedded resource's uri/mime/body nested under `resource` (where ACP
@@ -1270,7 +1294,7 @@ pub fn prompt_block_from_wire(item: &serde_json::Value) -> Option<PromptInputBlo
         Some("image") => Some(PromptInputBlock::Image {
             data: string(item, "data")?,
             // ACP requires `mimeType`; a record MISSING it is old enough that
-            // png was the only thing HouHub ever pasted. A record that carries
+            // png was the only thing houhub ever pasted. A record that carries
             // an empty one keeps it, which is what the typed reader sees.
             mime_type: mime(item).unwrap_or_else(|| "image/png".to_string()),
             uri: string(item, "uri"),
@@ -1280,9 +1304,7 @@ pub fn prompt_block_from_wire(item: &serde_json::Value) -> Option<PromptInputBlo
             let uri = string(resource, "uri");
             let mime_type = mime(resource);
             let blob = string(resource, "blob");
-            let is_image = mime_type
-                .as_deref()
-                .is_some_and(|m| m.starts_with("image/"));
+            let is_image = mime_type.as_deref().is_some_and(|m| m.starts_with("image/"));
             // Nothing to show: no uri to name it by, and no bytes to draw it
             // from. (Kept identical to `acp_native::prompt_block_from_content`,
             // the typed reader for the same content off the replay channel.)
@@ -1492,7 +1514,7 @@ pub struct SessionConfigOptionInfo {
     pub category: Option<String>,
     pub kind: SessionConfigKindInfo,
     /// The value the AGENT recommends for this option, when it named one —
-    /// JetBrains AIR's `recommendedValue` (codex-acp 1.11.0+, gated on HouHub
+    /// JetBrains AIR's `recommendedValue` (codex-acp 1.11.0+, gated on houhub
     /// advertising the capability; see `build_client_capabilities`). It is a
     /// hint, never an instruction: `current_value` still decides what is
     /// selected, and a recommendation that matches nothing in the option list
@@ -1504,12 +1526,15 @@ pub struct SessionConfigOptionInfo {
     pub recommended_value: Option<String>,
 }
 
-/// What Grok says about one model, parsed from a session
-/// response's top-level `models.availableModels[]._meta` (only reachable via the
-/// raw JSON, since the `unstable_session_model` feature that would surface the
-/// typed `models` field is intentionally off). Drives the model-reactive
-/// composer effort selector and the live context ring. Backend-internal and not
-/// serialized onto the wire.
+/// What Grok says about ONE of its models, parsed from a session response's
+/// top-level `models.availableModels[]._meta` (only reachable via the raw JSON,
+/// since the `unstable_session_model` feature that would surface the typed
+/// `models` field is intentionally off). Backend-internal — NOT serialized onto
+/// the wire.
+///
+/// Two consumers: the model-reactive composer effort selector (`supports ==
+/// false` ⇒ the model shows NO effort selector) and the live context ring, which
+/// pairs `context_window` with Grok's cumulative per-turn token count.
 #[derive(Debug, Clone, Default)]
 pub struct GrokModelSpec {
     /// Switchable efforts the model advertises: `(id, label, description)`.
@@ -1519,8 +1544,10 @@ pub struct GrokModelSpec {
     pub default: Option<String>,
     /// Whether the model advertises `supportsReasoningEffort`.
     pub supports: bool,
-    /// The model's context window (`totalContextTokens`) — Grok's own number.
-    /// `None` means the live ring falls back to the catalog/id heuristic.
+    /// The model's context window (`totalContextTokens`) — Grok's own number,
+    /// which beats inferring one from the model id. `None` when the entry omits
+    /// it, and the caller falls back to
+    /// [`crate::parsers::infer_context_window_max_tokens`].
     pub context_window: Option<u64>,
 }
 
@@ -1661,22 +1688,22 @@ pub struct AcpAgentInfo {
     pub description: String,
     pub available: bool,
     pub distribution_type: String,
-    /// Whether HouHub's entry for this agent is a third-party ACP *adapter*
+    /// Whether houhub's entry for this agent is a third-party ACP *adapter*
     /// wrapping a vendor CLI of a different name (Claude Code, Codex — see
     /// `registry::acp_adapter_relation`). Lets the surfaces that have no
     /// preflight result (composer block banner, settings header badge) say
     /// "the adapter isn't installed" instead of "the agent isn't", without
     /// hardcoding a second copy of the agent list frontend-side.
     pub is_acp_adapter: bool,
-    /// The vendor's install page for an agent HouHub does not install itself
+    /// The vendor's install page for an agent houhub does not install itself
     /// (`AgentDistribution::System`, i.e. `distribution_type == "system"`):
     /// the Settings page links it where other agents get an Install button.
-    /// `None` for every agent HouHub installs.
+    /// `None` for every agent houhub installs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_url: Option<String>,
     /// Whether that install can be upgraded from the Settings page through the
     /// vendor's own updater (`acp_update_system_agent`). Always `false` for
-    /// agents HouHub installs itself — they upgrade through their own actions.
+    /// agents houhub installs itself — they upgrade through their own actions.
     pub supports_self_update: bool,
     /// For custom agents, where the definition came from (`registry` |
     /// `manual`); `None` for built-ins. A manual definition's
@@ -1693,17 +1720,16 @@ pub struct AcpAgentInfo {
     ///
     /// Resolved by [`crate::acp::host_tools_policy::HostToolsPolicy::from_env`],
     /// the same function the launch uses, so it accounts for BOTH layers: the
-    /// per-agent `env_json` above and HouHub's own process env. Reading `env`
+    /// per-agent `env_json` above and houhub's own process env. Reading `env`
     /// frontend-side would see only the first, and an operator who exported the
     /// knob process-wide would get no warning at all while every agent silently
     /// lost delegation.
     pub host_tools_agent_mode: bool,
     pub config_json: Option<String>,
     pub config_file_path: Option<String>,
-    pub opencode_auth_json: Option<String>,
     pub codex_auth_json: Option<String>,
     pub codex_config_toml: Option<String>,
-    /// Compact structured codex model-catalog source (the `Houhub` custom-model
+    /// Compact structured codex model-catalog source (the `houhub` custom-model
     /// list) round-tripped into the settings editor. Only populated for
     /// `AgentType::Codex`, and only in api-key mode (no bound provider).
     pub codex_model_catalog: Option<String>,
@@ -1731,6 +1757,10 @@ pub struct AcpAgentInfo {
     /// permission mode is a launch flag, not a config key). Only populated
     /// for `AgentType::Cursor`. Derived from `cursor_cli_config_json`.
     pub cursor_settings: Option<CursorSettings>,
+    /// The `/model` picker ids houhub adds for houhub's Claude sessions when no
+    /// model provider is bound (`acp::claude_model_picker`). Only populated
+    /// for `AgentType::ClaudeCode`.
+    pub claude_model_picker: Option<Vec<String>>,
     pub model_provider_id: Option<i32>,
     /// Display icon for a custom ACP agent — normally an inlined
     /// `data:image/…;base64,…` URL (see
@@ -1817,13 +1847,13 @@ pub struct CodexGranularApproval {
 
 /// `[sandbox_workspace_write]` — only consulted when the effective sandbox mode
 /// is `workspace-write`. Every field defaults to false/empty upstream, so an
-/// absent key and an explicit `false` are equivalent; HouHub writes only the
+/// absent key and an explicit `false` are equivalent; houhub writes only the
 /// non-default ones to keep the file tidy.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CodexWorkspaceWrite {
     /// Extra writable folders beyond cwd. Upstream these are `AbsolutePathBuf`,
     /// but a RELATIVE entry is not rejected — codex resolves it against
-    /// `CODEX_HOME` (verified: `"rel/dir"` became `~/.codex/rel/dir`). HouHub
+    /// `CODEX_HOME` (verified: `"rel/dir"` became `~/.codex/rel/dir`). houhub
     /// therefore refuses to write relative entries rather than let a user
     /// silently grant write access inside `~/.codex`.
     pub writable_roots: Vec<String>,
@@ -1889,8 +1919,8 @@ pub struct CodexSandboxStructuredConfig {
 /// docs.x.ai/build/settings/reference); `None` means the key is absent.
 ///
 /// The *stock* per-session model is NOT surfaced here — it is chosen from the
-/// composer's model selector. But a HouHub-managed **custom (BYO endpoint) model**
-/// IS: HouHub writes a `[model.<id>]` block and points `[models].default` at it,
+/// composer's model selector. But a houhub-managed **custom (BYO endpoint) model**
+/// IS: houhub writes a `[model.<id>]` block and points `[models].default` at it,
 /// then reads it back through `custom_*` below. The managed block is anchored as
 /// "the `[model.<id>]` whose id equals `[models].default`", giving clean
 /// edit/rename/remove without leaving orphans.
@@ -1898,11 +1928,12 @@ pub struct CodexSandboxStructuredConfig {
 pub struct GrokSettings {
     /// `[models].default_reasoning_effort` — one of low/medium/high/xhigh.
     pub default_reasoning_effort: Option<String>,
-    /// `[ui].permission_mode` — Grok's native enum
-    /// (default/acceptEdits/auto/dontAsk/bypassPermissions/plan). Legacy
-    /// `ask`/`always-approve` values are migrated on read.
+    /// `[ui].permission_mode` — grok's real enum
+    /// (default/acceptEdits/auto/dontAsk/bypassPermissions/plan). Legacy houhub
+    /// markers (`ask`/`always-approve`) are migrated to `default`/`bypassPermissions`
+    /// on read (see `migrate_grok_permission_mode`).
     pub permission_mode: Option<String>,
-    /// The HouHub-managed custom model id: the `[model.<id>]` block whose id
+    /// The houhub-managed custom model id: the `[model.<id>]` block whose id
     /// equals `[models].default`. `None` when there is no such managed block.
     pub custom_model_id: Option<String>,
     /// `[model.<id>].base_url` — the custom endpoint. `None` ⇒ Grok's official
@@ -1925,6 +1956,11 @@ pub struct GrokSettings {
     /// so the composer offers no effort selector for it.
     #[serde(default)]
     pub custom_reasoning_efforts: Vec<String>,
+    /// The endpoint's other models houhub added beside the managed one, in file
+    /// order: the `[model.<id>]` tables naming `model_provider = "houhub"`,
+    /// whose `[model_providers.houhub]` carries the managed endpoint and key.
+    #[serde(default)]
+    pub custom_extra_models: Vec<String>,
     /// `[session].auto_compact_threshold_percent` — auto-compact trigger, 0–100
     /// (Grok's default is 85).
     pub auto_compact_threshold_percent: Option<i64>,
@@ -1938,7 +1974,7 @@ pub struct GrokSettings {
 ///
 /// The custom-model group is driven by `custom_model_id`: a non-empty id writes
 /// (or renames to) `[model.<id>]` + `[models].default = "<id>"`; an empty/`None`
-/// id removes the HouHub-managed block and its default. Within an active model,
+/// id removes the houhub-managed block and its default. Within an active model,
 /// each empty sub-field omits its key (e.g. empty `custom_base_url` ⇒ Grok falls
 /// back to the official endpoint).
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1959,12 +1995,18 @@ pub struct GrokStructuredConfig {
     /// client that predates the field may undo that. `Some(empty)` removes the
     /// key; a non-empty list writes it.
     pub custom_reasoning_efforts: Option<Vec<String>>,
+    /// The endpoint's other models to offer beside the managed one, each a
+    /// `[model.<id>]` on houhub's `[model_providers.houhub]`. `None` keeps the
+    /// ones houhub added (following the endpoint's URL, key and backend); a list
+    /// makes them exactly those. Ignored without `custom_model_id`.
+    #[serde(default)]
+    pub custom_extra_models: Option<Vec<String>>,
     pub auto_compact_threshold_percent: Option<i64>,
 }
 
 /// The subset of `~/.cursor/cli-config.json` surfaced as structured controls
 /// in the Cursor settings panel. The file is shared with the Cursor CLI's own
-/// `/config` UI, so HouHub only projects the keys it manages; everything else
+/// `/config` UI, so houhub only projects the keys it manages; everything else
 /// is preserved verbatim on write. `None` means the key is absent.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CursorSettings {
@@ -2007,10 +2049,10 @@ pub struct CursorAuthStatus {
     pub membership: Option<String>,
     /// Probe failure detail (spawn error / timeout / non-JSON output).
     pub error: Option<String>,
-    /// Absolute path to the cursor-agent binary HouHub would launch (managed
+    /// Absolute path to the cursor-agent binary houhub would launch (managed
     /// cache or system install). The settings panel builds a copy-pasteable
     /// `"<binary_path>" login` command from it — the managed binary lives in
-    /// HouHub's cache and is NOT on the user's PATH, so a bare `cursor-agent
+    /// houhub's cache and is NOT on the user's PATH, so a bare `cursor-agent
     /// login` fails. `None` when no binary is installed.
     pub binary_path: Option<String>,
     /// Whether the stored login credential actually WORKED against Cursor's
@@ -2060,18 +2102,30 @@ pub struct CursorModelsResult {
     pub error: Option<String>,
 }
 
-/// Result of probing the optional Qoder CLI. Kept separate from Cursor's
-/// status shape because Qoder exposes account tier and BYOK capability.
+/// Result of probing `qoder status -o json` for the Qoder settings panel's
+/// auth card. The CLI prints a flat object:
+/// `{logged_in, version, allow_byok, username, email, avatar_url, user_type}`.
+/// Parsed defensively — a shape change degrades to `error` rather than making
+/// the card claim the account is signed out.
 #[derive(Debug, Clone, Serialize)]
 pub struct QoderAuthStatus {
+    /// A launchable `qoder` binary was found (managed cache or system install).
     pub installed: bool,
     pub logged_in: bool,
     pub username: Option<String>,
     pub email: Option<String>,
+    /// Account tier, e.g. `personal_standard`.
     pub user_type: Option<String>,
+    /// CLI version the probe reported — the one that would actually launch,
+    /// which is not necessarily the version houhub's registry pins.
     pub version: Option<String>,
+    /// Whether the account may bring its own model provider key.
     pub allow_byok: Option<bool>,
+    /// Probe failure detail (spawn error / timeout / non-JSON output).
     pub error: Option<String>,
+    /// Absolute path to the `qoder` binary houhub would launch. The panel builds
+    /// a copy-pasteable `"<binary_path>" login` command from it, because a
+    /// managed binary lives in houhub's cache and is NOT on the user's PATH.
     pub binary_path: Option<String>,
 }
 
@@ -2403,10 +2457,7 @@ mod envelope_tests {
         }) else {
             panic!("a text resource projects to text");
         };
-        assert!(
-            text.ends_with("  1. box: 2×2 CSS px at (1, 1)\n</context>"),
-            "{text}"
-        );
+        assert!(text.ends_with("  1. box: 2×2 CSS px at (1, 1)\n</context>"), "{text}");
     }
 
     /// A page can write the block's own delimiters into its title or an id.
@@ -2432,10 +2483,7 @@ mod envelope_tests {
         assert_eq!(text.matches("<context ref=\"").count(), 1, "{text}");
         assert_eq!(text.matches("</context").count(), 1, "{text}");
         assert!(text.ends_with("\n</context>"), "{text}");
-        assert!(
-            text.contains("- page: Report ‹context ref=\"x\"> — http://x/"),
-            "{text}"
-        );
+        assert!(text.contains("- page: Report ‹context ref=\"x\"> — http://x/"), "{text}");
         assert!(text.contains("- element: div#a‹/context>b"), "{text}");
     }
 
@@ -2450,10 +2498,8 @@ mod envelope_tests {
             blob: None,
         };
         let read_back = prompt_block_from_wire(
-            &serde_json::to_value(crate::acp::connection::map_prompt_blocks(vec![
-                block.clone()
-            ]))
-            .expect("serializes")[0],
+            &serde_json::to_value(crate::acp::connection::map_prompt_blocks(vec![block.clone()]))
+                .expect("serializes")[0],
         )
         .expect("renderable");
         assert_eq!(
@@ -2542,7 +2588,9 @@ mod envelope_tests {
     #[test]
     fn wire_blocks_read_back_as_the_prompt_blocks_they_were_sent_as() {
         let sent = vec![
-            PromptInputBlock::Text { text: "hi".into() },
+            PromptInputBlock::Text {
+                text: "hi".into(),
+            },
             PromptInputBlock::Image {
                 data: "QUJD".into(),
                 mime_type: "image/jpeg".into(),
@@ -2601,11 +2649,7 @@ mod envelope_tests {
             serde_json::json!({"type": "resource_link", "name": "no uri"}),
             serde_json::json!({"type": "audio", "data": "QUJD", "mimeType": "audio/wav"}),
         ] {
-            assert_eq!(
-                prompt_block_from_wire(&unrenderable),
-                None,
-                "{unrenderable}"
-            );
+            assert_eq!(prompt_block_from_wire(&unrenderable), None, "{unrenderable}");
         }
         // An image resource is renderable on its bytes alone, uri or not.
         assert!(prompt_block_from_wire(&serde_json::json!({

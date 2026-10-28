@@ -6,13 +6,10 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -24,13 +21,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { fetchOpenAiCompatibleModels, updateModelProvider } from "@/lib/api"
+import { updateModelProvider } from "@/lib/api"
 import { CodexModelListEditor } from "@/components/settings/codex-model-list-editor"
+import type { CodexCatalogEndpoint } from "@/components/settings/codex-catalog-source"
+import {
+  describeCodexSaveError,
+  type CodexCatalogTranslator,
+} from "@/lib/codex-catalog-error"
 import {
   MODEL_PROVIDER_AGENT_TYPES,
   parseClaudeProviderModel,
-  parseCodexModelConfig,
   serializeClaudeProviderModel,
+  parseCodexModelConfig,
   serializeCodexModelConfig,
   type AgentType,
   type ClaudeProviderModel,
@@ -38,53 +40,9 @@ import {
   type ModelProviderInfo,
 } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
-
-function normalizeModelList(raw: string): string[] {
-  const seen = new Set<string>()
-  return raw
-    .split(/[\n,]+/)
-    .map((item) => item.trim())
-    .filter((item) => {
-      if (!item || seen.has(item)) return false
-      seen.add(item)
-      return true
-    })
-}
-
-function mergeModelList(values: string[]): string[] {
-  const seen = new Set<string>()
-  return values
-    .map((item) => item.trim())
-    .filter((item) => {
-      if (!item || seen.has(item)) return false
-      seen.add(item)
-      return true
-    })
-}
-
-function claudeModelValues(model: ClaudeProviderModel): string[] {
-  return mergeModelList([
-    model.main ?? "",
-    model.reasoning ?? "",
-    model.haiku ?? "",
-    model.sonnet ?? "",
-    model.opus ?? "",
-    model.customOption ?? "",
-  ])
-}
-
-function providerDefaultModel(provider: ModelProviderInfo): string {
-  const listed = provider.models.find((model) => model.trim())
-  if (listed) return listed.trim()
-  if (!provider.model) return ""
-  try {
-    const parsed = JSON.parse(provider.model) as Record<string, unknown>
-    const main = parsed?.main
-    return typeof main === "string" ? main.trim() : ""
-  } catch {
-    return provider.model.trim()
-  }
-}
+import { ClaudeProviderModelFields } from "@/components/settings/claude-model-fields"
+import { ModelIdInputWithFetch } from "@/components/settings/provider-models"
+import { useProviderModels } from "@/hooks/use-provider-models"
 
 interface EditModelProviderDialogProps {
   provider: ModelProviderInfo | null
@@ -98,59 +56,45 @@ export function EditModelProviderDialog({
   onProviderUpdated,
 }: EditModelProviderDialogProps) {
   const t = useTranslations("ModelProviderSettings")
+  const tCatalog = useTranslations(
+    "CodexModelEditor.catalogSource"
+  ) as unknown as CodexCatalogTranslator
   const [loading, setLoading] = useState(false)
-  const [modelsLoading, setModelsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const [name, setName] = useState("")
   const [apiUrl, setApiUrl] = useState("")
   const [apiKey, setApiKey] = useState("")
-  const [agentTypes, setAgentTypes] = useState<AgentType[]>([])
-  const [defaultModel, setDefaultModel] = useState("")
-  const [modelsText, setModelsText] = useState("")
+  const [agentType, setAgentType] = useState<AgentType>(
+    MODEL_PROVIDER_AGENT_TYPES[0]
+  )
+  const [singleModel, setSingleModel] = useState("")
   const [claudeModel, setClaudeModel] = useState<ClaudeProviderModel>({})
   const [codexModel, setCodexModel] = useState<CodexModelConfig>({
     customs: [],
   })
-  const includesClaude = agentTypes.includes("claude_code")
-  const codexOnly = agentTypes.length === 1 && agentTypes[0] === "codex"
-
-  const modelOptions = useMemo(
-    () => normalizeModelList(modelsText),
-    [modelsText]
-  )
-  const defaultModelOptions = useMemo(() => {
-    const trimmed = defaultModel.trim()
-    if (!trimmed || modelOptions.includes(trimmed)) return modelOptions
-    return [trimmed, ...modelOptions]
-  }, [defaultModel, modelOptions])
 
   useEffect(() => {
-    if (!provider) return
-    const nextAgentTypes =
-      provider.agent_types.length > 0
-        ? provider.agent_types
-        : [provider.agent_type]
-    setName(provider.name)
-    setApiUrl(provider.api_url)
-    setApiKey("")
-    setAgentTypes(nextAgentTypes)
-    const nextClaudeModel = nextAgentTypes.includes("claude_code")
-      ? parseClaudeProviderModel(provider.model)
-      : {}
-    const nextCodexModel =
-      nextAgentTypes.length === 1 && nextAgentTypes[0] === "codex"
-        ? parseCodexModelConfig(provider.model)
-        : { customs: [] }
-    setClaudeModel(nextClaudeModel)
-    setCodexModel(nextCodexModel)
-    setDefaultModel(
-      nextAgentTypes.includes("claude_code")
-        ? (nextClaudeModel.main ?? providerDefaultModel(provider))
-        : providerDefaultModel(provider)
-    )
-    setModelsText(provider.models.join("\n"))
-    setError(null)
+    if (provider) {
+      setName(provider.name)
+      setApiUrl(provider.api_url)
+      setApiKey("")
+      setAgentType(provider.agent_type)
+      if (provider.agent_type === "claude_code") {
+        setClaudeModel(parseClaudeProviderModel(provider.model))
+        setSingleModel("")
+        setCodexModel({ customs: [] })
+      } else if (provider.agent_type === "codex") {
+        setCodexModel(parseCodexModelConfig(provider.model))
+        setSingleModel("")
+        setClaudeModel({})
+      } else {
+        setSingleModel(provider.model ?? "")
+        setClaudeModel({})
+        setCodexModel({ customs: [] })
+      }
+      setError(null)
+    }
   }, [provider])
 
   const handleOpenChange = useCallback(
@@ -161,60 +105,44 @@ export function EditModelProviderDialog({
     [onOpenChange]
   )
 
+  // "Fetch models" uses the key typed here, else the stored one. Saving
+  // publishes through the cascade to a Codex agent bound to this provider.
+  const codexEndpoint = useMemo<CodexCatalogEndpoint | null>(
+    () =>
+      provider
+        ? {
+            baseUrl: apiUrl,
+            keySource: {
+              kind: "provider",
+              providerId: provider.id,
+              apiKey: apiKey.trim() || undefined,
+            },
+            // While Codex is bound to this provider, what it published too.
+            statusBinding: `provider:${provider.id}`,
+          }
+        : null,
+    [provider, apiUrl, apiKey]
+  )
+
+  // Claude and Gemini fields offer the models the provider lists, asked the
+  // way each agent sends the key: the one typed here, else the stored one.
+  const providerModels = useProviderModels(
+    provider && (agentType === "claude_code" || agentType === "gemini")
+      ? {
+          protocol: agentType === "gemini" ? "gemini" : "anthropic",
+          baseUrl: apiUrl,
+          apiKey,
+          providerId: provider.id,
+          keyHeader: agentType === "claude_code" ? "bearer" : null,
+        }
+      : null
+  )
+
   const modelPlaceholder = useMemo(() => {
-    if (agentTypes.includes("codex") || agentTypes.includes("pi"))
-      return t("modelPlaceholderCodex")
-    if (agentTypes.includes("gemini")) return t("modelPlaceholderGemini")
+    if (agentType === "codex") return t("modelPlaceholderCodex")
+    if (agentType === "gemini") return t("modelPlaceholderGemini")
     return ""
-  }, [agentTypes, t])
-
-  const handleAgentTypeToggle = useCallback((agentType: AgentType) => {
-    setAgentTypes((current) => {
-      if (current.includes(agentType)) {
-        return current.filter((item) => item !== agentType)
-      }
-      return [...current, agentType]
-    })
-  }, [])
-
-  const handleFetchModels = useCallback(async () => {
-    const baseUrl = apiUrl.trim()
-    const key = apiKey.trim() || provider?.api_key?.trim() || ""
-    if (!baseUrl) {
-      setError(t("apiUrlRequired"))
-      return
-    }
-    if (!key) {
-      setError(t("apiKeyRequired"))
-      return
-    }
-
-    setModelsLoading(true)
-    setError(null)
-    try {
-      const models = mergeModelList(
-        await fetchOpenAiCompatibleModels({ baseUrl, apiKey: key })
-      )
-      setModelsText(models.join("\n"))
-      if (models.length === 0) {
-        setError(t("fetchModelsEmpty"))
-        return
-      }
-      if (!defaultModel.trim()) setDefaultModel(models[0])
-      toast.success(t("fetchModelsSuccess"))
-    } catch (err: unknown) {
-      const raw = err as Record<string, unknown>
-      const msg =
-        typeof raw?.message === "string"
-          ? raw.message
-          : err instanceof Error
-            ? err.message
-            : String(err)
-      setError(msg)
-    } finally {
-      setModelsLoading(false)
-    }
-  }, [apiUrl, apiKey, provider, defaultModel, t])
+  }, [agentType, t])
 
   const handleSubmit = useCallback(async () => {
     if (!provider) return
@@ -226,49 +154,24 @@ export function EditModelProviderDialog({
       setError(t("apiUrlRequired"))
       return
     }
-    if (agentTypes.length === 0) {
-      setError(t("agentTypesRequired"))
+    if (!agentType) {
+      setError(t("agentTypeRequired"))
       return
     }
 
-    const defaultModelValue = defaultModel.trim() || modelOptions[0] || ""
-    const modelPayload = includesClaude
-      ? (serializeClaudeProviderModel({
-          ...claudeModel,
-          main: claudeModel.main?.trim() || defaultModelValue || undefined,
-        }) ?? "")
-      : codexOnly
-        ? (serializeCodexModelConfig(codexModel) ?? "")
-        : defaultModelValue
-    const modelsPayload = codexOnly
-      ? mergeModelList([
-          codexModel.default ?? "",
-          ...codexModel.customs.map((model) => model.slug),
-        ])
-      : modelOptions.length > 0
-        ? modelOptions
-        : modelPayload
-          ? includesClaude
-            ? claudeModelValues({
-                ...claudeModel,
-                main: claudeModel.main?.trim() || defaultModelValue,
-              })
-            : [modelPayload]
-          : []
+    let modelPayload: string | null = null
+    if (agentType === "claude_code") {
+      modelPayload = serializeClaudeProviderModel(claudeModel)
+    } else if (agentType === "codex") {
+      modelPayload = serializeCodexModelConfig(codexModel)
+    } else if (singleModel.trim()) {
+      modelPayload = singleModel.trim()
+    } else {
+      modelPayload = ""
+    }
     const previousModel = provider.model ?? ""
-    const modelChanged = previousModel !== modelPayload
-    const modelsChanged =
-      provider.models.length !== modelsPayload.length ||
-      provider.models.some((model, index) => model !== modelsPayload[index])
-    const previousAgentTypes =
-      provider.agent_types.length > 0
-        ? provider.agent_types
-        : [provider.agent_type]
-    const agentTypesChanged =
-      previousAgentTypes.length !== agentTypes.length ||
-      previousAgentTypes.some(
-        (agentType, index) => agentType !== agentTypes[index]
-      )
+    const nextModel = modelPayload ?? ""
+    const modelChanged = previousModel !== nextModel
 
     setLoading(true)
     setError(null)
@@ -278,11 +181,12 @@ export function EditModelProviderDialog({
         name: name.trim() !== provider.name ? name.trim() : undefined,
         apiUrl: apiUrl.trim() !== provider.api_url ? apiUrl.trim() : undefined,
         apiKey: apiKey.trim() || undefined,
-        agentTypes: agentTypesChanged ? agentTypes : undefined,
-        model: modelChanged ? modelPayload : undefined,
-        models: modelsChanged ? modelsPayload : undefined,
+        agentType: agentType !== provider.agent_type ? agentType : undefined,
+        model: modelChanged ? nextModel : undefined,
       })
       toast.success(t("editSuccess"))
+      // Bound agents' running sessions stay on the old credentials until
+      // restarted — tell the user how many need a restart to pick up the change.
       if (affectedRunningSessions > 0) {
         toast.info(
           t("affectedRunningSessions", { count: affectedRunningSessions })
@@ -291,14 +195,9 @@ export function EditModelProviderDialog({
       handleOpenChange(false)
       onProviderUpdated()
     } catch (err: unknown) {
-      const raw = err as Record<string, unknown>
-      const msg =
-        typeof raw?.message === "string"
-          ? raw.message
-          : err instanceof Error
-            ? err.message
-            : String(err)
-      setError(msg)
+      // A Codex agent bound to the provider gets the change through the
+      // model list commit; its errors carry a code to localize.
+      setError(describeCodexSaveError(err, tCatalog))
     } finally {
       setLoading(false)
     }
@@ -307,16 +206,14 @@ export function EditModelProviderDialog({
     name,
     apiUrl,
     apiKey,
-    agentTypes,
-    defaultModel,
-    includesClaude,
+    agentType,
+    singleModel,
     claudeModel,
     codexModel,
-    codexOnly,
-    modelOptions,
     handleOpenChange,
     onProviderUpdated,
     t,
+    tCatalog,
   ])
 
   return (
@@ -324,9 +221,6 @@ export function EditModelProviderDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t("editProvider")}</DialogTitle>
-          <DialogDescription className="sr-only">
-            {t("sectionDescription")}
-          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -368,218 +262,50 @@ export function EditModelProviderDialog({
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium">{t("agentTypes")}</label>
-            <div className="grid gap-2 rounded-md border p-2">
-              {MODEL_PROVIDER_AGENT_TYPES.map((at) => (
-                <label
-                  key={at}
-                  className="flex items-center gap-2 text-xs text-foreground"
-                >
-                  <Checkbox
-                    checked={agentTypes.includes(at)}
-                    onCheckedChange={() => handleAgentTypeToggle(at)}
-                  />
-                  {getAgentLabel(at)}
-                </label>
-              ))}
-            </div>
+            <label className="text-xs font-medium">{t("agentType")}</label>
+            <Select value={agentType} disabled>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MODEL_PROVIDER_AGENT_TYPES.map((at) => (
+                  <SelectItem key={at} value={at}>
+                    {getAgentLabel(at)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-2xs text-muted-foreground">
+              {t("agentTypeImmutableHint")}
+            </p>
           </div>
 
-          {codexOnly ? (
-            <CodexModelListEditor value={codexModel} onChange={setCodexModel} />
+          {agentType === "claude_code" ? (
+            <ClaudeProviderModelFields
+              value={claudeModel}
+              onChange={setClaudeModel}
+              state={providerModels}
+            />
+          ) : agentType === "codex" ? (
+            <div className="space-y-1.5">
+              <CodexModelListEditor
+                value={codexModel}
+                onChange={setCodexModel}
+                endpoint={codexEndpoint}
+              />
+            </div>
           ) : (
             <div className="space-y-1.5">
               <label className="text-xs font-medium">{t("model")}</label>
-              {modelOptions.length > 0 ? (
-                <Select value={defaultModel} onValueChange={setDefaultModel}>
-                  <SelectTrigger className="h-9 text-xs">
-                    <SelectValue placeholder={defaultModelOptions[0]} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {defaultModelOptions.map((model) => (
-                      <SelectItem key={model} value={model}>
-                        {model}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input
-                  value={defaultModel}
-                  onChange={(e) => setDefaultModel(e.target.value)}
-                  placeholder={modelPlaceholder}
-                />
-              )}
+              <ModelIdInputWithFetch
+                aria-label={t("model")}
+                value={singleModel}
+                onChange={setSingleModel}
+                state={providerModels}
+                placeholder={modelPlaceholder}
+              />
             </div>
           )}
-
-          {includesClaude && (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">
-                  {t("claudeMainModel")}
-                </label>
-                <Input
-                  value={claudeModel.main ?? ""}
-                  onChange={(e) =>
-                    setClaudeModel((prev) => ({
-                      ...prev,
-                      main: e.target.value,
-                    }))
-                  }
-                  placeholder="claude-sonnet-5-5"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">
-                  {t("claudeReasoningModel")}
-                </label>
-                <Input
-                  value={claudeModel.reasoning ?? ""}
-                  onChange={(e) =>
-                    setClaudeModel((prev) => ({
-                      ...prev,
-                      reasoning: e.target.value,
-                    }))
-                  }
-                  placeholder="claude-opus-5-5"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">
-                  {t("claudeHaikuDefaultModel")}
-                </label>
-                <Input
-                  value={claudeModel.haiku ?? ""}
-                  onChange={(e) =>
-                    setClaudeModel((prev) => ({
-                      ...prev,
-                      haiku: e.target.value,
-                    }))
-                  }
-                  placeholder="claude-haiku-5-5"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">
-                  {t("claudeSonnetDefaultModel")}
-                </label>
-                <Input
-                  value={claudeModel.sonnet ?? ""}
-                  onChange={(e) =>
-                    setClaudeModel((prev) => ({
-                      ...prev,
-                      sonnet: e.target.value,
-                    }))
-                  }
-                  placeholder="claude-sonnet-5-5"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">
-                  {t("claudeOpusDefaultModel")}
-                </label>
-                <Input
-                  value={claudeModel.opus ?? ""}
-                  onChange={(e) =>
-                    setClaudeModel((prev) => ({
-                      ...prev,
-                      opus: e.target.value,
-                    }))
-                  }
-                  placeholder="claude-opus-5-5"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">
-                  {t("claudeFableDefaultModel")}
-                </label>
-                <Input
-                  value={claudeModel.fable ?? ""}
-                  onChange={(e) =>
-                    setClaudeModel((prev) => ({
-                      ...prev,
-                      fable: e.target.value,
-                    }))
-                  }
-                  placeholder="claude-fable-5-1"
-                />
-              </div>
-              <div className="space-y-1.5 md:col-span-2">
-                <label className="text-xs font-medium">
-                  {t("claudeCustomModelOption")}
-                </label>
-                <Input
-                  value={claudeModel.customOption ?? ""}
-                  onChange={(e) =>
-                    setClaudeModel((prev) => ({
-                      ...prev,
-                      customOption: e.target.value,
-                    }))
-                  }
-                  placeholder="my-gateway/claude-opus-5-5"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">
-                  {t("claudeCustomModelOptionName")}
-                </label>
-                <Input
-                  value={claudeModel.customOptionName ?? ""}
-                  onChange={(e) =>
-                    setClaudeModel((prev) => ({
-                      ...prev,
-                      customOptionName: e.target.value,
-                    }))
-                  }
-                  placeholder="Gateway Opus"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium">
-                  {t("claudeCustomModelOptionDescription")}
-                </label>
-                <Input
-                  value={claudeModel.customOptionDescription ?? ""}
-                  onChange={(e) =>
-                    setClaudeModel((prev) => ({
-                      ...prev,
-                      customOptionDescription: e.target.value,
-                    }))
-                  }
-                  placeholder="Routed via custom gateway"
-                />
-              </div>
-              <p className="text-[11px] text-muted-foreground md:col-span-2">
-                {t("claudeCustomModelOptionHint")}
-              </p>
-            </div>
-          )}
-
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <label htmlFor="edit-mp-models" className="text-xs font-medium">
-                {t("availableModels")}
-              </label>
-              <Button
-                type="button"
-                variant="outline"
-                size="xs"
-                onClick={handleFetchModels}
-                disabled={modelsLoading || loading}
-              >
-                {modelsLoading && <Loader2 className="h-3 w-3 animate-spin" />}
-                {t("fetchModels")}
-              </Button>
-            </div>
-            <Textarea
-              id="edit-mp-models"
-              value={modelsText}
-              onChange={(e) => setModelsText(e.target.value)}
-              className="min-h-24 font-mono text-xs"
-              placeholder={"openai/deepseek-v4-flash\nopenai/gpt-5"}
-            />
-          </div>
 
           {error && (
             <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
@@ -592,11 +318,11 @@ export function EditModelProviderDialog({
           <Button
             variant="outline"
             onClick={() => handleOpenChange(false)}
-            disabled={loading || modelsLoading}
+            disabled={loading}
           >
             {t("cancel")}
           </Button>
-          <Button onClick={handleSubmit} disabled={loading || modelsLoading}>
+          <Button onClick={handleSubmit} disabled={loading}>
             {loading && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />}
             {t("save")}
           </Button>

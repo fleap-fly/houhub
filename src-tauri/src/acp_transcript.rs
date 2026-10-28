@@ -66,7 +66,6 @@
 //! abandoned rather than risk duplicating history that did land.
 
 use std::io::{Seek as _, Write as _};
-
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -242,7 +241,7 @@ impl PendingRecord {
     /// They mark the turn boundaries the reader reconstructs turns from, and —
     /// decisively — a `Prompt` is what makes [`has_entries_in`] answer true.
     /// That answer is the gate keeping a `session/load` replay from appending a
-    /// second copy of history HouHub already recorded.
+    /// second copy of history houhub already recorded.
     ///
     /// Flushing on arrival is only half of that guarantee: it bounds how long a
     /// prompt sits in the WRITER, not how long it sits in the queue ahead of
@@ -575,10 +574,7 @@ impl SessionWriter {
                 self.pending.len()
             );
         } else {
-            tracing::debug!(
-                "[acp-transcript] deferring write to {}: {e}",
-                self.path.display()
-            );
+            tracing::debug!("[acp-transcript] deferring write to {}: {e}", self.path.display());
         }
     }
 }
@@ -632,9 +628,7 @@ fn mergeable_chunk_kind(payload: &serde_json::Value) -> Option<&'static str> {
     };
     let content = payload.get("content")?;
     (content.get("type").and_then(|v| v.as_str()) == Some("text")
-        && content
-            .get("text")
-            .is_some_and(serde_json::Value::is_string))
+        && content.get("text").is_some_and(serde_json::Value::is_string))
     .then_some(kind)
 }
 
@@ -700,7 +694,9 @@ fn compact_batch(pending: &[Queued], compactable: bool) -> (String, bool) {
             // absent on both) is the only case where merging loses nothing.
             Some(kind)
                 if open.as_ref().is_some_and(|(open_kind, open_entry)| {
-                    *open_kind == kind && open_entry.p.get("_meta") == entry.p.get("_meta")
+                    *open_kind == kind
+                        && open_entry.p.get("_meta") == entry.p.get("_meta")
+                        && open_entry.p.get("messageId") == entry.p.get("messageId")
                 }) =>
             {
                 let (_, open_entry) = open.as_mut().expect("guard matched Some");
@@ -850,11 +846,7 @@ pub fn record_header(
     agent_dir: &str,
     header: &TranscriptHeader,
 ) -> tokio::sync::oneshot::Receiver<()> {
-    record_header_in(
-        &crate::paths::houhub_acp_transcripts_root(),
-        agent_dir,
-        header,
-    )
+    record_header_in(&crate::paths::houhub_acp_transcripts_root(), agent_dir, header)
 }
 
 /// Root-injectable core of [`record_header`].
@@ -866,12 +858,7 @@ pub fn record_header_in(
     // Idempotence is decided on the writer thread, which is the only party that
     // knows about a header still sitting in its buffer — and which, being the
     // only writer, cannot race the file it checks.
-    queue_for(
-        root,
-        agent_dir,
-        &header.session_id,
-        PendingRecord::Header(header.clone()),
-    )
+    queue_for(root, agent_dir, &header.session_id, PendingRecord::Header(header.clone()))
 }
 
 /// Record one prompt or update.
@@ -984,7 +971,10 @@ pub fn append_line_in(root: &Path, agent_dir: &str, session_id: &str, line: &str
         f.write_all(format!("{line}\n").as_bytes())
     };
     if let Err(e) = write() {
-        tracing::debug!("[acp-transcript] append failed for {}: {e}", path.display());
+        tracing::debug!(
+            "[acp-transcript] append failed for {}: {e}",
+            path.display()
+        );
     }
 }
 
@@ -1099,12 +1089,12 @@ pub fn read_header_in(root: &Path, agent_dir: &str, session_id: &str) -> Option<
     found
 }
 
-/// **The replay gate.** True when this conversation already has history HouHub
+/// **The replay gate.** True when this conversation already has history houhub
 /// recorded — whether it has reached the file yet or is still on its way there.
 ///
 /// A `session/load` replay may be recorded only when this is false. Answering
 /// "no history" for a conversation that has some is the one dangerous mistake:
-/// the replay is then appended to history HouHub already had, and because the
+/// the replay is then appended to history houhub already had, and because the
 /// gate reads non-empty from then on, the duplicate is permanent and silent.
 ///
 /// So it is deliberately conservative in exactly one direction — a prompt that
@@ -1307,11 +1297,9 @@ pub fn remove_agent_transcripts_in(root: &Path, agent_dir: &str) -> std::io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
-
     // The write-behind tests assert against the reader, since "does merging
     // change what the user sees" is the only question that matters about it.
     use crate::models::message::{MessageTurn, TurnRole};
-
     use crate::parsers::acp_native::project_turns;
 
     fn temp_root() -> PathBuf {
@@ -1353,10 +1341,7 @@ mod tests {
             &root,
             "goose",
             "s1",
-            &entry_line(
-                EntryKind::Prompt,
-                serde_json::json!([{"type":"text","text":"hi"}]),
-            ),
+            &entry_line(EntryKind::Prompt, serde_json::json!([{"type":"text","text":"hi"}])),
         );
         append_line_in(
             &root,
@@ -1445,32 +1430,22 @@ mod tests {
             &root,
             "goose",
             "s0",
-            &entry_line(
-                EntryKind::Prompt,
-                serde_json::json!([{"type":"text","text":"first"}]),
-            ),
+            &entry_line(EntryKind::Prompt, serde_json::json!([{"type":"text","text":"first"}])),
         );
         for (id, prev, text) in [("s1", "s0", "second"), ("s2", "s1", "third")] {
-            let header =
-                TranscriptHeader::new("custom:goose", id, "/elsewhere", 9_999).continuing(prev);
+            let header = TranscriptHeader::new("custom:goose", id, "/elsewhere", 9_999)
+                .continuing(prev);
             append_line_in(&root, "goose", id, &serde_json::to_string(&header).unwrap());
             append_line_in(
                 &root,
                 "goose",
                 id,
-                &entry_line(
-                    EntryKind::Prompt,
-                    serde_json::json!([{"type":"text","text":text}]),
-                ),
+                &entry_line(EntryKind::Prompt, serde_json::json!([{"type":"text","text":text}])),
             );
         }
 
         let merged = read_chain_in(&root, "goose", "s2");
-        assert_eq!(
-            merged.entries.len(),
-            3,
-            "every link contributes its entries"
-        );
+        assert_eq!(merged.entries.len(), 3, "every link contributes its entries");
         let header = merged.header.expect("oldest header survives");
         assert_eq!(header.session_id, "s0", "the root header wins");
         assert_eq!(
@@ -1501,8 +1476,8 @@ mod tests {
         let root = temp_root();
         append_line_in(&root, "goose", "s0", &header_line("s0"));
         for (id, prev) in [("s1", "s0"), ("s2", "s1")] {
-            let header =
-                TranscriptHeader::new("custom:goose", id, "/elsewhere", 9_999).continuing(prev);
+            let header = TranscriptHeader::new("custom:goose", id, "/elsewhere", 9_999)
+                .continuing(prev);
             append_line_in(&root, "goose", id, &serde_json::to_string(&header).unwrap());
         }
 
@@ -1533,7 +1508,8 @@ mod tests {
         // headers must not hang the bind path.
         let root = temp_root();
         for (id, prev) in [("a", "b"), ("b", "a")] {
-            let header = TranscriptHeader::new("custom:goose", id, "/repo", 1).continuing(prev);
+            let header =
+                TranscriptHeader::new("custom:goose", id, "/repo", 1).continuing(prev);
             append_line_in(&root, "goose", id, &serde_json::to_string(&header).unwrap());
         }
         assert_eq!(
@@ -1549,12 +1525,7 @@ mod tests {
         let root = temp_root();
         // A hand-edited file pointing at itself must not hang the reader.
         let looped = TranscriptHeader::new("custom:goose", "loop", "/repo", 1).continuing("loop");
-        append_line_in(
-            &root,
-            "goose",
-            "loop",
-            &serde_json::to_string(&looped).unwrap(),
-        );
+        append_line_in(&root, "goose", "loop", &serde_json::to_string(&looped).unwrap());
         append_line_in(
             &root,
             "goose",
@@ -1567,12 +1538,7 @@ mod tests {
         // never to an error or an empty result.
         let orphan =
             TranscriptHeader::new("custom:goose", "orphan", "/repo", 2).continuing("deleted");
-        append_line_in(
-            &root,
-            "goose",
-            "orphan",
-            &serde_json::to_string(&orphan).unwrap(),
-        );
+        append_line_in(&root, "goose", "orphan", &serde_json::to_string(&orphan).unwrap());
         append_line_in(
             &root,
             "goose",
@@ -1640,10 +1606,7 @@ mod tests {
             &root,
             "goose",
             "e1",
-            &entry_line(
-                EntryKind::Prompt,
-                serde_json::json!([{"type":"text","text":"hi"}]),
-            ),
+            &entry_line(EntryKind::Prompt, serde_json::json!([{"type":"text","text":"hi"}])),
         );
         assert!(has_entries_in(&root, "goose", "e1"));
 
@@ -1677,18 +1640,12 @@ mod tests {
         raw.extend_from_slice(header_line("torn").as_bytes());
         raw.push(b'\n');
         raw.extend_from_slice(
-            entry_line(
-                EntryKind::Prompt,
-                serde_json::json!([{"type":"text","text":"你好"}]),
-            )
-            .as_bytes(),
+            entry_line(EntryKind::Prompt, serde_json::json!([{"type":"text","text":"你好"}]))
+                .as_bytes(),
         );
         raw.push(b'\n');
         // A prompt line cut in the middle of a 3-byte character.
-        let torn = entry_line(
-            EntryKind::Prompt,
-            serde_json::json!([{"type":"text","text":"世界"}]),
-        );
+        let torn = entry_line(EntryKind::Prompt, serde_json::json!([{"type":"text","text":"世界"}]));
         let cut = torn.find('世').unwrap() + 2;
         raw.extend_from_slice(&torn.as_bytes()[..cut]);
         std::fs::write(&path, &raw).unwrap();
@@ -1727,10 +1684,9 @@ mod tests {
         let root = temp_root();
         let path = transcript_path_in(&root, "goose", "new").unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let header = serde_json::to_string(
-            &TranscriptHeader::new("custom:goose", "new", "/repo", 1).continuing("old"),
-        )
-        .unwrap();
+        let header =
+            serde_json::to_string(&TranscriptHeader::new("custom:goose", "new", "/repo", 1).continuing("old"))
+                .unwrap();
         let mut raw = Vec::from(header.as_bytes());
         raw.push(b'\n');
         raw.extend_from_slice(&[0xff, 0xfe, b'\n']);
@@ -1741,10 +1697,7 @@ mod tests {
             &root,
             "goose",
             "old",
-            &entry_line(
-                EntryKind::Prompt,
-                serde_json::json!([{"type":"text","text":"hi"}]),
-            ),
+            &entry_line(EntryKind::Prompt, serde_json::json!([{"type":"text","text":"hi"}])),
         );
 
         // `new` is readable despite the garbage line, so `old` is legitimately
@@ -1782,12 +1735,10 @@ mod tests {
         a.await.unwrap();
         b.await.unwrap();
 
-        let raw =
-            std::fs::read_to_string(transcript_path_in(&root, "goose", "s3").unwrap()).unwrap();
+        let raw = std::fs::read_to_string(transcript_path_in(&root, "goose", "s3").unwrap())
+            .unwrap();
         assert_eq!(
-            raw.lines()
-                .filter(|l| parse_header_line(l).is_some())
-                .count(),
+            raw.lines().filter(|l| parse_header_line(l).is_some()).count(),
             1,
             "exactly one header, no matter how many reconnects raced"
         );
@@ -2143,6 +2094,36 @@ mod tests {
         assert_eq!(entries[2].p["_meta"], serde_json::json!({"a": 2}));
     }
 
+    #[test]
+    fn typed_message_ids_survive_recording_and_separate_compacted_messages() {
+        use agent_client_protocol::schema::v1::SessionUpdate;
+        let message = |t, id| {
+            // Exercise the same typed decode/encode boundary as the live
+            // notification handler, not only hand-built transcript JSON.
+            let update: SessionUpdate = serde_json::from_value(serde_json::json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "x"},
+                "messageId": id,
+            })).unwrap();
+            PendingRecord::Entry(TranscriptEntry {
+                t, k: EntryKind::Update, steer: false,
+                p: serde_json::to_value(update).unwrap(),
+            })
+        };
+        let pending: Vec<_> = vec![
+            prompt_record(1, "hi"),
+            message(2, "msg-first"), message(3, "msg-first"),
+            message(4, "msg-second"), message(5, "msg-second"),
+        ].into_iter().map(queued).collect();
+        let (lines, _) = compact_batch(&pending, false);
+        let entries = parse_transcript(&lines).entries;
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[1].p["messageId"], "msg-first");
+        assert_eq!(entries[2].p["messageId"], "msg-second");
+        assert_eq!(entries[1].p["content"]["text"], "xx");
+        assert_eq!(entries[2].p["content"]["text"], "xx");
+    }
+
     /// The frontend refetches conversation detail the moment a turn completes,
     /// so everything buffered during the turn has to be on disk by the time the
     /// turn end's ack resolves — that ack is exactly what `record_turn_end`
@@ -2250,15 +2231,10 @@ mod tests {
         }
 
         let entries = read_transcript_in(&root, "goose", "wedged").entries;
-        assert_eq!(
-            entries.len(),
-            4,
-            "every buffered record landed exactly once"
-        );
+        assert_eq!(entries.len(), 4, "every buffered record landed exactly once");
         for (i, entry) in entries.iter().enumerate() {
             assert_eq!(
-                entry.p[0]["text"],
-                format!("p{i}"),
+                entry.p[0]["text"], format!("p{i}"),
                 "and in the order they were recorded"
             );
         }
@@ -2361,7 +2337,7 @@ mod tests {
     }
 
     /// The gate that keeps a `session/load` replay from appending a second copy
-    /// of history HouHub already has. It reads the file, so a prompt sitting in
+    /// of history houhub already has. It reads the file, so a prompt sitting in
     /// the writer's buffer would make it answer "empty" and let the replay in.
     #[tokio::test]
     async fn a_continuation_link_is_readable_as_soon_as_its_ack_resolves() {

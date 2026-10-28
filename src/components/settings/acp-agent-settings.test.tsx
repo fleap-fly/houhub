@@ -21,13 +21,12 @@ import {
   importantEnvKeysByAgent,
   importantFieldsFor,
   inferGrokMode,
+  isOpenCodeV1Release,
   latestReleaseOffer,
   materializeClaudeHardeningFlags,
-  modelProviderSupportsAgent,
   patchCodexConfigTomlText,
   patchEnvByImportantKey,
   patchImportantConfigText,
-  codexModelListForProvider,
   providerToRebindTo,
   codexSandboxSeedsAcpPreset,
   rebaseDeepSeekDraft,
@@ -65,7 +64,6 @@ function makeAgent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
     env: {},
     config_json: null,
     config_file_path: null,
-    opencode_auth_json: null,
     codex_auth_json: null,
     cline_secrets_json: null,
     codex_config_toml: null,
@@ -81,80 +79,6 @@ function makeAgent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
     ...overrides,
   }
 }
-
-describe("model provider engine bindings", () => {
-  const provider = {
-    id: 7,
-    name: "Houflow Gateway",
-    api_url: "https://gateway.example/v1",
-    api_key: "key",
-    api_key_masked: "ke****",
-    agent_types: ["codex", "claude_code", "gemini", "pi"],
-    agent_type: "codex",
-    model: "gpt-5.6-terra",
-    models: ["gpt-5.6-terra"],
-    created_at: "2026-09-09T00:00:00Z",
-    updated_at: "2026-09-09T00:00:00Z",
-  } satisfies import("@/lib/types").ModelProviderInfo
-
-  it("uses the advertised multi-engine list instead of the legacy primary type", () => {
-    expect(modelProviderSupportsAgent(provider, "claude_code")).toBe(true)
-    expect(modelProviderSupportsAgent(provider, "gemini")).toBe(true)
-    expect(modelProviderSupportsAgent(provider, "pi")).toBe(true)
-  })
-
-  it("falls back to the legacy primary type for old provider rows", () => {
-    expect(
-      modelProviderSupportsAgent({ ...provider, agent_types: [] }, "codex")
-    ).toBe(true)
-    expect(
-      modelProviderSupportsAgent({ ...provider, agent_types: [] }, "gemini")
-    ).toBe(false)
-  })
-
-  // A shared provider's fetched models are the only record of what the gateway
-  // serves — its `model` column belongs to Claude. Binding codex to it used to
-  // yield no catalog at all, so the composer offered only codex's bundled
-  // official models (see the bug report: a Houflow gateway with deepseek.
-  it("derives codex's catalog from a shared provider's fetched models", () => {
-    const shared = {
-      ...provider,
-      model: JSON.stringify({ main: "claude-sonnet-5" }),
-      models: ["deepseek-flash", "kimi-k2"],
-    }
-    const list = codexModelListForProvider(shared)
-    expect(list.customs.map((entry) => entry.slug)).toEqual([
-      "deepseek-flash",
-      "kimi-k2",
-    ])
-    expect(list.default).toBe("deepseek-flash")
-    // The listing gates the catalog file + `model_catalog_json` reference.
-    expect(list.customs.length).toBeGreaterThan(0)
-  })
-
-  it("keeps a codex-only provider's structured catalog authoritative", () => {
-    const codexOnly = {
-      ...provider,
-      agent_types: ["codex"],
-      agent_type: "codex",
-      model: JSON.stringify({
-        customs: [{ slug: "gw/opus", base: "gw/opus" }],
-        default: "gw/opus",
-      }),
-      models: ["gw/opus", "noise"],
-    }
-    const list = codexModelListForProvider(codexOnly)
-    expect(list.customs.map((entry) => entry.slug)).toEqual(["gw/opus"])
-    expect(list.default).toBe("gw/opus")
-  })
-
-  it("yields no catalog for a shared provider with nothing fetched", () => {
-    expect(
-      codexModelListForProvider({ ...provider, models: [] }).customs
-    ).toEqual([])
-    expect(codexModelListForProvider(null).customs).toEqual([])
-  })
-})
 
 // `disabled` lives only on the frontend-synthesized fix variant, not on the
 // backend FixAction member of the union — narrow before reading it.
@@ -245,12 +169,12 @@ describe("providerToRebindTo", () => {
       api_url: "",
       api_key: "",
       api_key_masked: "",
-      agent_types: ["claude_code"],
       agent_type: "claude_code",
-      models: [],
       model: null,
       created_at: "",
       updated_at: "",
+      agent_types: ["claude_code"],
+      models: [],
     }
   }
   const available = [provider(1), provider(2), provider(3)]
@@ -997,6 +921,64 @@ describe("buildVersionCheck", () => {
     expect(check?.fixes.some((fix) => fix.kind === "upgrade_npx")).toBe(true)
   })
 
+  // houhub refuses OpenCode 1.x at launch, so an installed 1.x is a failure
+  // that names the upgrade, not an optional "upgrade available".
+  it("fails an installed OpenCode 1.x and offers the upgrade", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "open_code" as AgentType,
+        registry_id: "opencode",
+        distribution_type: "binary",
+        registry_version: "2.2.0",
+        installed_version: "1.19.3",
+      })
+    )
+    expect(check?.status).toBe("fail")
+    expect(check?.message).toContain("OpenCode 1.x is no longer supported")
+    expect(check?.fixes.map((fix) => fix.kind)).toEqual([
+      "upgrade_binary",
+      "uninstall_binary",
+    ])
+  })
+
+  it("keeps the usual comparison for OpenCode 2 and preview builds", () => {
+    const behind = buildVersionCheck(
+      makeAgent({
+        agent_type: "open_code" as AgentType,
+        registry_id: "opencode",
+        distribution_type: "binary",
+        registry_version: "2.2.0",
+        installed_version: "2.1.4",
+      })
+    )
+    expect(behind?.status).toBe("warn")
+    expect(behind?.message).toContain("Upgrade available")
+
+    const current = buildVersionCheck(
+      makeAgent({
+        agent_type: "open_code" as AgentType,
+        registry_id: "opencode",
+        distribution_type: "binary",
+        registry_version: "2.2.0",
+        installed_version: "2.2.0",
+      })
+    )
+    expect(current?.status).toBe("pass")
+  })
+
+  it("judges only OpenCode releases as 1.x", () => {
+    expect(isOpenCodeV1Release("1.19.3")).toBe(true)
+    expect(isOpenCodeV1Release(" 1.18.33 ")).toBe(true)
+    expect(isOpenCodeV1Release("0.15.31")).toBe(true)
+    expect(isOpenCodeV1Release("1.19.5-beta.1")).toBe(true)
+    expect(isOpenCodeV1Release("2.0.0")).toBe(false)
+    expect(isOpenCodeV1Release("2.2.0")).toBe(false)
+    // Preview channels publish as 0.0.0-<tag> whatever the build's age.
+    expect(isOpenCodeV1Release("0.0.0-dev-202609282300")).toBe(false)
+    expect(isOpenCodeV1Release("1.19")).toBe(false)
+    expect(isOpenCodeV1Release("local")).toBe(false)
+  })
+
   // uv runtime not ready: a uvx agent (Hermes) must surface a blocked
   // version-status with the agent-install action DISABLED — the actual install
   // happens via the separate "Install uv" preflight action, not here.
@@ -1396,7 +1378,7 @@ describe("unreviewed latest release in Version Status", () => {
   // CLI that printed a diagnostic instead of its version lands in the
   // compare-to-pin branches. Pinned so a change there is a deliberate one:
   // the numbers read out of it put it past the pin but below the release,
-  // which offers an install over a version HouHub cannot read anyway.
+  // which offers an install over a version houhub cannot read anyway.
   it("treats a diagnostic-looking local version as below the release", () => {
     const check = buildVersionCheck(
       gemini({ installed_version: "error: 1.2 failed" }),
@@ -2102,7 +2084,7 @@ describe("patchCodexConfigTomlText — houhub's requires_openai_auth default", (
 
   // Regression (review round 1): `"http_headers.x-..." = "v"` is ONE literal
   // key, not an http_headers sub-table. Mistaking it for the nested path would
-  // suppress the default and break HouHub's own auth.json-based auth.
+  // suppress the default and break houhub's own auth.json-based auth.
   it("does not mistake a quoted dotted key for the header table", () => {
     const toml = [
       BOUND_PROVIDER,
@@ -2546,7 +2528,7 @@ describe("host-tools toggle — hand the fs/terminal channels back to the agent"
   })
 
   it("overrides an inherited value in both directions", () => {
-    // The backend resolves env_json first, then HouHub's process env. Whatever
+    // The backend resolves env_json first, then houhub's process env. Whatever
     // the operator exported, one flip of the switch must decide the outcome —
     // so both states write an explicit value and neither leaves the key absent.
     const off = setHostToolsAgentMode("", false)
@@ -2809,8 +2791,9 @@ describe("TRAE CLI env keys", () => {
 
 describe("Command Code env keys", () => {
   // Command Code's sign-in for a browser-less machine is the API key it reads
-  // ahead of its stored login; it talks only to its own service and the model
-  // is chosen over ACP, so there is no endpoint or model variable.
+  // ahead of its stored login; providers of the user's own (BYOK) are
+  // connected inside Command Code (`/connect`) and the model is chosen over
+  // ACP, so there is no endpoint or model variable.
   it("offers only the API key, under the name Command Code reads", () => {
     expect(importantEnvKeysByAgent("command_code" as AgentType)).toEqual({
       apiBaseUrl: [],
@@ -2840,7 +2823,7 @@ describe("codex ACP preset disclosures", () => {
   })
 
   it("only notes the 1.7–1.13 read-only gap when houhub really seeds read-only", () => {
-    // Unshadowed read-only: HouHub injects the `read-only` preset, which on
+    // Unshadowed read-only: houhub injects the `read-only` preset, which on
     // codex-acp 1.7.0–1.13.x is workspace-write with `approvalsReviewer:
     // "user"` (2.0.0 made it read-only again). Both halves of the note hold.
     expect(showsCodexReadOnlyAcpWarning("read-only", false)).toBe(true)
@@ -2888,5 +2871,23 @@ describe("ZCode runtime configuration", () => {
       buildAcpAdapterCheck({ ...adapter, native_path: "C:/ZCode/zcode.cjs" })
         ?.status
     ).toBe("pass")
+  })
+})
+
+describe("MiniMax Code native configuration", () => {
+  it("does not offer generic API fields or write keys to houhub settings", () => {
+    expect(importantEnvKeysByAgent("minimax_code")).toEqual({
+      apiBaseUrl: [],
+      apiKey: [],
+      model: [],
+    })
+    expect(importantFieldsFor("minimax_code")).toEqual({
+      apiBaseUrl: false,
+      apiKey: false,
+      model: false,
+    })
+    expect(
+      patchEnvByImportantKey("minimax_code", "KEEP=value", "apiKey", "secret")
+    ).toBe("KEEP=value")
   })
 })

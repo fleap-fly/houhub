@@ -1,51 +1,29 @@
 pub mod acp_native;
-
 mod agent_env;
-
 pub mod antigravity;
-
 pub mod claude;
-
 pub mod cline;
-
 pub mod codebuddy;
-
 pub mod codex;
-
 pub mod codex_code_mode;
-
 mod codex_desktop_attachments;
-
 pub mod cursor;
-
 pub mod deepseek;
-
 pub mod gemini;
-
 pub mod grok;
-
 pub mod hermes;
-
 pub mod kimi_code;
-
 pub mod kiro;
-
 pub mod openclaw;
-
 pub mod opencode;
-
 mod opencode_context_window;
-
 pub mod pi;
-
 pub mod qoder;
-
 mod summary_cache;
+mod trae_usage;
 
 use std::collections::{HashMap, HashSet};
-
 use std::path::PathBuf;
-
 use std::sync::OnceLock;
 
 pub use agent_env::{AgentEnv, AgentEnvs};
@@ -195,8 +173,11 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             indexes: &[],
         },
         ExternalSource {
+            // The default file even when `$OPENCODE_DB` moves the database the
+            // history is read from: the archive keys this entry by file name,
+            // and only a `.db` name is snapshotted as SQLite.
             agent: "opencode",
-            root: opencode::resolve_opencode_base_dir().join("opencode.db"),
+            root: opencode::resolve_opencode_base_dir().join(opencode::OPENCODE_DB_FILE),
             is_file: true,
             sqlite: true,
             include_top: None,
@@ -380,7 +361,6 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
 }
 
 use chrono::{DateTime, Utc};
-
 use regex::Regex;
 
 use crate::models::{
@@ -443,12 +423,16 @@ pub fn build_agent_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn Agen
         AgentType::Antigravity => Box::new(antigravity::AntigravityParser::for_env(env)),
         AgentType::Kiro => Box::new(kiro::KiroParser::for_env(env)),
         // Custom ACP agents have no native store to reverse-engineer; their
-        // history is houhub's own ACP transcript. TRAE CLI's rollouts use an
-        // undocumented paginated format of its own (see `acp::trae`), and so
-        // do Command Code's session trees (see `acp::command_code`), so both
-        // take the same route.
-        AgentType::Custom(_) | AgentType::ZCode | AgentType::Trae | AgentType::CommandCode => {
-            Box::new(acp_native::AcpNativeParser::new(agent_type))
+        // history is houhub's own ACP transcript. TRAE CLI takes the same route
+        // for message history, but AcpNativeParser enriches those turns from
+        // the precise token_usage_record rows in TRAE's native rollouts.
+        // Command Code's undocumented session tree remains ACP-only.
+        AgentType::Custom(_)
+        | AgentType::ZCode
+        | AgentType::Trae
+        | AgentType::CommandCode
+        | AgentType::MiniMaxCode => {
+            Box::new(acp_native::AcpNativeParser::for_env(agent_type, env))
         }
     };
     Box::new(RouteSanitized(inner))
@@ -599,10 +583,7 @@ pub fn expand_home_prefix(value: &str, home_dir: Option<&PathBuf>) -> PathBuf {
     if value == "~" {
         return home.clone();
     }
-    if let Some(rest) = value
-        .strip_prefix("~/")
-        .or_else(|| value.strip_prefix("~\\"))
-    {
+    if let Some(rest) = value.strip_prefix("~/").or_else(|| value.strip_prefix("~\\")) {
         return home.join(rest);
     }
     PathBuf::from(value)
@@ -695,10 +676,7 @@ fn is_markdown_whitespace(c: char) -> bool {
 /// lets a backslash escape whitespace, so `\` + whitespace ENDS (not extends) a
 /// label/destination scan — only `\` + a non-whitespace char is a real escape.
 fn reference_escapes_next(chars: &[char], k: usize) -> bool {
-    chars.get(k) == Some(&'\\')
-        && chars
-            .get(k + 1)
-            .is_some_and(|c| !is_markdown_whitespace(*c))
+    chars.get(k) == Some(&'\\') && chars.get(k + 1).is_some_and(|c| !is_markdown_whitespace(*c))
 }
 
 /// If a well-formed `(destination)` begins at `start`, return the index just
@@ -1874,7 +1852,7 @@ mod route_sanitizer_tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-            agent_message_id: None,
+        agent_message_id: None,
         }
     }
 
@@ -2029,10 +2007,7 @@ mod route_sanitizer_tests {
         let frame = routing_frame("antigravity");
         // ` ` block join + each separator rewritten to ` `.
         let persisted = format!("{visible} {}", frame.replace('\u{001e}', " "));
-        assert!(
-            !persisted.contains('\u{001e}'),
-            "fixture must lose its separators"
-        );
+        assert!(!persisted.contains('\u{001e}'), "fixture must lose its separators");
 
         // The title the parser hands over: folded, then capped mid-frame — the
         // cap is 100 chars and the body alone runs past 500.
@@ -2059,10 +2034,7 @@ mod route_sanitizer_tests {
     /// exists for the agents that rewrite the separators away.
     #[test]
     fn a_title_capped_halfway_through_the_marker_still_leaks_nothing() {
-        let prose = format!(
-            "{} ask [@A](houhub://agent/antigravity) to help",
-            "x".repeat(66)
-        );
+        let prose = format!("{} ask [@A](houhub://agent/antigravity) to help", "x".repeat(66));
         let frame = routing_frame("antigravity");
         let persisted = format!("{prose} {}", frame.replace('\u{001e}', " "));
 
@@ -2283,7 +2255,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: Some(base + chrono::Duration::seconds(end_s)),
-            agent_message_id: None,
+        agent_message_id: None,
         }
     }
 
@@ -2662,7 +2634,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
-                agent_message_id: None,
+            agent_message_id: None,
             },
             MessageTurn {
                 id: "turn-1".to_string(),
@@ -2678,7 +2650,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
-                agent_message_id: None,
+            agent_message_id: None,
             },
         ];
 

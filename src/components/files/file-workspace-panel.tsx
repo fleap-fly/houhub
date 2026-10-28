@@ -15,16 +15,9 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore } from "@/contexts/tab-context"
 import { emitAttachFileToSession } from "@/lib/session-attachment-events"
 import { formatFileRangeLabel } from "@/lib/reference-link"
-import {
-  findOwningFolder,
-  isUncPath,
-  normalizeAbsPath,
-  splitAbsPath,
-} from "@/lib/file-open-target"
-import {
-  buildMonacoModelPath,
-  collectLiveModelPaths,
-} from "@/lib/monaco-model-path"
+import { findOwningFolder, splitAbsPath } from "@/lib/file-open-target"
+import { buildMonacoModelPath } from "@/lib/monaco-model-path"
+import { useTrackMonacoModel } from "@/contexts/monaco-model-context"
 import { parseFileTabId } from "@/lib/file-tab-id"
 import {
   useWorkspaceActions,
@@ -34,12 +27,13 @@ import {
 import { BrowserTabView } from "@/components/browser/browser-tab-view"
 import { ImagePreview } from "@/components/files/image-preview"
 import { HtmlPreview } from "@/components/files/html-preview"
-import { isHtmlPreviewable } from "@/lib/language-detect"
+import { MarkdownDocumentPreview } from "@/components/files/markdown-document-preview"
 import {
   KeptOfficePreviews,
   isOfficeFileTab,
 } from "@/components/files/kept-office-previews"
 import { PdfPreview } from "@/components/files/pdf-preview"
+import { isHtmlPreviewable } from "@/lib/language-detect"
 import { DiffViewer } from "@/components/diff/diff-viewer"
 import { ImageDiffView } from "@/components/diff/image-diff-view"
 import { UnifiedDiffPreview } from "@/components/diff/unified-diff-preview"
@@ -49,11 +43,6 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
-import { Streamdown } from "streamdown"
-import { readFileBase64 } from "@/lib/api"
-import { normalizeMathDelimiters } from "@/components/ai-elements/message"
-import { mermaidComponents } from "@/components/ai-elements/mermaid-block"
-import { useStreamdownPlugins } from "@/components/ai-elements/streamdown-plugins"
 import {
   defineMonacoThemes,
   MONACO_UNICODE_HIGHLIGHT_OPTIONS,
@@ -62,265 +51,12 @@ import {
 import { useZoomLevel, useEditorFont } from "@/hooks/use-appearance"
 import { useImeSafeEditorValue } from "@/hooks/use-ime-safe-editor-value"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { BrowserLink } from "@/components/ui/browser-link"
 import {
   getAddToChatPillPlacement,
   type AddToChatPillPlacement,
 } from "@/lib/add-to-chat-pill-placement"
 
 import "@/lib/monaco-local"
-
-function resolveRelativePath(base: string, relative: string): string {
-  // Strip URL fragment (e.g. #gh-light-mode-only) and query string
-  const cleaned = relative.replace(/[#?].*$/, "")
-  // Preserve leading "/" for absolute paths, filter empty segments
-  const isAbsolute = base.startsWith("/")
-  const parts = base.split("/").filter(Boolean)
-  for (const seg of cleaned.split("/")) {
-    if (seg === "..") {
-      if (parts.length > 0) parts.pop()
-    } else if (seg !== "." && seg !== "") {
-      parts.push(seg)
-    }
-  }
-  return (isAbsolute ? "/" : "") + parts.join("/")
-}
-
-/**
- * Pre-resolve local paths in markdown image/link syntax before Streamdown.
- *
- * rehype-harden resolves "../foo" via `new URL("../foo", "http://example.com")`
- * which loses directory context (e.g. "../images/a.png" from "docs/readme/"
- * becomes "/images/a.png" instead of "/docs/images/a.png").
- *
- * `fileDir` is the document's ABSOLUTE directory, so relative references
- * resolve to absolute filesystem paths. Author-written root-relative
- * references ("/assets/x.png") resolve against `previewRoot` (the owning
- * workspace folder, or the document directory for files outside every
- * folder) so they also come out absolute — downstream consumers (image
- * loader, link opener) treat every local target as an absolute path.
- * The "./" prefix survives rehype-harden, which re-roots it to "/…".
- *
- * Known limitation: documents living under a Windows UNC root
- * ("//server/share/…") lose the double-slash prefix in this pipeline (the
- * "./…" → rehype-harden → "/…" round trip cannot carry an authority), so
- * their relative sub-resources fail to load — a clean broken-image /
- * failed-open, never a read of a different local file. Editing, saving,
- * and watching UNC files are unaffected.
- */
-function preprocessMarkdownPaths(
-  content: string,
-  fileDir: string,
-  previewRoot: string | null
-): string {
-  const resolveAgainst = (base: string, pathPart: string): string => {
-    const parts = base.split("/").filter(Boolean)
-    for (const seg of pathPart.split("/")) {
-      if (seg === "..") {
-        if (parts.length > 0) parts.pop()
-      } else if (seg !== "." && seg !== "") {
-        parts.push(seg)
-      }
-    }
-    return parts.join("/")
-  }
-
-  const resolveUrl = (url: string): string => {
-    // Skip remote URLs, protocol-relative URLs, and anchors
-    if (/^https?:\/\/|^data:|^blob:|^#|^\/\//.test(url)) return url
-    // Separate fragment/query from path
-    const fragIdx = url.search(/[#?]/)
-    const pathPart = fragIdx >= 0 ? url.slice(0, fragIdx) : url
-    const fragment = fragIdx >= 0 ? url.slice(fragIdx) : ""
-    if (pathPart.startsWith("/")) {
-      // Root-relative: the author means "from the project root".
-      if (!previewRoot) return url
-      return "./" + resolveAgainst(previewRoot, pathPart) + fragment
-    }
-    // Relative to the document's own (absolute) directory.
-    return "./" + resolveAgainst(fileDir, pathPart) + fragment
-  }
-
-  // Pre-resolve image paths: ![alt](url) or ![alt](url "title")
-  let result = content.replace(
-    /!\[([^\]]*)\]\(([^)\s"']+)([^)]*)\)/g,
-    (match, alt, url, rest) => {
-      const resolved = resolveUrl(url)
-      if (resolved === url) return match
-      return `![${alt}](${resolved}${rest})`
-    }
-  )
-
-  // Pre-resolve image-wrapped link paths: [![alt](img)](url)
-  result = result.replace(
-    /\[(!\[[^\]]*\]\([^)]*\))\]\(([^)\s"']+)([^)]*)\)/g,
-    (match, imgPart, url, rest) => {
-      const resolved = resolveUrl(url)
-      if (resolved === url) return match
-      return `[${imgPart}](${resolved}${rest})`
-    }
-  )
-
-  // Pre-resolve link paths: [text](url) — negative lookbehind to skip images
-  result = result.replace(
-    /(?<!!)\[([^\]]*)\]\(([^)\s"']+)([^)]*)\)/g,
-    (match, text, url, rest) => {
-      const resolved = resolveUrl(url)
-      if (resolved === url) return match
-      return `[${text}](${resolved}${rest})`
-    }
-  )
-
-  // Pre-resolve HTML <a href="..."> and <img src="..."> tags
-  result = result.replace(
-    /<(a\s[^>]*?href|img\s[^>]*?src)=(["'])([^"']+)\2/gi,
-    (match, prefix, quote, url) => {
-      const resolved = resolveUrl(url)
-      if (resolved === url) return match
-      return `<${prefix}=${quote}${resolved}${quote}`
-    }
-  )
-
-  return result
-}
-
-const MIME_BY_EXT: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  svg: "image/svg+xml",
-  webp: "image/webp",
-  bmp: "image/bmp",
-  ico: "image/x-icon",
-}
-
-function useLocalImageSrc(
-  src: string | undefined,
-  fileDir: string | null
-): string | undefined {
-  const [dataUrl, setDataUrl] = useState<string | undefined>(undefined)
-
-  // Protocol-relative "//host/…" srcs are REMOTE (the browser resolves them
-  // against the page protocol) — never route them into local file IO, where
-  // "//Users/…" would otherwise read an unintended local path.
-  const isLocal =
-    src && fileDir && !/^https?:\/\/|^data:|^blob:|^\/\//.test(src)
-
-  useEffect(() => {
-    if (!isLocal || !src || !fileDir) return
-    let cancelled = false
-    // preprocessMarkdownPaths resolved every local reference against the
-    // document's ABSOLUTE directory (or the preview root), and
-    // rehype-harden re-roots "./x" to "/x" — so a "/"-prefixed src already
-    // IS the absolute filesystem path. Anything else (raw HTML that
-    // slipped past preprocessing) resolves against the document directory.
-    const absPath = src.startsWith("/")
-      ? normalizeAbsPath(src.replace(/[#?].*$/, ""))
-      : resolveRelativePath(fileDir, src)
-    const ext = absPath.split(".").pop()?.toLowerCase() ?? ""
-    const mime = MIME_BY_EXT[ext] ?? "image/png"
-
-    readFileBase64(absPath)
-      .then((b64) => {
-        if (!cancelled) {
-          setDataUrl(`data:${mime};base64,${b64}`)
-        }
-      })
-      .catch((err) => {
-        console.error(
-          `[PreviewImage] readFileBase64 failed for "${absPath}":`,
-          typeof err === "object" ? JSON.stringify(err) : err
-        )
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [isLocal, src, fileDir])
-
-  if (!isLocal) return src
-  return dataUrl
-}
-
-function MarkdownDocumentPreview({
-  content,
-  fileDir,
-  localRefsEnabled,
-  openFilePreview,
-}: {
-  content: string
-  fileDir: string | null
-  localRefsEnabled: boolean
-  openFilePreview: (path: string) => void
-}) {
-  const plugins = useStreamdownPlugins(content)
-
-  return (
-    <div className="h-full overflow-auto p-6 [&_a_img]:inline [&_ol]:list-decimal [&_ul]:list-disc [&_ol]:pl-6 [&_ul]:pl-6">
-      <Streamdown
-        plugins={plugins}
-        mode="static"
-        parseIncompleteMarkdown={false}
-        components={{
-          ...mermaidComponents,
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          img: ({ node, ...imgProps }) => (
-            <PreviewImage
-              {...imgProps}
-              fileDir={localRefsEnabled ? fileDir : null}
-            />
-          ),
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          a: ({ node, href, children, ...aProps }) => {
-            // Protocol-relative "//host/..." is a web URL, not a local path.
-            const isRelative =
-              href && !/^[a-z][a-z0-9+.-]*:|^#|^\/\//i.test(href)
-            if (isRelative && href && localRefsEnabled) {
-              return (
-                <a
-                  {...aProps}
-                  href="#"
-                  onClick={(e) => {
-                    e.preventDefault()
-                    const target = href
-                      .replace(/[#?].*$/, "")
-                      .replace(/\/\/+/g, "/")
-                    void openFilePreview(target)
-                  }}
-                >
-                  {children}
-                </a>
-              )
-            }
-            const externalHref = href?.startsWith("//") ? `https:${href}` : href
-            return externalHref ? (
-              <BrowserLink {...aProps} href={externalHref}>
-                {children}
-              </BrowserLink>
-            ) : (
-              <span {...aProps}>{children}</span>
-            )
-          },
-        }}
-      >
-        {content}
-      </Streamdown>
-    </div>
-  )
-}
-
-function PreviewImage({
-  fileDir,
-  ...props
-}: React.ComponentProps<"img"> & {
-  fileDir: string | null
-}) {
-  const src = typeof props.src === "string" ? props.src : undefined
-  const resolvedSrc = useLocalImageSrc(src, fileDir)
-
-  // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
-  return <img {...props} src={resolvedSrc} />
-}
 
 const AUTO_SAVE_DELAY_MS = 5000
 
@@ -1042,7 +778,7 @@ export function FileWorkspacePanel() {
 
 function FileWorkspacePanelBody() {
   const t = useTranslations("Folder.fileWorkspacePanel")
-  const { activeFileTab, fileTabs, pendingFileReveal, previewFileTabIds } =
+  const { activeFileTab, pendingFileReveal, previewFileTabIds } =
     useWorkspaceFileTabs()
   const {
     consumePendingFileReveal,
@@ -1062,9 +798,7 @@ function FileWorkspacePanelBody() {
   // one) is derived here ONLY to pick the preview root — reads never need
   // a folder.
   const activeAbsPath =
-    activeFileTab?.kind === "file" && activeFileTab.resourceKind !== "readonly"
-      ? (activeFileTab.path ?? null)
-      : null
+    activeFileTab?.kind === "file" ? (activeFileTab.path ?? null) : null
   const activeIo = useMemo(
     () => (activeAbsPath ? splitAbsPath(activeAbsPath) : null),
     [activeAbsPath]
@@ -1111,52 +845,17 @@ function FileWorkspacePanelBody() {
   const tRef = useRef(t)
   const monacoRef = useRef<Monaco | null>(null)
   // The loaded monaco instance, captured at editor mount. Passing it to the
-  // theme hook (instead of the hook calling useMonaco()) keeps Monaco lazy: this
-  // panel is always mounted, incl. the file-less empty state, so an internal
-  // useMonaco() would eagerly load Monaco even with no editor shown.
+  // theme hook (instead of the hook calling useMonaco()) keeps Monaco lazy:
+  // the file-less empty state should not load Monaco before an editor opens.
   const [editorMonaco, setEditorMonaco] = useState<Monaco | null>(null)
   const editorTheme = useMonacoWorkspaceTheme(editorMonaco)
-  // @monaco-editor/react creates a model per unseen `path` and never disposes
-  // it — not on path change (it setModel()s away) and, on unmount, only the
-  // currently attached one. Left alone, every file opened during a session
-  // keeps its model (full text + tokenization + undo stack) alive after its
-  // tab closes. Reconcile instead: remember each URI this panel has routed
-  // through `path`, and dispose the ones whose tab is gone. Only URIs
-  // recorded here are ever touched — models owned by others (diff editors'
-  // anonymous pairs) are invisible to this cleanup.
-  const createdModelUrisRef = useRef<Set<string>>(new Set())
+  // Keep models from the first mount: the wrapper captures this option in
+  // its mount-only cleanup. The workspace owns disposal even when mobile
+  // navigation unmounts this whole panel; hidden open buffers keep undo state.
+  const trackMonacoModel = useTrackMonacoModel()
   useEffect(() => {
-    createdModelUrisRef.current.add(editorModelPath)
-  }, [editorModelPath])
-  // Joined into one string so the disposal effect fires only when tab
-  // membership changes — fileTabs itself churns per keystroke. URI segments
-  // are %-encoded, so "\n" cannot occur inside an entry.
-  const liveModelUrisKey = useMemo(
-    () => collectLiveModelPaths(fileTabs).join("\n"),
-    [fileTabs]
-  )
-  useEffect(() => {
-    const monaco = editorMonaco
-    if (!monaco) return
-    const keep = new Set(liveModelUrisKey ? liveModelUrisKey.split("\n") : [])
-    const tracked = createdModelUrisRef.current
-    for (const uri of [...tracked]) {
-      if (keep.has(uri)) continue
-      const model = monaco.editor.getModel(monaco.Uri.parse(uri))
-      if (!model) {
-        // Never materialized, or already disposed by the library's unmount
-        // path — either way no longer ours to manage.
-        tracked.delete(uri)
-        continue
-      }
-      // The editor's own effect runs first and has normally swapped off the
-      // model by now; if it is somehow still attached, keep it and retry on
-      // the next membership change instead of disposing an in-use model.
-      if (model.isAttachedToEditor()) continue
-      model.dispose()
-      tracked.delete(uri)
-    }
-  }, [editorMonaco, liveModelUrisKey])
+    if (editorMonaco) trackMonacoModel(editorModelPath, editorMonaco)
+  }, [editorModelPath, editorMonaco, trackMonacoModel])
   const { zoomLevel } = useZoomLevel()
   const {
     editorFontStack,
@@ -1165,6 +864,9 @@ function FileWorkspacePanelBody() {
     editorWordWrap,
     setEditorWordWrap,
   } = useEditorFont()
+  // The Alt+Z toggle action is registered once at mount, so it reads the live
+  // word-wrap preference through a ref to dodge a stale closure (same tactic as
+  // tRef / attachContextRef). `setEditorWordWrap` from context is stable.
   const editorWordWrapRef = useRef(editorWordWrap)
   const wordWrapActionRef = useRef<IDisposable | null>(null)
   const [editorMountVersion, setEditorMountVersion] = useState(0)
@@ -1317,25 +1019,6 @@ function FileWorkspacePanelBody() {
     [addSelectionToChat, addFileToChat]
   )
 
-  const registerWordWrapAction = useCallback(
-    (
-      editor: MonacoEditorNs.IStandaloneCodeEditor,
-      monaco: Monaco,
-      label: string
-    ) => {
-      wordWrapActionRef.current?.dispose()
-      wordWrapActionRef.current = editor.addAction({
-        id: "houhub.toggleWordWrap",
-        label,
-        keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.KeyZ],
-        contextMenuGroupId: "z_view",
-        contextMenuOrder: 1,
-        run: () => setEditorWordWrap(!editorWordWrapRef.current),
-      })
-    },
-    [setEditorWordWrap]
-  )
-
   // Single teardown for the action, listeners, pill widget, and context key —
   // called from both the editor's onDidDispose and the React unmount effect.
   // `removeContentWidget` guards its view call internally, so it's a safe no-op
@@ -1369,6 +1052,36 @@ function FileWorkspacePanelBody() {
     []
   )
 
+  // Register (or re-register) the word-wrap toggle. Re-registerable so the
+  // label can follow an in-app locale change — Monaco caches an action's label
+  // at registration time, and the editor outlives a tab switch. The handler
+  // reads the live preference through a ref, so re-registration only refreshes
+  // the label.
+  //
+  // Exposed BOTH as a right-click context-menu entry AND an Alt+Z keybinding
+  // (mirrors how the add-to-chat action pairs a menu item with its shortcut).
+  // The menu entry is the dependable path on macOS, where Alt is Option (⌥):
+  // ⌥Z only fires while the editor itself is focused and Option-letter combos
+  // are delivered unreliably through the webview (⌥Z otherwise inserts "Ω").
+  const registerWordWrapAction = useCallback(
+    (
+      editor: MonacoEditorNs.IStandaloneCodeEditor,
+      monaco: Monaco,
+      label: string
+    ) => {
+      wordWrapActionRef.current?.dispose()
+      wordWrapActionRef.current = editor.addAction({
+        id: "houhub.toggleWordWrap",
+        label,
+        keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.KeyZ],
+        contextMenuGroupId: "z_view",
+        contextMenuOrder: 1,
+        run: () => setEditorWordWrap(!editorWordWrapRef.current),
+      })
+    },
+    [setEditorWordWrap]
+  )
+
   // Keep the activation refs + Monaco context key in sync with React state, and
   // hide the pill the moment the tab stops being attachable.
   useEffect(() => {
@@ -1386,6 +1099,7 @@ function FileWorkspacePanelBody() {
     }
   }, [t, activeAbsPath, activeFileTab?.title, activeSessionTabId, isAttachable])
 
+  // Keep the once-registered Alt+Z toggle action reading the live preference.
   useEffect(() => {
     editorWordWrapRef.current = editorWordWrap
   }, [editorWordWrap])
@@ -1665,11 +1379,16 @@ function FileWorkspacePanelBody() {
         tRef.current("addSelectionToChat"),
         tRef.current("addFileToChat")
       )
+
+      // Alt+Z toggles the (global, persisted) word-wrap preference — mirrors VS
+      // Code's "View: Toggle Word Wrap". `wordWrap` is a controlled option, so
+      // flipping the preference re-renders and applies the change.
       registerWordWrapAction(
         editorInstance,
         monaco,
         tRef.current("toggleWordWrap")
       )
+
       const pill = createAddToChatPill(
         editorInstance,
         monaco,
@@ -2203,27 +1922,6 @@ function FileWorkspacePanelBody() {
   }
 
   if (isPreviewMode && activeFileTab) {
-    // The tab path is absolute, so the document directory is too — every
-    // local reference below resolves to an absolute filesystem path.
-    const fileDir = activeIo?.rootPath ?? null
-    // A UNC-hosted document (//server/share/…) cannot have its local
-    // sub-resources resolved: the "./x" → rehype-harden → "/x" round trip
-    // drops the //server/share authority, and a collapsed single-slash
-    // path like "/Windows/win.ini" would read a DIFFERENT local file. So
-    // for UNC docs we disable local resolution entirely — relative refs
-    // stay relative (harden externalizes them harmlessly) and the image
-    // loader / link opener treat nothing as a local path.
-    const localRefsEnabled = !fileDir || !isUncPath(fileDir)
-    // Pre-resolve relative AND root-relative paths before Streamdown /
-    // rehype-harden mangles them: relative ones against the document's own
-    // directory, root-relative ones ("/assets/x.png") against the preview
-    // root (owning folder when inside the workspace, else the directory).
-    const preprocessedContent = normalizeMathDelimiters(
-      localRefsEnabled
-        ? preprocessMarkdownPaths(renderedContent, fileDir ?? "", previewRoot)
-        : renderedContent
-    )
-
     const markdownColdLoad =
       activeFileTab.loading && !hasTabContent(activeFileTab)
     return (
@@ -2239,11 +1937,11 @@ function FileWorkspacePanelBody() {
           </div>
         ) : (
           <MarkdownDocumentPreview
-            content={preprocessedContent}
+            content={renderedContent}
             // The tab path is absolute, so the document directory is too —
             // every local reference resolves to an absolute filesystem path.
             fileDir={activeIo?.rootPath ?? null}
-            localRefsEnabled={localRefsEnabled}
+            previewRoot={previewRoot}
             openFilePreview={openFilePreview}
           />
         )}
@@ -2401,6 +2099,7 @@ function FileWorkspacePanelBody() {
         <div className="flex-1 min-h-0">
           {hasTabContent(activeFileTab) || !activeFileTab.loading ? (
             <MonacoEditor
+              keepCurrentModel={true}
               beforeMount={defineMonacoThemes}
               onMount={handleEditorMount}
               path={editorModelPath}
@@ -2429,10 +2128,10 @@ function FileWorkspacePanelBody() {
                 lineNumbersMinChars,
                 lineDecorationsWidth: 10,
                 wordWrap: editorWordWrap ? "on" : "off",
-                unicodeHighlight: MONACO_UNICODE_HIGHLIGHT_OPTIONS,
                 scrollBeyondLastLine: false,
                 scrollBeyondLastColumn: 8,
                 renderLineHighlight: "line",
+                unicodeHighlight: MONACO_UNICODE_HIGHLIGHT_OPTIONS,
                 scrollbar: {
                   horizontal: "auto",
                 },

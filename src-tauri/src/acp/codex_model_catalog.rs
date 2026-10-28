@@ -13,7 +13,7 @@
 //! the current official catalog **verbatim** (minus any the user removed) and
 //! append the user's custom entries.
 //!
-//! The official catalog is sourced at runtime from the codex Houhub actually
+//! The official catalog is sourced at runtime from the codex houhub actually
 //! launches (see [`crate::acp::codex_catalog_source`]); this module is the pure,
 //! snapshot-in / catalog-out core. We store a **compact** intent
 //! ([`CodexModelConfig`]: sparse `customs` + `excluded_officials`) so the set of
@@ -26,13 +26,9 @@
 
 use std::collections::HashSet;
 
-use std::path::Path;
-
 use serde::{Deserialize, Serialize};
-
 use serde_json::{Map, Value};
 
-use crate::app_error::{AppCommandError, AppErrorCode};
 
 /// Official codex catalog snapshot compiled into the binary. Generated from the
 /// `codex debug models --bundled` of the codex that `codex-acp` drives (shape
@@ -41,13 +37,12 @@ use crate::app_error::{AppCommandError, AppErrorCode};
 const BUNDLED_SNAPSHOT: &str = include_str!("../../resources/codex/bundled-catalog.json");
 
 /// File name (relative to `CODEX_HOME`) of the generated catalog codex reads.
-pub const CATALOG_REL: &str = "Houhub-model-catalog.json";
-
+pub const CATALOG_REL: &str = "houhub-model-catalog.json";
 /// File name (relative to `CODEX_HOME`) of the compact source list we round-trip
 /// back into the editor when no DB provider owns the list (api-key mode).
-pub const SOURCE_REL: &str = "Houhub-model-catalog.source.json";
+pub const SOURCE_REL: &str = "houhub-model-catalog.source.json";
 
-/// Fields Houhub owns/derives itself, so they are never captured as `overrides`
+/// Fields houhub owns/derives itself, so they are never captured as `overrides`
 /// when importing a pre-existing catalog: `slug`/`display_name`/`context_window`
 /// map to dedicated compact fields, and `visibility`/`supported_in_api`/
 /// `priority`/`upgrade` are force-set by [`expand_to_catalog`].
@@ -61,11 +56,9 @@ const IMPORT_SKIP_KEYS: &[&str] = &[
     "upgrade",
 ];
 
-// Authoritative strict-enum value sets, extracted from the codex binary itself
-// (`unknown variant …, expected one of …`). A custom override outside its set
-// would make codex reject the WHOLE catalog, so [`sanitized_override`] drops any
-// The value sets and nullability are encoded by `enum_spec_for` below.
-
+/// One strict-enum field: its allowed values and whether JSON `null` is also
+/// accepted. Both halves are load-bearing — codex rejects the WHOLE catalog on
+/// an unknown variant *and* on a `null` in a non-optional slot.
 struct EnumSpec {
     allowed: &'static [&'static str],
     nullable: bool,
@@ -82,13 +75,7 @@ fn enum_spec_for(key: &str) -> Option<EnumSpec> {
         "default_reasoning_summary" => spec(&["auto", "concise", "detailed", "none"], false),
         "default_verbosity" => spec(&["low", "medium", "high"], true),
         "shell_type" => spec(
-            &[
-                "default",
-                "local",
-                "unified_exec",
-                "disabled",
-                "shell_command",
-            ],
+            &["default", "local", "unified_exec", "disabled", "shell_command"],
             false,
         ),
         // Only `freeform` is a variant; `function` would reject the whole catalog.
@@ -152,6 +139,14 @@ fn enum_spec_for(key: &str) -> Option<EnumSpec> {
 /// field. Re-probed against the 0.160.1 binary: every field here and every
 /// enum set above behaves as on 0.159.3. Its one new key is nested — see
 /// [`model_messages_override_is_safe`].
+///
+/// 0.164.0 (codex-acp 2.3.0 moves `@openai/codex` ^0.160.1 → ^0.164.0) ships
+/// the same eleven models in the same order and priorities. Its bundled
+/// catalog is 0.160.1's with the eleven `"instructions_variables": null`
+/// members of `model_messages` gone: 0.164 no longer reads that member at
+/// all, so a value of any type there now loads. No `ModelInfo` field was
+/// added. Re-probed against the 0.164.0 binary: every field here and every
+/// enum set above behaves as on 0.160.1.
 const BOOL_FIELDS: &[&str] = &[
     "use_responses_lite",
     "supported_in_api",
@@ -239,6 +234,15 @@ const MODEL_MESSAGES_TEXT_FIELDS: &[&str] = &[
 /// offers no control for any of this, so only an imported or hand-edited
 /// override can carry one, which is the input these checks exist for. The
 /// nested message tables beyond those members pass through as before.
+///
+/// 0.164 adds more strict members, all inside those nested tables
+/// (`tools.incremental_tools`,
+/// `tools.functions_namespace_functions_description_prefixes`,
+/// `permissions.approved_prefixes`, two under `guardian_v2`); a mistyped one
+/// rejects the whole catalog there, and 0.160.1 ignores them. They pass
+/// through as well: none is in the bundled catalog or the editor, and the
+/// codex that will load a catalog judges it before houhub publishes it
+/// ([`crate::acp::codex_runtime`]).
 fn model_messages_override_is_safe(value: &Value) -> bool {
     match value {
         Value::Null => true,
@@ -269,6 +273,45 @@ pub struct CodexCustomEntry {
     pub overrides: Map<String, Value>,
 }
 
+/// The shape a provider's model list came back in (see
+/// [`crate::acp::codex_endpoint_catalog`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogFormat {
+    /// A Codex-native catalog, `{"models":[ModelInfo…]}`.
+    Native,
+    /// An OpenAI list, `{"data":[{"id"…}]}`.
+    OpenaiList,
+}
+
+impl CatalogFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CatalogFormat::Native => "native",
+            CatalogFormat::OpenaiList => "openai_list",
+        }
+    }
+}
+
+/// "Take the model list from the provider": present means the officials
+/// come from the provider's own `/models` instead of codex's bundled catalog.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexCatalogIntent {
+    /// The list URL when the user set one; absent means `base_url + /models`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The shape the list had when the user applied it. A refresh that comes
+    /// back in the other shape is not published (the delete semantics of the
+    /// two differ) until the user re-picks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<CatalogFormat>,
+    /// OpenAI list only: the ids the user picked (an allowlist). A native
+    /// catalog uses `excludedOfficials` as its blocklist instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected: Vec<String>,
+}
+
 /// The compact intent stored in `provider.model` / the source sidecar. The set
 /// of official models is **not** stored — it is auto-included from the runtime
 /// snapshot at expand time, so it tracks whatever codex ships; only the user's
@@ -284,15 +327,10 @@ pub struct CodexModelConfig {
     /// Slug that becomes codex's root `model` + `OPENAI_MODEL`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
-}
-
-/// What the caller must inject into `config.toml` after files are written.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CatalogInjection {
-    /// Relative path to write as the `model_catalog_json` value.
-    pub catalog_rel: &'static str,
-    /// The default model slug to write as root `model`.
-    pub default_model: Option<String>,
+    /// Present ⇒ the officials come from the provider (see
+    /// [`CodexCatalogIntent`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<CodexCatalogIntent>,
 }
 
 /// Parse the compiled-in offline snapshot into its `models` array (opaque
@@ -365,20 +403,34 @@ fn is_listable(model: &Value) -> bool {
 /// colliding official priorities, and the officials keep the order (and the
 /// default) codex would give them without the takeover.
 pub fn expand_to_catalog(config: &CodexModelConfig, snapshot: &[Value]) -> Value {
+    expand_catalog(config, snapshot, snapshot)
+}
+
+/// [`expand_to_catalog`] with the two roles of the snapshot split apart:
+/// `listed` is what the picker shows besides the customs (codex's officials,
+/// or the provider's own entries), `templates` is what a custom's `base` may
+/// name — looked up in `listed` first, then here, falling back to the
+/// highest-priority entry of `listed` (or of `templates` when `listed` is
+/// empty). A custom whose slug a listed entry also has replaces that entry,
+/// so the picker never shows the same model twice.
+pub fn expand_catalog(config: &CodexModelConfig, listed: &[Value], templates: &[Value]) -> Value {
     let excluded: HashSet<&str> = config
         .excluded_officials
         .iter()
         .map(String::as_str)
         .collect();
-    let fallback = fallback_base_slug(snapshot);
-    let mut out: Vec<Value> = Vec::with_capacity(config.customs.len() + snapshot.len());
+    let fallback = fallback_base_slug(listed).or_else(|| fallback_base_slug(templates));
+    let mut out: Vec<Value> = Vec::with_capacity(config.customs.len() + listed.len());
+    let find_base = |slug: &str| {
+        listed
+            .iter()
+            .find(|m| slug_of(m) == Some(slug))
+            .or_else(|| templates.iter().find(|m| slug_of(m) == Some(slug)))
+    };
 
     // Customs first — surface the user's own models at the top of the picker.
     for c in &config.customs {
-        let base = snapshot
-            .iter()
-            .find(|m| slug_of(m) == Some(c.base.as_str()))
-            .or_else(|| snapshot.iter().find(|m| slug_of(m) == fallback.as_deref()));
+        let base = find_base(c.base.as_str()).or_else(|| fallback.as_deref().and_then(find_base));
         let base_obj = base.and_then(Value::as_object);
         let mut obj = base_obj.cloned().unwrap_or_default();
 
@@ -418,11 +470,15 @@ pub fn expand_to_catalog(config: &CodexModelConfig, snapshot: &[Value]) -> Value
     // position into priority, so a snapshot in file order (see
     // `sort_by_priority`) would otherwise hand GPT-6 Astra the slot — and the
     // default — codex gives GPT-6.1 Sol.
-    let mut officials: Vec<&Value> = snapshot.iter().collect();
+    let custom_slugs: HashSet<&str> = config.customs.iter().map(|c| c.slug.as_str()).collect();
+    let mut officials: Vec<&Value> = listed.iter().collect();
     officials.sort_by_key(|m| priority_of(m));
     for m in officials {
         if let Some(slug) = slug_of(m) {
             if excluded.contains(slug) && is_listable(m) {
+                continue;
+            }
+            if custom_slugs.contains(slug) {
                 continue;
             }
             out.push(m.clone());
@@ -475,10 +531,12 @@ pub fn default_slug(config: &CodexModelConfig, snapshot: &[Value]) -> Option<Str
 /// applies** — i.e. "feature off", so codex should use its own catalog
 /// untouched. Removals of models codex has since retired to `hide` are ghosts:
 /// [`expand_to_catalog`] ignores them, so a config carrying only ghosts would
-/// have HouHub replace the whole model table (freezing the official list) for a
+/// have houhub replace the whole model table (freezing the official list) for a
 /// result identical to codex's own. Treating it as empty hands control back.
 pub fn is_effectively_empty(config: &CodexModelConfig, snapshot: &[Value]) -> bool {
-    if !config.customs.is_empty() {
+    // Taking the list from the provider is a deviation of its own, whatever
+    // else is (or is not) set.
+    if !config.customs.is_empty() || config.catalog.is_some() {
         return false;
     }
     let listable: HashSet<&str> = snapshot
@@ -561,13 +619,50 @@ fn single_custom_config(slug: &str) -> CodexModelConfig {
         }],
         excluded_officials: Vec::new(),
         default: Some(slug),
+        catalog: None,
     }
+}
+
+/// Read a stored `catalog` leniently: a value this build cannot read (an
+/// unknown `format` a newer houhub wrote, say) keeps what it can rather than
+/// dropping the provider source — or, worse, the whole config with it.
+fn parse_catalog_intent(value: &Value) -> Option<CodexCatalogIntent> {
+    let obj = value.as_object()?;
+    let url = obj
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    let format = obj
+        .get("format")
+        .and_then(|f| serde_json::from_value::<CatalogFormat>(f.clone()).ok());
+    let mut selected: Vec<String> = obj
+        .get("selected")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    selected.sort();
+    selected.dedup();
+    Some(CodexCatalogIntent {
+        url,
+        format,
+        selected,
+    })
 }
 
 /// Parse the compact config from a stored value, leniently and with migration.
 ///
 /// - `None`/blank → empty config (feature off).
-/// - New shape `{"customs":[…],"excludedOfficials":[…],"default":…}` → parsed.
+/// - New shape `{"customs":[…],"excludedOfficials":[…],"default":…,
+///   "catalog":{…}}` → parsed; any one of the keys is enough.
 /// - Legacy `{"models":[…],"default":…}` → each model migrated to a custom.
 /// - Any other JSON object → empty config.
 /// - A bare slug (JSON-quoted or not) → a single custom cloning that slug.
@@ -577,9 +672,19 @@ pub fn parse_model_config(raw: Option<&str>) -> CodexModelConfig {
     };
 
     match serde_json::from_str::<Value>(raw) {
-        Ok(Value::Object(obj)) => {
-            if obj.contains_key("customs") || obj.contains_key("excludedOfficials") {
-                return serde_json::from_value(Value::Object(obj)).unwrap_or_default();
+        Ok(Value::Object(mut obj)) => {
+            if obj.contains_key("customs")
+                || obj.contains_key("excludedOfficials")
+                || obj.contains_key("catalog")
+            {
+                let catalog = obj
+                    .remove("catalog")
+                    .as_ref()
+                    .and_then(parse_catalog_intent);
+                let mut config: CodexModelConfig =
+                    serde_json::from_value(Value::Object(obj)).unwrap_or_default();
+                config.catalog = catalog;
+                return config;
             }
             if let Some(models) = obj.get("models").and_then(Value::as_array) {
                 return CodexModelConfig {
@@ -589,6 +694,7 @@ pub fn parse_model_config(raw: Option<&str>) -> CodexModelConfig {
                         .get("default")
                         .and_then(Value::as_str)
                         .map(str::to_owned),
+                    catalog: None,
                 };
             }
             CodexModelConfig::default()
@@ -599,7 +705,7 @@ pub fn parse_model_config(raw: Option<&str>) -> CodexModelConfig {
 }
 
 /// Adopt a **pre-existing** `{"models":[ ModelInfo, ... ]}` catalog (one the user
-/// configured by hand, or Houhub's own catalog when its source sidecar is missing)
+/// configured by hand, or houhub's own catalog when its source sidecar is missing)
 /// into the compact config, reconciled against the live official catalog:
 /// non-official models become `customs`, listable officials **absent** from the
 /// foreign catalog are recorded as `excluded_officials` (the user removed them),
@@ -683,135 +789,7 @@ pub fn import_catalog(
         customs,
         excluded_officials,
         default,
-    }
-}
-
-fn io_err(context: &str, e: std::io::Error) -> AppCommandError {
-    AppCommandError::new(AppErrorCode::IoError, format!("{context}: {e}"))
-}
-
-/// Write the expanded catalog + the compact source sidecar under `codex_home`,
-/// expanding against `snapshot` (the runtime official catalog).
-///
-/// The sidecar is written **verbatim** from `raw_compact` so the value the
-/// editor reads back is byte-identical to what it stored. A config with no
-/// customs and no removal that still applies (see [`is_effectively_empty`])
-/// removes both files and returns `None`, signalling the caller to drop the
-/// `model_catalog_json` key so codex uses its own catalog.
-pub fn write_catalog_files(
-    raw_compact: &str,
-    codex_home: &Path,
-    snapshot: &[Value],
-) -> Result<Option<CatalogInjection>, AppCommandError> {
-    let config = parse_model_config(Some(raw_compact));
-    let catalog_path = codex_home.join(CATALOG_REL);
-    let source_path = codex_home.join(SOURCE_REL);
-
-    if is_effectively_empty(&config, snapshot) {
-        let _ = std::fs::remove_file(&catalog_path);
-        let _ = std::fs::remove_file(&source_path);
-        return Ok(None);
-    }
-
-    std::fs::create_dir_all(codex_home).map_err(|e| io_err("create codex home", e))?;
-    let catalog =
-        serde_json::to_string_pretty(&expand_to_catalog(&config, snapshot)).map_err(|e| {
-            AppCommandError::new(AppErrorCode::IoError, format!("serialize catalog: {e}"))
-        })?;
-    std::fs::write(&catalog_path, catalog).map_err(|e| io_err("write catalog file", e))?;
-    std::fs::write(&source_path, raw_compact).map_err(|e| io_err("write catalog source", e))?;
-
-    Ok(Some(CatalogInjection {
-        catalog_rel: CATALOG_REL,
-        default_model: default_slug(&config, snapshot),
-    }))
-}
-
-/// The OpenAI-compatible bundle a derived gateway model carries, as key/value
-/// pairs. Exposed so the provider-binding tests can assert a derived catalog is
-/// actually flattened without duplicating the list.
-pub fn gateway_compat_overrides() -> Vec<(&'static str, Value)> {
-    GATEWAY_COMPAT_OVERRIDES.to_vec()
-}
-
-/// The compatibility bundle that makes a cloned GPT entry speak plain OpenAI
-/// Responses — the same keys the editor's "OpenAI-compatible" preset writes
-/// (see `CODEX_COMPAT_OVERRIDES` on the TS side). Kept here so a gateway-derived
-/// catalog (see [`catalog_from_provider_models`]) can be built without the
-/// frontend: a third-party endpoint implements only the public API, so every
-/// model derived from one has to be flattened.
-const GATEWAY_COMPAT_OVERRIDES: &[(&str, Value)] = &[
-    ("tool_mode", Value::Null),
-    ("multi_agent_version", Value::Null),
-    ("use_responses_lite", Value::Bool(false)),
-    ("apply_patch_tool_type", Value::Null),
-    ("supports_image_detail_original", Value::Bool(false)),
-];
-
-/// Build a compact codex model config out of a **model-provider's** fetched
-/// model list, for a provider that is not codex-only.
-///
-/// Codex is the one agent whose provider binding is a whole catalog rather than
-/// a single model name: `model_catalog_json` replaces codex's entire model
-/// table, so a gateway's models only become selectable in the composer once
-/// they exist as catalog entries. A codex-only provider carries that catalog
-/// itself (in `provider.model`, as a structured `CodexModelConfig`). A
-/// **multi-agent** provider cannot: its `model` column is already spoken for by
-/// whichever agent owns it (Claude stores a JSON object there), and its fetched
-/// list lives in `models_json`. Binding codex to such a provider therefore
-/// derives the catalog from that list, so the models the user fetched in the
-/// provider dialog are exactly what codex offers.
-///
-/// Every derived entry carries [`GATEWAY_COMPAT_OVERRIDES`], because a
-/// third-party gateway only implements the public OpenAI API, and takes its own
-/// slug as `base` — the same shape the legacy single-slug path uses, and the one
-/// [`expand_to_catalog`] resolves to the highest-priority official when the slug
-/// is not itself an official (which a gateway model never is). Deriving `base`
-/// from the live snapshot here instead would make the value the settings panel
-/// round-trips disagree with the value the backend generates.
-/// `default` is `preferred` when it names a fetched model (so the provider's own
-/// default keeps winning), else the first entry — and it is always one of the
-/// derived slugs, so `default_slug` can never point codex's root `model` at
-/// something the generated catalog does not list.
-pub fn catalog_from_provider_models(
-    models: &[String],
-    preferred: Option<&str>,
-) -> CodexModelConfig {
-    let mut seen = HashSet::new();
-    let slugs: Vec<String> = models
-        .iter()
-        .map(|m| m.trim())
-        .filter(|m| !m.is_empty())
-        .map(str::to_owned)
-        .filter(|m| seen.insert(m.clone()))
-        .collect();
-    if slugs.is_empty() {
-        return CodexModelConfig::default();
-    }
-    let overrides = Map::from_iter(
-        GATEWAY_COMPAT_OVERRIDES
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), v.clone())),
-    );
-    let customs = slugs
-        .iter()
-        .map(|slug| CodexCustomEntry {
-            slug: slug.clone(),
-            display_name: None,
-            context_window: None,
-            base: slug.clone(),
-            overrides: overrides.clone(),
-        })
-        .collect();
-    let default = preferred
-        .map(str::trim)
-        .filter(|p| slugs.iter().any(|s| s == p))
-        .map(str::to_owned)
-        .or_else(|| slugs.first().cloned());
-    CodexModelConfig {
-        customs,
-        excluded_officials: Vec::new(),
-        default,
+        catalog: None,
     }
 }
 
@@ -847,7 +825,7 @@ mod tests {
         assert_eq!(
             models.len(),
             11,
-            "snapshot should carry the catalog codex 0.159.2–0.160.1 ships"
+            "snapshot should carry the catalog codex 0.159.2–0.164.0 ships"
         );
         // 0.158.0 deleted gpt-5.4 outright (it had shipped hidden, as a
         // retirement stub) rather than hiding it any further.
@@ -973,6 +951,7 @@ mod tests {
             }],
             excluded_officials: Vec::new(),
             default: None,
+            catalog: None,
         };
         let cat = expand_to_catalog(&config, &snap());
         // All 11 officials auto-included + 1 custom = 12.
@@ -1004,6 +983,7 @@ mod tests {
             customs: Vec::new(),
             excluded_officials: slugs.iter().map(|s| s.to_string()).collect(),
             default: None,
+            catalog: None,
         }
     }
 
@@ -1058,10 +1038,7 @@ mod tests {
         // A removal that still applies keeps the takeover.
         assert!(!is_effectively_empty(&excluding(&["gpt-5.5"]), &s));
         // Mixed: the live one wins.
-        assert!(!is_effectively_empty(
-            &excluding(&["gpt-5.4", "gpt-5.5"]),
-            &s
-        ));
+        assert!(!is_effectively_empty(&excluding(&["gpt-5.4", "gpt-5.5"]), &s));
         // codex 0.155.1 DELETED gpt-5.2 and gpt-5.4-mini outright rather than
         // hiding them, which is the other way a stored exclusion goes stale. A
         // slug that is not in the catalog at all cannot be listable either, so
@@ -1098,25 +1075,17 @@ mod tests {
                 overrides: Map::from_iter([
                     // Invalid → must be dropped (would reject the whole catalog).
                     ("shell_type".into(), Value::String("bogus".into())),
-                    (
-                        "default_verbosity".into(),
-                        Value::String("screaming".into()),
-                    ),
+                    ("default_verbosity".into(), Value::String("screaming".into())),
                     // `function` is NOT a valid apply_patch variant on codex 0.144.
-                    (
-                        "apply_patch_tool_type".into(),
-                        Value::String("function".into()),
-                    ),
+                    ("apply_patch_tool_type".into(), Value::String("function".into())),
                     // Valid → must be kept.
                     ("supports_search_tool".into(), Value::Bool(true)),
-                    (
-                        "default_reasoning_summary".into(),
-                        Value::String("concise".into()),
-                    ),
+                    ("default_reasoning_summary".into(), Value::String("concise".into())),
                 ]),
             }],
             excluded_officials: Vec::new(),
             default: None,
+            catalog: None,
         };
         let cat = expand_to_catalog(&config, &snap());
         let x = find(&cat, "gw/x").expect("present");
@@ -1155,15 +1124,8 @@ mod tests {
         };
         let cat = expand_to_catalog(&config, &snap());
         let x = find(&cat, "gw/n").expect("present");
-        for key in [
-            "default_reasoning_summary",
-            "web_search_tool_type",
-            "shell_type",
-        ] {
-            assert!(
-                !x.get(key).unwrap().is_null(),
-                "{key} must keep the base value"
-            );
+        for key in ["default_reasoning_summary", "web_search_tool_type", "shell_type"] {
+            assert!(!x.get(key).unwrap().is_null(), "{key} must keep the base value");
         }
         for key in ["apply_patch_tool_type", "tool_mode", "multi_agent_version"] {
             assert!(x.get(key).unwrap().is_null(), "{key} must accept null");
@@ -1346,6 +1308,7 @@ mod tests {
             }],
             excluded_officials: Vec::new(),
             default: Some("gpt-5.5".into()),
+            catalog: None,
         };
         assert_eq!(default_slug(&cfg, &s).as_deref(), Some("gpt-5.5"));
         // Explicit naming an absent model → first custom.
@@ -1416,10 +1379,7 @@ mod tests {
         gw.insert("slug".into(), Value::String("gw/opus".into()));
         // A field that genuinely differs from the clone base (its own description),
         // so import must capture it as an override.
-        gw.insert(
-            "description".into(),
-            Value::String("My private gateway".into()),
-        );
+        gw.insert("description".into(), Value::String("My private gateway".into()));
         let kept = s
             .iter()
             .find(|m| slug_of(m) == Some("gpt-5.5"))
@@ -1440,10 +1400,7 @@ mod tests {
         assert!(cfg.excluded_officials.iter().any(|x| x == "gpt-5.6-sol"));
         assert!(!cfg.excluded_officials.iter().any(|x| x == "gpt-5.5"));
         // Hidden official is never inferred-excluded.
-        assert!(!cfg
-            .excluded_officials
-            .iter()
-            .any(|x| x == "codex-auto-review"));
+        assert!(!cfg.excluded_officials.iter().any(|x| x == "codex-auto-review"));
         assert_eq!(cfg.default.as_deref(), Some("gpt-5.5"));
 
         // Round-trip: expanding reproduces gpt-5.5 + the custom, drops the
@@ -1456,109 +1413,5 @@ mod tests {
         // expansion would keep them regardless (they back codex internals).
         assert!(find(&cat, "gpt-daybreak-blue-latest").is_some());
         assert!(find(&cat, "codex-auto-review").is_some());
-    }
-
-    #[test]
-    fn write_and_clear_catalog_files() {
-        let dir = std::env::temp_dir().join(format!("Houhub-catalog-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let s = snap();
-        let raw = r#"{"customs":[{"slug":"gw/x","base":"gpt-5.6-sol"}],"default":"gw/x"}"#;
-        // write_catalog_files parses `raw` itself; snapshot is the runtime catalog.
-        let inj = write_catalog_files(raw, &dir, &s)
-            .unwrap()
-            .expect("non-empty → injection");
-        assert_eq!(inj.catalog_rel, CATALOG_REL);
-        assert_eq!(inj.default_model.as_deref(), Some("gw/x"));
-        assert_eq!(std::fs::read_to_string(dir.join(SOURCE_REL)).unwrap(), raw);
-        let cat: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join(CATALOG_REL)).unwrap()).unwrap();
-        assert!(find(&cat, "gw/x").is_some());
-        assert!(find(&cat, "gpt-5.6-sol").is_some()); // official auto-included
-                                                      // Empty config clears files + signals key removal.
-        assert!(write_catalog_files(r#"{"customs":[]}"#, &dir, &s)
-            .unwrap()
-            .is_none());
-        assert!(!dir.join(CATALOG_REL).exists());
-        assert!(!dir.join(SOURCE_REL).exists());
-
-        // A ghost-only config (removals of officials codex has since hidden)
-        // behaves the same: the files go away and the caller is told to drop the
-        // `model_catalog_json` key, so the two never get out of sync.
-        write_catalog_files(
-            r#"{"customs":[{"slug":"gw/y","base":"gpt-5.6-sol"}]}"#,
-            &dir,
-            &s,
-        )
-        .unwrap()
-        .expect("seeded");
-        assert!(dir.join(CATALOG_REL).exists());
-        let ghosts = r#"{"customs":[],"excludedOfficials":["gpt-5.4","gpt-5.4-mini"]}"#;
-        assert!(write_catalog_files(ghosts, &dir, &s).unwrap().is_none());
-        assert!(!dir.join(CATALOG_REL).exists());
-        assert!(!dir.join(SOURCE_REL).exists());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A gateway's fetched models become real, listable catalog entries — this
-    /// is what puts them in codex's picker (and the composer's model selector)
-    /// instead of leaving codex on its own bundled official list.
-    #[test]
-    fn provider_models_expand_into_listable_catalog_entries() {
-        let models = vec![
-            "deepseek-flash".to_string(),
-            "deepseek-flash".to_string(),
-            "  ".to_string(),
-            "kimi-k2".to_string(),
-        ];
-        let config = catalog_from_provider_models(&models, Some("kimi-k2"));
-        assert_eq!(config.default.as_deref(), Some("kimi-k2"));
-        let cat = expand_to_catalog(&config, &snap());
-        let out = slugs(&cat);
-        // Customs first, then every official (the table is a whole replace).
-        assert_eq!(out[0], "deepseek-flash");
-        assert_eq!(out[1], "kimi-k2");
-        assert!(out.contains(&"gpt-6-astra".to_string()));
-        for slug in ["deepseek-flash", "kimi-k2"] {
-            let entry = find(&cat, slug).expect("present");
-            assert_eq!(entry.get("visibility").unwrap(), "list");
-            assert_eq!(entry.get("supported_in_api").unwrap(), &Value::Bool(true));
-            // Flattened to plain OpenAI Responses: a third-party gateway cannot
-            // serve GPT's code-mode/multi-agent dialect.
-            assert!(entry.get("tool_mode").unwrap().is_null());
-            assert!(entry.get("multi_agent_version").unwrap().is_null());
-            assert_eq!(
-                entry.get("use_responses_lite").unwrap(),
-                &Value::Bool(false)
-            );
-        }
-        // An empty list means "codex keeps its own table".
-        assert!(catalog_from_provider_models(&[], None).customs.is_empty());
-        assert!(catalog_from_provider_models(&["  ".to_string()], None)
-            .customs
-            .is_empty());
-    }
-
-    /// The default must always name a derived slug; otherwise codex's root
-    /// `model` would point at something the generated catalog does not list.
-    #[test]
-    fn provider_models_default_falls_back_to_the_first_model() {
-        let models = vec!["deepseek-flash".to_string(), "kimi-k2".to_string()];
-        assert_eq!(
-            catalog_from_provider_models(&models, Some("not-in-the-list"))
-                .default
-                .as_deref(),
-            Some("deepseek-flash")
-        );
-        assert_eq!(
-            catalog_from_provider_models(&models, None)
-                .default
-                .as_deref(),
-            Some("deepseek-flash")
-        );
-        // The derived default survives `default_slug_for_env` unchanged, so the
-        // provider bind writes the same value the catalog was built around.
-        let config = catalog_from_provider_models(&models, Some("kimi-k2"));
-        assert_eq!(default_slug_for_env(&config).as_deref(), Some("kimi-k2"));
     }
 }

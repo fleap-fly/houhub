@@ -1,11 +1,8 @@
 use chrono::{DateTime, Utc};
-
 use serde::{Deserialize, Serialize};
 
 use super::agent::AgentType;
-
 use super::message::{MessageTurn, TurnUsage};
-
 use crate::db::entities::conversation::ConversationKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,14 +276,16 @@ pub struct ImportResult {
     pub restored: u32,
 }
 
-/// Reconciliation state of one locally-discovered session against the HouHub DB,
+/// Reconciliation state of one locally-discovered session against the houhub DB,
 /// keyed by `(external_id, agent_type)` — the same identity `import_one` uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanSessionStatus {
     /// Not in the DB — importable.
     New,
-    /// At least one live (non-deleted) row exists — already imported.
+    /// At least one live (non-deleted) row exists — already imported. Also a
+    /// Claude Code session whose usage a live conversation of a custom agent
+    /// on the official Claude adapter counts: the import skips it.
     Imported,
     /// Only soft-deleted rows exist. Deletion is a soft delete, so the row (and
     /// its whole history) is still there: the picker offers such a session for

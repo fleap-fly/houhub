@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { ProviderModelsRefreshButton } from "@/components/settings/provider-models"
 import {
   Combobox,
   ComboboxContent,
@@ -67,7 +68,7 @@ const CURSOR_MODEL_ENV = "CURSOR_MODEL"
  * such env var. Off is written explicitly rather than by deleting the key —
  * see [`buildCursorEnv`]. */
 const CURSOR_FORCE_ENV = "CURSOR_FORCE"
-/** HouHub-side knob recording the chosen authentication method. Read by the
+/** houhub-side knob recording the chosen authentication method. Read by the
  * launch path (`apply_cursor_env_policy`): in `subscription` mode it clears any
  * inherited CURSOR_API_KEY/BASE_URL so the CLI uses the browser-login
  * credential. The CLI itself ignores this var. */
@@ -75,11 +76,10 @@ const CURSOR_AUTH_MODE_ENV = "CURSOR_AUTH_MODE"
 
 const UNSET = "__unset__"
 
-/** Cursor account authentication for Agent CLI. `custom` = a Cursor Dashboard
- * API key for headless/servers; it is not an IDE model-provider credential.
- * Cursor IDE's OpenAI-compatible BYOK settings are not consumed by Agent CLI.
- * Native CLI provider flows such as Bedrock remain managed by Cursor itself.
- * The wire token stays `"custom"` for compatibility with existing rows. */
+/** The Cursor CLI's two real authentication methods. `custom` = a Cursor
+ * account API key (headless/servers); it is NOT a third-party/OpenAI endpoint —
+ * cursor-agent has no custom-endpoint support. The wire token stays `"custom"`
+ * for backward-compatibility with rows saved before the rename. */
 export type CursorAuthMethod = "subscription" | "custom"
 
 /** One entry in the model-family picker. `value` is the family's base id, and
@@ -134,8 +134,8 @@ export function buildCursorEnv(
     }
   }
   env[CURSOR_AUTH_MODE_ENV] = mode
-  // Agent CLI does not consume the IDE's OpenAI base URL setting. Scrub the
-  // legacy HouHub field so the saved config never claims otherwise.
+  // cursor-agent has no custom-endpoint support: the base URL is always removed,
+  // scrubbing any value a legacy row or an old build may have written.
   delete env[CURSOR_API_BASE_URL_ENV]
   if (mode === "custom") {
     setOrDelete(CURSOR_API_KEY_ENV, apiKey)
@@ -226,7 +226,7 @@ export function cursorLoginIsHeadless(
 }
 
 /** The copy-pasteable login command. The managed cursor-agent binary lives in
- * HouHub's cache (not on PATH), so a bare `cursor-agent login` fails — use the
+ * houhub's cache (not on PATH), so a bare `cursor-agent login` fails — use the
  * resolved absolute path, quoted when it contains whitespace. */
 export function cursorLoginCommand(
   binaryPath?: string | null,
@@ -310,8 +310,8 @@ function RuleListEditor({
 /**
  * Dedicated settings panel for Cursor (cursor-agent CLI). The user first picks
  * an **authentication method** (a Select, matching the Codex panel's idiom).
- * Both methods authenticate the Cursor account used by Agent CLI. Cursor IDE
- * model-provider settings are separate and are not inherited by this process:
+ * Both methods authenticate against Cursor's own backend — the CLI has no
+ * bring-your-own-endpoint support, so there is no API-URL field:
  *
  * 1. **Official subscription** — sign in with a Cursor account
  *    (`"<path>" login`). No credential is stored; the launch clears any
@@ -843,21 +843,11 @@ export function CursorConfigPanel({
             <span className="text-2xs font-medium">
               {t("cursor.modelTitle")}
             </span>
-            <Button
-              className="h-6 gap-1 px-2 text-2xs"
-              disabled={modelsLoading}
-              onClick={() => void loadModels()}
-              size="sm"
-              type="button"
-              variant="ghost"
-            >
-              {modelsLoading ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <RefreshCw className="h-3 w-3" />
-              )}
-              {t("cursor.loadModels")}
-            </Button>
+            <ProviderModelsRefreshButton
+              fetching={modelsLoading}
+              onRefresh={() => void loadModels()}
+              label={t("cursor.loadModels")}
+            />
           </div>
           <Combobox
             key={currentBase || UNSET}
