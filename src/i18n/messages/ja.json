@@ -4303,6 +4303,7 @@
         "settling": "バックグラウンド結果を同期中…"
       },
       "asyncTasks": {
+        "title": "バックグラウンドタスク",
         "openOutput": "出力",
         "stop": "停止",
         "tokens": "{count} トークン",

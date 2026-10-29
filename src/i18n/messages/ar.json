@@ -4303,6 +4303,7 @@
         "settling": "جارٍ مزامنة نتائج الخلفية…"
       },
       "asyncTasks": {
+        "title": "مهام الخلفية",
         "openOutput": "المخرجات",
         "stop": "إيقاف",
         "tokens": "{count} رمز",

@@ -357,12 +357,41 @@ export const MessageBranchPage = ({
 // / `/slash`-badging hooks were removed.
 export type MessageResponseProps = ComponentProps<typeof Streamdown>
 
-// remark-math uses dollar delimiters. Single-dollar math is disabled so
-// currency and shell variables remain prose. LaTeX-style delimiters are
-// rewritten to double-dollar fences, with a zero-width pad where CommonMark
-// would otherwise treat a multiline opener/closer as a block fence.
+// remark-math uses dollar delimiters. `\[...\]` / `\(...\)` are rewritten
+// to `$$...$$`. Single-dollar `$...$` is disabled (`singleDollarTextMath:
+// false`) so currency (`$9.99`) and shell vars (`$HOME`, `$1`) stay prose.
+//
+// A single-line `$$x$$` inside a paragraph stays *inline* math (mdast tags
+// every math-text node `math-inline` regardless of dollar count). The one
+// hazard is math FLOW: a `$$` that starts a line's block content opens a
+// display fence and swallows the rest of that line as fence metadata. Both
+// delimiters of a multi-line `\(...\)` can land there, and both are kept off
+// it by putting a zero-width space in front:
+//
+//   opener — padded only when the `$$` would land exactly at block content
+//            start, since the pad sits in the surrounding Markdown, where it
+//            is a real character to later constructs. (An emphasis run or a
+//            link-reference label padded on one side stops matching.)
+//   closer — padded unconditionally. This pad lands INSIDE the formula,
+//            where KaTeX ignores it, so it costs nothing to always emit and
+//            saves having to decide whether the closing line is container
+//            prefix or TeX. That question is not answerable from the line
+//            alone: `\(a\n2. \)` and a list continuation look identical, as
+//            do a tab-indented `>` and a blockquote marker, and a lazily
+//            continued quote carries no marker at all.
+//
+// Code and inline code are masked BEFORE line endings are folded: the inline
+// mask excludes LF but tolerates a bare CR, so folding first would un-mask
+// multi-line inline code and rewrite its contents.
+//
+// Known limit, pre-existing: an INDENTED code block is not masked, so
+// `\(...\)` inside one is rewritten (it already is on main). Padding cannot
+// avoid it — 4 spaces means "indented code" at top level but "content column"
+// inside a nested list, and a prefix scan cannot tell those apart.
 export function normalizeMathDelimiters(text: string): string {
   const { masked, restore } = maskLiteralSpans(text)
+  // Fold line endings only after masking, so the offsets and line scans below
+  // match what remark-parse sees while masked code keeps its own bytes.
   const source = masked.replace(/\r\n|\r/g, "\n")
   const normalized = source
     .replace(/\\\[([\s\S]*?)\\\]/g, (_m, inner: string) => `$$${inner}$$`)
@@ -381,6 +410,17 @@ function isSpaceOrTab(code: number): boolean {
   return code === 32 || code === 9
 }
 
+/**
+ * Index just past the CommonMark container prefix (blockquote markers, list
+ * markers, indentation) opening the line `[start, end)` — i.e. where that
+ * line's block content begins. Returns `start` when content starts
+ * immediately. Single pass, no backtracking: every iteration consumes at
+ * least one character or returns.
+ *
+ * Indentation is deliberately not capped at 3. A deeper run only happens
+ * inside a nested list (where it IS the content column, so the guard is
+ * needed) or in an indented code block (where the guard is inert).
+ */
 function containerPrefixEnd(
   source: string,
   start: number,
@@ -392,12 +432,12 @@ function containerPrefixEnd(
     if (i >= end) return i
 
     const ch = source.charCodeAt(i)
-    if (ch === 62) {
+    if (ch === 62 /* > */) {
       i += 1
       continue
     }
 
-    if (ch === 42 || ch === 45 || ch === 43) {
+    if (ch === 42 /* * */ || ch === 45 /* - */ || ch === 43 /* + */) {
       if (i + 1 < end && isSpaceOrTab(source.charCodeAt(i + 1))) {
         i += 2
         continue
@@ -419,7 +459,7 @@ function containerPrefixEnd(
       }
       const marker = j < end ? source.charCodeAt(j) : 0
       if (
-        (marker === 46 || marker === 41) &&
+        (marker === 46 /* . */ || marker === 41) /* ) */ &&
         j + 1 < end &&
         isSpaceOrTab(source.charCodeAt(j + 1))
       ) {
@@ -435,6 +475,7 @@ function containerPrefixEnd(
 
 const remarkPlugins = [
   ...Object.values(defaultRemarkPlugins),
+  // Before remarkRewriteFileUriLinks, which reshapes a drive path's url.
   remarkRestoreWindowsPaths,
   remarkLocalImages,
   remarkRewriteFileUriLinks,
@@ -529,7 +570,9 @@ function MessageResponseImpl({
   return (
     <Streamdown
       className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:ps-2 [&_ol]:ps-2",
+        // `chat-markdown`: while it streams, its blocks keep the spacing they
+        // settle with (globals.css).
+        "chat-markdown size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:ps-2 [&_ol]:ps-2",
         // Each block takes the direction of its own text (`dir="auto"`
         // below), so indents and rules go on the logical start side. An item
         // re-states `text-align: start`: the UA gives <li>
@@ -587,7 +630,12 @@ export const MessageResponse = memo(
     (prevProps.mode ?? FINISHED_MODE) === (nextProps.mode ?? FINISHED_MODE) &&
     (prevProps.parseIncompleteMarkdown ??
       FINISHED_PARSE_INCOMPLETE_MARKDOWN) ===
-      (nextProps.parseIncompleteMarkdown ?? FINISHED_PARSE_INCOMPLETE_MARKDOWN)
+      (nextProps.parseIncompleteMarkdown ??
+        FINISHED_PARSE_INCOMPLETE_MARKDOWN) &&
+    // The prose being written wraps its new characters to fade them in
+    // (`animated` + `isAnimating`); done, it drops the wrapping.
+    (prevProps.isAnimating ?? false) === (nextProps.isAnimating ?? false) &&
+    prevProps.animated === nextProps.animated
 )
 
 MessageResponse.displayName = "MessageResponse"

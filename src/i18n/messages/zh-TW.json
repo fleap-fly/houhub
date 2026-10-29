@@ -4303,6 +4303,7 @@
         "settling": "正在同步背景結果…"
       },
       "asyncTasks": {
+        "title": "背景任務",
         "openOutput": "輸出",
         "stop": "停止",
         "tokens": "{count} tokens",

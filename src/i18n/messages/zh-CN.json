@@ -4303,6 +4303,7 @@
         "settling": "正在同步后台结果…"
       },
       "asyncTasks": {
+        "title": "后台任务",
         "openOutput": "输出",
         "stop": "停止",
         "tokens": "{count} tokens",

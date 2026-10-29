@@ -4303,6 +4303,7 @@
         "settling": "Syncing background results…"
       },
       "asyncTasks": {
+        "title": "Background tasks",
         "openOutput": "Output",
         "stop": "Stop",
         "tokens": "{count} tokens",

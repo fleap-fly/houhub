@@ -4303,6 +4303,7 @@
         "settling": "Sincronizando resultados em segundo plano…"
       },
       "asyncTasks": {
+        "title": "Tarefas em segundo plano",
         "openOutput": "Saída",
         "stop": "Parar",
         "tokens": "{count} tokens",

@@ -5,7 +5,6 @@
 //! [`hydrate_registry`] at startup and after every mutation.
 
 use chrono::Utc;
-
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel, NotSet,
     QueryFilter, QueryOrder, Set,
@@ -15,11 +14,8 @@ use crate::acp::custom_registry::{
     self, CustomAgentDef, CustomAgentSource, CustomAgentSpec, CustomDistributionKind,
     FALLBACK_VERSION,
 };
-
 use crate::db::entities::custom_agent;
-
 use crate::db::error::DbError;
-
 use crate::models::agent::is_valid_custom_agent_id;
 
 /// Convert a stored row into a launch definition. Returns `None` when the row
@@ -174,95 +170,6 @@ pub async fn hydrate_registry(conn: &DatabaseConnection) -> Result<(), DbError> 
 }
 
 #[cfg(test)]
-mod zcode_legacy_registration_tests {
-    use super::*;
-    use crate::acp::custom_registry::NpxSpec;
-    use crate::acp::registry::{self, AgentDistribution};
-    use crate::models::agent::AgentType;
-
-    #[tokio::test]
-    // The existing registry guard spans DB awaits on this single-threaded test.
-    #[allow(clippy::await_holding_lock)]
-    async fn zcode_legacy_rows_still_hydrate_and_keep_their_launch_metadata() {
-        let _guard = custom_registry::hydrate_test_guard();
-        let db = crate::db::test_helpers::fresh_in_memory_db().await;
-        let spec = CustomAgentSpec {
-            npx: Some(NpxSpec {
-                package: "legacy-zcode@0.1.0".into(),
-                cmd: Some("legacy-zcode".into()),
-                args: vec!["--stdio".into()],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        // Bypass current validation to represent rows saved before this builtin.
-        for id in ["zcode", "zcode-acp"] {
-            custom_agent::ActiveModel {
-                id: NotSet,
-                registry_id: Set(id.into()),
-                name: Set(format!("Legacy {id}")),
-                description: Set("previously registered ZCode".into()),
-                version: Set("0.1.0".into()),
-                distribution_kind: Set("npx".into()),
-                spec_json: Set(serde_json::to_string(&spec).unwrap()),
-                icon_url: Set(None),
-                skills_shared_store: Set(false),
-                skills_dir: Set(None),
-                source: Set("manual".into()),
-                version_probe: Set(None),
-                supports_mcp: Set(true),
-                created_at: Set(Utc::now()),
-                updated_at: Set(Utc::now()),
-            }
-            .insert(&db.conn)
-            .await
-            .unwrap();
-        }
-        hydrate_registry(&db.conn).await.unwrap();
-        for id in ["zcode", "zcode-acp"] {
-            let custom = AgentType::custom(id).unwrap();
-            assert!(
-                custom_registry::is_registered(id),
-                "{id} must survive startup"
-            );
-            assert_eq!(registry::from_registry_id(id), Some(custom));
-            assert!(registry::all_acp_agents().contains(&custom));
-            let meta = registry::get_agent_meta(custom);
-            assert_eq!(meta.agent_type, custom);
-            assert_eq!(meta.name, format!("Legacy {id}"));
-            match meta.distribution {
-                AgentDistribution::Npx {
-                    package, cmd, args, ..
-                } => {
-                    assert_eq!(package, "legacy-zcode@0.1.0");
-                    assert_eq!(cmd, "legacy-zcode");
-                    assert_eq!(args, &["--stdio"]);
-                }
-                _ => panic!("legacy launch distribution changed"),
-            }
-            let row = get(&db.conn, id).await.unwrap().unwrap();
-            upsert(&db.conn, &def_from_model(&row).unwrap())
-                .await
-                .expect("the old entry remains editable");
-        }
-        let builtin = registry::get_agent_meta(AgentType::ZCode);
-        assert_eq!(builtin.agent_type, AgentType::ZCode);
-        assert_eq!(
-            registry::from_registry_id(registry::registry_id_for(AgentType::ZCode)),
-            Some(AgentType::ZCode)
-        );
-        match builtin.distribution {
-            AgentDistribution::Npx { package, cmd, .. } => {
-                assert_eq!(package, "zcode-acp-server@0.76.3");
-                assert_eq!(cmd, "zcode-acp-server");
-            }
-            _ => panic!("builtin launch distribution changed"),
-        }
-        custom_registry::hydrate(&[]);
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::acp::custom_registry::{BinaryPlatformSpec, NpxSpec};
@@ -342,10 +249,7 @@ mod tests {
         let mut def = npx_def("no-version");
         def.version = "   ".into();
         upsert(&db.conn, &def).await.unwrap();
-        assert_eq!(
-            get(&db.conn, "no-version").await.unwrap().unwrap().version,
-            FALLBACK_VERSION
-        );
+        assert_eq!(get(&db.conn, "no-version").await.unwrap().unwrap().version, FALLBACK_VERSION);
     }
 
     #[tokio::test]
@@ -362,13 +266,7 @@ mod tests {
         // appear to save and silently do nothing.
         def.supports_mcp = true;
         upsert(&db.conn, &def).await.unwrap();
-        assert!(
-            get(&db.conn, "mcp-row")
-                .await
-                .unwrap()
-                .unwrap()
-                .supports_mcp
-        );
+        assert!(get(&db.conn, "mcp-row").await.unwrap().unwrap().supports_mcp);
     }
 
     #[tokio::test]
@@ -419,9 +317,7 @@ mod tests {
     async fn hydrate_registry_publishes_rows_to_the_launch_registry() {
         let _guard = custom_registry::hydrate_test_guard();
         let db = fresh_in_memory_db().await;
-        upsert(&db.conn, &npx_def("hydrate-svc-agent"))
-            .await
-            .unwrap();
+        upsert(&db.conn, &npx_def("hydrate-svc-agent")).await.unwrap();
         hydrate_registry(&db.conn).await.unwrap();
         assert!(custom_registry::is_registered("hydrate-svc-agent"));
         let meta = custom_registry::get("hydrate-svc-agent").unwrap();
@@ -456,5 +352,94 @@ mod tests {
         assert_eq!(npx.cmd.as_deref(), Some("qwen"));
         assert_eq!(npx.args, vec!["--acp".to_string()]);
         let _ = BTreeMap::<String, String>::new();
+    }
+}
+
+#[cfg(test)]
+mod zcode_legacy_registration_tests {
+    use super::*;
+    use crate::acp::custom_registry::NpxSpec;
+    use crate::acp::registry::{self, AgentDistribution};
+    use crate::models::agent::AgentType;
+
+    #[tokio::test]
+    // The existing registry guard spans DB awaits on this single-threaded test.
+    #[allow(clippy::await_holding_lock)]
+    async fn zcode_legacy_rows_still_hydrate_and_keep_their_launch_metadata() {
+        let _guard = custom_registry::hydrate_test_guard();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let spec = CustomAgentSpec {
+            npx: Some(NpxSpec {
+                package: "legacy-zcode@0.1.0".into(),
+                cmd: Some("legacy-zcode".into()),
+                args: vec!["--stdio".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // Bypass current validation to represent rows saved before this builtin.
+        for id in ["zcode", "zcode-acp"] {
+            custom_agent::ActiveModel {
+                id: NotSet,
+                registry_id: Set(id.into()),
+                name: Set(format!("Legacy {id}")),
+                description: Set("previously registered ZCode".into()),
+                version: Set("0.1.0".into()),
+                distribution_kind: Set("npx".into()),
+                spec_json: Set(serde_json::to_string(&spec).unwrap()),
+                icon_url: Set(None),
+                skills_shared_store: Set(false),
+                skills_dir: Set(None),
+                source: Set("manual".into()),
+                version_probe: Set(None),
+                supports_mcp: Set(true),
+                created_at: Set(Utc::now()),
+                updated_at: Set(Utc::now()),
+            }
+            .insert(&db.conn)
+            .await
+            .unwrap();
+        }
+        hydrate_registry(&db.conn).await.unwrap();
+        for id in ["zcode", "zcode-acp"] {
+            let custom = AgentType::custom(id).unwrap();
+            assert!(
+                custom_registry::is_registered(id),
+                "{id} must survive startup"
+            );
+            assert_eq!(registry::from_registry_id(id), Some(custom));
+            assert!(registry::all_acp_agents().contains(&custom));
+            let meta = registry::get_agent_meta(custom);
+            assert_eq!(meta.agent_type, custom);
+            assert_eq!(meta.name, format!("Legacy {id}"));
+            match meta.distribution {
+                AgentDistribution::Npx {
+                    package, cmd, args, ..
+                } => {
+                    assert_eq!(package, "legacy-zcode@0.1.0");
+                    assert_eq!(cmd, "legacy-zcode");
+                    assert_eq!(args, &["--stdio"]);
+                }
+                _ => panic!("legacy launch distribution changed"),
+            }
+            let row = get(&db.conn, id).await.unwrap().unwrap();
+            upsert(&db.conn, &def_from_model(&row).unwrap())
+                .await
+                .expect("the old entry remains editable");
+        }
+        let builtin = registry::get_agent_meta(AgentType::ZCode);
+        assert_eq!(builtin.agent_type, AgentType::ZCode);
+        assert_eq!(
+            registry::from_registry_id(registry::registry_id_for(AgentType::ZCode)),
+            Some(AgentType::ZCode)
+        );
+        match builtin.distribution {
+            AgentDistribution::Npx { package, cmd, .. } => {
+                assert_eq!(package, "zcode-acp-server@0.78.0");
+                assert_eq!(cmd, "zcode-acp-server");
+            }
+            _ => panic!("builtin launch distribution changed"),
+        }
+        custom_registry::hydrate(&[]);
     }
 }

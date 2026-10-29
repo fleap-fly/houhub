@@ -4303,6 +4303,7 @@
         "settling": "Synchronisation des résultats d'arrière-plan…"
       },
       "asyncTasks": {
+        "title": "Tâches en arrière-plan",
         "openOutput": "Sortie",
         "stop": "Arrêter",
         "tokens": "{count} jetons",

@@ -4303,6 +4303,7 @@
         "settling": "Hintergrundergebnisse werden synchronisiert…"
       },
       "asyncTasks": {
+        "title": "Hintergrundaufgaben",
         "openOutput": "Ausgabe",
         "stop": "Stoppen",
         "tokens": "{count} Tokens",
