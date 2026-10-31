@@ -233,8 +233,20 @@ jobs:
           rm -f "$tar_path" "$tar_path.sig"
           COPYFILE_DISABLE=1 tar -czf "$tar_path" -C "$dmg_dir/fixed-src" "houhub.app"
 
-          pnpm tauri signer sign "$tar_path"
+          # `requireSignedVersion: true` makes the updater reject a signature whose
+          # trusted comment carries no `version:`. Without `--app-version` the macOS
+          # package was signed with a timestamp only, so every macOS in-app update
+          # failed at verification (Windows goes through the bundler, which sets it).
+          pnpm tauri signer sign --app-version "$version" "$tar_path"
           test -f "$tar_path.sig"
+          node -e '
+            const fs = require("fs")
+            const comment = Buffer.from(fs.readFileSync(process.argv[1], "utf8").trim(), "base64").toString("utf8")
+            if (!comment.includes(`version:${process.argv[2]}`)) {
+              console.error("signature is not bound to version " + process.argv[2] + ":\n" + comment)
+              process.exit(1)
+            }
+          ' "$tar_path.sig" "$version"
 
       - name: Collect macOS artifacts
         shell: bash
@@ -390,6 +402,13 @@ jobs:
           $signaturePath = "$($installer.FullName).sig"
           if (-not (Test-Path -LiteralPath $signaturePath -PathType Leaf)) {
             throw "No Windows updater signature found: $signaturePath"
+          }
+          # `requireSignedVersion: true`: the signature must name this release.
+          $comment = [System.Text.Encoding]::UTF8.GetString(
+            [System.Convert]::FromBase64String((Get-Content -LiteralPath $signaturePath -Raw).Trim())
+          )
+          if ($comment -notmatch "version:\d+\.\d+\.\d+") {
+            throw "Windows updater signature is not bound to a version: $comment"
           }
           Copy-Item -LiteralPath $installer.FullName -Destination release-assets\ -Force
           Copy-Item -LiteralPath $signaturePath -Destination (Join-Path "release-assets" "$($installer.Name).sig") -Force
