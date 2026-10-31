@@ -239,14 +239,11 @@ jobs:
           # failed at verification (Windows goes through the bundler, which sets it).
           pnpm tauri signer sign --app-version "$version" "$tar_path"
           test -f "$tar_path.sig"
-          node -e '
-            const fs = require("fs")
-            const comment = Buffer.from(fs.readFileSync(process.argv[1], "utf8").trim(), "base64").toString("utf8")
-            if (!comment.includes(`version:${process.argv[2]}`)) {
-              console.error("signature is not bound to version " + process.argv[2] + ":\n" + comment)
-              process.exit(1)
-            }
-          ' "$tar_path.sig" "$version"
+          if ! base64 --decode "$tar_path.sig" | grep -q "trusted comment:.*version:$version"; then
+            echo "signature is not bound to version $version:" >&2
+            base64 --decode "$tar_path.sig" | grep "trusted comment:" >&2
+            exit 1
+          fi
 
       - name: Collect macOS artifacts
         shell: bash
