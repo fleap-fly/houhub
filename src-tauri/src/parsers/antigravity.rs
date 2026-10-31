@@ -44,18 +44,14 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeZone, Utc};
-
 use prost::Message as _;
-
 use rusqlite::{Connection, OpenFlags};
 
 use crate::models::{
     AgentType, ContentBlock, ConversationDetail, ConversationSummary, MessageTurn, TurnRole,
     TurnUsage,
 };
-
 use crate::parsers::expand_home_prefix;
-
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, merge_context_window_stats, relocate_orphaned_tool_results,
@@ -66,16 +62,12 @@ use crate::parsers::{
 /// Bound a single tool output / input preview so one enormous step cannot blow
 /// up a conversation payload. Mirrors the Cursor and Grok parsers' caps.
 const TOOL_OUTPUT_CAP: usize = 16_000;
-
 const TOOL_INPUT_CAP: usize = 8_000;
-
 /// Bound assistant/user text too — a `view_file` step can inline a whole file.
 const TEXT_CAP: usize = 200_000;
 
 const SESSIONS_DIR_NAME: &str = "conversations";
-
 const ACP_SUBDIR: &str = "antigravity-acp";
-
 const METADATA_FILE_SUFFIX: &str = "meta";
 
 // ---------------------------------------------------------------------------
@@ -437,9 +429,9 @@ struct AntigravityAskOption {
 }
 
 /// `exa.cortex_pb.AskQuestionEntry`: one question of an `ask_question` step and
-/// the user's answer to it. Checked against the 1.4.1 and 1.4.3 descriptors
-/// and live runs: options are numbered `"1"`, `"2"`, …; a question the user
-/// dismissed (or never reached, once an earlier one was dismissed) is
+/// the user's answer to it. Checked against the 1.4.1, 1.4.3 and 1.4.4
+/// descriptors and live runs: options are numbered `"1"`, `"2"`, …; a question
+/// the user dismissed (or never reached, once an earlier one was dismissed) is
 /// `skipped` with nothing chosen; a multi-select question is still answered
 /// with one option, because the ACP server asks it as a single-choice
 /// permission request.
@@ -914,7 +906,7 @@ fn project_steps(steps: &[Step]) -> SessionParse {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
-                agent_message_id: None,
+            agent_message_id: None,
             });
             parsed.message_count = parsed.message_count.saturating_add(1);
             continue;
@@ -935,10 +927,7 @@ fn project_steps(steps: &[Step]) -> SessionParse {
         if let Some(usage) = step.metadata.as_ref().and_then(|m| m.model_usage.as_ref()) {
             // Per-step usage SUMS into the turn (cost accounting) while the
             // window gauge tracks only the latest step's input side.
-            pending.usage.input_tokens = pending
-                .usage
-                .input_tokens
-                .saturating_add(usage.input_tokens);
+            pending.usage.input_tokens = pending.usage.input_tokens.saturating_add(usage.input_tokens);
             pending.usage.output_tokens = pending
                 .usage
                 .output_tokens
@@ -1288,10 +1277,7 @@ fn step_outcome(step: &Step) -> Option<StepOutcome> {
         }
         let mut body = String::new();
         if !grep.query.is_empty() {
-            body.push_str(&format!(
-                "{} ({} results)\n",
-                grep.query, grep.total_results
-            ));
+            body.push_str(&format!("{} ({} results)\n", grep.query, grep.total_results));
         }
         body.push_str(&grep.raw_output);
         return Some(StepOutcome {
@@ -1906,7 +1892,10 @@ mod tests {
             conversation_history: "ignored too".into(),
         };
         let decoded = Step::decode(wide.encode_to_vec().as_slice()).expect("decode subset");
-        assert_eq!(decoded.user_input.as_ref().unwrap().query, "still readable");
+        assert_eq!(
+            decoded.user_input.as_ref().unwrap().query,
+            "still readable"
+        );
         assert!(decoded.metadata.unwrap().created_at.is_some());
     }
 
@@ -2001,10 +1990,7 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(&truncate_str(&input, TOOL_INPUT_CAP)).expect("still valid JSON");
         assert_eq!(parsed["arguments"]["prompt"].as_str(), Some(&*long_prompt));
-        assert!(
-            parsed.get("prompt").is_none(),
-            "the derived copy is dropped"
-        );
+        assert!(parsed.get("prompt").is_none(), "the derived copy is dropped");
     }
 
     #[test]
@@ -2122,10 +2108,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            step_outcome(&genuine)
-                .expect("an outcome")
-                .output
-                .as_deref(),
+            step_outcome(&genuine).expect("an outcome").output.as_deref(),
             Some("from the impostor")
         );
     }

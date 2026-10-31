@@ -440,6 +440,21 @@ fn a_bound_provider_endpoint_keeps_the_users_keys_and_comments() {
         houhub_provider_parts(&out).unwrap().base_url,
         "https://new/v1"
     );
+    // codex 0.165 builds in `gcp` (Vertex AI), whose table takes only
+    // `base_url`, `auth` and `http_headers`: the binding moves to houhub's own
+    // provider and leaves the user's `gcp` table as written.
+    let gcp = "model_provider = \"gcp\"\n\n[model_providers.gcp]\nbase_url = \"https://vertex.example/v1\"\n";
+    let out = compose_toml(&input, gcp).unwrap();
+    let value: toml::Table = out.parse().unwrap();
+    assert_eq!(value["model_provider"].as_str(), Some("houhub"));
+    assert_eq!(
+        value["model_providers"]["gcp"]["base_url"].as_str(),
+        Some("https://vertex.example/v1")
+    );
+    assert_eq!(
+        houhub_provider_parts(&out).unwrap().base_url,
+        "https://new/v1"
+    );
 }
 
 /// Only houhub's own file is ever houhub's: a catalog the user wrote (or
