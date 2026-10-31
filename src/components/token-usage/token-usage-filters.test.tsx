@@ -120,12 +120,15 @@ describe("CustomRangeFields", () => {
     return next.getMonth() !== now.getMonth()
   })()
 
-  it.skipIf(tomorrowCrossesMonth)("disables days after today — there are no future statistics", async () => {
-    renderFields()
-    const tomorrow = new Date()
-    tomorrow.setDate(tomorrow.getDate() + 1)
-    expect(await findDay(tomorrow)).toBeDisabled()
-  })
+  it.skipIf(tomorrowCrossesMonth)(
+    "disables days after today — there are no future statistics",
+    async () => {
+      renderFields()
+      const tomorrow = new Date()
+      tomorrow.setDate(tomorrow.getDate() + 1)
+      expect(await findDay(tomorrow)).toBeDisabled()
+    }
+  )
 
   it("opens on last month too, so a cross-month span needs no paging", async () => {
     // Defaulting to today would show [this month, next month] — and next month
