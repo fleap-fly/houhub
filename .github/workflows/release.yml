@@ -242,9 +242,11 @@ jobs:
           # failed at verification (Windows goes through the bundler, which sets it).
           pnpm tauri signer sign --app-version "$version" "$tar_path"
           test -f "$tar_path.sig"
-          if ! base64 --decode "$tar_path.sig" | grep -q "trusted comment:.*version:$version"; then
+          # BSD base64 (the macOS runner) takes its input from stdin or `-i`,
+          # not as a positional argument.
+          if ! cat "$tar_path.sig" | base64 -D | grep -q "trusted comment:.*version:$version"; then
             echo "signature is not bound to version $version:" >&2
-            base64 --decode "$tar_path.sig" | grep "trusted comment:" >&2
+            cat "$tar_path.sig" | base64 -D | grep "trusted comment:" >&2
             exit 1
           fi
 
