@@ -223,6 +223,9 @@ jobs:
             exit 1
           fi
 
+          # Each `run:` step is its own shell: the version the signature must
+          # name has to be read here, not inherited from the repair step.
+          version="$(node -p 'require("./package.json").version')"
           dmg_dir="src-tauri/target/${TARGET}/release/bundle/dmg"
           macos_dir="src-tauri/target/${TARGET}/release/bundle/macos"
           app="$dmg_dir/fixed-src/houhub.app"
