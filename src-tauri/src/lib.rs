@@ -105,6 +105,7 @@ mod tauri_app {
         browser as browser_commands,
         canvas as canvas_commands,
         chat_authoring as chat_authoring_commands, chat_channel as chat_channel_commands,
+        houflow as houflow_commands,
         clipboard as clipboard_commands,
         commit_message as commit_message_commands,
         config_sync,
@@ -123,6 +124,7 @@ mod tauri_app {
         system_settings, terminal as terminal_commands,
         token_usage as token_usage_commands,
         forge as forge_commands, version_control, windows, work_task as work_task_commands,
+        workbench as workbench_commands,
         workspace_state as workspace_state_commands, workspace_windows,
     };
     use crate::terminal::manager::TerminalManager;
@@ -1801,6 +1803,42 @@ mod tauri_app {
                 }
             })
             .invoke_handler(tauri::generate_handler![
+                houflow_commands::houflow_load_auth_secret,
+                houflow_commands::houflow_save_auth_secret,
+                houflow_commands::houflow_clear_auth_secret,
+                houflow_commands::houflow_control_http_call,
+                houflow_commands::houflow_oauth_loopback_listen,
+                houflow_commands::houflow_sync_managed_gateway,
+                houflow_commands::houflow_connector_status,
+                houflow_commands::houflow_connector_login,
+                houflow_commands::houflow_connector_up,
+                houflow_commands::houflow_connector_down,
+                houflow_commands::houflow_connector_heartbeat,
+                houflow_commands::houflow_connector_autostart,
+                houflow_commands::houflow_connector_logs,
+                houflow_commands::houflow_connector_commands,
+                houflow_commands::houflow_connector_sync_local_agents,
+                workbench_commands::workbench_list_projects,
+                workbench_commands::workbench_set_active_project,
+                workbench_commands::workbench_list_client_suites,
+                workbench_commands::workbench_open_suite,
+                workbench_commands::workbench_get_session,
+                workbench_commands::workbench_ai_list_sessions,
+                workbench_commands::workbench_ai_get_session,
+                workbench_commands::workbench_ai_create_session,
+                workbench_commands::workbench_ai_list_assistants,
+                workbench_commands::workbench_ai_send_message,
+                workbench_commands::workbench_begin_device_auth,
+                workbench_commands::workbench_poll_device_auth,
+                workbench_commands::workbench_sign_out,
+                workbench_commands::workbench_space_list,
+                workbench_commands::workbench_space_usage,
+                workbench_commands::workbench_space_create_folder,
+                workbench_commands::workbench_space_delete_file,
+                workbench_commands::workbench_space_download_url,
+                workbench_commands::workbench_space_presign_upload,
+                workbench_commands::workbench_space_complete_upload,
+                take_pending_deep_link,
                 browser_commands::browser_capabilities,
                 browser_commands::browser_open_tab,
                 browser_commands::browser_close,
@@ -2468,3 +2506,94 @@ mod tauri_app {
 pub use tauri_app::run;
 #[cfg(feature = "tauri-runtime")]
 pub(crate) use tauri_app::shut_down;
+
+/// A merge that replaces `lib.rs` wholesale can silently drop command
+/// registrations: the 0.41.1 upstream sync did exactly that for the fork's
+/// `houflow_*` and `workbench_*` commands, so signing in to Houflow failed at
+/// runtime with "Command houflow_save_auth_secret not found". This guard fails
+/// the build whenever a `#[tauri::command]` exists that `generate_handler!`
+/// never registered.
+#[cfg(all(test, feature = "tauri-runtime"))]
+mod command_registration_tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// Names declared with `#[tauri::command]` (or the `cfg_attr` spelling).
+    fn declared_commands(src: &str) -> Vec<String> {
+        let lines: Vec<&str> = src.lines().collect();
+        let mut names = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            let is_marker = trimmed.starts_with("#[tauri::command]")
+                || (trimmed.starts_with("#[cfg_attr(") && trimmed.contains("tauri::command"));
+            if !is_marker {
+                continue;
+            }
+            for next in lines.iter().skip(i) {
+                let candidate = next.trim();
+                if let Some(pos) = candidate.find("fn ") {
+                    let rest = &candidate[pos + 3..];
+                    let name: String = rest
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !name.is_empty() {
+                        names.push(name);
+                    }
+                    break;
+                }
+            }
+        }
+        names
+    }
+
+    fn registered_commands(lib_src: &str) -> Vec<String> {
+        let Some(start) = lib_src.find("generate_handler![") else {
+            return Vec::new();
+        };
+        let block = &lib_src[start..];
+        let Some(end) = block.find("\n            ])") else {
+            return Vec::new();
+        };
+        block[..end]
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|token| !token.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn every_tauri_command_is_registered() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let lib_src = include_str!("lib.rs");
+        let registered = registered_commands(lib_src);
+        let mut files = Vec::new();
+        rust_files(&manifest.join("src"), &mut files);
+        let mut missing = Vec::new();
+        for file in files {
+            let Ok(src) = fs::read_to_string(&file) else { continue };
+            for name in declared_commands(&src) {
+                if !registered.iter().any(|r| r == &name) {
+                    missing.push(format!("{} ({})", name, file.display()));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "these tauri commands are never registered in generate_handler!:\n  {}",
+            missing.join("\n  ")
+        );
+    }
+}
