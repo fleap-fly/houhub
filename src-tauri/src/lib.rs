@@ -1838,7 +1838,6 @@ mod tauri_app {
                 workbench_commands::workbench_space_download_url,
                 workbench_commands::workbench_space_presign_upload,
                 workbench_commands::workbench_space_complete_upload,
-                crate::deep_link::take_pending_deep_link,
                 browser_commands::browser_capabilities,
                 browser_commands::browser_open_tab,
                 browser_commands::browser_close,
