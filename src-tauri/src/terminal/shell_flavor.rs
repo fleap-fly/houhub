@@ -24,7 +24,7 @@ pub(crate) fn shell_basename(shell: &str) -> String {
 /// narrower question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShellFamily {
-    /// `pwsh` / `powershell`: `-NoLogo -NoProfile -Command <script>`.
+    /// `pwsh` / `powershell`: `-Command <script>`.
     PowerShell,
     /// `cmd.exe` and cmd-compatible replacements: `/D /S /C <line>`.
     Cmd,
@@ -136,10 +136,7 @@ mod tests {
         );
         // A cmd-compatible replacement reached through COMSPEC must still get
         // cmd's `/C` convention, not POSIX `-c`.
-        assert_eq!(
-            classify_shell_family("C:\\tools\\tcc.exe"),
-            ShellFamily::Cmd
-        );
+        assert_eq!(classify_shell_family("C:\\tools\\tcc.exe"), ShellFamily::Cmd);
         assert_eq!(
             classify_shell_family("C:\\Program Files\\Git\\bin\\bash.exe"),
             ShellFamily::Posix

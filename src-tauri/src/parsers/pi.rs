@@ -1,24 +1,17 @@
 use std::collections::{HashMap, HashSet};
-
 use std::ffi::OsString;
-
 use std::fs;
-
 use std::io::{BufRead, BufReader};
-
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-
 use serde_json::Value;
-
 use walkdir::WalkDir;
 
 use crate::models::{
     AgentType, ContentBlock, ConversationDetail, ConversationSummary, ImageData, MessageRole,
     MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
 };
-
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, latest_turn_total_usage_tokens, merge_context_window_stats,
@@ -37,13 +30,13 @@ use crate::parsers::{
 /// through pi's tilde rule ([`expand_pi_tilde`]), because pi reads them through
 /// `expandTildePath`.
 ///
-/// That is pi's own documented order minus its `--session-dir` flag, which HouHub
+/// That is pi's own documented order minus its `--session-dir` flag, which houhub
 /// never passes (`docs/settings.md`: "precedence is `--session-dir`,
 /// `PI_CODING_AGENT_SESSION_DIR`, then `sessionDir` in settings.json"). The
 /// settings layer is not optional garnish: pi-acp reads it too
 /// (`getPiSessionsDir` → `readSessionDirFromSettings`), so a user who sets
 /// `sessionDir` and is missing this layer gets a pi that resumes fine while
-/// HouHub's history list stays permanently empty.
+/// houhub's history list stays permanently empty.
 ///
 /// Mirrors the `resolve_*`/`resolve_*_from` split of `parsers::kimi_code` so the
 /// environment lookup is a pure function over its inputs (testable without
@@ -101,7 +94,7 @@ pub(crate) fn resolve_pi_agent_dir_for_env(env: &AgentEnv) -> PathBuf {
 /// `contextWindow: definition.contextWindow ?? 128000`. The entry REPLACES any
 /// built-in model of the same id (`applyModelsJson` upserts by id and only
 /// borrows `api`/`baseUrl` from the one it replaces), so 128K is what pi runs
-/// with — not the built-in catalog's number, and not HouHub's name table's.
+/// with — not the built-in catalog's number, and not houhub's name table's.
 const PI_DEFAULT_MODEL_CONTEXT_WINDOW: u64 = 128_000;
 
 /// The context window `<agent_dir>/models.json` settles on for a model.
@@ -251,7 +244,7 @@ fn expand_pi_tilde(value: &str, home_dir: Option<&Path>) -> PathBuf {
 /// resolves a single sessions root with no workspace in hand.
 ///
 /// Guessing is worse than declining. Resolving a relative value against the agent
-/// dir (which is what pi-acp's own discovery helper does) would point HouHub at a
+/// dir (which is what pi-acp's own discovery helper does) would point houhub at a
 /// directory nobody writes to AND would shadow the default — costing the user the
 /// history pi wrote to `<agent_dir>/sessions` before they ever set the option.
 /// Falling through keeps that history listed.
@@ -488,6 +481,7 @@ impl AgentParser for PiParser {
 
     fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError> {
         if self.base_dir.exists() {
+            let mut by_filename: Option<PathBuf> = None;
             for entry in WalkDir::new(&self.base_dir)
                 .into_iter()
                 .filter_map(|e| e.ok())
@@ -496,11 +490,23 @@ impl AgentParser for PiParser {
                 if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                     continue;
                 }
-                // Match by the header `id` (the stable external id); fall back to
+                // Match by the header `id` (what listing reports); fall back to
                 // the filename uuid when a malformed file has no header.
                 if session_id_of(path).as_deref() == Some(conversation_id) {
                     return self.parse_detail(path, conversation_id);
                 }
+                // The filename carries the id pi reported when the session was
+                // created — pi-acp's ACP session id, which houhub stores. The
+                // header can still differ: a session loaded before its first
+                // prompt relaunches `pi --session <unwritten file>`, and pi then
+                // writes a fresh header id into that file (#1068). Accept the
+                // filename uuid, but only when no header matches.
+                if by_filename.is_none() && fallback_id(path) == conversation_id {
+                    by_filename = Some(path.to_path_buf());
+                }
+            }
+            if let Some(path) = by_filename {
+                return self.parse_detail(&path, conversation_id);
             }
         }
 
@@ -516,7 +522,8 @@ struct SessionParse {
     messages: Vec<UnifiedMessage>,
     first_ts: Option<DateTime<Utc>>,
     last_ts: Option<DateTime<Utc>>,
-    /// Header `id` (the stable external id; `None` when the header is missing).
+    /// Header `id` (the listed id; `None` when the header is missing). It can
+    /// differ from the filename uuid — see `get_conversation`.
     session_id: Option<String>,
     /// Header `cwd`.
     cwd: Option<String>,
@@ -764,7 +771,11 @@ fn has_fork(entries: &[SessionRecord], by_id: &HashMap<&str, usize>) -> bool {
 /// Whether a record survives the branch filter. An entry WITHOUT an `id` is
 /// always kept: it has no place in the tree, so dropping it would be pure loss
 /// rather than branch pruning.
-fn keeps_record(active: Option<&HashSet<usize>>, index: usize, record: &SessionRecord) -> bool {
+fn keeps_record(
+    active: Option<&HashSet<usize>>,
+    index: usize,
+    record: &SessionRecord,
+) -> bool {
     match active {
         None => true,
         Some(on_path) => on_path.contains(&index) || entry_id(&record.value).is_none(),
@@ -979,7 +990,7 @@ fn parse_branch_summary(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
 
 /// An extension-injected message that DOES participate in the LLM context
 /// (`custom_message`). `display: false` is the extension asking for it to stay
-/// hidden in the TUI, and HouHub honors that rather than second-guessing it.
+/// hidden in the TUI, and houhub honors that rather than second-guessing it.
 fn parse_custom_message(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>, idx: usize) {
     if !value
         .get("display")
@@ -1514,11 +1525,8 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use serde_json::json;
-
     use std::io::Write;
-
     use tempfile::tempdir;
 
     /// Two providers, same id, different windows — the file pi would resolve
@@ -1568,8 +1576,8 @@ mod tests {
     /// pi's `modelFromJson` ends `contextWindow: definition.contextWindow ??
     /// 128000`, and the entry REPLACES any built-in of the same id. So a listed
     /// model that declares nothing is not unknown — it is 128K, including for
-    /// an id HouHub's own name table would answer differently. This is the shape
-    /// HouHub's Pi settings panel writes (`apply_pi_custom_model` records `id` +
+    /// an id houhub's own name table would answer differently. This is the shape
+    /// houhub's Pi settings panel writes (`apply_pi_custom_model` records `id` +
     /// `name` + reasoning, never a window).
     #[test]
     fn a_listed_model_without_a_window_takes_pi_s_own_default() {
@@ -1723,7 +1731,6 @@ mod tests {
     /// honored-path assertions quietly exercise the FALLBACK there.
     #[cfg(windows)]
     const ABS_PREFIX: &str = "C:";
-
     #[cfg(not(windows))]
     const ABS_PREFIX: &str = "";
 
@@ -1758,7 +1765,10 @@ mod tests {
     #[test]
     fn resolve_sessions_dir_defaults_to_home_dot_pi() {
         let resolved = resolve_pi_sessions_dir_from(None, None, Some(PathBuf::from("/home/demo")));
-        assert_eq!(resolved, PathBuf::from("/home/demo/.pi/agent/sessions"));
+        assert_eq!(
+            resolved,
+            PathBuf::from("/home/demo/.pi/agent/sessions")
+        );
     }
 
     #[test]
@@ -1768,7 +1778,10 @@ mod tests {
             Some(OsString::new()),
             Some(PathBuf::from("/home/demo")),
         );
-        assert_eq!(resolved, PathBuf::from("/home/demo/.pi/agent/sessions"));
+        assert_eq!(
+            resolved,
+            PathBuf::from("/home/demo/.pi/agent/sessions")
+        );
     }
 
     #[test]
@@ -1787,12 +1800,8 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create session dir");
         let mut file = std::fs::File::create(dir.join(filename)).expect("create jsonl");
         for record in records {
-            writeln!(
-                file,
-                "{}",
-                serde_json::to_string(record).expect("serialize")
-            )
-            .expect("write line");
+            writeln!(file, "{}", serde_json::to_string(record).expect("serialize"))
+                .expect("write line");
         }
     }
 
@@ -1873,9 +1882,9 @@ mod tests {
 
         let has_user = detail.turns.iter().any(|t| {
             matches!(t.role, TurnRole::User)
-                && t.blocks.iter().any(
-                    |b| matches!(b, ContentBlock::Text { text } if text.contains("pnpm build")),
-                )
+                && t.blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("pnpm build")))
         });
         assert!(has_user, "user message becomes a User turn");
 
@@ -2112,18 +2121,80 @@ mod tests {
         .unwrap();
 
         let parser = PiParser::with_base_dir(base.to_path_buf());
-        let summaries = parser
-            .list_conversations()
-            .expect("list survives malformed lines");
+        let summaries = parser.list_conversations().expect("list survives malformed lines");
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, id);
+        let detail = parser.get_conversation(id).expect("detail survives malformed lines");
+        assert!(detail.turns.iter().any(|t| matches!(t.role, TurnRole::User)));
+    }
+
+    /// REGRESSION (#1068): a session reloaded before its first prompt is named
+    /// after the ACP session id (the one houhub stores as `external_id`) but
+    /// carries a different header `id`. pi 1.0.0 + pi-acp 0.0.34 really write
+    /// this shape: `session/new`, then `session/load`, then a prompt. Matching
+    /// the header alone left every such conversation with an empty history.
+    #[test]
+    fn filename_uuid_finds_a_session_whose_header_id_differs() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path();
+        let acp_id = "01a18bd6-7bac-773a-a4b6-cdb58ac62a44";
+        let header_id = "01a18bd6-914a-76bc-9d69-00f93c18dc57";
+        write_session(
+            base,
+            "--Users-demo-my-app--",
+            &format!("2026-10-30T08-04-11-821Z_{acp_id}.jsonl"),
+            &sample_records(header_id),
+        );
+        let parser = PiParser::with_base_dir(base.to_path_buf());
+
+        assert_eq!(parser.list_conversations().expect("list")[0].id, header_id);
+
         let detail = parser
-            .get_conversation(id)
-            .expect("detail survives malformed lines");
+            .get_conversation(acp_id)
+            .expect("found by filename uuid");
         assert!(detail
             .turns
             .iter()
             .any(|t| matches!(t.role, TurnRole::User)));
+        // The id asked for comes back unchanged, so the open path does not
+        // rewrite `external_id` away from the id pi-acp's session map knows.
+        assert_eq!(detail.summary.id, acp_id);
+
+        assert!(
+            parser.get_conversation(header_id).is_ok(),
+            "header id still works"
+        );
+    }
+
+    /// The header `id` wins over another file's filename uuid, whatever order
+    /// the directory walk visits them in.
+    #[test]
+    fn header_id_match_wins_over_a_filename_match() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path();
+        let id = "01a18bd6-0000-7000-8000-000000000001";
+        // The decoy's filename names `id`; only the other file's header does.
+        let decoy: Vec<Value> = sample_records("01a18bd6-0000-7000-8000-000000000002")
+            .into_iter()
+            .map(|mut r| {
+                if r["type"] == "session_info" {
+                    r["name"] = json!("Filename match");
+                }
+                r
+            })
+            .collect();
+        write_session(base, "--Users-demo-a--", &format!("a_{id}.jsonl"), &decoy);
+        write_session(
+            base,
+            "--Users-demo-b--",
+            "b_other.jsonl",
+            &sample_records(id),
+        );
+
+        let detail = PiParser::with_base_dir(base.to_path_buf())
+            .get_conversation(id)
+            .expect("detail");
+        assert_eq!(detail.summary.title.as_deref(), Some("Build the app"));
     }
 
     #[test]
@@ -2669,14 +2740,10 @@ mod tests {
             Some(&json!("automatic"))
         );
         assert!(
-            detail
-                .turns
-                .iter()
-                .flat_map(|t| &t.blocks)
-                .any(|b| matches!(
-                    b,
-                    ContentBlock::ToolResult { tool_use_id: Some(id), .. } if id == "c1"
-                )),
+            detail.turns.iter().flat_map(|t| &t.blocks).any(|b| matches!(
+                b,
+                ContentBlock::ToolResult { tool_use_id: Some(id), .. } if id == "c1"
+            )),
             "the pair must settle or the card reads as still running"
         );
     }
@@ -2718,7 +2785,7 @@ mod tests {
 
     /// pi-acp resolves `<agentDir>/settings.json` → `sessionDir` before falling
     /// back to `<agentDir>/sessions`, so a user who sets it kept a pi that
-    /// resumed fine and a HouHub history list that was permanently empty.
+    /// resumed fine and a houhub history list that was permanently empty.
     #[test]
     fn settings_json_session_dir_is_honored() {
         let dir = tempdir().expect("tempdir");
@@ -2807,7 +2874,7 @@ mod tests {
     /// relative one does: `\srv\x` (and `/srv/x`) carries a root but no drive
     /// prefix, so Windows resolves it against whatever drive the pi process's cwd
     /// sits on — and that cwd is the per-session workspace pi-acp passes. Widening
-    /// the gate from `is_absolute` to `has_root` would name a directory HouHub
+    /// the gate from `is_absolute` to `has_root` would name a directory houhub
     /// cannot know AND shadow the history in `<agent_dir>\sessions`.
     #[test]
     #[cfg(windows)]
@@ -2893,7 +2960,7 @@ mod tests {
     }
 
     /// #948: built with an agent's launch env, the parser reads where THAT
-    /// env puts the agent's files, not where HouHub's own environment does.
+    /// env puts the agent's files, not where houhub's own environment does.
     #[test]
     fn for_env_reads_both_dirs_of_the_launch_env() {
         let env = AgentEnv::with_overrides(&[

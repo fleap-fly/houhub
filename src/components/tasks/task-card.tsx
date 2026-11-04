@@ -494,6 +494,8 @@ export function TaskCard({
             {t("badgeCleanupFailed")}
           </span>
         ) : null}
+        {/* "Kept" claims the worktree is still there — stay silent when its
+            directory is actually gone (the removed chip above speaks then). */}
         {task.status === "canceled" &&
         task.worktree_folder_id != null &&
         task.worktree_missing !== true ? (
@@ -566,7 +568,7 @@ export function TaskCard({
               type="button"
               size="xs"
               className="min-w-0 shrink"
-              title={primary.label}
+              title={primary.hint ?? primary.label}
               onClick={(e) => {
                 // The card itself opens the detail sheet — keep actions local.
                 e.stopPropagation()
@@ -604,7 +606,7 @@ function CardIconAction({ item }: { item: TaskActionItem }) {
       size="icon-xs"
       variant="outline"
       className="rounded-full opacity-0 transition-opacity focus-visible:opacity-100 group-focus-within/card:opacity-100 group-hover/card:opacity-100"
-      title={item.label}
+      title={item.hint ?? item.label}
       aria-label={item.label}
       onClick={(e) => {
         // The card itself opens the detail sheet — keep actions local.

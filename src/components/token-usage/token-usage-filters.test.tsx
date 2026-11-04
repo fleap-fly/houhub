@@ -9,7 +9,7 @@ import { useState } from "react"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
 import { toLocalDayValue } from "@/lib/token-usage"
 import { CustomRangeFields } from "./token-usage-filters"
@@ -92,6 +92,18 @@ function lastMonthDay(n: number): Date {
 }
 
 describe("CustomRangeFields", () => {
+  beforeEach(() => {
+    // Pin "today" to mid-month: the calendar renders a two-month window ending
+    // this month, so tomorrow can fall outside the grid near month-end.
+    // Fake only Date so userEvent and waitFor keep using real timers.
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date(2026, 6, 15, 12, 0))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it("shows a placeholder until a range is picked", () => {
     renderFields()
     expect(pill()).toHaveTextContent("Pick a date range")
@@ -111,24 +123,12 @@ describe("CustomRangeFields", () => {
     expect(onChange.mock.calls[0][0].from).toBe(toLocalDayValue(first))
   })
 
-  // Upstream asserts against "tomorrow", which on the last day of a month falls
-  // into a month the panel does not open on; skip that one day a month.
-  const tomorrowCrossesMonth = (() => {
-    const now = new Date()
-    const next = new Date(now)
-    next.setDate(next.getDate() + 1)
-    return next.getMonth() !== now.getMonth()
-  })()
-
-  it.skipIf(tomorrowCrossesMonth)(
-    "disables days after today — there are no future statistics",
-    async () => {
-      renderFields()
-      const tomorrow = new Date()
-      tomorrow.setDate(tomorrow.getDate() + 1)
-      expect(await findDay(tomorrow)).toBeDisabled()
-    }
-  )
+  it("disables days after today — there are no future statistics", async () => {
+    renderFields()
+    const tomorrow = new Date()
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    expect(await findDay(tomorrow)).toBeDisabled()
+  })
 
   it("opens on last month too, so a cross-month span needs no paging", async () => {
     // Defaulting to today would show [this month, next month] — and next month

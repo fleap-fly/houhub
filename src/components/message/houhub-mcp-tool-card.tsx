@@ -122,11 +122,8 @@ export function HouhubMcpToolCard({
   state,
   layout = "card",
 }: Props) {
-  const t = useTranslations("Folder.chat.houhubMcpTool") as unknown as (
-    key: string,
-    values?: Record<string, unknown>
-  ) => string
   const timeline = layout === "timeline"
+  const t = useTranslations("Folder.chat.houhubMcpTool")
   const [expanded, setExpanded] = useState(false)
   const panelId = useId()
 
@@ -197,7 +194,7 @@ export function HouhubMcpToolCard({
     // a failure is the word at the end (the ring carries the icon), and the
     // label is in the light ink of the delegation checks it sits among.
     <>
-      <span className="flex min-w-0 flex-1 items-start gap-1">
+      <span className="flex min-w-0 items-start gap-1">
         <span
           title={label}
           className={cn(
@@ -269,7 +266,7 @@ export function HouhubMcpToolCard({
           className={cn(
             "flex w-full text-start",
             timeline
-              ? "group/row min-w-0 cursor-pointer items-start rounded-sm py-0.5 text-sm leading-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              ? "activity-row-toggle group/row min-w-0 cursor-pointer items-start rounded-sm py-0.5 text-sm leading-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               : "items-center gap-2 px-3 py-2 transition-colors hover:bg-muted/50"
           )}
         >

@@ -86,7 +86,7 @@ pub fn create_credential_helper_script(
         let script_path = app_data_dir.join("git-credential-houhub.sh");
         let content = format!(
             r#"#!/bin/sh
-# Houhub credential helper — calls the app binary to look up credentials.
+# HouHub credential helper — calls the app binary to look up credentials.
 # Only responds to "get" action; ignores "store" and "erase".
 [ "$1" != "get" ] && exit 0
 exec {binary} --credential-helper --data-dir {data_dir} < /dev/stdin
@@ -277,20 +277,20 @@ fn parse_data_dir_arg<I: IntoIterator<Item = String>>(args: I) -> Option<std::pa
 
 /// Resolve the app data directory (same path Tauri uses).
 fn resolve_app_data_dir() -> Option<std::path::PathBuf> {
-    // On macOS: ~/Library/Application Support/app.houhub
-    // On Linux: ~/.local/share/app.houhub
-    // On Windows: %APPDATA%/app.houhub
+    // On macOS: ~/Library/Application Support/com.houflow.houhub
+    // On Linux: ~/.local/share/com.houflow.houhub
+    // On Windows: %APPDATA%/com.houflow.houhub
     #[cfg(target_os = "macos")]
     {
-        dirs::data_dir().map(|d| d.join("app.houhub"))
+        dirs::data_dir().map(|d| d.join("com.houflow.houhub"))
     }
     #[cfg(target_os = "linux")]
     {
-        dirs::data_dir().map(|d| d.join("app.houhub"))
+        dirs::data_dir().map(|d| d.join("com.houflow.houhub"))
     }
     #[cfg(target_os = "windows")]
     {
-        dirs::data_dir().map(|d| d.join("app.houhub"))
+        dirs::data_dir().map(|d| d.join("com.houflow.houhub"))
     }
 }
 
@@ -356,6 +356,27 @@ pub fn inject_credentials(
         .env("HOUHUB_GIT_PASSWORD", token)
         .env("GIT_TERMINAL_PROMPT", "0");
 }
+
+/// The username git should send for a stored account.
+///
+/// Usually the account's own login. CNB is the exception: its git server
+/// takes a FIXED username, `cnb`, with the access token as the password, and
+/// documents that value as the only one to send — the account's login is not
+/// a username it authenticates by.
+pub fn git_username_for(account: &GitHubAccount) -> &str {
+    let is_cnb = account
+        .provider
+        .as_deref()
+        .is_some_and(|p| p.trim().eq_ignore_ascii_case("cnb"));
+    if is_cnb {
+        CNB_GIT_USERNAME
+    } else {
+        &account.username
+    }
+}
+
+/// See [`git_username_for`].
+pub const CNB_GIT_USERNAME: &str = "cnb";
 
 /// Get the remote URL for the "origin" remote of a repository.
 pub async fn get_remote_url(repo_path: &str) -> Option<String> {
@@ -520,8 +541,7 @@ pub async fn try_inject_for_repo_remote(
         None => {
             tracing::info!(
                 "[GIT_CRED] no remote URL found for {} (remote: {})",
-                repo_path,
-                target_remote
+                repo_path, target_remote
             );
             return false;
         }
@@ -568,10 +588,9 @@ pub async fn try_inject_for_repo_remote(
 
     tracing::info!(
         "[GIT_CRED] injecting credentials for {} (user: {})",
-        remote_url,
-        account.username
+        remote_url, account.username
     );
-    inject_credentials(cmd, &account.username, &token, &askpass);
+    inject_credentials(cmd, git_username_for(account), &token, &askpass);
     true
 }
 
@@ -613,7 +632,7 @@ pub async fn try_inject_for_url(
         }
     };
 
-    inject_credentials(cmd, &account.username, &token, &askpass);
+    inject_credentials(cmd, git_username_for(account), &token, &askpass);
     true
 }
 
@@ -643,6 +662,24 @@ mod tests {
             extract_host("git@github.com:user/repo.git"),
             Some("github.com".to_string())
         );
+    }
+
+    #[test]
+    fn a_cnb_account_sends_the_fixed_git_username() {
+        let account = |provider: Option<&str>| GitHubAccount {
+            id: "1".into(),
+            server_url: "https://cnb.cool".into(),
+            username: "alice".into(),
+            scopes: vec![],
+            avatar_url: None,
+            is_default: true,
+            created_at: String::new(),
+            provider: provider.map(str::to_string),
+        };
+        assert_eq!(git_username_for(&account(Some("cnb"))), "cnb");
+        // Every other forge authenticates by the account's own login.
+        assert_eq!(git_username_for(&account(Some("gitea"))), "alice");
+        assert_eq!(git_username_for(&account(None)), "alice");
     }
 
     #[test]
@@ -763,7 +800,7 @@ mod tests {
         let content = std::fs::read_to_string(&script_path).expect("read script");
 
         // Must invoke the embedded binary with both flags so server-mode
-        // deployments don't fall back to the hardcoded `app.houhub` path.
+        // deployments don't fall back to the hardcoded `com.houflow.houhub` path.
         // Paths are sh-single-quoted so spaces / `$` / backticks survive.
         assert!(content.contains("/usr/local/bin/houhub-server"));
         assert!(content.contains("--credential-helper"));

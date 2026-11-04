@@ -12,27 +12,19 @@
 use serde::{Deserialize, Serialize};
 
 use crate::app_error::AppCommandError;
-
 use crate::commands::folders::get_folder_core;
-
 use crate::db::service::work_task_service::{self, ForgeCreateOutcome};
-
 use crate::db::AppDatabase;
-
 use crate::forge::envelope::{forge_untrusted_envelope, ForgeSnapshot};
-
 use crate::forge::{
     self, CountFilters, ForgeError, ForgeIssueList, ForgeItemKind, ForgeProvider, ForgeSourceMeta,
     ForgeTab, ListFilters, ListIssuesRequest,
 };
-
 use crate::models::{WorkTaskConfig, WorkTaskDraft, WorkTaskInfo, WorkTaskSource};
-
 use crate::web::event_bridge::{emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT};
 
 /// Hard cap for one reverse-lookup batch (a screen shows ~30 rows).
 const LOOKUP_KEYS_CAP: usize = 100;
-
 /// Task card titles inherit the automation convention: 80 chars.
 const TITLE_CAP: usize = 80;
 
@@ -203,11 +195,7 @@ impl ForgeScenario {
             return Err(AppCommandError::invalid_input(format!(
                 "scenario \"{}\" does not apply to {} — refresh the workbench and try again",
                 scenario.as_str(),
-                if is_pr {
-                    "a proposed change"
-                } else {
-                    "an issue"
-                }
+                if is_pr { "a proposed change" } else { "an issue" }
             )));
         }
         Ok(scenario)
@@ -619,7 +607,8 @@ pub async fn forge_list_issues_core(
     folder_id: i32,
     filters: ListFilters,
 ) -> Result<ForgeIssueList, AppCommandError> {
-    let (remote, auth) = resolve_folder_repo(db, folder_id, filters.account_id.as_deref()).await?;
+    let (remote, auth) =
+        resolve_folder_repo(db, folder_id, filters.account_id.as_deref()).await?;
     // The repository is an ARGUMENT here, never a field of `filters`: it is
     // derived from the folder's own remote, so there is nothing for a client to
     // claim. Paging is clamped inside each client (`ListIssuesRequest::clamped`)
@@ -629,7 +618,35 @@ pub async fn forge_list_issues_core(
         ForgeProvider::GitHub => forge::github::list_issues(&auth, &request).await?,
         ForgeProvider::GitLab => forge::gitlab::list_issues(&auth, &request).await?,
         ForgeProvider::Gitea => forge::gitea::list_issues(&auth, &request).await?,
+        ForgeProvider::Cnb => forge::cnb::list_issues(&auth, &request).await?,
     })
+}
+
+/// One issue, read in full — for the description its list row does not carry.
+///
+/// Only CNB needs this: its issue list omits `body` (its pull list carries
+/// one), so the panel asks for the item itself the moment it opens, the same
+/// way it asks for the comment thread. Every other forge ships the body on the
+/// row and never calls this, which is why no other arm is implemented — one
+/// arriving is a wiring mistake and says so rather than returning a row that
+/// looks like an issue with no description.
+pub async fn forge_issue_detail_core(
+    db: &AppDatabase,
+    folder_id: i32,
+    number: i64,
+    account_id: Option<String>,
+) -> Result<forge::ForgeIssueRow, AppCommandError> {
+    let (remote, auth) = resolve_folder_repo(db, folder_id, account_id.as_deref()).await?;
+    match remote.provider {
+        ForgeProvider::Cnb => {
+            Ok(forge::cnb::issue_detail(&auth, &remote.owner_repo, number).await?)
+        }
+        other => Err(ForgeError::Invalid(format!(
+            "{} serves the issue body with its list rows; only CNB needs a detail read",
+            other.display_name()
+        ))
+        .into()),
+    }
 }
 
 /// One tab's item count under a set of filters — a badge on the workbench's
@@ -662,6 +679,7 @@ pub async fn forge_tab_count_core(
         ForgeProvider::GitHub => forge::github::list_issues(&auth, &request).await,
         ForgeProvider::GitLab => forge::gitlab::list_issues(&auth, &request).await,
         ForgeProvider::Gitea => forge::gitea::list_issues(&auth, &request).await,
+        ForgeProvider::Cnb => forge::cnb::list_issues(&auth, &request).await,
     };
     Ok(listed.ok().and_then(|page| page.trustworthy_count()))
 }
@@ -703,6 +721,12 @@ pub async fn forge_list_comments_core(
         ForgeProvider::Gitea => {
             forge::gitea::list_comments(&auth, &remote.owner_repo, number, page, per_page).await?
         }
+        // CNB keeps issues and merge requests in separate collections, so the
+        // kind picks the endpoint exactly as it does on GitLab.
+        ForgeProvider::Cnb => {
+            forge::cnb::list_comments(&auth, &remote.owner_repo, kind, number, page, per_page)
+                .await?
+        }
     })
 }
 
@@ -739,6 +763,9 @@ pub async fn forge_create_comment_core(
         ForgeProvider::Gitea => {
             forge::gitea::create_comment(&auth, &remote.owner_repo, number, &body).await?
         }
+        ForgeProvider::Cnb => {
+            forge::cnb::create_comment(&auth, &remote.owner_repo, kind, number, &body).await?
+        }
     })
 }
 
@@ -766,6 +793,9 @@ pub async fn forge_set_item_state_core(
         ForgeProvider::Gitea => {
             forge::gitea::set_item_state(&auth, &remote.owner_repo, kind, number, action).await?
         }
+        ForgeProvider::Cnb => {
+            forge::cnb::set_item_state(&auth, &remote.owner_repo, kind, number, action).await?
+        }
     })
 }
 
@@ -790,6 +820,9 @@ pub async fn forge_create_issue_core(
         }
         ForgeProvider::Gitea => {
             forge::gitea::create_issue(&auth, &remote.owner_repo, &resolved).await?
+        }
+        ForgeProvider::Cnb => {
+            forge::cnb::create_issue(&auth, &remote.owner_repo, &resolved).await?
         }
     })
 }
@@ -818,6 +851,9 @@ pub async fn forge_change_detail_core(
         ForgeProvider::Gitea => {
             forge::gitea::change_detail(&auth, &remote.owner_repo, number).await?
         }
+        ForgeProvider::Cnb => {
+            forge::cnb::change_detail(&auth, &remote.owner_repo, number).await?
+        }
     })
 }
 
@@ -845,6 +881,10 @@ pub async fn forge_change_files_core(
         }
         ForgeProvider::Gitea => {
             forge::gitea::list_change_files(&auth, &remote.owner_repo, number, page, per_page)
+                .await?
+        }
+        ForgeProvider::Cnb => {
+            forge::cnb::list_change_files(&auth, &remote.owner_repo, number, page, per_page)
                 .await?
         }
     })
@@ -887,6 +927,7 @@ pub async fn forge_merge_options_core(
         ForgeProvider::GitHub => forge::github::merge_options(&auth, &remote.owner_repo).await?,
         ForgeProvider::GitLab => forge::gitlab::merge_options(&auth, &remote.owner_repo).await?,
         ForgeProvider::Gitea => forge::gitea::merge_options(&auth, &remote.owner_repo).await?,
+        ForgeProvider::Cnb => forge::cnb::merge_options(&auth, &remote.owner_repo).await?,
     })
 }
 
@@ -920,6 +961,9 @@ pub async fn forge_merge_change_core(
         ForgeProvider::Gitea => {
             forge::gitea::merge_change(&auth, &remote.owner_repo, number, method, head_sha).await?
         }
+        ForgeProvider::Cnb => {
+            forge::cnb::merge_change(&auth, &remote.owner_repo, number, method, head_sha).await?
+        }
     })
 }
 
@@ -937,6 +981,7 @@ pub async fn forge_list_labels_core(
         ForgeProvider::GitHub => forge::github::list_labels(&auth, &remote.owner_repo).await?,
         ForgeProvider::GitLab => forge::gitlab::list_labels(&auth, &remote.owner_repo).await?,
         ForgeProvider::Gitea => forge::gitea::list_labels(&auth, &remote.owner_repo).await?,
+        ForgeProvider::Cnb => forge::cnb::list_labels(&auth, &remote.owner_repo).await?,
     })
 }
 
@@ -987,7 +1032,8 @@ pub async fn create_forge_task(
     let source = &draft.source;
     let item_kind = ForgeItemKind::parse(&source.kind).map_err(AppCommandError::from)?;
     let is_pr = item_kind == ForgeItemKind::Change;
-    let claimed_provider = ForgeProvider::parse(&source.provider).map_err(AppCommandError::from)?;
+    let claimed_provider =
+        ForgeProvider::parse(&source.provider).map_err(AppCommandError::from)?;
 
     let server_host = source.server_host.trim().to_ascii_lowercase();
     let owner_repo = forge::normalize_repo(&source.owner_repo).ok_or_else(|| {
@@ -1020,13 +1066,9 @@ pub async fn create_forge_task(
 
     // Account resolution pins the identity the task will keep using (writeback
     // and delivery read it from source_meta — never "the current default").
-    let auth = forge::resolve_forge_auth(
-        &db.conn,
-        provider,
-        &server_host,
-        source.account_id.as_deref(),
-    )
-    .await?;
+    let auth =
+        forge::resolve_forge_auth(&db.conn, provider, &server_host, source.account_id.as_deref())
+            .await?;
 
     // A proposed change has to be hydrated before a card can exist: the list
     // rows carry no refs at all, and without head/base there is nothing to
@@ -1041,6 +1083,9 @@ pub async fn create_forge_task(
             }
             ForgeProvider::Gitea => {
                 forge::gitea::get_pull(&auth, &owner_repo, source.number).await?
+            }
+            ForgeProvider::Cnb => {
+                forge::cnb::get_pull(&auth, &owner_repo, source.number).await?
             }
         };
         // Refused here, at the only moment the user can still choose something
@@ -1117,7 +1162,15 @@ pub async fn create_forge_task(
         standing.as_deref(),
         draft.instruction.as_deref(),
     );
-    let envelope = forge_untrusted_envelope(provider.as_str(), &draft.snapshot);
+    // CNB's issue LIST carries no description, and both callers build their
+    // snapshot from a list row — so without this read the agent would get the
+    // title and an empty fence. Same reason the change above is hydrated: the
+    // card must not exist without what its prompt needs.
+    let mut snapshot = draft.snapshot.clone();
+    if provider == ForgeProvider::Cnb && !is_pr {
+        forge::cnb::fill_issue_body(&auth, &owner_repo, source.number, &mut snapshot).await?;
+    }
+    let envelope = forge_untrusted_envelope(provider.as_str(), &snapshot);
     let blocks = vec![
         serde_json::to_value(crate::acp::types::PromptInputBlock::Text {
             text: instruction.clone(),
@@ -1189,7 +1242,9 @@ pub async fn create_forge_task(
             crate::commands::work_task::nudge_pump(task.folder_id);
             Ok(ForgeCreateResult::Created { task })
         }
-        ForgeCreateOutcome::Duplicate(existing) => Ok(ForgeCreateResult::Duplicate { existing }),
+        ForgeCreateOutcome::Duplicate(existing) => {
+            Ok(ForgeCreateResult::Duplicate { existing })
+        }
     }
 }
 
@@ -1307,6 +1362,17 @@ pub async fn forge_list_issues(
     query: ListFilters,
 ) -> Result<ForgeIssueList, AppCommandError> {
     forge_list_issues_core(&db, folder_id, query).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn forge_issue_detail(
+    db: tauri::State<'_, AppDatabase>,
+    folder_id: i32,
+    number: i64,
+    account_id: Option<String>,
+) -> Result<forge::ForgeIssueRow, AppCommandError> {
+    forge_issue_detail_core(&db, folder_id, number, account_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1576,10 +1642,7 @@ mod tests {
                     !text.contains("task_progress") && !text.contains("task_complete"),
                     "{s:?} duplicates the engine's reporting instructions"
                 );
-                assert!(
-                    text.contains("#7") && text.contains(URL),
-                    "{s:?} lost its anchor"
-                );
+                assert!(text.contains("#7") && text.contains(URL), "{s:?} lost its anchor");
                 assert!(
                     text.contains("fenced external content"),
                     "{s:?} must point at the envelope"
@@ -1617,15 +1680,11 @@ mod tests {
                     "{s:?} leaves the check optional"
                 );
 
-                let gate = text
-                    .find("Judge whether the report holds up")
-                    .expect("the gate");
+                let gate = text.find("Judge whether the report holds up").expect("the gate");
                 let branch = text
                     .find("If the report does not hold")
                     .unwrap_or_else(|| panic!("{s:?} has no failure branch"));
-                let work = text
-                    .find("Once the report holds up")
-                    .expect("the work paragraph");
+                let work = text.find("Once the report holds up").expect("the work paragraph");
                 // Before the work, not after it: an instruction that arrives
                 // once the fix is written is a retraction, not a gate.
                 assert!(gate < branch && branch < work, "{s:?} judges after acting");
@@ -1668,10 +1727,7 @@ mod tests {
                     "{s:?} does not say what must not happen"
                 );
                 // Not only the fix it was asked for: the extras it found too.
-                assert!(
-                    outcome.contains("not even"),
-                    "{s:?} still lets extras through"
-                );
+                assert!(outcome.contains("not even"), "{s:?} still lets extras through");
                 let lower = outcome.to_lowercase();
                 assert!(lower.contains("stop there"), "{s:?} never ends the task");
                 assert!(
@@ -1751,9 +1807,7 @@ mod tests {
             let noun = provider.change_noun();
             let text = forge_instruction(ForgeScenario::ReviewFix, provider, 7, URL);
             assert!(
-                text.starts_with(&format!(
-                    "Review {noun} #7 ({URL}): judge its approach first"
-                )),
+                text.starts_with(&format!("Review {noun} #7 ({URL}): judge its approach first")),
                 "{provider:?}: the anchor does not put the judgement first"
             );
             assert!(
@@ -1765,22 +1819,14 @@ mod tests {
             let branch = text
                 .find("If the approach does not hold")
                 .unwrap_or_else(|| panic!("{provider:?} has no failure branch"));
-            let work = text
-                .find("Once the approach holds up")
-                .expect("the fixing paragraph");
+            let work = text.find("Once the approach holds up").expect("the fixing paragraph");
             // Before the work, not after it: an instruction that arrives once
             // the fixes are written is a retraction, not a gate.
-            assert!(
-                gate < branch && branch < work,
-                "{provider:?} judges after fixing"
-            );
+            assert!(gate < branch && branch < work, "{provider:?} judges after fixing");
             let first_fix = text
                 .find("fix the problems that are worth fixing")
                 .expect("the licence to fix");
-            assert!(
-                work < first_fix,
-                "{provider:?} licenses fixes before the judgement"
-            );
+            assert!(work < first_fix, "{provider:?} licenses fixes before the judgement");
             // Doubt is the user's call, not a reason to go ahead.
             assert!(
                 text[gate..branch].contains("treat it as not holding"),
@@ -1797,14 +1843,8 @@ mod tests {
                 outcome.contains("not even the small fixes"),
                 "{provider:?} still lets the reviewer polish the wrong design"
             );
-            assert!(
-                outcome.contains("worktree clean"),
-                "{provider:?} leaves a dirty tree"
-            );
-            assert!(
-                outcome.contains("stop there"),
-                "{provider:?} never ends the task"
-            );
+            assert!(outcome.contains("worktree clean"), "{provider:?} leaves a dirty tree");
+            assert!(outcome.contains("stop there"), "{provider:?} never ends the task");
             // The user gets the decision, and the ways forward from it.
             assert!(
                 outcome.contains("send this task back to have you fix it in place anyway"),
@@ -1894,10 +1934,7 @@ mod tests {
         for provider in [ForgeProvider::GitHub, ForgeProvider::GitLab] {
             for s in [ForgeScenario::ReviewFix, ForgeScenario::ReviewOnly] {
                 let text = forge_instruction(s, provider, 7, URL);
-                assert!(
-                    text.contains("Judge the approach, not just the diff"),
-                    "{s:?}"
-                );
+                assert!(text.contains("Judge the approach, not just the diff"), "{s:?}");
                 assert!(text.contains("warranted at all"), "{s:?}");
                 assert!(text.contains("best way to solve it"), "{s:?}");
                 assert!(text.contains("production-ready as it stands"), "{s:?}");
@@ -1924,10 +1961,7 @@ mod tests {
         for s in all_scenarios() {
             for provider in [ForgeProvider::GitHub, ForgeProvider::GitLab] {
                 let text = forge_instruction(s, provider, 7, URL);
-                assert!(
-                    text.contains("\n\n"),
-                    "{s:?} runs together as one paragraph"
-                );
+                assert!(text.contains("\n\n"), "{s:?} runs together as one paragraph");
                 assert!(
                     !text.replace("\n\n", "").contains('\n'),
                     "{s:?} still breaks a paragraph with a bare newline"
@@ -1961,10 +1995,7 @@ mod tests {
             None,
             Some("  also update the docs  "),
         );
-        assert_eq!(
-            noted,
-            format!("{plain}\n\n{USER_NOTE_HEADER}\nalso update the docs")
-        );
+        assert_eq!(noted, format!("{plain}\n\n{USER_NOTE_HEADER}\nalso update the docs"));
         // A blank line before the header, and the note on its own line under
         // it — the two breaks the old wording was missing.
         assert!(noted.contains(&format!("\n\n{USER_NOTE_HEADER}\n")));
@@ -1978,18 +2009,9 @@ mod tests {
         let gh = ForgeProvider::GitHub;
         let plain = instruction_block(ForgeScenario::ReviewFix, gh, 7, URL, None, None);
 
-        let standing = instruction_block(
-            ForgeScenario::ReviewFix,
-            gh,
-            7,
-            URL,
-            Some("  Reply in zh.  "),
-            None,
-        );
-        assert_eq!(
-            standing,
-            format!("{plain}\n\n{STANDING_HEADER}\nReply in zh.")
-        );
+        let standing =
+            instruction_block(ForgeScenario::ReviewFix, gh, 7, URL, Some("  Reply in zh.  "), None);
+        assert_eq!(standing, format!("{plain}\n\n{STANDING_HEADER}\nReply in zh."));
 
         let both = instruction_block(
             ForgeScenario::ReviewFix,
@@ -2008,10 +2030,7 @@ mod tests {
         );
         let standing_at = both.find(STANDING_HEADER).expect("standing section");
         let note_at = both.find(USER_NOTE_HEADER).expect("note section");
-        assert!(
-            standing_at < note_at,
-            "the per-item note must have the last word"
-        );
+        assert!(standing_at < note_at, "the per-item note must have the last word");
     }
 
     /// The envelope is a separate prompt block appended right after the
@@ -2037,15 +2056,8 @@ mod tests {
             },
         );
         let glued = format!("{instruction}{envelope}");
-        let note_line = glued
-            .lines()
-            .find(|l| l.contains("do X"))
-            .expect("the note's line");
-        assert_eq!(
-            note_line.trim(),
-            "do X",
-            "the envelope ran onto the user's note"
-        );
+        let note_line = glued.lines().find(|l| l.contains("do X")).expect("the note's line");
+        assert_eq!(note_line.trim(), "do X", "the envelope ran onto the user's note");
     }
 
     /// The settings blob keys its standing instructions by SCENARIO WIRE NAME
@@ -2133,11 +2145,7 @@ mod tests {
             let round: ForgeSourceMeta =
                 serde_json::from_str(&serde_json::to_string(&meta).expect("encode"))
                     .expect("decode");
-            assert_eq!(
-                round.writeback.unwrap_or(false),
-                expected,
-                "gate flipped for {sent}"
-            );
+            assert_eq!(round.writeback.unwrap_or(false), expected, "gate flipped for {sent}");
         }
     }
 

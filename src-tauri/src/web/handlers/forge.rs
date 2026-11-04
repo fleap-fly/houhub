@@ -10,17 +10,12 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-
 use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
-
 use crate::app_state::AppState;
-
 use crate::commands::forge as core;
-
 use crate::forge::settings::{ForgePanelSettings, ForgeSettingsStore};
-
 use crate::forge::{
     ChangeFilesQuery, ChangeMergeRequest, ChangeQuery, CommentDraft, CommentFilters, CountFilters,
     ListFilters, NewIssueDraft, StateChangeRequest,
@@ -48,6 +43,15 @@ pub struct ListIssuesParams {
     /// flattened so the trust boundary stays visible: the repository is not in
     /// here, and cannot be.
     pub query: ListFilters,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDetailParams {
+    pub folder_id: i32,
+    pub number: i64,
+    #[serde(default)]
+    pub account_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -174,6 +178,16 @@ pub async fn forge_list_issues(
 ) -> Result<Json<crate::forge::ForgeIssueList>, AppCommandError> {
     Ok(Json(
         core::forge_list_issues_core(&state.db, params.folder_id, params.query).await?,
+    ))
+}
+
+pub async fn forge_issue_detail(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<IssueDetailParams>,
+) -> Result<Json<crate::forge::ForgeIssueRow>, AppCommandError> {
+    Ok(Json(
+        core::forge_issue_detail_core(&state.db, params.folder_id, params.number, params.account_id)
+            .await?,
     ))
 }
 
@@ -318,9 +332,7 @@ pub async fn forge_auto_status(
 pub async fn forge_auto_scan_now(
     Json(params): Json<FolderParams>,
 ) -> Result<Json<crate::forge::auto::ScanReport>, AppCommandError> {
-    Ok(Json(
-        core::forge_auto_scan_now_core(params.folder_id).await?,
-    ))
+    Ok(Json(core::forge_auto_scan_now_core(params.folder_id).await?))
 }
 
 /// Largest webhook body accepted. Issue and pull-request deliveries are a few

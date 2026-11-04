@@ -12,6 +12,7 @@ vi.mock("@/lib/api", () => ({
   validateGitHubToken: vi.fn(),
   validateGitLabToken: vi.fn(),
   validateGiteaToken: vi.fn(),
+  validateCnbToken: vi.fn(),
   getAccountToken: vi.fn(),
   deleteAccountToken: vi.fn(),
   saveAccountToken: vi.fn(),
@@ -34,7 +35,7 @@ function account(overrides: Partial<GitHubAccount> = {}): GitHubAccount {
   return {
     id: "acc-1",
     server_url: "https://gitlab.example.com",
-    username: "fleap-fly",
+    username: "houhub",
     scopes: ["api"],
     avatar_url: null,
     is_default: false,
@@ -85,7 +86,7 @@ describe("VersionControlSettings account avatars", () => {
 
     // jsdom never loads images, which is exactly the state a blocked or
     // login-walled avatar host leaves the real webview in.
-    await waitFor(() => expect(screen.getByText("F")).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText("H")).toBeInTheDocument())
   })
 
   it("shows the username initial for an account with no avatar at all", async () => {
