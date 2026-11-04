@@ -129,9 +129,6 @@ mod tauri_app {
     };
     use crate::terminal::manager::TerminalManager;
     use crate::{db, git_credential, network, paths, process, web};
-    // `generate_handler!` resolves each command's `__cmd__` helper as a macro, so a
-    // bare name has to be in scope here (a path form would need the module too).
-    use crate::deep_link::take_pending_deep_link;
     use tauri::Manager;
 
     static APP_QUITTING: AtomicBool = AtomicBool::new(false);
@@ -1841,7 +1838,7 @@ mod tauri_app {
                 workbench_commands::workbench_space_download_url,
                 workbench_commands::workbench_space_presign_upload,
                 workbench_commands::workbench_space_complete_upload,
-                take_pending_deep_link,
+                crate::deep_link::take_pending_deep_link,
                 browser_commands::browser_capabilities,
                 browser_commands::browser_open_tab,
                 browser_commands::browser_close,
