@@ -61,8 +61,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The arm64 macOS runner pool keeps cancelling this job before a
+          # runner is assigned, so the arm64 bundle is cross-compiled on the
+          # Intel image instead (Tauri supports this; the rust-toolchain action
+          # adds the aarch64 target below).
           - name: macos-aarch64
-            os: macos-14
+            os: macos-15-intel
             target: aarch64-apple-darwin
             dmg_arch: aarch64
           - name: macos-x64
