@@ -36,7 +36,6 @@ import {
   type HouflowCloudSessionOutput,
 } from "@/houflow/cloud-sessions"
 import { toErrorMessage } from "@/lib/app-error"
-import { languageFromPath } from "@/lib/language-detect"
 import { cn } from "@/lib/utils"
 
 export function CloudSessionOutputsPanel() {
@@ -66,7 +65,7 @@ export function CloudSessionOutputsPanel() {
   const removeSession = useHouflowCloudWorkspaceStore(
     (state) => state.removeSession
   )
-  const { openReadonlyFilePreview } = useWorkspaceActions()
+  const { openFilePreview, updateFileTabContent } = useWorkspaceActions()
   const [outputs, setOutputs] = useState<HouflowCloudSessionOutput[]>([])
   const [loading, setLoading] = useState(false)
   const [outputsLoaded, setOutputsLoaded] = useState(false)
@@ -169,7 +168,6 @@ export function CloudSessionOutputsPanel() {
         const displayPath = output.relativePath || output.filename
         const image = isCloudImageOutput(output)
         let content: string
-        let language: string
 
         if (image) {
           if (!canPreviewOutput(output)) {
@@ -184,7 +182,6 @@ export function CloudSessionOutputsPanel() {
           content = await blobToDataUrl(
             new Blob([bytes], { type: mediaTypeForCloudOutputBlob(output) })
           )
-          language = "image"
         } else {
           if (!canPreviewOutput(output)) {
             throw new Error(t("previewUnavailable"))
@@ -195,18 +192,13 @@ export function CloudSessionOutputsPanel() {
             selectedSessionId,
             output.fileId
           )
-          language = languageFromPath(displayPath)
         }
 
-        openReadonlyFilePreview({
-          id: `houflow:${selectedSessionId}:${output.id}`,
-          title: displayPath.split(/[\\/]/).pop() || output.filename,
-          description: displayPath,
-          path: displayPath,
-          language,
-          content,
-          preview: language === "markdown" || language === "html",
-        })
+        // Upstream 0.42.1 dropped the "open a tab with supplied content"
+        // action, so open the tab through the public preview action and then
+        // write the fetched bytes into it.
+        const tabId = await openFilePreview(displayPath)
+        if (tabId) updateFileTabContent(tabId, content)
       } catch (err) {
         toast.error(t("previewUnavailable"), {
           description: toErrorMessage(err),
@@ -220,7 +212,8 @@ export function CloudSessionOutputsPanel() {
     [
       houflow.secret,
       houflow.session,
-      openReadonlyFilePreview,
+      openFilePreview,
+      updateFileTabContent,
       selectedSessionId,
       t,
     ]

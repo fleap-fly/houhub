@@ -6,23 +6,18 @@
 //! a clean "engine not running" error.
 
 use crate::app_error::AppCommandError;
-
 use crate::commands::folders::get_folder_core;
-
 use crate::db::entities::work_task::WorkTaskStatus;
-
 use crate::db::error::DbError;
-
 use crate::db::service::work_task_service;
-
 use crate::db::AppDatabase;
-
 use crate::models::{
     FollowUpIntent, WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings,
     WorkTaskInfo, WorkTaskTemplateDraft, WorkTaskTemplateInfo,
 };
-
-use crate::web::event_bridge::{emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT};
+use crate::web::event_bridge::{
+    emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT,
+};
 
 fn engine() -> Result<std::sync::Arc<crate::work_task::TaskEngine>, DbError> {
     crate::work_task::engine()
@@ -508,11 +503,7 @@ pub async fn work_task_schedule_core(
     id: i32,
     scheduled_at: Option<String>,
 ) -> Result<(), DbError> {
-    let at = match scheduled_at
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+    let at = match scheduled_at.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => Some(
             chrono::DateTime::parse_from_rfc3339(raw)
                 .map_err(|e| DbError::Validation(format!("invalid scheduled_at: {e}")))?
@@ -589,10 +580,7 @@ pub async fn work_task_cancel_core(
     delete_worktree: bool,
 ) -> Result<(), DbError> {
     let engine = engine()?;
-    engine
-        .cancel(id, reason)
-        .await
-        .map_err(DbError::Validation)?;
+    engine.cancel(id, reason).await.map_err(DbError::Validation)?;
     if delete_worktree {
         if let Err(blocked) = engine.cleanup_task(id).await {
             tracing::warn!(
@@ -666,20 +654,27 @@ pub async fn work_task_merge_unqueue_core(
 /// the task lands, the same offer the merge and complete acceptances make. It
 /// never changes the result: a removal that fails leaves a retryable
 /// `cleanup_state` on the card and the delivered URL still comes back.
+///
+/// `closes` is which issues the pull request closes, for a task made from
+/// several related issues only — chosen at its first delivery and fixed from
+/// then on (see `engine::closing_list`). `None` keeps the list already fixed,
+/// or closes them all on a first delivery.
 pub async fn work_task_deliver_pr_core(
     id: i32,
     pr_title: Option<String>,
     draft: bool,
     delete_worktree: bool,
     mark_done: Option<bool>,
+    closes: Option<Vec<i64>>,
 ) -> Result<String, DbError> {
     engine()?
-        .deliver_pr(
+        .deliver_pr_closing(
             id,
             pr_title,
             draft,
             delete_worktree,
             mark_done.unwrap_or(true),
+            closes,
         )
         .await
         .map_err(DbError::Validation)
@@ -920,7 +915,9 @@ pub async fn work_task_events(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn work_task_attention_count(db: tauri::State<'_, AppDatabase>) -> Result<u64, DbError> {
+pub async fn work_task_attention_count(
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<u64, DbError> {
     work_task_attention_count_core(&db).await
 }
 
@@ -1092,8 +1089,9 @@ pub async fn work_task_deliver_pr(
     draft: bool,
     delete_worktree: bool,
     mark_done: Option<bool>,
+    closes: Option<Vec<i64>>,
 ) -> Result<String, DbError> {
-    work_task_deliver_pr_core(id, pr_title, draft, delete_worktree, mark_done).await
+    work_task_deliver_pr_core(id, pr_title, draft, delete_worktree, mark_done, closes).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1295,24 +1293,15 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
+        assert!(work_task_service::begin_setup(&db.conn, overridden.id, run_seq)
+            .await
+            .unwrap());
         assert!(
-            work_task_service::begin_setup(&db.conn, overridden.id, run_seq)
+            work_task_service::mark_running(&db.conn, overridden.id, run_seq, conversation_id, "c1")
                 .await
                 .unwrap()
         );
-        assert!(work_task_service::mark_running(
-            &db.conn,
-            overridden.id,
-            run_seq,
-            conversation_id,
-            "c1"
-        )
-        .await
-        .unwrap());
-        assert_eq!(
-            agent_of(&db, overridden.id).await.as_deref(),
-            Some("gemini")
-        );
+        assert_eq!(agent_of(&db, overridden.id).await.as_deref(), Some("gemini"));
 
         // A list stamps every row the same way a get does.
         let listed = work_task_list_core(&db, Some(folder_id)).await.unwrap();

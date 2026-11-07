@@ -53,37 +53,26 @@
 //! children — they keep running in the background (the whole point of async).
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-
 use std::sync::Arc;
-
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-
 use tokio::sync::{Mutex, Notify};
 
 use crate::acp::delegation::event_emitter::{DelegationEventEmitter, NoopEventEmitter};
-
 use crate::acp::delegation::live_reply::{ChildLiveReplyLookup, NoopChildLiveReplyLookup};
-
 use crate::acp::delegation::meta_writer::{
     build_delegation_meta, is_synthetic_parent_tool_use_id, DelegationMetaWriter, NoopMetaWriter,
 };
-
 use crate::acp::delegation::spawner::{ConnectionSpawner, DelegationLink};
-
 use crate::acp::agent_mentions::render_assistant_brief;
-
 use crate::acp::delegation::assistants::{AssistantLookup, AssistantRosterEntry, NoAssistants};
-
 use crate::acp::delegation::types::{
     AgentDelegationDefaults, AssistantRef, BlockedKind, BlockedOn, DelegationAssistant,
     DelegationError, DelegationOutcome, DelegationProgress, DelegationRequest,
     DelegationTaskReport, ResumeDelegationRequest, TaskStatus,
 };
-
 use crate::acp::types::DelegationResultSummary;
-
 use crate::models::AgentType;
 
 /// Default per-parent byte budget for cached completed-task result text. The
@@ -1494,7 +1483,6 @@ const PENDING_TOOL_CALL_TTL: Duration = Duration::from_secs(60);
 /// block). A host that emits no observable ACP `tool_call` at all still falls
 /// through to the synthetic id after the budget, exactly as before.
 const CLAIM_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
 const CLAIM_POLL_ATTEMPTS: usize = 200;
 
 /// Poll budget for the status/cancel call-time rename
@@ -2757,12 +2745,13 @@ impl DelegationBroker {
             parent_conversation_id: req.parent_conversation_id,
             parent_tool_use_id: req.parent_tool_use_id.clone(),
             delegation_call_id: call_id.clone(),
-            assistant: req.assistant.as_ref().map(|a| {
-                crate::acp::delegation::spawner::AssistantLink {
+            assistant: req
+                .assistant
+                .as_ref()
+                .map(|a| crate::acp::delegation::spawner::AssistantLink {
                     id: a.id,
                     snapshot: a.run_snapshot(),
-                }
-            }),
+                }),
         };
         // The assistant's standing instructions ride the child's first prompt
         // as a trailing internal frame (see `render_assistant_brief`).
@@ -3314,7 +3303,8 @@ impl DelegationBroker {
     /// Mirror of `emit_completed_if_real`: same synthetic-id skip, and the
     /// event rides the parent's stream so the frontend `DelegationContext`
     /// receives it via the parent's per-connection attach stream in
-    /// web/server mode (not only via the desktop firehose).
+    /// web/server mode (not only via the desktop firehose). The lifecycle
+    /// `DelegationChildRunning` goes out first, for every delegation.
     #[allow(clippy::too_many_arguments)]
     async fn emit_started_if_real(
         &self,
@@ -3327,6 +3317,10 @@ impl DelegationBroker {
         task_preview: &str,
         task_id: &str,
     ) {
+        // Every delegation counts for the parent's lifecycle, card or not.
+        self.event_emitter
+            .emit_child_running(parent_connection_id, child_connection_id, true)
+            .await;
         if is_synthetic_parent_tool_use_id(parent_tool_use_id) {
             return;
         }
@@ -3348,7 +3342,9 @@ impl DelegationBroker {
     /// stream iff the `parent_tool_use_id` refers to a real ACP tool_call.
     /// Synthetic ids (the `"delegation-<uuid>"` UUID fallback) map to no
     /// live UI binding, so the emit would be wasted noise — same skip
-    /// criterion as `write_meta_if_real`.
+    /// criterion as `write_meta_if_real`. The lifecycle
+    /// `DelegationChildRunning` is not skipped: the parent still has to know
+    /// the child is done.
     #[allow(clippy::too_many_arguments)]
     async fn emit_completed_if_real(
         &self,
@@ -3360,6 +3356,9 @@ impl DelegationBroker {
         assistant: Option<&AssistantRef>,
         result: DelegationResultSummary,
     ) {
+        self.event_emitter
+            .emit_child_running(parent_connection_id, child_connection_id, false)
+            .await;
         if is_synthetic_parent_tool_use_id(parent_tool_use_id) {
             return;
         }
@@ -3455,8 +3454,7 @@ impl DelegationBroker {
         for (task, duration_ms) in drained {
             // The child already disconnected/errored — disconnect-only teardown
             // (no spawner `cancel`, there's no live turn to interrupt).
-            self.teardown_canceled_child(&task, duration_ms, false)
-                .await;
+            self.teardown_canceled_child(&task, duration_ms, false).await;
         }
         self.result_notify.notify_waiters();
     }
@@ -4141,62 +4139,50 @@ impl DelegationBroker {
                             if inner.resuming.insert(req.task_id.clone()) {
                                 MemGate::Proceed { claimed: true }
                             } else {
-                                MemGate::Refuse(Box::new(
-                                    not_resumable_report(
-                                        &req.task_id,
-                                        status,
-                                        Some(child_conversation_id),
-                                        Some(agent_type),
-                                        "a resume of this task is already in progress.",
-                                    )
-                                    .with_assistant(assistant.as_ref()),
-                                ))
+                                MemGate::Refuse(Box::new(not_resumable_report(
+                                    &req.task_id,
+                                    status,
+                                    Some(child_conversation_id),
+                                    Some(agent_type),
+                                    "a resume of this task is already in progress.",
+                                ).with_assistant(assistant.as_ref())))
                             }
                         }
-                        TaskStatus::Completed => MemGate::Refuse(Box::new(
-                            not_resumable_report(
-                                &req.task_id,
-                                status,
-                                Some(child_conversation_id),
-                                Some(agent_type),
-                                "the task already completed — resume only applies to a \
+                        TaskStatus::Completed => MemGate::Refuse(Box::new(not_resumable_report(
+                            &req.task_id,
+                            status,
+                            Some(child_conversation_id),
+                            Some(agent_type),
+                            "the task already completed — resume only applies to a \
                              canceled or interrupted task. Start a new \
                              delegate_to_agent call for follow-up work.",
-                            )
-                            .with_assistant(assistant.as_ref()),
-                        )),
-                        _ => MemGate::Refuse(Box::new(
-                            not_resumable_report(
-                                &req.task_id,
-                                status,
-                                Some(child_conversation_id),
-                                Some(agent_type),
-                                "the task ended in failure rather than being \
+                        ).with_assistant(assistant.as_ref()))),
+                        _ => MemGate::Refuse(Box::new(not_resumable_report(
+                            &req.task_id,
+                            status,
+                            Some(child_conversation_id),
+                            Some(agent_type),
+                            "the task ended in failure rather than being \
                              interrupted — resume only applies to a canceled or \
                              interrupted task. Start a new delegate_to_agent call \
                              to retry it.",
-                            )
-                            .with_assistant(assistant.as_ref()),
-                        )),
+                        ).with_assistant(assistant.as_ref()))),
                     }
                 }
             } else if let Some(r) = inner.running.get(&req.task_id) {
                 if r.parent_connection_id != req.parent_connection_id {
                     MemGate::Refuse(Box::new(unknown_report(&req.task_id)))
                 } else {
-                    MemGate::Refuse(Box::new(
-                        not_resumable_report(
-                            &req.task_id,
-                            TaskStatus::Running,
-                            Some(r.child_conversation_id),
-                            Some(r.agent_type),
-                            "the task is still running — resume only applies to a \
+                    MemGate::Refuse(Box::new(not_resumable_report(
+                        &req.task_id,
+                        TaskStatus::Running,
+                        Some(r.child_conversation_id),
+                        Some(r.agent_type),
+                        "the task is still running — resume only applies to a \
                          canceled or interrupted task. Poll it with \
                          get_delegation_status (or stop it with cancel_delegation) \
                          instead.",
-                        )
-                        .with_assistant(r.assistant.as_ref()),
-                    ))
+                    ).with_assistant(r.assistant.as_ref())))
                 }
             } else {
                 let claimed = inner.resuming.insert(req.task_id.clone());
@@ -4738,8 +4724,10 @@ impl DelegationBroker {
                 let canceled_duration_ms = {
                     let mut inner = self.pending.inner.lock().await;
                     if inner.running.remove(&call_id).is_some() {
-                        let outcome =
-                            canceled_outcome(ctx.child_conversation_id, "canceled before await");
+                        let outcome = canceled_outcome(
+                            ctx.child_conversation_id,
+                            "canceled before await",
+                        );
                         let duration_ms = started_at.elapsed().as_millis() as u64;
                         inner.insert_completed(
                             &call_id,
@@ -5044,11 +5032,8 @@ impl ChildStatusLookup for DbChildStatusLookup {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::acp::delegation::spawner::{mock::MockSpawner, ResumedSpawn, SpawnerError};
-
     use crate::acp::delegation::types::DelegationSuccess;
-
     use crate::models::AgentType;
 
     /// Test-only `ConversationDepthLookup` that resolves against a flat
@@ -5477,10 +5462,7 @@ mod tests {
         let first = broker
             .get_task_status("parent-conn", Some(1), &task_id, StatusWait::Infinite)
             .await;
-        assert_eq!(
-            first.blocked_on.map(|b| b.request_id).as_deref(),
-            Some("req-1")
-        );
+        assert_eq!(first.blocked_on.map(|b| b.request_id).as_deref(), Some("req-1"));
 
         // Same prompt, still unanswered: a bounded wait now runs to its deadline
         // rather than returning immediately.
@@ -5506,10 +5488,7 @@ mod tests {
             started.elapsed() < Duration::from_millis(2_000),
             "a NEW blocking prompt must wake the wait"
         );
-        assert_eq!(
-            third.blocked_on.map(|b| b.request_id).as_deref(),
-            Some("req-2")
-        );
+        assert_eq!(third.blocked_on.map(|b| b.request_id).as_deref(), Some("req-2"));
     }
 
     /// The delivery-failure valve: marking a block reported is not proof the
@@ -7522,7 +7501,6 @@ mod tests {
     // -- Meta writer lifecycle --------------------------------------------
 
     use crate::acp::delegation::meta_writer::mock::MockMetaWriter;
-
     use crate::acp::delegation::meta_writer::DelegationMetaWriter;
 
     async fn broker_with_meta(
@@ -7684,9 +7662,7 @@ mod tests {
                 "parent-conn",
                 "tc-keyed".into(),
                 Some(DelegationMatchKey {
-                    target: crate::acp::delegation::types::DelegationTarget::Agent(
-                        AgentType::ClaudeCode,
-                    ),
+                    target: crate::acp::delegation::types::DelegationTarget::Agent(AgentType::ClaudeCode),
                     task: "do x".into(),
                     working_dir: None,
                 }),
@@ -8746,9 +8722,7 @@ mod tests {
     // for the full path matrix.
 
     use crate::acp::delegation::event_emitter::mock::MockEventEmitter;
-
     use crate::acp::delegation::event_emitter::DelegationEventEmitter;
-
     use crate::acp::types::DelegationResultSummary;
 
     async fn broker_with_emitter(
@@ -8878,6 +8852,60 @@ mod tests {
         // Completion adds exactly one terminal emit; started stays at 1.
         assert_eq!(emitter.started_count().await, 1);
         assert_eq!(emitter.count().await, 1);
+    }
+
+    /// A delegation whose parent tool call couldn't be identified has no card,
+    /// so its started/completed events are skipped — but it still dies with its
+    /// parent (`cancel_by_parent`), so the parent's lifecycle accounting must
+    /// hear about it from start to finish.
+    #[tokio::test]
+    async fn child_running_is_reported_for_a_synthetic_parent_tool_use_id() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("c-synth-life".into())).await;
+        mock.queue_send(Ok(9)).await;
+        let writer = Arc::new(MockMetaWriter::new());
+        let emitter = Arc::new(MockEventEmitter::new());
+        let broker = broker_with_emitter(mock.clone(), writer.clone(), emitter.clone()).await;
+
+        let driver = {
+            let broker = broker.clone();
+            tokio::spawn(async move { broker.handle_request(request(1, "")).await })
+        };
+        let call_id = loop {
+            if let Some(id) = broker.peek_first_pending_call_id().await {
+                break id;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        assert_eq!(
+            emitter.child_running_snapshot().await,
+            vec![("parent-conn".to_string(), "c-synth-life".to_string(), true)],
+            "the running child is reported while it runs"
+        );
+        broker
+            .complete_call(
+                &call_id,
+                DelegationOutcome::Ok(DelegationSuccess {
+                    text: "ok".into(),
+                    child_conversation_id: 9,
+                    child_agent_type: AgentType::Codex,
+                    turn_count: 1,
+                    duration_ms: 5,
+                    token_usage: None,
+                }),
+            )
+            .await;
+        driver.await.unwrap();
+
+        assert_eq!(
+            emitter.child_running_snapshot().await,
+            vec![
+                ("parent-conn".to_string(), "c-synth-life".to_string(), true),
+                ("parent-conn".to_string(), "c-synth-life".to_string(), false),
+            ]
+        );
+        assert_eq!(emitter.started_count().await, 0, "no card event");
+        assert_eq!(emitter.count().await, 0, "no card event");
     }
 
     #[tokio::test]
@@ -9449,18 +9477,35 @@ mod tests {
 
         // Per-connection stream (WS attach delivery path) must receive the
         // envelope tagged with the right connection + payload shape.
-        // The parent stream now also carries the setup-time DelegationStarted;
-        // skip past it to the terminal DelegationCompleted.
+        // The parent stream now also carries the setup-time DelegationStarted
+        // and the lifecycle DelegationChildRunning frames; skip past them to
+        // the terminal DelegationCompleted, noting the lifecycle frames.
+        let mut lifecycle = Vec::new();
         let envelope = loop {
             let env = tokio::time::timeout(Duration::from_millis(500), stream_rx.recv())
                 .await
                 .expect("per-connection stream should receive DelegationCompleted within 500ms")
                 .expect("envelope recv must not error");
-            if matches!(env.payload, AcpEvent::DelegationStarted { .. }) {
-                continue;
+            match &env.payload {
+                AcpEvent::DelegationStarted { .. } => continue,
+                AcpEvent::DelegationChildRunning {
+                    child_connection_id,
+                    running,
+                } => {
+                    lifecycle.push((child_connection_id.clone(), *running));
+                    continue;
+                }
+                _ => break env,
             }
-            break env;
         };
+        assert_eq!(
+            lifecycle,
+            vec![
+                ("child-conn-real".to_string(), true),
+                ("child-conn-real".to_string(), false),
+            ],
+            "the parent hears the child start and stop before the card settles"
+        );
         assert_eq!(envelope.connection_id, "parent-conn");
         match &envelope.payload {
             AcpEvent::DelegationCompleted {
@@ -9491,7 +9536,10 @@ mod tests {
                 .await
                 .expect("InternalEventBus should receive DelegationCompleted within 500ms")
                 .expect("bus recv must not error");
-            if matches!(env.payload, AcpEvent::DelegationStarted { .. }) {
+            if matches!(
+                env.payload,
+                AcpEvent::DelegationStarted { .. } | AcpEvent::DelegationChildRunning { .. }
+            ) {
                 continue;
             }
             break env;
@@ -9563,6 +9611,21 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
 
+        // The lifecycle frame goes out first, for every delegation.
+        let lifecycle = tokio::time::timeout(Duration::from_millis(500), stream_rx.recv())
+            .await
+            .expect("per-connection stream should receive DelegationChildRunning within 500ms")
+            .expect("envelope recv must not error");
+        assert_eq!(lifecycle.connection_id, "parent-conn");
+        assert!(
+            matches!(
+                &lifecycle.payload,
+                AcpEvent::DelegationChildRunning { child_connection_id, running: true }
+                    if child_connection_id == "child-conn-started"
+            ),
+            "expected the child's running frame, got {:?}",
+            lifecycle.payload
+        );
         let envelope = tokio::time::timeout(Duration::from_millis(500), stream_rx.recv())
             .await
             .expect("per-connection stream should receive DelegationStarted within 500ms")
@@ -9587,18 +9650,21 @@ mod tests {
                 // The event labels the card even when the parent tool call's
                 // raw_input never carried the arguments (identity-less hosts).
                 assert_eq!(task_preview, "do x");
-                assert!(
-                    !task_id.is_empty(),
-                    "broker-minted task id must ride the event"
-                );
+                assert!(!task_id.is_empty(), "broker-minted task id must ride the event");
             }
             other => panic!("expected DelegationStarted, got {other:?}"),
         }
 
-        let bus_envelope = tokio::time::timeout(Duration::from_millis(500), bus_rx.recv())
-            .await
-            .expect("InternalEventBus should receive DelegationStarted within 500ms")
-            .expect("bus recv must not error");
+        let bus_envelope = loop {
+            let env = tokio::time::timeout(Duration::from_millis(500), bus_rx.recv())
+                .await
+                .expect("InternalEventBus should receive DelegationStarted within 500ms")
+                .expect("bus recv must not error");
+            if matches!(env.payload, AcpEvent::DelegationChildRunning { .. }) {
+                continue;
+            }
+            break env;
+        };
         assert_eq!(bus_envelope.connection_id, "parent-conn");
         assert!(matches!(
             bus_envelope.payload,
@@ -9940,9 +10006,11 @@ mod tests {
         let mock = Arc::new(MockSpawner::new());
         let lookup = Arc::new(MockResumeLookup::default());
         *lookup.ctx.lock().await = ctx;
-        let broker =
-            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup())
-                .with_status_lookup(lookup.clone() as Arc<dyn ChildStatusLookup>);
+        let broker = DelegationBroker::new(
+            mock.clone() as Arc<dyn ConnectionSpawner>,
+            shallow_lookup(),
+        )
+        .with_status_lookup(lookup.clone() as Arc<dyn ChildStatusLookup>);
         enable_delegation(&broker).await;
         (mock, lookup, broker)
     }
@@ -9971,8 +10039,7 @@ mod tests {
     #[tokio::test]
     async fn resume_after_interruption_runs_under_same_id_then_completes() {
         let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
-            .await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
         mock.queue_resume_send(Ok(())).await;
 
         let mut req = resume_request("task-1");
@@ -9981,10 +10048,7 @@ mod tests {
         assert_eq!(ack.status, TaskStatus::Running);
         assert_eq!(ack.task_id.as_deref(), Some("task-1"));
         assert_eq!(ack.child_conversation_id, Some(42));
-        assert!(ack
-            .message
-            .unwrap()
-            .starts_with("Delegation resumed. task_id=task-1"));
+        assert!(ack.message.unwrap().starts_with("Delegation resumed. task_id=task-1"));
 
         // The spawn resumed the recorded agent session in the recorded dir.
         let spawns = mock.resume_spawn_args.lock().await;
@@ -10047,8 +10111,7 @@ mod tests {
         assert_eq!(canceled.status, TaskStatus::Canceled);
         assert_eq!(broker.completed_count().await, 1);
 
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
-            .await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
         mock.queue_resume_send(Ok(())).await;
         let ack = broker.resume_delegation(resume_request(&task_id)).await;
         assert_eq!(ack.status, TaskStatus::Running);
@@ -10166,8 +10229,7 @@ mod tests {
 
         // No live connection → the stranded row resumes.
         let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Running))).await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
-            .await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
         mock.queue_resume_send(Ok(())).await;
         let ack = broker.resume_delegation(resume_request("task-1")).await;
         assert_eq!(ack.status, TaskStatus::Running);
@@ -10269,8 +10331,7 @@ mod tests {
     #[tokio::test]
     async fn resume_send_failure_disconnects_and_unreserves() {
         let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
-            .await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
         mock.queue_resume_send(Err(SpawnerError::Send("stdin closed".into())))
             .await;
         let report = broker.resume_delegation(resume_request("task-1")).await;
@@ -10328,18 +10389,11 @@ mod tests {
         assert_eq!(report.error_code.as_deref(), Some(NOT_RESUMABLE_CODE));
         assert!(report.message.unwrap().contains("already in progress"));
         assert!(mock.resume_spawn_args.lock().await.is_empty());
-        assert!(broker
-            .pending
-            .inner
-            .lock()
-            .await
-            .resuming
-            .contains("task-1"));
+        assert!(broker.pending.inner.lock().await.resuming.contains("task-1"));
 
         // A successful resume releases its own claim.
         let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
-            .await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
         mock.queue_resume_send(Ok(())).await;
         let ack = broker.resume_delegation(resume_request("task-1")).await;
         assert_eq!(ack.status, TaskStatus::Running);
@@ -10374,8 +10428,7 @@ mod tests {
     #[tokio::test]
     async fn resumed_task_cancels_like_any_running_task() {
         let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
-            .await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
         mock.queue_resume_send(Ok(())).await;
         let ack = broker.resume_delegation(resume_request("task-1")).await;
         assert_eq!(ack.status, TaskStatus::Running);
@@ -10395,7 +10448,6 @@ mod tests {
             .await
             .contains(&"child-conn-2".to_string()));
     }
-
     // ── Assistant delegations ──────────────────────────────────────────────
 
     fn reviewer() -> DelegationAssistant {
@@ -10473,10 +10525,7 @@ mod tests {
         assert_eq!(send.task, "do x", "the task goes out untouched");
         let brief = send.brief.expect("the brief rides the first prompt");
         assert!(brief.contains(r#"{"name":"Reviewer","instructions":"Cite line numbers."}"#));
-        let link = send
-            .link
-            .assistant
-            .expect("the child row learns its assistant");
+        let link = send.link.assistant.expect("the child row learns its assistant");
         assert_eq!(link.id, 3);
         assert_eq!(link.snapshot, reviewer().run_snapshot());
 
@@ -10489,12 +10538,7 @@ mod tests {
 
         // Status keeps naming it; the terminal report and event do too.
         let report = broker
-            .get_task_status(
-                "parent-conn",
-                Some(1),
-                ack.task_id.as_deref().unwrap(),
-                StatusWait::Immediate,
-            )
+            .get_task_status("parent-conn", Some(1), ack.task_id.as_deref().unwrap(), StatusWait::Immediate)
             .await;
         assert_eq!(report.assistant_id, Some(3));
         broker
@@ -10511,19 +10555,11 @@ mod tests {
             )
             .await;
         let done = broker
-            .get_task_status(
-                "parent-conn",
-                Some(1),
-                ack.task_id.as_deref().unwrap(),
-                StatusWait::Immediate,
-            )
+            .get_task_status("parent-conn", Some(1), ack.task_id.as_deref().unwrap(), StatusWait::Immediate)
             .await;
         assert_eq!(done.status, TaskStatus::Completed);
         assert_eq!(done.assistant_name.as_deref(), Some("Reviewer"));
-        assert_eq!(
-            emitter.snapshot().await[0].assistant,
-            Some(reviewer().identity())
-        );
+        assert_eq!(emitter.snapshot().await[0].assistant, Some(reviewer().identity()));
         let writes = writer.snapshot().await;
         let terminal_meta = &writes.last().unwrap().meta["houhub.delegation"];
         assert_eq!(terminal_meta["status"], "completed");
@@ -10614,8 +10650,7 @@ mod tests {
                 ..DelegationConfig::default()
             })
             .await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-r")))
-            .await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-r"))).await;
         mock.queue_resume_send(Ok(())).await;
 
         let ack = broker.resume_delegation(resume_request("task-1")).await;
@@ -10664,10 +10699,7 @@ mod tests {
         assert!(report.message.unwrap().contains("could not be read back"));
         assert_eq!(report.assistant_id, Some(3));
         assert_eq!(report.assistant_name.as_deref(), Some("Reviewer"));
-        assert!(
-            mock.resume_spawn_args.lock().await.is_empty(),
-            "nothing relaunched"
-        );
+        assert!(mock.resume_spawn_args.lock().await.is_empty(), "nothing relaunched");
     }
 
     /// A resume refused before its gates (delegation switched off) still says
@@ -10682,9 +10714,7 @@ mod tests {
         enable_delegation(&broker).await;
         let ack = broker.start_delegation(assistant_request(1, "pt-e")).await;
         let task_id = ack.task_id.unwrap();
-        broker
-            .cancel_task_by_id("parent-conn", Some(1), &task_id)
-            .await;
+        broker.cancel_task_by_id("parent-conn", Some(1), &task_id).await;
         broker
             .set_config(DelegationConfig {
                 enabled: false,
@@ -10701,10 +10731,7 @@ mod tests {
         foreign.parent_connection_id = "someone-else".into();
         let refused = broker.resume_delegation(foreign).await;
         assert_eq!(refused.agent_type, None);
-        assert_eq!(
-            refused.assistant_id, None,
-            "no identity for a foreign caller"
-        );
+        assert_eq!(refused.assistant_id, None, "no identity for a foreign caller");
     }
 
     /// The DB lookup decides "assistant child" off the row's `assistant_id`,
@@ -10758,15 +10785,9 @@ mod tests {
             }),
         };
 
-        let ctx = lookup
-            .find_resume_context_by_call_id("call-a")
-            .await
-            .unwrap();
+        let ctx = lookup.find_resume_context_by_call_id("call-a").await.unwrap();
         assert_eq!(ctx.assistant, ResumeAssistant::Snapshot(reviewer()));
-        let ctx = lookup
-            .find_resume_context_by_call_id("call-p")
-            .await
-            .unwrap();
+        let ctx = lookup.find_resume_context_by_call_id("call-p").await.unwrap();
         assert_eq!(ctx.assistant, ResumeAssistant::None);
         assert_eq!(plain.assistant_id, None);
 
@@ -10781,10 +10802,7 @@ mod tests {
                 ))
                 .await
                 .unwrap();
-            let ctx = lookup
-                .find_resume_context_by_call_id("call-a")
-                .await
-                .unwrap();
+            let ctx = lookup.find_resume_context_by_call_id("call-a").await.unwrap();
             assert!(
                 matches!(ctx.assistant, ResumeAssistant::Unrecoverable { id: 3, .. }),
                 "{broken}: {:?}",
@@ -10795,9 +10813,9 @@ mod tests {
 
     #[tokio::test]
     async fn resuming_an_agent_child_keeps_the_per_agent_defaults_and_no_brief() {
-        let (mock, _lookup, broker) = resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-r2")))
-            .await;
+        let (mock, _lookup, broker) =
+            resume_harness(Some(resume_ctx(TaskStatus::Canceled))).await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-r2"))).await;
         mock.queue_resume_send(Ok(())).await;
         let ack = broker.resume_delegation(resume_request("task-1")).await;
         assert_eq!(ack.assistant_id, None);

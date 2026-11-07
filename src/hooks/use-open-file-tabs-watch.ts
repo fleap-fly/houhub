@@ -88,7 +88,7 @@ async function resolveFileChangeDecision(
   io: FileIoTarget,
   fileTabsRef: RefObject<FileWorkspaceTab[]>
 ): Promise<FileChangeDecision> {
-  if (tabSnapshot.kind !== "file" || tabSnapshot.resourceKind === "readonly") {
+  if (tabSnapshot.kind !== "file") {
     return { kind: "none" }
   }
   const path = tabSnapshot.path
@@ -208,8 +208,7 @@ export function useOpenFileTabsWatch({
   const watchSignature = useMemo(() => {
     const rootByFolder = new Map<number, string>()
     for (const tab of fileTabs) {
-      if (tab.kind !== "file" || tab.resourceKind === "readonly" || !tab.path)
-        continue
+      if (tab.kind !== "file" || !tab.path) continue
       const owning = findOwningFolder(tab.path, allFolders)
       if (!owning) continue
       rootByFolder.set(owning.folderId, owning.rootPath)
@@ -249,7 +248,6 @@ export function useOpenFileTabsWatch({
         const openFileTabs = (fileTabsRef.current ?? []).filter(
           (t) =>
             t.kind === "file" &&
-            t.resourceKind !== "readonly" &&
             t.path &&
             !t.loading &&
             isPathUnderRoot(t.path, rootPath)
@@ -429,12 +427,7 @@ export function useOpenFileTabsWatch({
   const lastActivationCheckedTabIdRef = useRef<string | null>(null)
   useEffect(() => {
     const tab = activeFileTab
-    if (
-      !tab ||
-      tab.kind !== "file" ||
-      tab.resourceKind === "readonly" ||
-      !tab.path
-    ) {
+    if (!tab || tab.kind !== "file" || !tab.path) {
       lastActivationCheckedTabIdRef.current = null
       return
     }

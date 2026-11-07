@@ -47,6 +47,8 @@ import type {
   ForgeIdentity,
   ForgeIssueList,
   ForgeIssueRow,
+  ForgeIssuesCreateResult,
+  ForgeIssuesTaskDraftInput,
   ForgeLabelList,
   ForgeMergeMethod,
   ForgeMergeOptions,
@@ -4276,7 +4278,11 @@ export async function workTaskDeliverPr(
   prTitle: string | null,
   draft: boolean,
   deleteWorktree: boolean,
-  markDone: boolean
+  markDone: boolean,
+  /** Which issues the pull request closes — a task made from several related
+   *  issues only, and only before its first delivery fixed the list. Omitted
+   *  (`undefined`) for every other delivery. */
+  closes?: number[]
 ): Promise<string> {
   return getTransport().call("work_task_deliver_pr", {
     id,
@@ -4284,6 +4290,7 @@ export async function workTaskDeliverPr(
     draft,
     deleteWorktree,
     markDone,
+    ...(closes === undefined ? {} : { closes }),
   })
 }
 
@@ -6603,6 +6610,13 @@ export async function workTaskCreateFromForge(
   return getTransport().call("work_task_create_from_forge", { draft })
 }
 
+/** One task for several related issues — see `ForgeIssuesTaskDraftInput`. */
+export async function workTaskCreateFromForgeIssues(
+  draft: ForgeIssuesTaskDraftInput
+): Promise<ForgeIssuesCreateResult> {
+  return getTransport().call("work_task_create_from_forge_issues", { draft })
+}
+
 /** Latest task per source key (any state) — drives the row chips. */
 export async function workTaskLookupBySource(
   sourceKeys: string[]
@@ -6648,46 +6662,6 @@ export async function forgeAutoScanNow(
   folderId: number
 ): Promise<ForgeAutoScanReport> {
   return getTransport().call("forge_auto_scan_now", { folderId })
-}
-
-export interface ModelProviderTestOutcome {
-  success: boolean
-  latencyMs: number
-  error: string | null
-  preview: string | null
-}
-
-export interface HouflowManagedGatewaySyncResult {
-  providers: ModelProviderInfo[]
-  boundAgentTypes: AgentType[]
-  skippedAgentTypes: AgentType[]
-}
-
-export interface HouflowConnectorStatusResult {
-  installed: boolean
-  executable: string | null
-  version: unknown | null
-  snapshot: unknown | null
-  diagnosis: unknown | null
-  error: string | null
-}
-
-export interface HouflowConnectorLocalAgentSyncInput {
-  localAgentRef: string
-  provider: string
-  name: string
-  runtimeProvider?: string | null
-  runtimeRunner?: boolean | null
-  workingDirectory?: string | null
-  skillsDirectory?: string | null
-  useDefaultSkillsDirectory?: boolean | null
-  capabilities?: string[] | null
-}
-
-export interface HouflowConnectorSyncLocalAgentsResult {
-  agents: unknown[]
-  heartbeat: unknown | null
-  status: unknown
 }
 
 export async function fetchOpenAiCompatibleModels(params: {
@@ -6770,4 +6744,44 @@ export async function syncHouflowConnectorLocalAgents(params: {
     },
     { timeoutMs: 120_000 }
   )
+}
+
+export interface ModelProviderTestOutcome {
+  success: boolean
+  latencyMs: number
+  error: string | null
+  preview: string | null
+}
+
+export interface HouflowManagedGatewaySyncResult {
+  providers: ModelProviderInfo[]
+  boundAgentTypes: AgentType[]
+  skippedAgentTypes: AgentType[]
+}
+
+export interface HouflowConnectorStatusResult {
+  installed: boolean
+  executable: string | null
+  version: unknown | null
+  snapshot: unknown | null
+  diagnosis: unknown | null
+  error: string | null
+}
+
+export interface HouflowConnectorLocalAgentSyncInput {
+  localAgentRef: string
+  provider: string
+  name: string
+  runtimeProvider?: string | null
+  runtimeRunner?: boolean | null
+  workingDirectory?: string | null
+  skillsDirectory?: string | null
+  useDefaultSkillsDirectory?: boolean | null
+  capabilities?: string[] | null
+}
+
+export interface HouflowConnectorSyncLocalAgentsResult {
+  agents: unknown[]
+  heartbeat: unknown | null
+  status: unknown
 }

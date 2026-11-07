@@ -1,15 +1,11 @@
 use std::sync::Arc;
 
 use axum::{extract::Extension, Json};
-
 use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
-
 use crate::app_state::AppState;
-
 use crate::commands::work_task as core;
-
 use crate::models::{
     WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
     WorkTaskTemplateDraft, WorkTaskTemplateInfo,
@@ -83,6 +79,7 @@ pub struct ReturnParams {
     #[serde(default)]
     pub intent: Option<String>,
     /// Out-of-band attachments (images, pasted bytes) as raw prompt blocks.
+    /// Defaults, so an older client's body still deserializes.
     #[serde(default)]
     pub blocks: Vec<serde_json::Value>,
 }
@@ -167,6 +164,11 @@ pub struct DeliverPrParams {
     /// predates the choice delivers the way every delivery always did.
     #[serde(default)]
     pub mark_done: Option<bool>,
+    /// Which issues the pull request closes — a task made from several
+    /// related issues only. Absent keeps the list already fixed for the task,
+    /// or closes every issue on its first delivery.
+    #[serde(default)]
+    pub closes: Option<Vec<i64>>,
 }
 
 #[derive(Deserialize)]
@@ -302,7 +304,9 @@ pub async fn work_task_delete(
     Ok(Json(()))
 }
 
-pub async fn work_task_start(Json(params): Json<IdParams>) -> Result<Json<()>, AppCommandError> {
+pub async fn work_task_start(
+    Json(params): Json<IdParams>,
+) -> Result<Json<()>, AppCommandError> {
     core::work_task_start_core(params.id)
         .await
         .map_err(AppCommandError::from)?;
@@ -321,14 +325,9 @@ pub async fn work_task_start_all(
 pub async fn work_task_retry(
     Json(params): Json<RestartParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    core::work_task_retry_core(
-        params.id,
-        params.note,
-        params.blocks,
-        params.allow_duplicate_source,
-    )
-    .await
-    .map_err(AppCommandError::from)?;
+    core::work_task_retry_core(params.id, params.note, params.blocks, params.allow_duplicate_source)
+        .await
+        .map_err(AppCommandError::from)?;
     Ok(Json(()))
 }
 
@@ -345,7 +344,7 @@ pub async fn work_task_requeue(
         params.allow_duplicate_source,
     )
     .await
-    .map_err(AppCommandError::from)?;
+        .map_err(AppCommandError::from)?;
     Ok(Json(()))
 }
 
@@ -414,6 +413,7 @@ pub async fn work_task_deliver_pr(
         params.draft,
         params.delete_worktree,
         params.mark_done,
+        params.closes,
     )
     .await
     .map_err(AppCommandError::from)?;
@@ -449,7 +449,9 @@ pub async fn work_task_defer(
     Ok(Json(()))
 }
 
-pub async fn work_task_cleanup(Json(params): Json<IdParams>) -> Result<Json<()>, AppCommandError> {
+pub async fn work_task_cleanup(
+    Json(params): Json<IdParams>,
+) -> Result<Json<()>, AppCommandError> {
     core::work_task_cleanup_core(params.id)
         .await
         .map_err(AppCommandError::from)?;
@@ -506,9 +508,14 @@ pub async fn work_task_settings_set(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<SettingsSetParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    core::work_task_settings_set_core(&state.emitter, &state.db, params.folder_id, params.settings)
-        .await
-        .map_err(AppCommandError::from)?;
+    core::work_task_settings_set_core(
+        &state.emitter,
+        &state.db,
+        params.folder_id,
+        params.settings,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
     Ok(Json(()))
 }
 

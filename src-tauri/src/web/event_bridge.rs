@@ -1,9 +1,7 @@
 use std::sync::atomic::Ordering;
-
 use std::sync::Arc;
 
 use serde::{ser::SerializeStruct, Serialize, Serializer};
-
 use tokio::sync::{broadcast, RwLock};
 
 use crate::acp::{AcpEvent, EventBusMetrics, EventEnvelope, InternalEventBus, SessionState};
@@ -441,28 +439,26 @@ pub enum AutomationChange {
     },
 }
 
-/// Global side-channel for cross-client task-board sync. Task execution is
-/// headless, so clients refresh the board when the engine changes a row.
+/// Global side-channel for cross-client work-task board sync. Mirrors
+/// [`AUTOMATION_CHANGED_EVENT`]: the task engine runs headless, so this
+/// broadcast is the only way an open tasks view (or the sidebar badge) learns a
+/// task advanced. Payload is id-only — clients refetch.
 pub const WORK_TASK_CHANGED_EVENT: &str = "task://changed";
 
-/// Id-only task change payload. Keeping the wire payload small avoids sending
-/// task transcripts through every connected client; the UI refetches the row
-/// or list it needs.
+/// Payload for [`WORK_TASK_CHANGED_EVENT`]. Ids only — clients respond with a
+/// refetch of the task list (and badge count).
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkTaskChange {
-    Upsert {
-        id: i32,
-    },
-    Deleted {
-        id: i32,
-    },
+    /// Insert-or-replace by id (create, edit, any status transition).
+    Upsert { id: i32 },
+    /// Soft-deleted by id.
+    Deleted { id: i32 },
     /// Something the folder's tasks INHERIT changed: its task settings, or the
     /// folder's own default agent (the layer below them). Either can change
     /// what an inheriting task runs — and reports — without touching a row.
-    Settings {
-        folder_id: i32,
-    },
+    Settings { folder_id: i32 },
+    /// Bulk change (e.g. boot reconcile) — refetch everything.
     Refresh,
 }
 
@@ -568,7 +564,7 @@ pub async fn emit_with_state_built<F>(
 where
     F: FnOnce(&mut SessionState) -> Option<AcpEvent>,
 {
-    let (envelope_arc, stream, evicted) = {
+    let (envelope_arc, stream, evicted, turn_file_jobs) = {
         let mut s = state.write().await;
         let Some(payload) = build(&mut s) else {
             return false;
@@ -581,8 +577,27 @@ where
             payload,
         });
         let evicted = s.push_recent_event(Arc::clone(&envelope));
-        (envelope, s.event_stream(), evicted)
+        let turn_file_jobs = std::mem::take(&mut s.turn_file_jobs);
+        (envelope, s.event_stream(), evicted, turn_file_jobs)
     };
+
+    // Office auto-preview: confirm the files this turn's tool calls named.
+    // Filesystem work, so off the session lock and off the async workers.
+    if !turn_file_jobs.is_empty() {
+        let emitter = emitter.clone();
+        let run = move || {
+            for job in turn_file_jobs {
+                crate::agent_turn_files::run_job(job, &emitter);
+            }
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(run);
+            }
+            // Not reachable from the async callers today; never drop the work.
+            Err(_) => run(),
+        }
+    }
 
     // Per-connection broadcaster — primary delivery path for web/remote-
     // desktop transports (they use Subscribe-with-Snapshot attach for ACP
@@ -853,11 +868,7 @@ mod tests {
         assert_eq!(p["kind"], "deleted");
         assert_eq!(p["id"], 3);
 
-        emit_event(
-            &emitter,
-            FOLDER_GROUP_CHANGED_EVENT,
-            FolderGroupChange::Layout,
-        );
+        emit_event(&emitter, FOLDER_GROUP_CHANGED_EVENT, FolderGroupChange::Layout);
         let evt = rx.try_recv().expect("layout nudge should broadcast");
         let p = &*evt.payload;
         assert_eq!(p["kind"], "layout");
@@ -909,9 +920,7 @@ mod tests {
         assert_eq!(p["kind"], "upsert");
         assert_eq!(p["assistant"]["id"], 3);
         assert_eq!(p["assistant"]["revision"], 2);
-        assert!(p["assistant"]
-            .get("deleted_at")
-            .is_some_and(|v| v.is_null()));
+        assert!(p["assistant"].get("deleted_at").is_some_and(|v| v.is_null()));
 
         emit_event(
             &emitter,

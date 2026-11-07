@@ -1,15 +1,11 @@
 use std::sync::Arc;
 
 use axum::{extract::Extension, Json};
-
 use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
-
 use crate::app_state::AppState;
-
 use crate::commands::conversations as conv_commands;
-
 use crate::models::*;
 
 #[derive(Deserialize, Default)]
@@ -430,6 +426,7 @@ pub async fn delete_conversation(
     conv_commands::delete_conversation_with_cleanup_core(
         &state.emitter,
         &state.db.conn,
+        &state.connection_manager,
         params.conversation_id,
     )
     .await?;

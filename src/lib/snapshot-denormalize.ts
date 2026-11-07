@@ -82,7 +82,10 @@ export interface SnapshotPatch {
    *  that the one-shot `session_config_stale` event won't replay. */
   configStale: boolean
   configStaleKind: ConfigStaleKind | null
-  /** Launched-but-unresolved background tasks carried by the snapshot. */
+  /** Launched-but-unresolved background tasks carried by the snapshot, so a
+   *  client attaching mid-episode recovers the sweep exemption the one-shot
+   *  `background_activity` events won't replay. `0` when the server omitted
+   *  the field. */
   backgroundOutstanding: number
   /** AIR typed session failure table carried by the snapshot — resolved
    *  entries and their revision watermarks included. MERGED into the in-memory
@@ -113,6 +116,9 @@ export interface SnapshotPatch {
    *  `seedDelegationsFromSnapshot`); the reducer does not store this on
    *  ConnectionState. `[]` when the server omitted the field. */
   activeDelegations: ActiveDelegationState[]
+  /** Child connection ids of every running houhub delegation — the parent's
+   *  busy signal (`ConnectionState.delegatedChildren`). `[]` when absent. */
+  delegatedChildren: string[]
 }
 
 const DEFAULT_PROMPT_CAPS: PromptCapabilitiesInfo = {
@@ -184,6 +190,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     lastErrorLevel: routeAcpError(lastErrorCode).level,
     eventSeq: wire.event_seq,
     activeDelegations: wire.active_delegations ?? [],
+    delegatedChildren: wire.delegated_children ?? [],
   }
 }
 
@@ -251,17 +258,47 @@ function denormalizeBlock(
 }
 
 /**
- * Rebuild the raw output text that a live tool-call event would carry from
- * the backend's parsed output variant. Snapshot hydration has no chunk
- * history, but downstream cards parse the agent's original text rather than
- * the tagged storage envelope.
+ * Rebuild the `raw_output` TEXT a live `tool_call` event would have carried,
+ * from the snapshot's already-parsed `ToolCallOutput`.
+ *
+ * The backend does not keep the agent's raw output string: `upsert_tool_call`
+ * runs it through `parse_tool_call_output_text` and stores the tagged enum
+ * (`{kind:"json",value}` / `{kind:"text",content}` / `{kind:"error",message}`).
+ * `raw_output_chunks`, on the other hand, is by contract the agent's own text —
+ * every downstream reader (`delegation-status`, `background-task`,
+ * `ask-question`, `feedback-check`, `shell-session-tool`, and the generic tool
+ * card) parses it as such. Serializing the enum wholesale therefore hands them
+ * `{"kind":"json","value":{…}}`, which matches none of their shapes: the
+ * delegation card's `findTasksArray` misses the `tasks` array and falls back to
+ * painting the envelope as opaque text.
+ *
+ * The corruption is intermittent because it only touches tool calls that are in
+ * `active_tool_calls` when a hydrate lands (WS re-attach after lag, viewing the
+ * session from a second client, refresh mid-turn) AND receive no later
+ * `raw_output` event to overwrite the chunk — hence one poll in a run rendering
+ * raw JSON while its neighbours are fine.
+ *
+ * Inverting the enum is faithful for `json` (`JSON.stringify` of the parsed
+ * value — key order may differ, which no reader depends on) and for `text`
+ * (stored verbatim). `error` is re-wrapped as the `{error: …}` object that made
+ * the backend choose that variant, so it round-trips back to the same variant
+ * and the message stays where readers scan for it — but the sibling keys the
+ * backend dropped when promoting to `Error` are gone for good. One consequence
+ * worth knowing: a codex-style `{result: null, error: "…"}` host failure comes
+ * back without its `result` key, so `mcp-result-envelope.ts::hostFailureError`
+ * (which requires both) no longer recognizes it and the delegation card shows
+ * the `{"error": …}` JSON rather than the bare message. The failure is still
+ * reported, and the loss happens in the backend, not in this inversion.
  */
 function toolOutputRawText(output: ToolCallState["output"]): string | null {
   if (output == null) return null
+  // A bare string is what an older backend sent before the enum existed.
   if (typeof output === "string") return output
   if (output.kind === "text") return output.content
   if (output.kind === "json") return JSON.stringify(output.value)
   if (output.kind === "error") return JSON.stringify({ error: output.message })
+  // A variant this build doesn't know yet: still better as its own JSON than
+  // dropped on the floor.
   return JSON.stringify(output)
 }
 

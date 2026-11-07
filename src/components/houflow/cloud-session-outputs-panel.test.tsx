@@ -7,7 +7,8 @@ import {
 import type { HouflowCloudSessionOutput } from "@/houflow/cloud-sessions"
 
 const mocks = vi.hoisted(() => ({
-  openReadonlyFilePreview: vi.fn(),
+  openFilePreview: vi.fn().mockResolvedValue("houflow-tab"),
+  updateFileTabContent: vi.fn(),
   listOutputs: vi.fn(),
   getOutputText: vi.fn(),
   getOutputBytes: vi.fn(),
@@ -25,7 +26,8 @@ vi.mock("sonner", () => ({
 
 vi.mock("@/contexts/workspace-context", () => ({
   useWorkspaceActions: () => ({
-    openReadonlyFilePreview: mocks.openReadonlyFilePreview,
+    openFilePreview: mocks.openFilePreview,
+    updateFileTabContent: mocks.updateFileTabContent,
   }),
 }))
 
@@ -85,7 +87,9 @@ describe("canPreviewOutput", () => {
 
 describe("CloudSessionOutputsPanel", () => {
   beforeEach(() => {
-    mocks.openReadonlyFilePreview.mockReset()
+    mocks.openFilePreview.mockReset()
+    mocks.openFilePreview.mockResolvedValue("houflow-tab")
+    mocks.updateFileTabContent.mockReset()
     mocks.listOutputs.mockReset()
     mocks.getOutputText.mockReset()
     mocks.getOutputBytes.mockReset()
@@ -121,15 +125,11 @@ describe("CloudSessionOutputsPanel", () => {
     fireEvent.click(file)
 
     await waitFor(() => {
-      expect(mocks.openReadonlyFilePreview).toHaveBeenCalledWith({
-        id: "houflow:session-1:out-html",
-        title: "report.html",
-        description: "outputs/report.html",
-        path: "outputs/report.html",
-        language: "html",
-        content: "<h1>Report</h1>",
-        preview: true,
-      })
+      expect(mocks.openFilePreview).toHaveBeenCalledWith("outputs/report.html")
+      expect(mocks.updateFileTabContent).toHaveBeenCalledWith(
+        "houflow-tab",
+        "<h1>Report</h1>"
+      )
     })
     expect(mocks.getOutputText).toHaveBeenCalledWith(
       expect.anything(),
