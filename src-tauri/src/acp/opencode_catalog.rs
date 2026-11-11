@@ -14,7 +14,6 @@
 //!    offline.
 
 use std::path::{Path, PathBuf};
-
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -103,8 +102,14 @@ pub fn normalize_models_dev(raw: &str) -> Result<Vec<CatalogProvider>, AppComman
             .filter(|s| !s.is_empty())
             .unwrap_or(&id)
             .to_string();
-        let npm = p.get("npm").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let doc = p.get("doc").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let npm = p
+            .get("npm")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let doc = p
+            .get("doc")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let env = p
             .get("env")
             .and_then(|v| v.as_array())
@@ -114,12 +119,7 @@ pub fn normalize_models_dev(raw: &str) -> Result<Vec<CatalogProvider>, AppComman
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let auth_kind = if is_oauth_provider(&id) {
-            "oauth"
-        } else {
-            "api"
-        }
-        .to_string();
+        let auth_kind = if is_oauth_provider(&id) { "oauth" } else { "api" }.to_string();
 
         let mut models = Vec::new();
         if let Some(model_obj) = p.get("models").and_then(|v| v.as_object()) {
@@ -141,14 +141,8 @@ pub fn normalize_models_dev(raw: &str) -> Result<Vec<CatalogProvider>, AppComman
                 models.push(CatalogModel {
                     id: model_id,
                     name: model_name,
-                    reasoning: m
-                        .get("reasoning")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                    tool_call: m
-                        .get("tool_call")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
+                    reasoning: m.get("reasoning").and_then(|v| v.as_bool()).unwrap_or(false),
+                    tool_call: m.get("tool_call").and_then(|v| v.as_bool()).unwrap_or(false),
                     context: m
                         .get("limit")
                         .and_then(|v| v.get("context"))
@@ -259,9 +253,11 @@ async fn fetch_live() -> Result<Vec<CatalogProvider>, AppCommandError> {
         .map_err(|e| {
             AppCommandError::network(format!("failed to build models.dev http client: {e}"))
         })?;
-    let response = client.get(MODELS_DEV_URL).send().await.map_err(|e| {
-        AppCommandError::network(format!("failed to fetch models.dev catalog: {e}"))
-    })?;
+    let response = client
+        .get(MODELS_DEV_URL)
+        .send()
+        .await
+        .map_err(|e| AppCommandError::network(format!("failed to fetch models.dev catalog: {e}")))?;
     if !response.status().is_success() {
         return Err(AppCommandError::network(format!(
             "failed to fetch models.dev catalog: HTTP {}",
@@ -305,10 +301,7 @@ mod tests {
             catalog.len()
         );
         let openai = catalog.iter().find(|p| p.id == "openai");
-        assert!(
-            openai.is_some(),
-            "snapshot must include the openai provider"
-        );
+        assert!(openai.is_some(), "snapshot must include the openai provider");
         let openai = openai.unwrap();
         assert_eq!(openai.auth_kind, "oauth");
         assert!(!openai.models.is_empty());
@@ -334,6 +327,29 @@ mod tests {
             )),
             "bundled snapshot has no cache read/write prices; regenerate it from models.dev"
         );
+    }
+
+    #[test]
+    fn bundled_snapshot_prices_claude_fable_5_2() {
+        // Claude Code 2.1.321 (claude-agent-acp 0.102.0) makes Fable 5.2 the
+        // `fable` model, so an offline install must price it too: $8/$40 per
+        // Mtok, $0.20 cache reads and $10 cache writes, as models.dev lists it.
+        let catalog = bundled_catalog();
+        let fable = catalog
+            .iter()
+            .find(|p| p.id == "anthropic")
+            .and_then(|p| p.models.iter().find(|m| m.id == "claude-fable-5-2"))
+            .expect("snapshot must list claude-fable-5-2 under anthropic");
+        assert_eq!(
+            (
+                fable.cost_in,
+                fable.cost_out,
+                fable.cost_cache_read,
+                fable.cost_cache_write
+            ),
+            (Some(8.0), Some(40.0), Some(0.2), Some(10.0))
+        );
+        assert_eq!(fable.context, Some(1_000_000));
     }
 
     #[test]
