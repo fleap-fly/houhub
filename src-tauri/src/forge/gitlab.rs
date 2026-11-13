@@ -25,23 +25,21 @@
 //! is shared with the GitHub client.
 
 use std::collections::HashMap;
-
 use std::sync::{LazyLock, RwLock};
 
 use serde::Deserialize;
 
 use super::auth::ResolvedAuth;
-
 use super::deliver::{ForgePr, NewPullRequest};
-
 use super::{
     count_diff_lines, sanitize_web_url, scan_timestamp, truncate_chars, urlencode_path,
+    ForgeCheckSummary, ForgeCheckSummaryList, ForgeCheckVerdict,
     urlencode_query, validate_state_filter, web_origin, ForgeChangeDetail, ForgeChangedFile,
     ForgeChangedFileList, ForgeCheck, ForgeCheckList, ForgeCheckState, ForgeComment,
     ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList, ForgeIssueRow, ForgeItemKind,
-    ForgeLabel, ForgeLabelList, ForgeMergeMethod, ForgeMergeOptions, ForgeMergeStrategy, ForgeSort,
-    ForgeStateAction, ListIssuesRequest, OpenItemsScan, ResolvedNewIssue, ScanCursor, BODY_CAP,
-    LABEL_PAGE_SIZE, SCAN_MAX_PAGES, SCAN_PAGE_SIZE,
+    ForgeLabel, ForgeLabelList, ForgeMergeMethod, ForgeMergeOptions, ForgeMergeStrategy,
+    ForgeSort, ForgeStateAction, ListIssuesRequest, OpenItemsScan, ResolvedNewIssue, ScanCursor,
+    BODY_CAP, LABEL_PAGE_SIZE, SCAN_MAX_PAGES, SCAN_PAGE_SIZE,
 };
 
 // ── reads ───────────────────────────────────────────────────────────────────
@@ -81,10 +79,7 @@ pub async fn list_issues(
     if !req.labels.is_empty() {
         // Comma-joined, which is lossless here: GitLab forbids commas in label
         // titles, so no name can be split by this.
-        url.push_str(&format!(
-            "&labels={}",
-            urlencode_query(&req.labels.join(","))
-        ));
+        url.push_str(&format!("&labels={}", urlencode_query(&req.labels.join(","))));
     }
     if let Some(text) = req.search.as_deref() {
         // `search` is plain text on both collections, so unlike GitHub's `q`
@@ -92,18 +87,15 @@ pub async fn list_issues(
         // default and is stated anyway: the box promises that scope, and a
         // promise resting on somebody else's default is one release away from
         // being wrong.
-        url.push_str(&format!(
-            "&search={}&in=title,description",
-            urlencode_query(text)
-        ));
+        url.push_str(&format!("&search={}&in=title,description", urlencode_query(text)));
     }
 
     let response = api_get(auth, &url).await?;
     let total_count = header_i64(response.headers(), "x-total");
     // Empty means "no page after this one" — the one pagination signal GitLab
     // always sends, even where it declines to count.
-    let has_next =
-        header_str(response.headers(), "x-next-page").is_some_and(|v| !v.trim().is_empty());
+    let has_next = header_str(response.headers(), "x-next-page")
+        .is_some_and(|v| !v.trim().is_empty());
     let raw: Vec<RawItem> = response
         .json()
         .await
@@ -159,45 +151,40 @@ pub async fn list_open_items(
     let project = project_ref(owner_repo)?;
     let mut rows = Vec::new();
     let mut cursor = ScanCursor::default();
-    for (wanted, collection, is_pr) in [(issues, "issues", false), (pulls, "merge_requests", true)]
-    {
+    for (wanted, collection, is_pr) in [
+        (issues, "issues", false),
+        (pulls, "merge_requests", true),
+    ] {
         if !wanted {
             continue;
         }
         let project = &project;
-        super::scan_collection(
-            collection,
-            from,
-            &mut cursor,
-            &mut rows,
-            SCAN_MAX_PAGES,
-            |page| {
-                let mut url = format!(
-                    "{}/projects/{project}/{collection}?state=opened&order_by=updated_at&sort=desc\
+        super::scan_collection(collection, from, &mut cursor, &mut rows, SCAN_MAX_PAGES, |page| {
+            let mut url = format!(
+                "{}/projects/{project}/{collection}?state=opened&order_by=updated_at&sort=desc\
                  &with_labels_details=true&per_page={SCAN_PAGE_SIZE}&page={page}",
-                    auth.api_base
-                );
-                if let Some(since) = since {
-                    url.push_str(&format!(
-                        "&updated_after={}",
-                        urlencode_query(&scan_timestamp(since))
-                    ));
-                }
-                async move {
-                    let response = api_get(auth, &url).await?;
-                    let has_next = header_str(response.headers(), "x-next-page")
-                        .is_some_and(|v| !v.trim().is_empty());
-                    let raw: Vec<RawItem> = response
-                        .json()
-                        .await
-                        .map_err(|e| ForgeError::Network(format!("bad list payload: {e}")))?;
-                    Ok((
-                        raw.into_iter().map(|item| item.into_row(is_pr)).collect(),
-                        has_next,
-                    ))
-                }
-            },
-        )
+                auth.api_base
+            );
+            if let Some(since) = since {
+                url.push_str(&format!(
+                    "&updated_after={}",
+                    urlencode_query(&scan_timestamp(since))
+                ));
+            }
+            async move {
+                let response = api_get(auth, &url).await?;
+                let has_next = header_str(response.headers(), "x-next-page")
+                    .is_some_and(|v| !v.trim().is_empty());
+                let raw: Vec<RawItem> = response
+                    .json()
+                    .await
+                    .map_err(|e| ForgeError::Network(format!("bad list payload: {e}")))?;
+                Ok((
+                    raw.into_iter().map(|item| item.into_row(is_pr)).collect(),
+                    has_next,
+                ))
+            }
+        })
         .await?;
     }
     Ok(OpenItemsScan {
@@ -300,8 +287,8 @@ pub async fn list_notes(
         auth.api_base
     );
     let response = api_get(auth, &url).await?;
-    let has_next =
-        header_str(response.headers(), "x-next-page").is_some_and(|v| !v.trim().is_empty());
+    let has_next = header_str(response.headers(), "x-next-page")
+        .is_some_and(|v| !v.trim().is_empty());
     let raw: Vec<RawNote> = response
         .json()
         .await
@@ -348,9 +335,7 @@ pub async fn get_merge_request(
         .json()
         .await
         .map_err(|e| ForgeError::Network(format!("bad merge request payload: {e}")))?;
-    let foreign_project = raw
-        .source_project_id
-        .filter(|src| Some(*src) != raw.target_project_id);
+    let foreign_project = raw.source_project_id.filter(|src| Some(*src) != raw.target_project_id);
     let mut pr = map_merge_request(raw, owner_repo);
     if let Some(id) = foreign_project {
         if let Some(path) = project_path(auth, id).await {
@@ -442,10 +427,7 @@ pub async fn create_note(
         return Err(ForgeError::Invalid(format!("bad work item number: {iid}")));
     }
     let collection = collection_of(kind);
-    let url = format!(
-        "{}/projects/{project}/{collection}/{iid}/notes",
-        auth.api_base
-    );
+    let url = format!("{}/projects/{project}/{collection}/{iid}/notes", auth.api_base);
     let created: RawNote = api_post(auth, &url, &serde_json::json!({ "body": body }))
         .await?
         .json()
@@ -589,6 +571,9 @@ pub async fn change_detail(
         changed_files: raw.changes_count.as_deref().and_then(exact_changes_count),
         commits: None,
         checks,
+        // Only GitHub holds runs for a maintainer's approval through an API
+        // this panel can act on.
+        workflow_approval: None,
     })
 }
 
@@ -631,8 +616,7 @@ async fn pipeline_jobs(auth: &ResolvedAuth, project: &str, pipeline: i64) -> For
         "{}/projects/{project}/pipelines/{pipeline}/jobs?per_page={LABEL_PAGE_SIZE}",
         auth.api_base
     );
-    let raw: Option<Vec<RawJob>> =
-        async { api_get(auth, &url).await.ok()?.json().await.ok() }.await;
+    let raw: Option<Vec<RawJob>> = async { api_get(auth, &url).await.ok()?.json().await.ok() }.await;
     match raw {
         Some(jobs) => ForgeCheckList::available(
             jobs.into_iter()
@@ -665,6 +649,112 @@ fn job_state(status: &str) -> ForgeCheckState {
     }
 }
 
+/// The GraphQL endpoint beside a REST base: `…/api/v4` → `…/api/graphql`,
+/// keeping whatever relative URL root the instance is mounted under.
+pub(crate) fn graphql_url(api_base: &str) -> String {
+    let base = api_base.trim_end_matches('/');
+    match base.strip_suffix("/v4") {
+        Some(api) => format!("{api}/graphql"),
+        None => format!("{base}/graphql"),
+    }
+}
+
+/// A head pipeline's status, folded the way [`job_state`] folds a job's — so
+/// the row and the panel's tab badge read the same words the same way.
+/// `MANUAL` (blocked on a manual job) is no verdict, as a manual job is.
+fn pipeline_verdict(status: &str, group: Option<&str>) -> ForgeCheckVerdict {
+    // "Passed with warnings" is a pass whose allowed failures are the detail.
+    if group == Some("success-with-warnings") {
+        return ForgeCheckVerdict::Success;
+    }
+    match status {
+        "SUCCESS" => ForgeCheckVerdict::Success,
+        "FAILED" => ForgeCheckVerdict::Failure,
+        "CREATED" | "WAITING_FOR_RESOURCE" | "PREPARING" | "PENDING" | "RUNNING"
+        | "SCHEDULED" | "CANCELING" | "WAITING_FOR_CALLBACK" => ForgeCheckVerdict::Running,
+        _ => ForgeCheckVerdict::Neutral,
+    }
+}
+
+/// CI summaries for one page of merge requests: each one's HEAD PIPELINE
+/// status, in one GraphQL request (the REST list carries no pipeline). No
+/// counts — a pipeline status is what GitLab's own MR list shows too.
+///
+/// Decoration, so it never fails (see [`ForgeCheckSummaryList`]): a merge
+/// request missing from the answer is unknown, and `headPipeline: null` is a
+/// change with no pipeline.
+pub async fn check_summaries(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    numbers: &[i64],
+) -> ForgeCheckSummaryList {
+    let Some(path) = super::normalize_repo(owner_repo) else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    if numbers.is_empty() {
+        return ForgeCheckSummaryList {
+            available: true,
+            items: Vec::new(),
+        };
+    }
+    let iids: Vec<String> = numbers.iter().map(i64::to_string).collect();
+    let body = serde_json::json!({
+        "query": "query($path: ID!, $iids: [String!]) { project(fullPath: $path) { \
+                  mergeRequests(iids: $iids, first: 100) { nodes { iid \
+                  headPipeline { status detailedStatus { group } } } } } }",
+        "variables": { "path": path, "iids": iids },
+    });
+    let Ok(response) = api_post(auth, &graphql_url(&auth.api_base), &body).await else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    let Ok(value) = response.json::<serde_json::Value>().await else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    // Any error leaves the answer suspect as a whole: GitLab does not tie its
+    // errors to one merge request the way GitHub's aliases do.
+    if value
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|e| !e.is_empty())
+    {
+        return ForgeCheckSummaryList::unavailable();
+    }
+    let Some(nodes) = value
+        .pointer("/data/project/mergeRequests/nodes")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    let items = nodes
+        .iter()
+        .filter_map(|node| {
+            let number = node
+                .get("iid")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|iid| iid.parse::<i64>().ok())
+                .filter(|n| numbers.contains(n))?;
+            let pipeline = node.get("headPipeline").filter(|p| p.is_object());
+            let verdict = pipeline.and_then(|p| {
+                let status = p.get("status").and_then(serde_json::Value::as_str)?;
+                let group = p
+                    .pointer("/detailedStatus/group")
+                    .and_then(serde_json::Value::as_str);
+                Some(pipeline_verdict(status, group))
+            });
+            Some(ForgeCheckSummary {
+                number,
+                verdict,
+                counts: None,
+                awaiting_approval: 0,
+            })
+        })
+        .collect();
+    ForgeCheckSummaryList {
+        available: true,
+        items,
+    }
+}
+
 /// One page of the files a merge request touches.
 ///
 /// `/diffs` is the paginated endpoint (GitLab 15.7+); older instances answer
@@ -689,8 +779,8 @@ pub async fn list_change_files(
     );
     match api_get(auth, &url).await {
         Ok(response) => {
-            let has_next =
-                header_str(response.headers(), "x-next-page").is_some_and(|v| !v.trim().is_empty());
+            let has_next = header_str(response.headers(), "x-next-page")
+                .is_some_and(|v| !v.trim().is_empty());
             let raw: Vec<RawDiff> = response
                 .json()
                 .await
@@ -702,7 +792,9 @@ pub async fn list_change_files(
                 has_next,
             })
         }
-        Err(ForgeError::NotFound) => legacy_change_files(auth, &project, iid, page, per_page).await,
+        Err(ForgeError::NotFound) => {
+            legacy_change_files(auth, &project, iid, page, per_page).await
+        }
         Err(other) => Err(other),
     }
 }
@@ -733,9 +825,7 @@ async fn legacy_change_files(
     // `saturating_mul` rather than a bare product: `page` is clamped to at
     // least 1 but has no ceiling, and a 32-bit overflow here would wrap round
     // to the FIRST page of a list the caller asked to be past the end of.
-    let skip = (page as usize)
-        .saturating_sub(1)
-        .saturating_mul(per_page as usize);
+    let skip = (page as usize).saturating_sub(1).saturating_mul(per_page as usize);
     Ok(ForgeChangedFileList {
         files: raw
             .changes
@@ -902,11 +992,7 @@ static LOGIN_CACHE: LazyLock<RwLock<HashMap<String, String>>> =
 
 async fn current_login(auth: &ResolvedAuth) -> Result<String, ForgeError> {
     let cache_key = format!("{}\n{}", auth.api_base, auth.account_id);
-    if let Some(hit) = LOGIN_CACHE
-        .read()
-        .ok()
-        .and_then(|c| c.get(&cache_key).cloned())
-    {
+    if let Some(hit) = LOGIN_CACHE.read().ok().and_then(|c| c.get(&cache_key).cloned()) {
         return Ok(hit);
     }
     #[derive(Deserialize)]
@@ -1422,207 +1508,6 @@ struct RawDiffRefs {
     head_sha: Option<String>,
 }
 
-/// `list_open_items` — the auto-processing scan's read.
-#[cfg(test)]
-mod open_items_tests {
-    use super::*;
-    use crate::forge::ForgeProvider;
-    use axum::extract::Query;
-    use axum::http::HeaderMap;
-    use axum::routing::get;
-    use axum::Json;
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
-
-    type Seen = Arc<Mutex<Vec<(String, HashMap<String, String>)>>>;
-
-    fn auth_for(api_base: String) -> ResolvedAuth {
-        ResolvedAuth {
-            provider: ForgeProvider::GitLab,
-            server_host: "gitlab.test".into(),
-            api_base,
-            account_id: "acc-test".into(),
-            username: "alice".into(),
-            avatar_url: None,
-            token: "tok-test".into(),
-            scopes: vec![],
-        }
-    }
-
-    fn item(iid: i64, draft: bool) -> serde_json::Value {
-        serde_json::json!({
-            "iid": iid,
-            "title": format!("item {iid}"),
-            "state": "opened",
-            "draft": draft,
-            "labels": [{ "name": "bug", "color": "#d9534f" }],
-            "author": { "username": "alice" },
-            "updated_at": "2026-10-14T09:00:00.000Z",
-            "web_url": format!("https://gitlab.test/group/proj/-/issues/{iid}"),
-        })
-    }
-
-    async fn serve() -> (String, Seen) {
-        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
-        let route = |collection: &'static str, seen: Seen| {
-            get(move |Query(q): Query<HashMap<String, String>>| {
-                let seen = seen.clone();
-                async move {
-                    let page: u32 = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
-                    seen.lock().unwrap().push((collection.to_string(), q));
-                    let mut headers = HeaderMap::new();
-                    // GitLab's own pagination signal: empty on the last page.
-                    let next = if page == 1 { "2" } else { "" };
-                    headers.insert("x-next-page", next.parse().unwrap());
-                    let is_mr = collection == "merge_requests";
-                    let rows = vec![item(i64::from(page) * 10, is_mr)];
-                    (headers, Json(serde_json::Value::Array(rows)))
-                }
-            })
-        };
-        let app = axum::Router::new()
-            .route(
-                "/projects/group%2Fproj/issues",
-                route("issues", seen.clone()),
-            )
-            .route(
-                "/projects/group%2Fproj/merge_requests",
-                route("merge_requests", seen.clone()),
-            );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        (format!("http://{addr}"), seen)
-    }
-
-    /// One collection per kind, each read to its last page, `opened` only and
-    /// cut at `updated_after` — with GitLab's `opened` normalized like every
-    /// other row.
-    #[tokio::test]
-    async fn the_scan_reads_both_collections_since_the_window() {
-        let (base, seen) = serve().await;
-        let since = chrono::DateTime::parse_from_rfc3339("2026-10-14T08:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let scan = list_open_items(
-            &auth_for(base),
-            "Group/Proj",
-            true,
-            true,
-            Some(since),
-            &ScanCursor::default(),
-        )
-        .await
-        .expect("listed");
-        assert_eq!(scan.resume, None);
-        let rows: Vec<(i64, bool, bool)> = scan
-            .rows
-            .iter()
-            .map(|r| (r.number, r.is_pr, r.draft))
-            .collect();
-        assert_eq!(
-            rows,
-            vec![
-                (10, false, false),
-                (20, false, false),
-                (10, true, true),
-                (20, true, true)
-            ]
-        );
-        assert!(scan.rows.iter().all(|r| r.state == "open"));
-
-        let seen = seen.lock().unwrap().clone();
-        assert_eq!(seen.len(), 4, "two pages of each collection");
-        for (_, q) in &seen {
-            assert_eq!(q.get("state").map(String::as_str), Some("opened"));
-            assert_eq!(q.get("order_by").map(String::as_str), Some("updated_at"));
-            assert_eq!(q.get("sort").map(String::as_str), Some("desc"));
-            assert_eq!(
-                q.get("updated_after").map(String::as_str),
-                Some("2026-10-14T08:00:00Z")
-            );
-            assert_eq!(q.get("per_page").map(String::as_str), Some("100"));
-        }
-    }
-
-    #[tokio::test]
-    async fn only_the_wanted_collections_are_asked() {
-        let (base, seen) = serve().await;
-        let fresh = ScanCursor::default();
-        let scan = list_open_items(&auth_for(base), "group/proj", false, true, None, &fresh)
-            .await
-            .expect("listed");
-        assert!(scan.rows.iter().all(|r| r.is_pr));
-        let seen = seen.lock().unwrap().clone();
-        assert!(seen
-            .iter()
-            .all(|(collection, q)| collection == "merge_requests"
-                && !q.contains_key("updated_after")));
-    }
-
-    /// Each collection carries its own place: one cut short reads on from the
-    /// page after its last, one read to its end is not asked again within the
-    /// same window.
-    #[tokio::test]
-    async fn each_collection_carries_its_own_place() {
-        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
-        let issues_log = seen.clone();
-        let mrs_log = seen.clone();
-        let app = axum::Router::new()
-            .route(
-                "/projects/group%2Fproj/issues",
-                get(move |Query(q): Query<HashMap<String, String>>| {
-                    let log = issues_log.clone();
-                    async move {
-                        let page: i64 = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
-                        log.lock().unwrap().push(("issues".to_string(), q));
-                        let mut headers = HeaderMap::new();
-                        // Endless: always a next page.
-                        headers.insert("x-next-page", (page + 1).to_string().parse().unwrap());
-                        (headers, Json(serde_json::json!([item(page, false)])))
-                    }
-                }),
-            )
-            .route(
-                "/projects/group%2Fproj/merge_requests",
-                get(move |Query(q): Query<HashMap<String, String>>| {
-                    let log = mrs_log.clone();
-                    async move {
-                        log.lock().unwrap().push(("merge_requests".to_string(), q));
-                        let mut headers = HeaderMap::new();
-                        headers.insert("x-next-page", "".parse().unwrap());
-                        (headers, Json(serde_json::json!([item(500, true)])))
-                    }
-                }),
-            );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let auth = auth_for(format!("http://{addr}"));
-
-        let fresh = ScanCursor::default();
-        let scan = list_open_items(&auth, "group/proj", true, true, None, &fresh)
-            .await
-            .expect("listed");
-        let cursor = scan.resume.expect("the issues were cut short");
-        assert_eq!(cursor.first_page("issues"), Some(SCAN_MAX_PAGES + 1));
-        assert_eq!(cursor.first_page("merge_requests"), None, "read to its end");
-
-        seen.lock().unwrap().clear();
-        list_open_items(&auth, "group/proj", true, true, None, &cursor)
-            .await
-            .expect("listed");
-        let asked = seen.lock().unwrap().clone();
-        assert!(
-            asked.iter().all(|(collection, _)| collection == "issues"),
-            "a finished collection was asked again"
-        );
-        // Carrying on re-reads the overlap first.
-        let restart = SCAN_MAX_PAGES + 1 - crate::forge::SCAN_CONTINUATION_OVERLAP_PAGES;
-        assert_eq!(asked[0].1.get("page").cloned(), Some(restart.to_string()));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1727,7 +1612,8 @@ mod tests {
                     if let Ok(mut slot) = issue_query.write() {
                         *slot = q.clone();
                     }
-                    let page: u32 = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+                    let page: u32 =
+                        q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
                     let mut headers = axum::http::HeaderMap::new();
                     // 3 matches over 2 pages — the shape GitLab sends when it
                     // is willing to count.
@@ -1803,10 +1689,7 @@ mod tests {
             .route(
                 "/projects/group%2Fsub%2Fproj/issues/7/notes",
                 post(move |Json(body): Json<serde_json::Value>| {
-                    issue_notes
-                        .lock()
-                        .unwrap()
-                        .push(("issues".to_string(), body));
+                    issue_notes.lock().unwrap().push(("issues".to_string(), body));
                     async { Json(serde_json::json!({ "id": 55 })) }
                 })
                 // The read side. Both pages mix system events into the same
@@ -1844,10 +1727,7 @@ mod tests {
             .route(
                 "/projects/group%2Fsub%2Fproj/merge_requests/7/notes",
                 post(move |Json(body): Json<serde_json::Value>| {
-                    mr_notes
-                        .lock()
-                        .unwrap()
-                        .push(("merge_requests".to_string(), body));
+                    mr_notes.lock().unwrap().push(("merge_requests".to_string(), body));
                     async { Json(serde_json::json!({ "id": 66 })) }
                 })
                 .get(|| async {
@@ -1896,13 +1776,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        (
-            format!("http://{addr}"),
-            creates,
-            notes,
-            user_hits,
-            last_query,
-        )
+        (format!("http://{addr}"), creates, notes, user_hits, last_query)
     }
 
     fn req(tab: super::super::ForgeTab, state: &str) -> ListIssuesRequest {
@@ -1938,14 +1812,8 @@ mod tests {
         assert_eq!(
             row.labels,
             vec![
-                ForgeLabel {
-                    name: "bug".into(),
-                    color: Some("#d9534f".into())
-                },
-                ForgeLabel {
-                    name: "legacy".into(),
-                    color: None
-                },
+                ForgeLabel { name: "bug".into(), color: Some("#d9534f".into()) },
+                ForgeLabel { name: "legacy".into(), color: None },
             ]
         );
         assert_eq!(row.author.as_deref(), Some("alice"));
@@ -1965,10 +1833,7 @@ mod tests {
 
         let page2 = list_issues(
             &auth,
-            &ListIssuesRequest {
-                page: 2,
-                ..req(super::super::ForgeTab::Issues, "open")
-            },
+            &ListIssuesRequest { page: 2, ..req(super::super::ForgeTab::Issues, "open") },
         )
         .await
         .expect("page 2");
@@ -2009,10 +1874,7 @@ mod tests {
         assert_eq!(wire_state(super::super::ForgeTab::Prs, "closed"), "all");
         // Issues have no merged state, so theirs stays a plain closed query —
         // nothing is filtered locally, so its count IS trustworthy.
-        assert_eq!(
-            wire_state(super::super::ForgeTab::Issues, "closed"),
-            "closed"
-        );
+        assert_eq!(wire_state(super::super::ForgeTab::Issues, "closed"), "closed");
         let issues = list_issues(&auth, &req(super::super::ForgeTab::Issues, "closed"))
             .await
             .expect("list");
@@ -2062,39 +1924,24 @@ mod tests {
         .expect("list");
         let sent = last.read().unwrap().clone();
         // Comma-joined: GitLab forbids commas in label titles, so nothing splits.
-        assert_eq!(
-            sent.get("labels").map(String::as_str),
-            Some("bug,help wanted")
-        );
-        assert_eq!(
-            sent.get("search").map(String::as_str),
-            Some("login timeout")
-        );
+        assert_eq!(sent.get("labels").map(String::as_str), Some("bug,help wanted"));
+        assert_eq!(sent.get("search").map(String::as_str), Some("login timeout"));
         // The scope the box promises, stated rather than inherited: it happens
         // to be GitLab's default too, and a promise resting on somebody else's
         // default is one release away from being wrong.
-        assert_eq!(
-            sent.get("in").map(String::as_str),
-            Some("title,description")
-        );
+        assert_eq!(sent.get("in").map(String::as_str), Some("title,description"));
         assert_eq!(sent.get("order_by").map(String::as_str), Some("updated_at"));
         assert_eq!(sent.get("sort").map(String::as_str), Some("asc"));
         // Without this the rows come back with bare label NAMES and every chip
         // in the workbench is grey.
-        assert_eq!(
-            sent.get("with_labels_details").map(String::as_str),
-            Some("true")
-        );
+        assert_eq!(sent.get("with_labels_details").map(String::as_str), Some("true"));
 
         // The default order, and GitLab's spelling of GitHub's `created`.
         list_issues(&auth, &req(super::super::ForgeTab::Issues, "open"))
             .await
             .expect("list");
         let plain = last.read().unwrap().clone();
-        assert_eq!(
-            plain.get("order_by").map(String::as_str),
-            Some("created_at")
-        );
+        assert_eq!(plain.get("order_by").map(String::as_str), Some("created_at"));
         assert_eq!(plain.get("sort").map(String::as_str), Some("desc"));
         // Absent filters are absent params, not empty ones — `labels=` matches
         // items with no labels at all on some GitLab versions. `in` belongs to
@@ -2127,15 +1974,9 @@ mod tests {
         assert_eq!(
             list.labels,
             vec![
-                ForgeLabel {
-                    name: "bug".into(),
-                    color: Some("#d9534f".into())
-                },
+                ForgeLabel { name: "bug".into(), color: Some("#d9534f".into()) },
                 // Unrecognized colour → no colour, not a dropped label.
-                ForgeLabel {
-                    name: "help wanted".into(),
-                    color: None
-                },
+                ForgeLabel { name: "help wanted".into(), color: None },
             ],
             "empty name dropped"
         );
@@ -2203,31 +2044,21 @@ mod tests {
         let row_for = |author: serde_json::Value| {
             let mut raw = item_json(1, "opened");
             raw["author"] = author;
-            serde_json::from_value::<RawItem>(raw)
-                .expect("item")
-                .into_row(false)
+            serde_json::from_value::<RawItem>(raw).expect("item").into_row(false)
         };
 
-        let ok =
-            row_for(serde_json::json!({ "username": "alice", "avatar_url": "https://a.test/1" }));
+        let ok = row_for(serde_json::json!({ "username": "alice", "avatar_url": "https://a.test/1" }));
         assert_eq!(ok.author.as_deref(), Some("alice"));
         assert_eq!(ok.author_avatar.as_deref(), Some("https://a.test/1"));
 
         let hostile = row_for(
             serde_json::json!({ "username": "alice", "avatar_url": "javascript:alert(1)" }),
         );
-        assert_eq!(
-            hostile.author.as_deref(),
-            Some("alice"),
-            "the name still stands"
-        );
+        assert_eq!(hostile.author.as_deref(), Some("alice"), "the name still stands");
         assert_eq!(hostile.author_avatar, None);
 
         // A picture GitLab did not send, and an account it no longer has.
-        assert_eq!(
-            row_for(serde_json::json!({ "username": "alice" })).author_avatar,
-            None
-        );
+        assert_eq!(row_for(serde_json::json!({ "username": "alice" })).author_avatar, None);
         let gone = row_for(serde_json::Value::Null);
         assert_eq!((gone.author, gone.author_avatar), (None, None));
     }
@@ -2244,10 +2075,7 @@ mod tests {
         let second = list_notes(&auth, "group/sub/proj", ForgeItemKind::Issue, 7, 2, 20)
             .await
             .expect("notes");
-        assert!(
-            second.comments.is_empty(),
-            "the page held only system events"
-        );
+        assert!(second.comments.is_empty(), "the page held only system events");
         assert!(second.has_next, "…and the discussion continues");
 
         let last = list_notes(&auth, "group/sub/proj", ForgeItemKind::Issue, 7, 3, 20)
@@ -2276,16 +2104,12 @@ mod tests {
         );
 
         // Coordinates a client made up must not reach the API at all.
-        assert!(
-            list_notes(&auth, "no-slash", ForgeItemKind::Issue, 7, 1, 20)
-                .await
-                .is_err()
-        );
-        assert!(
-            list_notes(&auth, "group/sub/proj", ForgeItemKind::Issue, 0, 1, 20)
-                .await
-                .is_err()
-        );
+        assert!(list_notes(&auth, "no-slash", ForgeItemKind::Issue, 7, 1, 20)
+            .await
+            .is_err());
+        assert!(list_notes(&auth, "group/sub/proj", ForgeItemKind::Issue, 0, 1, 20)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -2311,13 +2135,8 @@ mod tests {
     async fn a_merge_request_is_looked_up_by_iid() {
         let (api_base, _, _, _, _) = mock_api().await;
         let auth = auth_for(api_base);
-        let mr = get_merge_request(&auth, "Group/Sub/Proj", 4)
-            .await
-            .expect("mr");
-        assert_eq!(
-            (mr.number, mr.head_ref.as_str(), mr.base_ref.as_str()),
-            (4, "feature", "main")
-        );
+        let mr = get_merge_request(&auth, "Group/Sub/Proj", 4).await.expect("mr");
+        assert_eq!((mr.number, mr.head_ref.as_str(), mr.base_ref.as_str()), (4, "feature", "main"));
         assert_eq!(mr.head_sha, "deadbee", "diff_refs wins over sha");
         assert_eq!(mr.state, "open");
         assert!(!mr.merged);
@@ -2325,13 +2144,8 @@ mod tests {
         // every same_repo gate downstream asks.
         assert!(super::super::same_repo(&mr.head_repo, "group/sub/proj"));
 
-        let fork = get_merge_request(&auth, "group/sub/proj", 9)
-            .await
-            .expect("mr");
-        assert_eq!(
-            fork.head_repo, "contributor/proj",
-            "fork path resolved for the message"
-        );
+        let fork = get_merge_request(&auth, "group/sub/proj", 9).await.expect("mr");
+        assert_eq!(fork.head_repo, "contributor/proj", "fork path resolved for the message");
         assert!(!super::super::same_repo(&fork.head_repo, "group/sub/proj"));
 
         assert!(get_merge_request(&auth, "group/sub/proj", 0).await.is_err());
@@ -2424,30 +2238,16 @@ mod tests {
         // A note has no URL of its own; the anchor on the item's page does.
         let issue_url = issue_note.html_url.clone().expect("issue anchor");
         let mr_url = mr_note.html_url.clone().expect("mr anchor");
-        assert!(
-            issue_url.ends_with("/group/sub/proj/-/issues/7#note_55"),
-            "{issue_url}"
-        );
-        assert!(
-            mr_url.ends_with("/group/sub/proj/-/merge_requests/7#note_66"),
-            "{mr_url}"
-        );
+        assert!(issue_url.ends_with("/group/sub/proj/-/issues/7#note_55"), "{issue_url}");
+        assert!(mr_url.ends_with("/group/sub/proj/-/merge_requests/7#note_66"), "{mr_url}");
         // The composer gets the whole comment back, not just a link — it is
         // appended to the thread on screen without re-fetching the page, so it
         // has to be the SAME shape the reader produces.
         assert_eq!(issue_note.id, "55");
         assert_eq!(mr_note.id, "66");
 
-        assert!(
-            create_note(&auth, "not-a-path", ForgeItemKind::Issue, 7, "x")
-                .await
-                .is_err()
-        );
-        assert!(
-            create_note(&auth, "group/sub/proj", ForgeItemKind::Issue, 0, "x")
-                .await
-                .is_err()
-        );
+        assert!(create_note(&auth, "not-a-path", ForgeItemKind::Issue, 7, "x").await.is_err());
+        assert!(create_note(&auth, "group/sub/proj", ForgeItemKind::Issue, 0, "x").await.is_err());
     }
 
     #[tokio::test]
@@ -2473,10 +2273,7 @@ mod tests {
                 ..req(super::super::ForgeTab::Issues, "open")
             };
             assert!(
-                matches!(
-                    list_issues(&auth, &hostile).await,
-                    Err(ForgeError::Invalid(_))
-                ),
+                matches!(list_issues(&auth, &hostile).await, Err(ForgeError::Invalid(_))),
                 "{bad} should be refused"
             );
         }
@@ -2494,7 +2291,8 @@ mod tests {
     /// shown to be ours — "unknown" must not read as "same repository".
     #[test]
     fn an_unstated_source_project_is_not_this_repository() {
-        let raw: RawMergeRequest = serde_json::from_value(mr_json(3, "opened", 1)).expect("parse");
+        let raw: RawMergeRequest =
+            serde_json::from_value(mr_json(3, "opened", 1)).expect("parse");
         assert!(super::super::same_repo(
             &map_merge_request(raw, "group/proj").head_repo,
             "group/proj"
@@ -2523,9 +2321,11 @@ mod tests {
             move |Path(iid): Path<i64>, Json(body): Json<serde_json::Value>| {
                 let w = w.clone();
                 async move {
-                    w.lock()
-                        .unwrap()
-                        .push(("PUT".into(), format!("issues/{iid}"), body.clone()));
+                    w.lock().unwrap().push((
+                        "PUT".into(),
+                        format!("issues/{iid}"),
+                        body.clone(),
+                    ));
                     let mut item = item_json(iid, "closed");
                     // A single item's labels arrive as bare NAMES — the colours
                     // only ever come with `with_labels_details`, which is a
@@ -2746,11 +2546,7 @@ mod tests {
         assert!(!issue.is_pr && issue.state == "closed");
         // Bare names still make chips; they just arrive without colours.
         assert_eq!(
-            issue
-                .labels
-                .iter()
-                .map(|l| l.name.as_str())
-                .collect::<Vec<_>>(),
+            issue.labels.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
             vec!["bug", "docs"]
         );
         assert!(issue.labels.iter().all(|l| l.color.is_none()));
@@ -2764,10 +2560,7 @@ mod tests {
         )
         .await
         .expect("reopen mr");
-        assert!(
-            mr.is_pr && mr.draft,
-            "the draft flag only means anything here"
-        );
+        assert!(mr.is_pr && mr.draft, "the draft flag only means anything here");
 
         let sent = writes.lock().unwrap().clone();
         assert_eq!(sent[0].0, "PUT", "GitLab edits with PUT, not PATCH");
@@ -2776,24 +2569,12 @@ mod tests {
         assert_eq!(sent[1].1, "merge_requests/9");
         assert_eq!(sent[1].2["state_event"], "reopen");
 
-        assert!(set_item_state(
-            &auth,
-            "no-slash",
-            ForgeItemKind::Issue,
-            7,
-            ForgeStateAction::Close
-        )
-        .await
-        .is_err());
-        assert!(set_item_state(
-            &auth,
-            "group/sub/proj",
-            ForgeItemKind::Issue,
-            0,
-            ForgeStateAction::Close
-        )
-        .await
-        .is_err());
+        assert!(set_item_state(&auth, "no-slash", ForgeItemKind::Issue, 7, ForgeStateAction::Close)
+            .await
+            .is_err());
+        assert!(set_item_state(&auth, "group/sub/proj", ForgeItemKind::Issue, 0, ForgeStateAction::Close)
+            .await
+            .is_err());
     }
 
     /// GitLab's merge endpoint takes NO method — the project picks between a
@@ -2939,14 +2720,9 @@ mod tests {
     async fn a_merge_request_detail_carries_its_branches_and_pipeline() {
         let (api_base, _) = mock_write_api().await;
         let auth = auth_for(format!("{api_base}/detail"));
-        let detail = change_detail(&auth, "Group/Sub/Proj", 4)
-            .await
-            .expect("detail");
+        let detail = change_detail(&auth, "Group/Sub/Proj", 4).await.expect("detail");
 
-        assert_eq!(
-            (detail.base_ref.as_str(), detail.head_ref.as_str()),
-            ("main", "fix/timeout")
-        );
+        assert_eq!((detail.base_ref.as_str(), detail.head_ref.as_str()), ("main", "fix/timeout"));
         // The fork's PATH, resolved with the one extra request a fork costs —
         // "project 42" would be a worse answer in the one place it is read.
         assert_eq!(detail.head_repo.as_deref(), Some("contributor/proj"));
@@ -2958,62 +2734,28 @@ mod tests {
         assert_eq!(detail.merge_state.as_deref(), Some("mergeable"));
         assert_eq!(detail.changed_files, Some(3));
         // GitLab reports neither, and a zero would claim the change is empty.
-        assert_eq!(
-            (detail.additions, detail.deletions, detail.commits),
-            (None, None, None)
-        );
+        assert_eq!((detail.additions, detail.deletions, detail.commits), (None, None, None));
 
         assert!(detail.checks.available);
         let state_of = |name: &str| {
-            detail
-                .checks
-                .checks
-                .iter()
-                .find(|c| c.name == name)
-                .expect(name)
-                .state
+            detail.checks.checks.iter().find(|c| c.name == name).expect(name).state
         };
         assert_eq!(state_of("rspec"), ForgeCheckState::Success);
         assert_eq!(state_of("lint"), ForgeCheckState::Failure);
-        assert_eq!(
-            state_of("deploy"),
-            ForgeCheckState::Neutral,
-            "manual has no verdict"
-        );
+        assert_eq!(state_of("deploy"), ForgeCheckState::Neutral, "manual has no verdict");
         assert_eq!(state_of("build"), ForgeCheckState::Running);
         // A red job the pipeline is allowed to fail on is a different fact
         // from one that blocks the change.
-        assert!(
-            detail
-                .checks
-                .checks
-                .iter()
-                .find(|c| c.name == "lint")
-                .unwrap()
-                .allow_failure
-        );
+        assert!(detail.checks.checks.iter().find(|c| c.name == "lint").unwrap().allow_failure);
         // The stage is the summary — it is what turns a column of job names
         // into a pipeline that can be read.
         assert_eq!(
-            detail
-                .checks
-                .checks
-                .iter()
-                .find(|c| c.name == "rspec")
-                .unwrap()
-                .summary
-                .as_deref(),
+            detail.checks.checks.iter().find(|c| c.name == "rspec").unwrap().summary.as_deref(),
             Some("test")
         );
         // A `data:` URL the instance made up never reaches an `href`.
         assert_eq!(
-            detail
-                .checks
-                .checks
-                .iter()
-                .find(|c| c.name == "deploy")
-                .unwrap()
-                .url,
+            detail.checks.checks.iter().find(|c| c.name == "deploy").unwrap().url,
             None
         );
 
@@ -3039,10 +2781,8 @@ mod tests {
         let quiet = change_detail(&auth_for(format!("{api_base}/nopipe")), "group/sub/proj", 4)
             .await
             .expect("detail");
-        assert!(
-            quiet.checks.available && quiet.checks.checks.is_empty(),
-            "the forge answered: nothing runs here"
-        );
+        assert!(quiet.checks.available && quiet.checks.checks.is_empty(),
+                "the forge answered: nothing runs here");
         // A conflict is a definite no, whatever `merge_status` says.
         assert_eq!(quiet.mergeable, Some(false));
         assert_eq!(quiet.state, "merged");
@@ -3060,10 +2800,7 @@ mod tests {
         assert_eq!(page.files.len(), 3);
         // `+++`/`---` are the file headers; counting them would add one to
         // each side of every file in the list.
-        assert_eq!(
-            (page.files[0].additions, page.files[0].deletions),
-            (Some(2), Some(1))
-        );
+        assert_eq!((page.files[0].additions, page.files[0].deletions), (Some(2), Some(1)));
         assert_eq!(page.files[0].status, ForgeFileStatus::Modified);
         // The very text those counters were counted off, kept rather than
         // discarded — a file row opens onto it.
@@ -3074,17 +2811,11 @@ mod tests {
         assert_eq!(page.files[1].status, ForgeFileStatus::Renamed);
         assert_eq!(page.files[1].previous_path.as_deref(), Some("src/old.rs"));
         assert!(page.files[2].binary);
-        assert_eq!(
-            (page.files[2].additions, page.files[2].deletions),
-            (None, None)
-        );
+        assert_eq!((page.files[2].additions, page.files[2].deletions), (None, None));
         // Binary and "no diff" are one and the same answer here, unlike on
         // GitHub: a blank `diff` is the only way GitLab says either.
         assert!(page.files[2].patch.is_none());
-        assert!(
-            page.has_next,
-            "from `x-next-page`, never from the row count"
-        );
+        assert!(page.has_next, "from `x-next-page`, never from the row count");
     }
 
     /// An instance older than 15.7 has no `/diffs`. The unpaginated `/changes`
@@ -3098,11 +2829,7 @@ mod tests {
             .await
             .expect("page 1");
         assert_eq!(
-            first
-                .files
-                .iter()
-                .map(|f| f.path.as_str())
-                .collect::<Vec<_>>(),
+            first.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
             vec!["f0.rs", "f1.rs"]
         );
         assert!(first.has_next);
@@ -3111,10 +2838,7 @@ mod tests {
             .await
             .expect("page 3");
         assert_eq!(
-            last.files
-                .iter()
-                .map(|f| f.path.as_str())
-                .collect::<Vec<_>>(),
+            last.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
             vec!["f4.rs"]
         );
         assert!(!last.has_next);
@@ -3159,5 +2883,281 @@ mod tests {
         assert_eq!(exact_changes_count("1000+"), None);
         assert_eq!(exact_changes_count(""), None);
         assert_eq!(exact_changes_count("many"), None);
+    }
+}
+
+/// `list_open_items` — the auto-processing scan's read.
+#[cfg(test)]
+mod open_items_tests {
+    use super::*;
+    use crate::forge::ForgeProvider;
+    use axum::extract::Query;
+    use axum::http::HeaderMap;
+    use axum::routing::get;
+    use axum::Json;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    type Seen = Arc<Mutex<Vec<(String, HashMap<String, String>)>>>;
+
+    fn auth_for(api_base: String) -> ResolvedAuth {
+        ResolvedAuth {
+            provider: ForgeProvider::GitLab,
+            server_host: "gitlab.test".into(),
+            api_base,
+            account_id: "acc-test".into(),
+            username: "alice".into(),
+            avatar_url: None,
+            token: "tok-test".into(),
+            scopes: vec![],
+        }
+    }
+
+    fn item(iid: i64, draft: bool) -> serde_json::Value {
+        serde_json::json!({
+            "iid": iid,
+            "title": format!("item {iid}"),
+            "state": "opened",
+            "draft": draft,
+            "labels": [{ "name": "bug", "color": "#d9534f" }],
+            "author": { "username": "alice" },
+            "updated_at": "2026-10-14T09:00:00.000Z",
+            "web_url": format!("https://gitlab.test/group/proj/-/issues/{iid}"),
+        })
+    }
+
+    async fn serve() -> (String, Seen) {
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        let route = |collection: &'static str, seen: Seen| {
+            get(move |Query(q): Query<HashMap<String, String>>| {
+                let seen = seen.clone();
+                async move {
+                    let page: u32 = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+                    seen.lock().unwrap().push((collection.to_string(), q));
+                    let mut headers = HeaderMap::new();
+                    // GitLab's own pagination signal: empty on the last page.
+                    let next = if page == 1 { "2" } else { "" };
+                    headers.insert("x-next-page", next.parse().unwrap());
+                    let is_mr = collection == "merge_requests";
+                    let rows = vec![item(i64::from(page) * 10, is_mr)];
+                    (headers, Json(serde_json::Value::Array(rows)))
+                }
+            })
+        };
+        let app = axum::Router::new()
+            .route("/projects/group%2Fproj/issues", route("issues", seen.clone()))
+            .route(
+                "/projects/group%2Fproj/merge_requests",
+                route("merge_requests", seen.clone()),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), seen)
+    }
+
+    /// One collection per kind, each read to its last page, `opened` only and
+    /// cut at `updated_after` — with GitLab's `opened` normalized like every
+    /// other row.
+    #[tokio::test]
+    async fn the_scan_reads_both_collections_since_the_window() {
+        let (base, seen) = serve().await;
+        let since = chrono::DateTime::parse_from_rfc3339("2026-10-14T08:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let scan = list_open_items(
+            &auth_for(base),
+            "Group/Proj",
+            true,
+            true,
+            Some(since),
+            &ScanCursor::default(),
+        )
+        .await
+        .expect("listed");
+        assert_eq!(scan.resume, None);
+        let rows: Vec<(i64, bool, bool)> =
+            scan.rows.iter().map(|r| (r.number, r.is_pr, r.draft)).collect();
+        assert_eq!(
+            rows,
+            vec![(10, false, false), (20, false, false), (10, true, true), (20, true, true)]
+        );
+        assert!(scan.rows.iter().all(|r| r.state == "open"));
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 4, "two pages of each collection");
+        for (_, q) in &seen {
+            assert_eq!(q.get("state").map(String::as_str), Some("opened"));
+            assert_eq!(q.get("order_by").map(String::as_str), Some("updated_at"));
+            assert_eq!(q.get("sort").map(String::as_str), Some("desc"));
+            assert_eq!(
+                q.get("updated_after").map(String::as_str),
+                Some("2026-10-14T08:00:00Z")
+            );
+            assert_eq!(q.get("per_page").map(String::as_str), Some("100"));
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_wanted_collections_are_asked() {
+        let (base, seen) = serve().await;
+        let fresh = ScanCursor::default();
+        let scan = list_open_items(&auth_for(base), "group/proj", false, true, None, &fresh)
+            .await
+            .expect("listed");
+        assert!(scan.rows.iter().all(|r| r.is_pr));
+        let seen = seen.lock().unwrap().clone();
+        assert!(seen.iter().all(|(collection, q)| collection == "merge_requests"
+            && !q.contains_key("updated_after")));
+    }
+
+    /// Each collection carries its own place: one cut short reads on from the
+    /// page after its last, one read to its end is not asked again within the
+    /// same window.
+    #[tokio::test]
+    async fn each_collection_carries_its_own_place() {
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        let issues_log = seen.clone();
+        let mrs_log = seen.clone();
+        let app = axum::Router::new()
+            .route(
+                "/projects/group%2Fproj/issues",
+                get(move |Query(q): Query<HashMap<String, String>>| {
+                    let log = issues_log.clone();
+                    async move {
+                        let page: i64 = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+                        log.lock().unwrap().push(("issues".to_string(), q));
+                        let mut headers = HeaderMap::new();
+                        // Endless: always a next page.
+                        headers.insert("x-next-page", (page + 1).to_string().parse().unwrap());
+                        (headers, Json(serde_json::json!([item(page, false)])))
+                    }
+                }),
+            )
+            .route(
+                "/projects/group%2Fproj/merge_requests",
+                get(move |Query(q): Query<HashMap<String, String>>| {
+                    let log = mrs_log.clone();
+                    async move {
+                        log.lock().unwrap().push(("merge_requests".to_string(), q));
+                        let mut headers = HeaderMap::new();
+                        headers.insert("x-next-page", "".parse().unwrap());
+                        (headers, Json(serde_json::json!([item(500, true)])))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let auth = auth_for(format!("http://{addr}"));
+
+        let fresh = ScanCursor::default();
+        let scan = list_open_items(&auth, "group/proj", true, true, None, &fresh)
+            .await
+            .expect("listed");
+        let cursor = scan.resume.expect("the issues were cut short");
+        assert_eq!(cursor.first_page("issues"), Some(SCAN_MAX_PAGES + 1));
+        assert_eq!(cursor.first_page("merge_requests"), None, "read to its end");
+
+        seen.lock().unwrap().clear();
+        list_open_items(&auth, "group/proj", true, true, None, &cursor)
+            .await
+            .expect("listed");
+        let asked = seen.lock().unwrap().clone();
+        assert!(
+            asked.iter().all(|(collection, _)| collection == "issues"),
+            "a finished collection was asked again"
+        );
+        // Carrying on re-reads the overlap first.
+        let restart = SCAN_MAX_PAGES + 1 - crate::forge::SCAN_CONTINUATION_OVERLAP_PAGES;
+        assert_eq!(asked[0].1.get("page").cloned(), Some(restart.to_string()));
+    }
+
+}
+
+#[cfg(test)]
+mod check_summary_tests {
+    use super::*;
+    use axum::routing::post;
+    use axum::Json;
+    use std::sync::{Arc, Mutex};
+
+    fn auth_for(api_base: String) -> ResolvedAuth {
+        ResolvedAuth {
+            provider: super::super::ForgeProvider::GitLab,
+            server_host: "gitlab.test".into(),
+            api_base,
+            account_id: "acc-test".into(),
+            username: "alice".into(),
+            avatar_url: None,
+            token: "tok-test".into(),
+            scopes: vec![],
+        }
+    }
+
+    async fn serve(answer: serde_json::Value) -> (ResolvedAuth, Arc<Mutex<Vec<serde_json::Value>>>) {
+        let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
+        let log = seen.clone();
+        let app = axum::Router::new().route(
+            "/gitlab/api/graphql",
+            post(move |Json(body): Json<serde_json::Value>| {
+                let log = log.clone();
+                let answer = answer.clone();
+                async move {
+                    log.lock().unwrap().push(body);
+                    Json(answer)
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // Mounted under a relative URL root, which the GraphQL path keeps.
+        (auth_for(format!("http://{addr}/gitlab/api/v4")), seen)
+    }
+
+    #[test]
+    fn the_graphql_endpoint_keeps_the_relative_url_root() {
+        assert_eq!(graphql_url("https://gitlab.com/api/v4"), "https://gitlab.com/api/graphql");
+        assert_eq!(graphql_url("https://h/gitlab/api/v4/"), "https://h/gitlab/api/graphql");
+    }
+
+    #[tokio::test]
+    async fn head_pipelines_fold_into_the_row_verdicts() {
+        let (auth, seen) = serve(serde_json::json!({ "data": { "project": { "mergeRequests": { "nodes": [
+            { "iid": "1", "headPipeline": { "status": "SUCCESS", "detailedStatus": { "group": "success" } } },
+            { "iid": "2", "headPipeline": { "status": "FAILED", "detailedStatus": { "group": "success-with-warnings" } } },
+            { "iid": "3", "headPipeline": { "status": "RUNNING", "detailedStatus": { "group": "running" } } },
+            { "iid": "4", "headPipeline": { "status": "MANUAL", "detailedStatus": { "group": "manual" } } },
+            { "iid": "5", "headPipeline": null },
+            // Not asked for: dropped rather than trusted.
+            { "iid": "99", "headPipeline": { "status": "FAILED" } },
+        ] } } } }))
+        .await;
+        let list = check_summaries(&auth, "group/app", &[1, 2, 3, 4, 5, 6]).await;
+        assert!(list.available);
+        let verdict = |n: i64| list.items.iter().find(|s| s.number == n).map(|s| s.verdict);
+        assert_eq!(verdict(1), Some(Some(ForgeCheckVerdict::Success)));
+        assert_eq!(verdict(2), Some(Some(ForgeCheckVerdict::Success)), "passed with warnings");
+        assert_eq!(verdict(3), Some(Some(ForgeCheckVerdict::Running)));
+        assert_eq!(verdict(4), Some(Some(ForgeCheckVerdict::Neutral)), "blocked on a manual job");
+        assert_eq!(verdict(5), Some(None), "no pipeline: present and empty");
+        assert_eq!(verdict(6), None, "not in the answer: unknown");
+        assert_eq!(verdict(99), None);
+        assert!(list.items.iter().all(|s| s.counts.is_none() && s.awaiting_approval == 0));
+
+        let body = &seen.lock().unwrap()[0];
+        assert_eq!(body["variables"]["path"], "group/app");
+        assert_eq!(body["variables"]["iids"], serde_json::json!(["1", "2", "3", "4", "5", "6"]));
+    }
+
+    #[tokio::test]
+    async fn any_error_leaves_the_batch_unknown() {
+        let (auth, _) = serve(serde_json::json!({
+            "data": { "project": null },
+            "errors": [{ "message": "The resource that you are attempting to access does not exist" }],
+        }))
+        .await;
+        assert!(!check_summaries(&auth, "group/app", &[1]).await.available);
     }
 }

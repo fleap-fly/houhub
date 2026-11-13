@@ -57,13 +57,10 @@ use std::io;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-
 use serde_json::Value;
-
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::acp::chat_authoring::{NewAutomationSpec, NewWorkTaskSpec};
-
 use crate::acp::question::QuestionSpec;
 
 /// One delegation call's worth of input forwarded from the companion to the
@@ -209,22 +206,37 @@ pub struct BrokerSessionRequest {
     pub max_messages: Option<u32>,
 }
 
-/// Report a progress milestone for the work task that owns the parent ACP
-/// connection.
+/// Report a progress milestone for the work task driving the parent session.
+/// Backs the `task_progress` MCP tool. Authenticated by the per-launch `token`;
+/// the listener resolves the parent connection from it and the task engine maps
+/// that to the owning task + execution generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerTaskProgressRequest {
     pub token: String,
     pub message: String,
 }
 
-/// Report the final task verdict. The engine accepts `review`, `done`, or
-/// `failed` (unknown values are rejected), with an optional summary.
+/// Report the final verdict (+ optional summary) for the work task driving the
+/// parent session. Backs the `task_complete` MCP tool; the verdict decides how
+/// the task settles when the turn ends.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerTaskCompleteRequest {
     pub token: String,
     pub verdict: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// The comment drafted for each forge thread the task came from — only
+    /// when the task context asked for it. Stored as a draft the user reviews
+    /// before it is posted (see `forge::thread_reply`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thread_replies: Vec<ThreadReply>,
+}
+
+/// One entry of `task_complete`'s `thread_replies`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadReply {
+    pub number: i64,
+    pub body: String,
 }
 
 /// The JSON Schema `submit_result` takes, for the companion's `tools/list`.
@@ -734,7 +746,7 @@ pub async fn client_session_round_trip(
     message_round_trip(socket_path, &BrokerMessage::SessionInfo(req.clone())).await
 }
 
-/// Dispatch a work-task progress report.
+/// Dispatch a `task_progress` report and read back the `{ recorded }` ack.
 pub async fn client_task_progress_round_trip(
     socket_path: &str,
     req: &BrokerTaskProgressRequest,
@@ -742,7 +754,7 @@ pub async fn client_task_progress_round_trip(
     message_round_trip(socket_path, &BrokerMessage::TaskProgress(req.clone())).await
 }
 
-/// Dispatch a work-task completion report.
+/// Dispatch a `task_complete` report and read back the `{ recorded }` ack.
 pub async fn client_task_complete_round_trip(
     socket_path: &str,
     req: &BrokerTaskCompleteRequest,

@@ -33,19 +33,16 @@
 //! keeps the echoed `per_page` honest.
 
 use std::collections::HashMap;
-
 use std::sync::{LazyLock, RwLock};
 
 use serde::Deserialize;
 
 use super::auth::ResolvedAuth;
-
 use super::deliver::{ForgePr, NewPullRequest};
-
 use super::{
     sanitize_web_url, scan_timestamp, truncate_chars, urlencode_query, validate_state_filter,
     ForgeChangeDetail, ForgeChangedFile, ForgeChangedFileList, ForgeCheck, ForgeCheckList,
-    ForgeCheckState, ForgeComment, ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList,
+    ForgeCheckState, ForgeCheckSummary, ForgeCheckSummaryList, ForgeComment, ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList,
     ForgeIssueRow, ForgeItemKind, ForgeLabel, ForgeLabelList, ForgeMergeMethod, ForgeMergeOptions,
     ForgeMergeStrategy, ForgeStateAction, ForgeTab, ListIssuesRequest, OpenItemsScan,
     ResolvedNewIssue, ScanCursor, BODY_CAP, LABEL_PAGE_SIZE, SCAN_MAX_PAGES,
@@ -93,10 +90,7 @@ pub async fn list_issues(
         // rather than matching nothing, so a stale chip widens the list instead
         // of emptying it; the chips come from `list_labels` on this same
         // repository, so that is a narrow window.
-        url.push_str(&format!(
-            "&labels={}",
-            urlencode_query(&req.labels.join(","))
-        ));
+        url.push_str(&format!("&labels={}", urlencode_query(&req.labels.join(","))));
     }
     if let Some(text) = req.search.as_deref() {
         // Plain text, not a query language: Gitea hands `q` to its issue
@@ -161,37 +155,27 @@ pub async fn list_open_items(
             continue;
         }
         let repo = &repo;
-        super::scan_collection(
-            collection,
-            from,
-            &mut cursor,
-            &mut rows,
-            SCAN_MAX_PAGES,
-            |page| {
-                let mut url = format!(
+        super::scan_collection(collection, from, &mut cursor, &mut rows, SCAN_MAX_PAGES, |page| {
+            let mut url = format!(
                 "{}/repos/{repo}/issues?state=open&type={kind}&page={page}&limit={SCAN_PAGE_LIMIT}",
                 auth.api_base
             );
-                if let Some(since) = since {
-                    url.push_str(&format!(
-                        "&since={}",
-                        urlencode_query(&scan_timestamp(since))
-                    ));
-                }
-                async move {
-                    let response = api_get(auth, &url).await?;
-                    let has_next = has_next_link(response.headers());
-                    let raw: Vec<RawIssue> = response
-                        .json()
-                        .await
-                        .map_err(|e| ForgeError::Network(format!("bad list payload: {e}")))?;
-                    Ok((
-                        raw.into_iter().map(|item| item.into_row(is_pr)).collect(),
-                        has_next,
-                    ))
-                }
-            },
-        )
+            if let Some(since) = since {
+                url.push_str(&format!("&since={}", urlencode_query(&scan_timestamp(since))));
+            }
+            async move {
+                let response = api_get(auth, &url).await?;
+                let has_next = has_next_link(response.headers());
+                let raw: Vec<RawIssue> = response
+                    .json()
+                    .await
+                    .map_err(|e| ForgeError::Network(format!("bad list payload: {e}")))?;
+                Ok((
+                    raw.into_iter().map(|item| item.into_row(is_pr)).collect(),
+                    has_next,
+                ))
+            }
+        })
         .await?;
     }
     Ok(OpenItemsScan {
@@ -228,10 +212,7 @@ async fn fetch_labels(
     auth: &ResolvedAuth,
     repo: &str,
 ) -> Result<(Vec<RawLabel>, bool), ForgeError> {
-    let url = format!(
-        "{}/repos/{repo}/labels?page=1&limit={LABEL_PAGE_SIZE}",
-        auth.api_base
-    );
+    let url = format!("{}/repos/{repo}/labels?page=1&limit={LABEL_PAGE_SIZE}", auth.api_base);
     let response = api_get(auth, &url).await?;
     let total = header_i64(response.headers(), "x-total-count");
     let raw: Vec<RawLabel> = response
@@ -276,9 +257,7 @@ pub async fn list_comments(
     // `saturating_mul` rather than a bare product: `page` is clamped to at
     // least 1 but has no ceiling, and a 32-bit overflow would wrap round to the
     // FIRST page of a thread the caller asked to be past the end of.
-    let skip = (page as usize)
-        .saturating_sub(1)
-        .saturating_mul(per_page as usize);
+    let skip = (page as usize).saturating_sub(1).saturating_mul(per_page as usize);
     let total = raw.len();
     Ok(ForgeCommentList {
         comments: raw
@@ -402,11 +381,7 @@ fn resolve_label(known: &[RawLabel], wanted: &str) -> Option<i64> {
     known
         .iter()
         .find(|label| label.name == wanted)
-        .or_else(|| {
-            known
-                .iter()
-                .find(|label| label.name.eq_ignore_ascii_case(wanted))
-        })
+        .or_else(|| known.iter().find(|label| label.name.eq_ignore_ascii_case(wanted)))
         .map(|label| label.id)
         .filter(|id| *id > 0)
 }
@@ -462,16 +437,8 @@ pub async fn change_detail(
 
     Ok(ForgeChangeDetail {
         number: if raw.number > 0 { raw.number } else { number },
-        base_ref: raw
-            .base
-            .as_ref()
-            .map(|b| b.ref_name.clone())
-            .unwrap_or_default(),
-        head_ref: raw
-            .head
-            .as_ref()
-            .map(|h| h.ref_name.clone())
-            .unwrap_or_default(),
+        base_ref: raw.base.as_ref().map(|b| b.ref_name.clone()).unwrap_or_default(),
+        head_ref: raw.head.as_ref().map(|h| h.ref_name.clone()).unwrap_or_default(),
         head_repo,
         head_sha,
         draft: raw.draft,
@@ -488,6 +455,9 @@ pub async fn change_detail(
         // `ForgeChangeDetail`.
         commits: None,
         checks,
+        // Only GitHub holds runs for a maintainer's approval through an API
+        // this panel can act on.
+        workflow_approval: None,
     })
 }
 
@@ -535,6 +505,63 @@ async fn head_checks(auth: &ResolvedAuth, repo: &str, sha: &str) -> ForgeCheckLi
                 .collect(),
         ),
         None => ForgeCheckList::unavailable(),
+    }
+}
+
+/// Requests in flight at once while summarizing a page. Gitea's list carries no
+/// head commit, so each change costs two reads; this keeps a page of a hundred
+/// from arriving at a self-hosted instance as two hundred simultaneous calls.
+const SUMMARY_CONCURRENCY: usize = 4;
+
+/// CI summaries for one page of pull requests.
+///
+/// Two reads per change — the pull (for its head commit) and that commit's
+/// combined status, the same one the panel reads — since `/issues?type=pulls`,
+/// which the list is served from, carries no head commit. Decoration, so it
+/// never fails: a change whose reads fail is left out (unknown), and only when
+/// EVERY change failed is the whole batch unavailable.
+pub async fn check_summaries(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    numbers: &[i64],
+) -> ForgeCheckSummaryList {
+    use futures::stream::{self, StreamExt};
+
+    let Ok(repo) = repo_ref(owner_repo) else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    if numbers.is_empty() {
+        return ForgeCheckSummaryList {
+            available: true,
+            items: Vec::new(),
+        };
+    }
+    let found: Vec<(i64, Option<ForgeCheckSummary>)> = stream::iter(numbers.iter().copied())
+        .map(|number| {
+            let repo = repo.clone();
+            async move {
+                let summary = async {
+                    let url = format!("{}/repos/{repo}/pulls/{number}", auth.api_base);
+                    let raw: RawPull = api_get(auth, &url).await.ok()?.json().await.ok()?;
+                    let sha = raw.head.and_then(|h| h.sha).filter(|sha| !sha.is_empty())?;
+                    ForgeCheckSummary::from_checks(number, &head_checks(auth, &repo, &sha).await)
+                }
+                .await;
+                (number, summary)
+            }
+        })
+        .buffer_unordered(SUMMARY_CONCURRENCY)
+        .collect()
+        .await;
+    if found.iter().all(|(_, s)| s.is_none()) {
+        return ForgeCheckSummaryList::unavailable();
+    }
+    // Back in the order asked: `buffer_unordered` yields as they finish.
+    let mut items: Vec<ForgeCheckSummary> = found.into_iter().filter_map(|(_, s)| s).collect();
+    items.sort_by_key(|s| numbers.iter().position(|n| *n == s.number));
+    ForgeCheckSummaryList {
+        available: true,
+        items,
     }
 }
 
@@ -652,9 +679,7 @@ async fn change_diff(auth: &ResolvedAuth, repo: &str, number: i64) -> HashMap<St
         Some(String::from_utf8_lossy(&body).into_owned())
     }
     .await;
-    fetched
-        .map(|diff| split_diff_by_path(&diff))
-        .unwrap_or_default()
+    fetched.map(|diff| split_diff_by_path(&diff)).unwrap_or_default()
 }
 
 /// A unified diff cut into `path -> hunks` at each `diff --git` boundary.
@@ -704,11 +729,7 @@ fn absorb(out: &mut HashMap<String, String>, block: &[&str]) {
     let path = header
         .iter()
         .find_map(|line| header_path(line, "+++ ", "b/"))
-        .or_else(|| {
-            header
-                .iter()
-                .find_map(|line| header_path(line, "--- ", "a/"))
-        });
+        .or_else(|| header.iter().find_map(|line| header_path(line, "--- ", "a/")));
     let Some(path) = path else { return };
     // No hunk at all — a pure mode change, or the "Binary files … differ" line
     // git emits instead of content. Nothing to reveal, so nothing is recorded
@@ -794,10 +815,7 @@ pub async fn merge_options(
     let strategy = merge_commit_strategy(&raw);
     let methods: Vec<ForgeMergeMethod> = [
         (ForgeMergeMethod::Merge, strategy.is_some()),
-        (
-            ForgeMergeMethod::Squash,
-            raw.allow_squash_merge.unwrap_or(true),
-        ),
+        (ForgeMergeMethod::Squash, raw.allow_squash_merge.unwrap_or(true)),
         (ForgeMergeMethod::Rebase, raw.allow_rebase.unwrap_or(true)),
     ]
     .into_iter()
@@ -825,7 +843,10 @@ pub async fn merge_options(
 }
 
 /// `GET /repos/{o}/{r}` — the repository's merge settings.
-async fn repo_settings(auth: &ResolvedAuth, repo: &str) -> Result<RawRepoSettings, ForgeError> {
+async fn repo_settings(
+    auth: &ResolvedAuth,
+    repo: &str,
+) -> Result<RawRepoSettings, ForgeError> {
     let url = format!("{}/repos/{repo}", auth.api_base);
     api_get(auth, &url)
         .await?
@@ -893,12 +914,7 @@ async fn merge_do(auth: &ResolvedAuth, repo: &str, method: ForgeMergeMethod) -> 
         ForgeMergeMethod::Squash => "squash",
         ForgeMergeMethod::Rebase => "rebase",
         ForgeMergeMethod::Merge => {
-            match repo_settings(auth, repo)
-                .await
-                .as_ref()
-                .ok()
-                .and_then(merge_commit_strategy)
-            {
+            match repo_settings(auth, repo).await.as_ref().ok().and_then(merge_commit_strategy) {
                 Some(ForgeMergeStrategy::RebaseMerge) => "rebase-merge",
                 Some(ForgeMergeStrategy::FastForward) => "fast-forward-only",
                 // Includes "the settings could not be read": a merge commit is
@@ -955,7 +971,6 @@ pub async fn merge_change(
 /// How far back [`find_pulls`] will look for a pull request headed by one
 /// branch. See that function for why there is a limit at all.
 const PR_SCAN_PAGES: u32 = 5;
-
 /// Rows asked for per scan page. Gitea clamps this to its own
 /// `MAX_RESPONSE_ITEMS`, 50 by default — asking for more costs nothing and
 /// helps on an instance configured higher.
@@ -998,9 +1013,7 @@ pub async fn find_pulls(
         found.extend(
             raw.into_iter()
                 .filter(|pull| {
-                    pull.head
-                        .as_ref()
-                        .is_some_and(|h| h.ref_name == head_branch)
+                    pull.head.as_ref().is_some_and(|h| h.ref_name == head_branch)
                 })
                 .map(RawPull::into_pr),
         );
@@ -1068,11 +1081,9 @@ pub async fn create_pull(
 /// bytes through the middle of a code point PANICS.
 fn is_wip_title(title: &str) -> bool {
     let trimmed = title.trim_start();
-    ["wip:", "[wip]"].iter().any(|prefix| {
-        trimmed
-            .get(..prefix.len())
-            .is_some_and(|got| got.eq_ignore_ascii_case(prefix))
-    })
+    ["wip:", "[wip]"]
+        .iter()
+        .any(|prefix| trimmed.get(..prefix.len()).is_some_and(|got| got.eq_ignore_ascii_case(prefix)))
 }
 
 // ── plumbing ────────────────────────────────────────────────────────────────
@@ -1084,11 +1095,7 @@ static LOGIN_CACHE: LazyLock<RwLock<HashMap<String, String>>> =
 
 async fn current_login(auth: &ResolvedAuth) -> Result<String, ForgeError> {
     let cache_key = format!("{}\n{}", auth.api_base, auth.account_id);
-    if let Some(hit) = LOGIN_CACHE
-        .read()
-        .ok()
-        .and_then(|c| c.get(&cache_key).cloned())
-    {
+    if let Some(hit) = LOGIN_CACHE.read().ok().and_then(|c| c.get(&cache_key).cloned()) {
         return Ok(hit);
     }
     #[derive(Deserialize)]
@@ -1116,9 +1123,7 @@ fn repo_ref(owner_repo: &str) -> Result<String, ForgeError> {
 
 fn require_number(number: i64) -> Result<(), ForgeError> {
     if number <= 0 {
-        return Err(ForgeError::Invalid(format!(
-            "bad work item number: {number}"
-        )));
+        return Err(ForgeError::Invalid(format!("bad work item number: {number}")));
     }
     Ok(())
 }
@@ -1550,182 +1555,6 @@ struct RawRepoSettings {
     default_merge_style: Option<String>,
 }
 
-/// `list_open_items` — the auto-processing scan's read.
-#[cfg(test)]
-mod open_items_tests {
-    use super::*;
-    use crate::forge::ForgeProvider;
-    use axum::extract::Query;
-    use axum::http::HeaderMap;
-    use axum::routing::get;
-    use axum::Json;
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
-
-    fn auth_for(api_base: String) -> ResolvedAuth {
-        ResolvedAuth {
-            provider: ForgeProvider::Gitea,
-            server_host: "gitea.test".into(),
-            api_base,
-            account_id: "acc-test".into(),
-            username: "alice".into(),
-            avatar_url: None,
-            token: "tok-test".into(),
-            scopes: vec![],
-        }
-    }
-
-    /// The issues feed, split by `type=` as Gitea does it: one page each,
-    /// with a `next` link on the first page of issues only.
-    #[tokio::test]
-    async fn the_scan_asks_each_kind_with_type_and_since() {
-        let seen: Arc<Mutex<Vec<HashMap<String, String>>>> = Arc::new(Mutex::new(Vec::new()));
-        let log = seen.clone();
-        let app = axum::Router::new().route(
-            "/repos/team/tool/issues",
-            get(move |Query(q): Query<HashMap<String, String>>| {
-                let log = log.clone();
-                async move {
-                    let page: u32 = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
-                    let pulls = q.get("type").map(String::as_str) == Some("pulls");
-                    log.lock().unwrap().push(q);
-                    let mut headers = HeaderMap::new();
-                    if !pulls && page == 1 {
-                        headers.insert(
-                            "link",
-                            "<https://gitea.test/x?page=2>; rel=\"next\""
-                                .parse()
-                                .unwrap(),
-                        );
-                    }
-                    let number = if pulls { 100 } else { i64::from(page) };
-                    let mut row = serde_json::json!({
-                        "number": number,
-                        "title": format!("item {number}"),
-                        "state": "open",
-                        "labels": [],
-                        "user": { "login": "alice" },
-                        "updated_at": "2026-10-14T17:00:00+08:00",
-                        "html_url": format!("https://gitea.test/team/tool/issues/{number}"),
-                    });
-                    if pulls {
-                        row["pull_request"] =
-                            serde_json::json!({ "merged": false, "draft": false });
-                    }
-                    (headers, Json(serde_json::json!([row])))
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-        let since = chrono::DateTime::parse_from_rfc3339("2026-10-14T08:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let auth = auth_for(format!("http://{addr}"));
-        let fresh = ScanCursor::default();
-        let scan = list_open_items(&auth, "Team/Tool", true, true, Some(since), &fresh)
-            .await
-            .expect("listed");
-        assert_eq!(scan.resume, None, "read to its end");
-        let rows: Vec<(i64, bool)> = scan.rows.iter().map(|r| (r.number, r.is_pr)).collect();
-        assert_eq!(rows, vec![(1, false), (2, false), (100, true)]);
-
-        let seen = seen.lock().unwrap().clone();
-        assert_eq!(seen.len(), 3);
-        for q in &seen {
-            assert_eq!(q.get("state").map(String::as_str), Some("open"));
-            assert_eq!(
-                q.get("since").map(String::as_str),
-                Some("2026-10-14T08:00:00Z")
-            );
-            // Gitea's own ceiling, not the hundred the other forges serve.
-            assert_eq!(q.get("limit").map(String::as_str), Some("50"));
-        }
-        assert_eq!(seen[0].get("type").map(String::as_str), Some("issues"));
-        assert_eq!(seen[2].get("type").map(String::as_str), Some("pulls"));
-    }
-
-    /// The case the continuation overlap exists for: between two scans of a
-    /// sweep, an item that was already read is closed. Everything behind it
-    /// shifts up a place, so the first unread item now sits on the last page
-    /// the first scan read. Carrying on from the cursor alone would skip it
-    /// for good; re-reading the overlap page finds it.
-    #[tokio::test]
-    async fn a_closure_between_scans_does_not_lose_the_next_unread_item() {
-        // One item per page; page N holds the N-th still-open item.
-        let open: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new((1..=150).collect()));
-        let list = open.clone();
-        let app = axum::Router::new().route(
-            "/repos/team/tool/issues",
-            get(move |Query(q): Query<HashMap<String, String>>| {
-                let list = list.clone();
-                async move {
-                    let page: usize = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
-                    let items = list.lock().unwrap().clone();
-                    let mut headers = HeaderMap::new();
-                    if page < items.len() {
-                        headers.insert(
-                            "link",
-                            "<https://gitea.test/x?page=next>; rel=\"next\""
-                                .parse()
-                                .unwrap(),
-                        );
-                    }
-                    let rows: Vec<serde_json::Value> = items
-                        .get(page - 1)
-                        .map(|number| {
-                            serde_json::json!({
-                                "number": number,
-                                "title": format!("item {number}"),
-                                "state": "open",
-                                "labels": [],
-                                "user": { "login": "alice" },
-                                "html_url": format!("https://gitea.test/team/tool/issues/{number}"),
-                            })
-                        })
-                        .into_iter()
-                        .collect();
-                    (headers, Json(serde_json::Value::Array(rows)))
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let auth = auth_for(format!("http://{addr}"));
-
-        let first = list_open_items(
-            &auth,
-            "team/tool",
-            true,
-            false,
-            None,
-            &ScanCursor::default(),
-        )
-        .await
-        .expect("listed");
-        let read: Vec<i64> = first.rows.iter().map(|r| r.number).collect();
-        assert_eq!(read.len(), SCAN_MAX_PAGES as usize);
-        let cursor = first.resume.expect("cut short");
-
-        // An item the first scan already read is closed in between.
-        open.lock().unwrap().retain(|&n| n != 7);
-        let next_unread = i64::from(SCAN_MAX_PAGES) + 1;
-
-        let second = list_open_items(&auth, "team/tool", true, false, None, &cursor)
-            .await
-            .expect("listed");
-        let numbers: Vec<i64> = second.rows.iter().map(|r| r.number).collect();
-        assert!(
-            numbers.contains(&next_unread),
-            "item {next_unread} shifted onto a page already read and was skipped: {numbers:?}"
-        );
-        assert_eq!(second.resume, None, "the rest of the window was read");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2128,9 +1957,7 @@ mod tests {
         let (api_base, seen) = mock_api().await;
         let auth = auth_for(api_base);
 
-        let list = list_issues(&auth, &req(ForgeTab::Issues, "open"))
-            .await
-            .expect("list");
+        let list = list_issues(&auth, &req(ForgeTab::Issues, "open")).await.expect("list");
         {
             let q = seen.list_query.lock().unwrap();
             assert_eq!(q.get("type").map(String::as_str), Some("issues"));
@@ -2156,10 +1983,7 @@ mod tests {
         );
         assert_eq!(
             row.labels,
-            vec![ForgeLabel {
-                name: "bug".into(),
-                color: Some("#d73a4a".into())
-            }],
+            vec![ForgeLabel { name: "bug".into(), color: Some("#d73a4a".into()) }],
             "the nameless label is dropped, and the bare hex gains its hash"
         );
         assert_eq!((list.page, list.per_page), (1, 20));
@@ -2168,15 +1992,9 @@ mod tests {
         assert!(!list.incomplete);
         assert!(list.has_next);
 
-        let page2 = list_issues(
-            &auth,
-            &ListIssuesRequest {
-                page: 2,
-                ..req(ForgeTab::Issues, "open")
-            },
-        )
-        .await
-        .expect("page 2");
+        let page2 = list_issues(&auth, &ListIssuesRequest { page: 2, ..req(ForgeTab::Issues, "open") })
+            .await
+            .expect("page 2");
         assert_eq!(page2.rows[0].number, 3);
         assert!(!page2.has_next, "no Link header is the end of the list");
     }
@@ -2189,22 +2007,13 @@ mod tests {
     async fn the_pr_tab_derives_merged_and_draft_from_the_pull_request_key() {
         let (api_base, seen) = mock_api().await;
         let auth = auth_for(api_base);
-        let list = list_issues(&auth, &req(ForgeTab::Prs, "open"))
-            .await
-            .expect("list");
+        let list = list_issues(&auth, &req(ForgeTab::Prs, "open")).await.expect("list");
         assert_eq!(
-            seen.list_query
-                .lock()
-                .unwrap()
-                .get("type")
-                .map(String::as_str),
+            seen.list_query.lock().unwrap().get("type").map(String::as_str),
             Some("pulls")
         );
         assert!(list.rows.iter().all(|r| r.is_pr));
-        assert_eq!(
-            list.rows[0].state, "merged",
-            "closed + merged is not closed"
-        );
+        assert_eq!(list.rows[0].state, "merged", "closed + merged is not closed");
         assert!(!list.rows[0].draft);
         assert_eq!(list.rows[1].state, "open");
         assert!(list.rows[1].draft);
@@ -2235,11 +2044,7 @@ mod tests {
             assert_eq!(q.get("q").map(String::as_str), Some("crash on save"));
         }
         list_issues(&auth, &mine).await.expect("list again");
-        assert_eq!(
-            seen.user_hits.load(Ordering::SeqCst),
-            1,
-            "the login is cached"
-        );
+        assert_eq!(seen.user_hits.load(Ordering::SeqCst), 1, "the login is cached");
     }
 
     /// The label filter's vocabulary. `truncated` has to come from the count
@@ -2249,20 +2054,12 @@ mod tests {
     #[tokio::test]
     async fn labels_report_truncation_from_the_count_not_from_a_full_page() {
         let (api_base, _) = mock_api().await;
-        let list = list_labels(&auth_for(api_base), "acme/app")
-            .await
-            .expect("labels");
+        let list = list_labels(&auth_for(api_base), "acme/app").await.expect("labels");
         assert_eq!(
             list.labels,
             vec![
-                ForgeLabel {
-                    name: "bug".into(),
-                    color: Some("#d73a4a".into())
-                },
-                ForgeLabel {
-                    name: "Help Wanted".into(),
-                    color: Some("#0e8a16".into())
-                },
+                ForgeLabel { name: "bug".into(), color: Some("#d73a4a".into()) },
+                ForgeLabel { name: "Help Wanted".into(), color: Some("#0e8a16".into()) },
             ],
             "both spellings of the colour are accepted; the nameless one is dropped"
         );
@@ -2277,15 +2074,9 @@ mod tests {
         let (api_base, _) = mock_api().await;
         let auth = auth_for(api_base);
 
-        let first = list_comments(&auth, "acme/app", 7, 1, 2)
-            .await
-            .expect("page 1");
+        let first = list_comments(&auth, "acme/app", 7, 1, 2).await.expect("page 1");
         assert_eq!(
-            first
-                .comments
-                .iter()
-                .map(|c| c.id.as_str())
-                .collect::<Vec<_>>(),
+            first.comments.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
             vec!["101", "102"]
         );
         assert!(first.has_next, "a third comment is behind this page");
@@ -2304,15 +2095,11 @@ mod tests {
             Some("https://gitea.test/avatars/alice")
         );
 
-        let second = list_comments(&auth, "acme/app", 7, 2, 2)
-            .await
-            .expect("page 2");
+        let second = list_comments(&auth, "acme/app", 7, 2, 2).await.expect("page 2");
         assert_eq!(second.comments.len(), 1);
         assert!(!second.has_next);
         // Past the end is empty, not a wrapped-around first page.
-        let past = list_comments(&auth, "acme/app", 7, 9, 2)
-            .await
-            .expect("page 9");
+        let past = list_comments(&auth, "acme/app", 7, 9, 2).await.expect("page 9");
         assert!(past.comments.is_empty());
         assert!(!past.has_next);
     }
@@ -2326,10 +2113,7 @@ mod tests {
         let comment = create_comment(&auth_for(api_base), "acme/app", 7, "on it")
             .await
             .expect("post");
-        assert_eq!(
-            seen.wrote("comment"),
-            vec![serde_json::json!({ "body": "on it" })]
-        );
+        assert_eq!(seen.wrote("comment"), vec![serde_json::json!({ "body": "on it" })]);
         assert_eq!(comment.id, "200");
         assert_eq!(comment.author.as_deref(), Some("alice"));
         assert_eq!(
@@ -2347,35 +2131,17 @@ mod tests {
         let (api_base, seen) = mock_api().await;
         let auth = auth_for(api_base);
 
-        let issue = set_item_state(
-            &auth,
-            "acme/app",
-            ForgeItemKind::Issue,
-            7,
-            ForgeStateAction::Close,
-        )
-        .await
-        .expect("close");
-        assert_eq!(
-            seen.wrote("issue-state"),
-            vec![serde_json::json!({ "state": "closed" })]
-        );
+        let issue = set_item_state(&auth, "acme/app", ForgeItemKind::Issue, 7, ForgeStateAction::Close)
+            .await
+            .expect("close");
+        assert_eq!(seen.wrote("issue-state"), vec![serde_json::json!({ "state": "closed" })]);
         assert_eq!(issue.state, "closed");
         assert!(!issue.is_pr);
 
-        let pull = set_item_state(
-            &auth,
-            "acme/app",
-            ForgeItemKind::Change,
-            4,
-            ForgeStateAction::Close,
-        )
-        .await
-        .expect("close");
-        assert_eq!(
-            seen.wrote("pull-state"),
-            vec![serde_json::json!({ "state": "closed" })]
-        );
+        let pull = set_item_state(&auth, "acme/app", ForgeItemKind::Change, 4, ForgeStateAction::Close)
+            .await
+            .expect("close");
+        assert_eq!(seen.wrote("pull-state"), vec![serde_json::json!({ "state": "closed" })]);
         assert_eq!(pull.state, "merged", "the forge's answer wins over the ask");
         assert!(pull.is_pr);
     }
@@ -2387,21 +2153,9 @@ mod tests {
     #[test]
     fn a_label_name_resolves_to_its_exact_match_before_a_loose_one() {
         let known = vec![
-            RawLabel {
-                id: 1,
-                name: "BUG".into(),
-                color: None,
-            },
-            RawLabel {
-                id: 2,
-                name: "bug".into(),
-                color: None,
-            },
-            RawLabel {
-                id: 3,
-                name: "Help Wanted".into(),
-                color: None,
-            },
+            RawLabel { id: 1, name: "BUG".into(), color: None },
+            RawLabel { id: 2, name: "bug".into(), color: None },
+            RawLabel { id: 3, name: "Help Wanted".into(), color: None },
         ];
         assert_eq!(resolve_label(&known, "bug"), Some(2));
         assert_eq!(resolve_label(&known, "BUG"), Some(1));
@@ -2448,38 +2202,24 @@ mod tests {
     #[tokio::test]
     async fn a_change_detail_carries_the_counters_and_the_checks() {
         let (api_base, _) = mock_api().await;
-        let detail = change_detail(&auth_for(api_base), "acme/app", 4)
-            .await
-            .expect("detail");
+        let detail = change_detail(&auth_for(api_base), "acme/app", 4).await.expect("detail");
         assert_eq!(detail.number, 4);
-        assert_eq!(
-            (detail.base_ref.as_str(), detail.head_ref.as_str()),
-            ("main", "feature")
-        );
+        assert_eq!((detail.base_ref.as_str(), detail.head_ref.as_str()), ("main", "feature"));
         // Canonical casing on the head repository — `same_repo`, never `==`,
         // is what keeps this from reading as a fork.
         assert_eq!(detail.head_repo, None);
         assert_eq!(detail.head_sha.as_deref(), Some("deadbee"));
         assert_eq!(detail.state, "open");
         assert_eq!(detail.mergeable, Some(true));
-        assert_eq!(
-            detail.merge_state, None,
-            "Gitea has no word to pass through"
-        );
+        assert_eq!(detail.merge_state, None, "Gitea has no word to pass through");
         assert_eq!(
             (detail.additions, detail.deletions, detail.changed_files),
             (Some(12), Some(3), Some(2))
         );
-        assert_eq!(
-            detail.commits, None,
-            "absent rather than a zero it never sent"
-        );
+        assert_eq!(detail.commits, None, "absent rather than a zero it never sent");
 
         assert!(detail.checks.available);
-        assert!(
-            !detail.checks.partial,
-            "one collection, so never half an answer"
-        );
+        assert!(!detail.checks.partial, "one collection, so never half an answer");
         let states: Vec<_> = detail.checks.checks.iter().map(|c| c.state).collect();
         assert_eq!(
             states,
@@ -2493,10 +2233,7 @@ mod tests {
         );
         assert_eq!(detail.checks.checks[0].name, "build");
         assert_eq!(detail.checks.checks[0].summary.as_deref(), Some("ok"));
-        assert_eq!(
-            detail.checks.checks[0].url.as_deref(),
-            Some("https://ci.test/1")
-        );
+        assert_eq!(detail.checks.checks[0].url.as_deref(), Some("https://ci.test/1"));
         // Straight into an href — only the web schemes survive.
         assert_eq!(detail.checks.checks[1].url, None);
     }
@@ -2517,18 +2254,10 @@ mod tests {
         let modified = by_path["src/lib.rs"];
         assert_eq!(modified.status, ForgeFileStatus::Modified);
         assert_eq!((modified.additions, modified.deletions), (Some(3), Some(1)));
-        assert!(modified
-            .patch
-            .as_deref()
-            .unwrap()
-            .contains("@@ -1,2 +1,4 @@"));
+        assert!(modified.patch.as_deref().unwrap().contains("@@ -1,2 +1,4 @@"));
 
         let removed = by_path["old.txt"];
-        assert_eq!(
-            removed.status,
-            ForgeFileStatus::Removed,
-            "`deleted`, not `removed`"
-        );
+        assert_eq!(removed.status, ForgeFileStatus::Removed, "`deleted`, not `removed`");
         assert!(removed.patch.as_deref().unwrap().contains("-b"));
 
         let renamed = by_path["new name.rs"];
@@ -2595,7 +2324,8 @@ mod tests {
                                     return None;
                                 }
                                 counter.fetch_add(1, Ordering::SeqCst);
-                                let chunk: Result<Vec<u8>, std::io::Error> = Ok(vec![b'x'; CHUNK]);
+                                let chunk: Result<Vec<u8>, std::io::Error> =
+                                    Ok(vec![b'x'; CHUNK]);
                                 Some((chunk, sent + 1))
                             }
                         });
@@ -2619,10 +2349,7 @@ mod tests {
         assert_eq!(files.files.len(), 1);
         assert_eq!(files.files[0].path, "big.rs");
         assert_eq!(files.files[0].patch, None);
-        assert!(
-            !files.files[0].binary,
-            "counted lines are not binary content"
-        );
+        assert!(!files.files[0].binary, "counted lines are not binary content");
         assert_eq!(
             (files.files[0].additions, files.files[0].deletions),
             (Some(9), Some(1))
@@ -2698,30 +2425,18 @@ mod tests {
     #[tokio::test]
     async fn merge_options_follow_the_repository_settings() {
         let (api_base, _) = mock_api().await;
-        let options = merge_options(&auth_for(api_base), "acme/app")
-            .await
-            .expect("options");
+        let options = merge_options(&auth_for(api_base), "acme/app").await.expect("options");
         assert_eq!(
             options.methods,
             vec![ForgeMergeMethod::Merge, ForgeMergeMethod::Squash],
             "rebase is forbidden on this repository"
         );
-        assert_eq!(
-            options.default_method,
-            ForgeMergeMethod::Squash,
-            "the repo's own default"
-        );
+        assert_eq!(options.default_method, ForgeMergeMethod::Squash, "the repo's own default");
         assert_eq!(options.merge_strategy, ForgeMergeStrategy::MergeCommit);
         // Three of Gitea's five styles ARE `Merge` — see `merge_options`.
         assert_eq!(merge_method_of("merge"), Some(ForgeMergeMethod::Merge));
-        assert_eq!(
-            merge_method_of("rebase-merge"),
-            Some(ForgeMergeMethod::Merge)
-        );
-        assert_eq!(
-            merge_method_of("fast-forward-only"),
-            Some(ForgeMergeMethod::Merge)
-        );
+        assert_eq!(merge_method_of("rebase-merge"), Some(ForgeMergeMethod::Merge));
+        assert_eq!(merge_method_of("fast-forward-only"), Some(ForgeMergeMethod::Merge));
         assert_eq!(merge_method_of("rebase"), Some(ForgeMergeMethod::Rebase));
         assert_eq!(merge_method_of("squash"), Some(ForgeMergeMethod::Squash));
         assert_eq!(merge_method_of("manually-merged"), None);
@@ -2775,15 +2490,9 @@ mod tests {
 
             // …and the merge that follows sends the style Gitea will accept,
             // not the word the menu entry is spelled with.
-            merge_change(
-                &auth,
-                "acme/app",
-                4,
-                ForgeMergeMethod::Merge,
-                Some("deadbee"),
-            )
-            .await
-            .expect("merge");
+            merge_change(&auth, "acme/app", 4, ForgeMergeMethod::Merge, Some("deadbee"))
+                .await
+                .expect("merge");
             assert_eq!(
                 seen.wrote("merge"),
                 vec![serde_json::json!({ "do": expected_do, "head_commit_id": "deadbee" })],
@@ -2805,9 +2514,7 @@ mod tests {
             "allow_fast_forward_only_merge": false,
         }))
         .await;
-        let options = merge_options(&auth_for(api_base), "acme/app")
-            .await
-            .expect("options");
+        let options = merge_options(&auth_for(api_base), "acme/app").await.expect("options");
         assert!(options.methods.is_empty());
     }
 
@@ -2818,16 +2525,10 @@ mod tests {
     #[tokio::test]
     async fn an_instance_that_reports_no_flags_permits_everything() {
         let (api_base, _) = mock_repo_with(serde_json::json!({})).await;
-        let options = merge_options(&auth_for(api_base), "acme/app")
-            .await
-            .expect("options");
+        let options = merge_options(&auth_for(api_base), "acme/app").await.expect("options");
         assert_eq!(
             options.methods,
-            vec![
-                ForgeMergeMethod::Merge,
-                ForgeMergeMethod::Squash,
-                ForgeMergeMethod::Rebase
-            ]
+            vec![ForgeMergeMethod::Merge, ForgeMergeMethod::Squash, ForgeMergeMethod::Rebase]
         );
         assert_eq!(options.merge_strategy, ForgeMergeStrategy::MergeCommit);
     }
@@ -2911,11 +2612,7 @@ mod tests {
             .collect();
         assert_eq!(
             titles,
-            vec![
-                "WIP: Fix the crash",
-                "wip: already said so",
-                "Fix the crash"
-            ],
+            vec!["WIP: Fix the crash", "wip: already said so", "Fix the crash"],
             "prefixed once, never twice, and never when it is not a draft"
         );
         assert_eq!(seen.wrote("pull")[0]["head"], "houhub/task-1");
@@ -2944,9 +2641,12 @@ mod tests {
             crate::forge::normalize_repo(&pr.head_repo).is_none(),
             "a well-formed placeholder would pass the fork gate and fail at the push"
         );
-        assert!(
-            crate::forge::deliver::pull_is_workable(ForgeProvider::Gitea, &pr, "acme/app").is_err()
-        );
+        assert!(crate::forge::deliver::pull_is_workable(
+            ForgeProvider::Gitea,
+            &pr,
+            "acme/app"
+        )
+        .is_err());
     }
 
     /// A title is arbitrary user text, and the prefix test slices it. Bytes
@@ -2982,5 +2682,244 @@ mod tests {
             create_comment(&auth, "acme/app", -3, "hi").await,
             Err(ForgeError::Invalid(_))
         ));
+    }
+}
+
+/// `list_open_items` — the auto-processing scan's read.
+#[cfg(test)]
+mod open_items_tests {
+    use super::*;
+    use crate::forge::ForgeProvider;
+    use axum::extract::Query;
+    use axum::http::HeaderMap;
+    use axum::routing::get;
+    use axum::Json;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    fn auth_for(api_base: String) -> ResolvedAuth {
+        ResolvedAuth {
+            provider: ForgeProvider::Gitea,
+            server_host: "gitea.test".into(),
+            api_base,
+            account_id: "acc-test".into(),
+            username: "alice".into(),
+            avatar_url: None,
+            token: "tok-test".into(),
+            scopes: vec![],
+        }
+    }
+
+    /// The issues feed, split by `type=` as Gitea does it: one page each,
+    /// with a `next` link on the first page of issues only.
+    #[tokio::test]
+    async fn the_scan_asks_each_kind_with_type_and_since() {
+        let seen: Arc<Mutex<Vec<HashMap<String, String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let app = axum::Router::new().route(
+            "/repos/team/tool/issues",
+            get(move |Query(q): Query<HashMap<String, String>>| {
+                let log = log.clone();
+                async move {
+                    let page: u32 = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+                    let pulls = q.get("type").map(String::as_str) == Some("pulls");
+                    log.lock().unwrap().push(q);
+                    let mut headers = HeaderMap::new();
+                    if !pulls && page == 1 {
+                        headers.insert(
+                            "link",
+                            "<https://gitea.test/x?page=2>; rel=\"next\"".parse().unwrap(),
+                        );
+                    }
+                    let number = if pulls { 100 } else { i64::from(page) };
+                    let mut row = serde_json::json!({
+                        "number": number,
+                        "title": format!("item {number}"),
+                        "state": "open",
+                        "labels": [],
+                        "user": { "login": "alice" },
+                        "updated_at": "2026-10-14T17:00:00+08:00",
+                        "html_url": format!("https://gitea.test/team/tool/issues/{number}"),
+                    });
+                    if pulls {
+                        row["pull_request"] =
+                            serde_json::json!({ "merged": false, "draft": false });
+                    }
+                    (headers, Json(serde_json::json!([row])))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let since = chrono::DateTime::parse_from_rfc3339("2026-10-14T08:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let auth = auth_for(format!("http://{addr}"));
+        let fresh = ScanCursor::default();
+        let scan = list_open_items(&auth, "Team/Tool", true, true, Some(since), &fresh)
+            .await
+            .expect("listed");
+        assert_eq!(scan.resume, None, "read to its end");
+        let rows: Vec<(i64, bool)> = scan.rows.iter().map(|r| (r.number, r.is_pr)).collect();
+        assert_eq!(rows, vec![(1, false), (2, false), (100, true)]);
+
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 3);
+        for q in &seen {
+            assert_eq!(q.get("state").map(String::as_str), Some("open"));
+            assert_eq!(q.get("since").map(String::as_str), Some("2026-10-14T08:00:00Z"));
+            // Gitea's own ceiling, not the hundred the other forges serve.
+            assert_eq!(q.get("limit").map(String::as_str), Some("50"));
+        }
+        assert_eq!(seen[0].get("type").map(String::as_str), Some("issues"));
+        assert_eq!(seen[2].get("type").map(String::as_str), Some("pulls"));
+    }
+
+    /// The case the continuation overlap exists for: between two scans of a
+    /// sweep, an item that was already read is closed. Everything behind it
+    /// shifts up a place, so the first unread item now sits on the last page
+    /// the first scan read. Carrying on from the cursor alone would skip it
+    /// for good; re-reading the overlap page finds it.
+    #[tokio::test]
+    async fn a_closure_between_scans_does_not_lose_the_next_unread_item() {
+        // One item per page; page N holds the N-th still-open item.
+        let open: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new((1..=150).collect()));
+        let list = open.clone();
+        let app = axum::Router::new().route(
+            "/repos/team/tool/issues",
+            get(move |Query(q): Query<HashMap<String, String>>| {
+                let list = list.clone();
+                async move {
+                    let page: usize = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+                    let items = list.lock().unwrap().clone();
+                    let mut headers = HeaderMap::new();
+                    if page < items.len() {
+                        headers.insert(
+                            "link",
+                            "<https://gitea.test/x?page=next>; rel=\"next\"".parse().unwrap(),
+                        );
+                    }
+                    let rows: Vec<serde_json::Value> = items
+                        .get(page - 1)
+                        .map(|number| {
+                            serde_json::json!({
+                                "number": number,
+                                "title": format!("item {number}"),
+                                "state": "open",
+                                "labels": [],
+                                "user": { "login": "alice" },
+                                "html_url": format!("https://gitea.test/team/tool/issues/{number}"),
+                            })
+                        })
+                        .into_iter()
+                        .collect();
+                    (headers, Json(serde_json::Value::Array(rows)))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let auth = auth_for(format!("http://{addr}"));
+
+        let first = list_open_items(&auth, "team/tool", true, false, None, &ScanCursor::default())
+            .await
+            .expect("listed");
+        let read: Vec<i64> = first.rows.iter().map(|r| r.number).collect();
+        assert_eq!(read.len(), SCAN_MAX_PAGES as usize);
+        let cursor = first.resume.expect("cut short");
+
+        // An item the first scan already read is closed in between.
+        open.lock().unwrap().retain(|&n| n != 7);
+        let next_unread = i64::from(SCAN_MAX_PAGES) + 1;
+
+        let second = list_open_items(&auth, "team/tool", true, false, None, &cursor)
+            .await
+            .expect("listed");
+        let numbers: Vec<i64> = second.rows.iter().map(|r| r.number).collect();
+        assert!(
+            numbers.contains(&next_unread),
+            "item {next_unread} shifted onto a page already read and was skipped: {numbers:?}"
+        );
+        assert_eq!(second.resume, None, "the rest of the window was read");
+    }
+
+}
+
+#[cfg(test)]
+mod check_summary_tests {
+    use super::*;
+    use axum::extract::Path;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use axum::routing::get;
+    use axum::Json;
+
+    fn auth_for(api_base: String) -> ResolvedAuth {
+        ResolvedAuth {
+            provider: super::super::ForgeProvider::Gitea,
+            server_host: "gitea.test".into(),
+            api_base,
+            account_id: "acc-test".into(),
+            username: "alice".into(),
+            avatar_url: None,
+            token: "tok-test".into(),
+            scopes: vec![],
+        }
+    }
+
+    /// #1 red, #2 no statuses at all, #3 a pull Gitea will not serve, #4 a
+    /// pull whose statuses cannot be read.
+    async fn serve() -> ResolvedAuth {
+        let app = axum::Router::new()
+            .route(
+                "/api/v1/repos/acme/app/pulls/{n}",
+                get(|Path(n): Path<i64>| async move {
+                    if n == 3 {
+                        return StatusCode::NOT_FOUND.into_response();
+                    }
+                    Json(serde_json::json!({ "number": n, "head": { "ref": "fix", "sha": format!("sha{n}") } }))
+                        .into_response()
+                }),
+            )
+            .route(
+                "/api/v1/repos/acme/app/commits/{sha}/status",
+                get(|Path(sha): Path<String>| async move {
+                    match sha.as_str() {
+                        "sha1" => Json(serde_json::json!({ "statuses": [
+                            { "id": 1, "context": "ci/test", "status": "success" },
+                            { "id": 2, "context": "ci/lint", "status": "failure" },
+                            { "id": 3, "context": "ci/e2e", "status": "pending" },
+                        ] }))
+                        .into_response(),
+                        "sha2" => Json(serde_json::json!({ "statuses": [] })).into_response(),
+                        _ => StatusCode::FORBIDDEN.into_response(),
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        auth_for(format!("http://{addr}/api/v1"))
+    }
+
+    #[tokio::test]
+    async fn each_change_is_read_on_its_own_and_a_failure_is_only_that_one() {
+        let auth = serve().await;
+        let list = check_summaries(&auth, "acme/app", &[4, 3, 2, 1]).await;
+        assert!(list.available);
+        let numbers: Vec<i64> = list.items.iter().map(|s| s.number).collect();
+        assert_eq!(numbers, [2, 1], "unknown left out, the rest in the order asked");
+        let red = &list.items[1];
+        assert_eq!(red.verdict, Some(super::super::ForgeCheckVerdict::Failure));
+        assert_eq!(
+            red.counts,
+            Some(super::super::ForgeCheckCounts { passing: 1, failing: 1, pending: 1, neutral: 0, total: 3 })
+        );
+        assert_eq!(list.items[0].verdict, None, "no statuses: present and empty");
+
+        assert!(!check_summaries(&auth, "acme/app", &[3, 4]).await.available, "nothing readable");
     }
 }

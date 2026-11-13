@@ -67,6 +67,7 @@ const DELEGATION: DelegationContextValue = {
   findByParentToolUseId: () => undefined,
   findByChildConversationId: () => undefined,
   findByTaskId: () => undefined,
+  bindingsForParent: () => [],
 }
 
 function renderParts(parts: AdaptedContentPart[]) {
@@ -108,7 +109,7 @@ describe("Antigravity run_command renders as a terminal", () => {
       },
     ])
 
-    expect(screen.getAllByText("pnpm build").length).toBeGreaterThan(0)
+    expect(screen.getByText("pnpm build")).toBeInTheDocument()
     expect(container.textContent).toContain("Next.js 16.1.7")
     // The parser already prints the `$ <command>` prompt line; the renderer
     // must not print a second one on top of it.
@@ -142,7 +143,7 @@ describe("Antigravity run_command renders as a terminal", () => {
       },
     ])
 
-    expect(screen.getAllByText("pnpm build").length).toBeGreaterThan(0)
+    expect(screen.getByText("pnpm build")).toBeInTheDocument()
     expect(container.textContent).toContain("Next.js 16.1.7")
     // The JSON tree this card used to render.
     expect(container.textContent).not.toContain("combinedOutput")

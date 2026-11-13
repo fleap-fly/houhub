@@ -30,6 +30,7 @@ export interface AskQuestion {
    *  answer envelope is keyed by that id rather than the question text (unlike
    *  the houhub-mcp ask, which the card matches by header+question). */
   id?: string
+  allowOther?: boolean
 }
 
 export interface AskQuestionAnswer {
@@ -116,6 +117,11 @@ export function parseAskQuestionInput(
   }
   if (!parsed || typeof parsed !== "object") return []
   const root = parsed as Record<string, unknown>
+  // codex-acp 1.0.0 wraps every MCP call's input as
+  // `{ server, tool, arguments: { questions } }` (see createMcpToolCallUpdate in
+  // codex-acp/src/CodexToolCallMapper.ts). Fall back to the nested `arguments`
+  // when the questions aren't at the top level (the bare shape Claude / the
+  // history parser persist).
   let questions = root.questions
   if (!Array.isArray(questions)) {
     questions = asRecord(root.arguments)?.questions
@@ -141,6 +147,12 @@ export function parseAskQuestionInput(
       options,
       isSecret: obj.isSecret === true || obj.is_secret === true,
       id: typeof obj.id === "string" && obj.id ? obj.id : undefined,
+      allowOther:
+        obj.allowOther === false || obj.allow_other === false
+          ? false
+          : obj.allowOther === true || obj.allow_other === true
+            ? true
+            : undefined,
     })
   }
   return out
@@ -151,6 +163,14 @@ const NO_SELECTION = "(no selection)"
 const HEADER_LINE_RE = /^\s*\d+\.\s*\[([^\]]*)\]\s*(.*)$/
 const SELECTED_LINE_RE = /^\s*→\s*(.*)$/
 
+/**
+ * codex persists an MCP tool result in its rollout transcript's
+ * `function_call_output.output` as `Wall time: <n> seconds\nOutput:\n<body>`,
+ * where `<body>` is the actual result (here the `{ answers, declined }` JSON).
+ * Strip that wrapper so the body underneath is reachable. Anything without the
+ * marker (the live ACP path, Claude, the bare companion shapes) is returned
+ * unchanged.
+ */
 function stripCodexOutputWrapper(text: string): string {
   const match = text.match(/^Wall time:[^\n]*\r?\nOutput:\r?\n([\s\S]*)$/)
   return match ? match[1] : text
@@ -481,6 +501,8 @@ function parseOutcomeJson(output: string): AskQuestionOutcome | null {
   }
   const top = asRecord(parsed)
   if (!top) return null
+  // Resolve an answer envelope from a record: the record itself when it carries
+  // `answers`/`declined`, otherwise its `structuredContent`.
   const envelopeOf = (
     r: Record<string, unknown> | null
   ): Record<string, unknown> | null => {
@@ -488,6 +510,12 @@ function parseOutcomeJson(output: string): AskQuestionOutcome | null {
     if (Array.isArray(r.answers) || typeof r.declined === "boolean") return r
     return asRecord(r.structuredContent)
   }
+  // Prefer the bare top-level shape (Claude / the history parser) first, so a
+  // valid top-level envelope is never shadowed by an unrelated `result` key.
+  // codex's live ACP path wraps the MCP result as `{ result, error }`, where
+  // `result` is the CallToolResult (`{ content, structuredContent }`) — sometimes
+  // tagged again under an `Ok` serde variant — so fall through those layers when
+  // the top level yields nothing.
   const result = asRecord(top.result)
   const resultOk = result ? (asRecord(result.Ok) ?? asRecord(result.ok)) : null
   const env = envelopeOf(top) ?? envelopeOf(result) ?? envelopeOf(resultOk)
@@ -540,6 +568,8 @@ export function parseAskQuestionOutcome(
 ): AskQuestionOutcome | null {
   if (!output || !output.trim()) return null
 
+  // codex wraps the result as `Wall time: <n>s\nOutput:\n<body>` in its rollout;
+  // strip it so both the JSON and text paths below see the real payload.
   const body = stripCodexOutputWrapper(output)
 
   const fromJson = parseOutcomeJson(body)

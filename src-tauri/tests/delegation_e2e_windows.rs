@@ -7,37 +7,26 @@
 #![cfg(windows)]
 
 use std::path::PathBuf;
-
 use std::sync::Arc;
-
 use std::time::Duration;
 
 use async_trait::async_trait;
-
 use houhub_lib::acp::delegation::broker::{
     ConversationDepthLookup, DelegationBroker, DelegationConfig,
 };
-
 use houhub_lib::acp::delegation::listener::{
     DelegationListener, ParentSessionLookup, TokenEntry, TokenRegistry,
 };
-
 use houhub_lib::acp::delegation::spawner::{mock::MockSpawner, ConnectionSpawner};
-
 use houhub_lib::acp::delegation::transport::{
     client_round_trip, client_status_round_trip, BrokerRequest, BrokerResponse, BrokerStatusRequest,
 };
-
 use houhub_lib::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationSuccess};
-
 use houhub_lib::acp::question::{QuestionSpec, RegisteredQuestion, SessionQuestionAccess};
-
 use houhub_lib::models::AgentType;
-
 use serde_json::json;
 
 struct AlwaysRoot;
-
 #[async_trait]
 impl ConversationDepthLookup for AlwaysRoot {
     async fn parent_of(&self, _id: i32) -> Result<Option<i32>, DelegationError> {
@@ -46,7 +35,6 @@ impl ConversationDepthLookup for AlwaysRoot {
 }
 
 struct FixedParent(i32);
-
 #[async_trait]
 impl ParentSessionLookup for FixedParent {
     async fn current_conversation_id(&self, _: &str) -> Option<i32> {
@@ -56,7 +44,6 @@ impl ParentSessionLookup for FixedParent {
 
 /// No-op feedback access — this e2e suite exercises delegation, not feedback.
 struct NoFeedback;
-
 #[async_trait]
 impl houhub_lib::acp::feedback::SessionFeedbackAccess for NoFeedback {
     async fn read_pending_feedback(
@@ -70,7 +57,6 @@ impl houhub_lib::acp::feedback::SessionFeedbackAccess for NoFeedback {
 
 /// No-op question access — this e2e suite exercises delegation, not asks.
 struct NoQuestions;
-
 #[async_trait]
 impl SessionQuestionAccess for NoQuestions {
     async fn register_question(
@@ -86,7 +72,6 @@ impl SessionQuestionAccess for NoQuestions {
 
 /// No-op session-info access — this e2e suite never drives `get_session_info`.
 struct NoSessionInfo;
-
 #[async_trait]
 impl houhub_lib::acp::session_info::SessionInfoAccess for NoSessionInfo {
     async fn resolve(
@@ -100,7 +85,6 @@ impl houhub_lib::acp::session_info::SessionInfoAccess for NoSessionInfo {
 
 /// Task-tool stub: the e2e delegation tests never exercise the task arms.
 struct NoTaskTools;
-
 #[async_trait]
 impl houhub_lib::acp::work_task_tools::WorkTaskToolAccess for NoTaskTools {
     async fn report_progress(
@@ -115,6 +99,7 @@ impl houhub_lib::acp::work_task_tools::WorkTaskToolAccess for NoTaskTools {
         _parent: &str,
         _verdict: &str,
         _summary: Option<&str>,
+        _thread_replies: &[houhub_lib::acp::delegation::transport::ThreadReply],
     ) -> houhub_lib::acp::work_task_tools::TaskReportAck {
         houhub_lib::acp::work_task_tools::TaskReportAck::rejected("no engine")
     }
@@ -123,7 +108,6 @@ impl houhub_lib::acp::work_task_tools::WorkTaskToolAccess for NoTaskTools {
 /// Chat-authoring stub: the e2e delegation tests never exercise the authoring
 /// arms.
 struct NoAuthoring;
-
 #[async_trait]
 impl houhub_lib::acp::chat_authoring::ChatAuthoringAccess for NoAuthoring {
     async fn create_automation(
@@ -217,6 +201,7 @@ async fn end_to_end_named_pipe_happy_path() {
         .register(
             "tok".into(),
             TokenEntry {
+                agent_hosts_tools: false,
                 parent_connection_id: "p1".into(),
                 working_dir: PathBuf::from(r"C:\Windows\Temp"),
             },
@@ -326,6 +311,7 @@ async fn end_to_end_named_pipe_back_to_back_requests() {
         .register(
             "tok".into(),
             TokenEntry {
+                agent_hosts_tools: false,
                 parent_connection_id: "p1".into(),
                 working_dir: PathBuf::from(r"C:\Windows\Temp"),
             },

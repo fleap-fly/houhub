@@ -5,7 +5,7 @@ import { formatDistanceToNow } from "date-fns"
 import { enUS, zhCN, zhTW } from "date-fns/locale"
 import { File, Folder } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
-import { useAuxPanelStore } from "@/stores/aux-panel-store"
+import { useAuxPanelContext } from "@/contexts/aux-panel-context"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions } from "@/contexts/tab-context"
@@ -62,7 +62,7 @@ export function SearchCommandDialog({
   const { openTab } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const { openFilePreview } = useWorkspaceActions()
-  const revealInFileTree = useAuxPanelStore((state) => state.revealInFileTree)
+  const { revealInFileTree } = useAuxPanelContext()
 
   const [activeTab, setActiveTab] = useState<SearchTab>("conversations")
   // The search box owns the keyboard: the dialog opens with the cursor in it,
@@ -88,7 +88,8 @@ export function SearchCommandDialog({
     reset: resetFileTree,
   } = useFileTree({
     folderPath: folderPath || undefined,
-    enabled: activeTab === "files",
+    enabled: open && activeTab === "files",
+    query,
   })
 
   // Compute which agent types exist in current folder
@@ -96,8 +97,8 @@ export function SearchCommandDialog({
     new Set(conversations.map((c) => c.agent_type))
   ).sort(compareAgentType)
 
-  // Rank files by relevance (name/path tiers + fuzzy subsequence), scanning the
-  // full list so a deeply nested match isn't crowded out by shallower ones.
+  // The backend ranks the whole workspace before capping the response, so a
+  // deeply nested match remains reachable without retaining the full index.
   const filteredFiles = useMemo(
     () => rankFileMatches(query, allFiles, 100),
     [allFiles, query]
@@ -146,7 +147,9 @@ export function SearchCommandDialog({
       setAgentFilter(null)
       setResults([])
       setActiveTab("conversations")
-      resetFileTree()
+      // Like the full re-list this replaced, each opening searches files as
+      // they are now, not a native snapshot left over from before it opened.
+      resetFileTree(true)
     }
   }, [open, resetFileTree])
 

@@ -1,17 +1,12 @@
 use std::sync::Arc;
 
 use axum::{extract::Extension, Json};
-
 use serde::{Deserialize, Serialize};
 
 use crate::app_error::AppCommandError;
-
 use crate::app_state::AppState;
-
 use crate::commands::create_directory::create_directory_core;
-
 use crate::commands::folders as folder_commands;
-
 use crate::models::*;
 
 #[derive(Deserialize)]
@@ -85,8 +80,12 @@ pub async fn open_worktree_folder(
     Json(params): Json<OpenWorktreeFolderParams>,
 ) -> Result<Json<FolderDetail>, AppCommandError> {
     Ok(Json(
-        folder_commands::open_worktree_folder_core(&state.db, params.path, params.source_folder_id)
-            .await?,
+        folder_commands::open_worktree_folder_core(
+            &state.db,
+            params.path,
+            params.source_folder_id,
+        )
+        .await?,
     ))
 }
 
@@ -153,8 +152,12 @@ pub async fn remove_folder_from_workspace(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<FolderIdParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    folder_commands::remove_folder_from_workspace_core(&state.emitter, &state.db, params.folder_id)
-        .await?;
+    folder_commands::remove_folder_from_workspace_core(
+        &state.emitter,
+        &state.db,
+        params.folder_id,
+    )
+    .await?;
     Ok(Json(()))
 }
 
@@ -405,6 +408,54 @@ pub async fn list_workspace_files(
 ) -> Result<Json<Vec<folder_commands::WorkspaceFileEntry>>, AppCommandError> {
     let result = folder_commands::list_workspace_files(params.path).await?;
     Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchWorkspaceFilesParams {
+    pub path: String,
+    pub query: String,
+    pub limit: Option<usize>,
+    pub files_only: Option<bool>,
+    pub refresh: Option<bool>,
+    pub request: Option<crate::commands::workspace_file_search::SearchRequest>,
+    pub max_age_ms: Option<u64>,
+}
+
+pub async fn search_workspace_files(
+    Json(params): Json<SearchWorkspaceFilesParams>,
+) -> Result<Json<Vec<folder_commands::WorkspaceFileEntry>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::workspace_file_search::search_workspace_files(
+            params.path,
+            params.query,
+            params.limit,
+            params.files_only,
+            params.refresh,
+            params.request,
+            params.max_age_ms,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct CancelWorkspaceFileSearchParams {
+    pub request: crate::commands::workspace_file_search::SearchRequest,
+}
+
+pub async fn cancel_workspace_file_search(
+    Json(params): Json<CancelWorkspaceFileSearchParams>,
+) -> Result<Json<()>, AppCommandError> {
+    crate::commands::workspace_file_search::cancel_workspace_file_search(params.request).await?;
+    Ok(Json(()))
+}
+
+pub async fn prepare_workspace_file_search(
+    Json(params): Json<ListWorkspaceFilesParams>,
+) -> Json<()> {
+    crate::commands::workspace_file_search::prepare_workspace_file_search(params.path).await;
+    Json(())
 }
 
 #[derive(Deserialize)]

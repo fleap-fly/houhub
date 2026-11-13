@@ -107,6 +107,7 @@ import {
   SubsessionAncestorRails,
   CONV_RAIL_DEPTH_STEP,
 } from "./sidebar-conversation-card"
+import { MoveConversationDialog } from "./move-conversation-dialog"
 import {
   applyLayoutMove,
   buildDragSlots,
@@ -947,7 +948,9 @@ export interface SidebarConversationListProps {
   /** When on, each repo's worktree child folders render as indented sub-groups
    *  instead of being merged flat into the parent group. Defaults to off. */
   showWorktrees?: boolean
-  /** When on, render the flat Recent section at its configured slot. */
+  /** When on, the flat "Recent" section is rendered at its slot in
+   *  `sectionOrder`. Defaults to off here; the Sidebar passes the user's
+   *  preference, whose product default is ON. */
   showRecent?: boolean
   /** Narrow every section to conversations carrying these tags (see
    *  `matchesTagFilter`). Must be referentially stable — it feeds the bucket
@@ -1111,7 +1114,7 @@ export function SidebarConversationList({
   // and a fresh sidebar should open short again.
   const [recentLimit, setRecentLimit] = useState(RECENT_PAGE_SIZE)
   const revealMoreRecent = useCallback(
-    () => setRecentLimit((limit) => limit + RECENT_PAGE_SIZE),
+    () => setRecentLimit((n) => n + RECENT_PAGE_SIZE),
     []
   )
   // The Recent footer's own button, so the reset can hand focus to it.
@@ -1459,7 +1462,7 @@ export function SidebarConversationList({
   // children alike). Depends only on `folders`, so status events never rebuild
   // it — the Recent bucket below leans on that.
   const openFolderIds = useMemo(
-    () => new Set(folders.map((folder) => folder.id)),
+    () => new Set(folders.map((f) => f.id)),
     [folders]
   )
 
@@ -2140,6 +2143,20 @@ export function SidebarConversationList({
     setManageFolderId(folderId)
   }, [])
 
+  // From a row: the folder whose header the row is listed under — its own
+  // folder, or the repo a worktree session is merged into while "Show
+  // worktrees" is off — so the dialog opens on the group the user is looking
+  // at, like that header's own menu entry would.
+  const handleManageConversationsFor = useCallback(
+    (conversation: DbConversationSummary) => {
+      setManageFolderId(
+        displayChildToParent.get(conversation.folder_id) ??
+          conversation.folder_id
+      )
+    },
+    [displayChildToParent]
+  )
+
   const handleManageFolderTags = useCallback((folderId: number) => {
     openConversationTagsManager({ folderId })
   }, [])
@@ -2234,10 +2251,31 @@ export function SidebarConversationList({
     [updateConversationLocal]
   )
 
+  // "Move to folder" — the row's submenu picks the folder, this one dialog for
+  // the whole list confirms it, so the card memo keeps bailing out on a stable
+  // callback.
+  const [moveRequest, setMoveRequest] = useState<{
+    conversation: DbConversationSummary
+    folderId: number
+  } | null>(null)
+  const handleMoveToFolder = useCallback(
+    (conversation: DbConversationSummary, folderId: number) =>
+      setMoveRequest({ conversation, folderId }),
+    []
+  )
+  const moveConversationsList = useMemo(
+    () => (moveRequest ? [moveRequest.conversation] : []),
+    [moveRequest]
+  )
+
   const handleNewConversation = useCallback(() => {
     // Starting a conversation returns to the conversation workspace if a
     // workbench route (e.g. Automations) was taking over the content region.
     openConversations()
+    // With no active folder (all folders closed, or a cold start that recovered
+    // to nothing) fall back to folderless chat mode rather than no-op — the
+    // same defense the sidebar's own "New chat" row takes, so neither entry
+    // point is ever a dead end.
     if (!activeFolder) {
       openChatModeTab()
       return
@@ -2966,7 +3004,10 @@ export function SidebarConversationList({
           onToggle={toggleSection}
           // The chats section gets an always-visible New-chat button (its primary
           // entry point, reachable even when empty). `openChatModeTab` is a stable
-          // context callback, so the memo holds.
+          // context callback, so the memo holds. Recent gets the same
+          // affordance, but starting a conversation in the ACTIVE FOLDER — the
+          // section spans folders and chats alike, and the folder is where a
+          // "continue where I left off" list lands you.
           onNewChat={
             row.section === "chats"
               ? openChatModeTab
@@ -3141,6 +3182,20 @@ export function SidebarConversationList({
       )
     }
     if (row.kind === "recent-more") {
+      // Footer of the paged Recent section — a row, not a hint: each click
+      // reveals another page. Its geometry is the conversation card's, so the
+      // section reads as one column — the chevron sits ON the rail axis exactly
+      // where a card's agent icon does (same 0.75rem glyph in the same 0.875rem
+      // box, centred on the var), and the label starts at the card's title
+      // inset (`axis + 0.875rem`). Same row height and full rounding too, so
+      // its hover pill is the one the rows above it use.
+      //
+      // Two directions live here. While pages remain, the row is "show more"
+      // and the reset hides at the right edge as an icon, on the same
+      // reveal-on-hover terms as the section headers' actions. Once the last
+      // page is out (`remaining === 0`) buildRows keeps the row alive for the
+      // reset alone, and it takes over the row: nothing is left to expand, so a
+      // hover-only affordance would be the section's only exit hiding itself.
       const showMore = row.remaining > 0
       const resetLabel = t("resetRecentLimit", { count: RECENT_PAGE_SIZE })
       return (
@@ -3253,6 +3308,8 @@ export function SidebarConversationList({
         onStatusChange={handleStatusChange}
         onNewConversation={handleNewConversationForFolder}
         onTogglePin={handleTogglePin}
+        onMoveToFolder={handleMoveToFolder}
+        onManageConversations={handleManageConversationsFor}
         depth={row.depth}
         hasChildren={conv.child_count > 0}
         expanded={conversationExpanded.has(conv.id)}
@@ -3261,6 +3318,10 @@ export function SidebarConversationList({
     )
   }
 
+  // Keys must be unique across the WHOLE flat array, and the Recent section
+  // deliberately re-lists conversations that also appear under their folder or
+  // in Chat — so every row a Recent parent can produce carries a `recent-`
+  // prefix to stay distinct from its canonical twin.
   const rowKey = (row: SidebarRow): string => {
     if (row.kind === "section") return `section-${row.section}`
     if (row.kind === "folder-group") return `foldergroup-${row.groupId}`
@@ -3273,8 +3334,9 @@ export function SidebarConversationList({
     if (row.kind === "recent-empty") return "recent-empty"
     if (row.kind === "recent-more") return "recent-more"
     const prefix = row.recent ? "recent-" : ""
-    if (row.kind === "subsession-loading")
+    if (row.kind === "subsession-loading") {
       return `${prefix}subloading-${row.parentId}`
+    }
     return `${prefix}conv-${row.conversation.agent_type}-${row.conversation.id}`
   }
 
@@ -3584,6 +3646,13 @@ export function SidebarConversationList({
           </ContextMenuContent>
         </ContextMenu>
       )}
+
+      <MoveConversationDialog
+        open={moveRequest !== null}
+        onOpenChange={(open) => !open && setMoveRequest(null)}
+        conversations={moveConversationsList}
+        targetFolderId={moveRequest?.folderId ?? null}
+      />
 
       <AlertDialog
         open={removeConfirm !== null}

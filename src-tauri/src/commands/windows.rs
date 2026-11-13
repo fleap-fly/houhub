@@ -1,28 +1,20 @@
 use std::collections::HashMap;
-
 #[cfg(target_os = "macos")]
 use std::sync::atomic::AtomicU32;
-
 #[cfg(target_os = "macos")]
 use std::sync::atomic::AtomicU64;
-
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering as AtomicOrdering};
-
 use std::sync::Mutex;
 
 use sea_orm::DatabaseConnection;
-
 use tauri::{
     window::{Effect, EffectState, EffectsBuilder},
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
 use crate::app_error::AppCommandError;
-
 use crate::db::service::app_metadata_service;
-
 use crate::db::AppDatabase;
-
 use crate::models::FolderDetail;
 
 /// Base traffic-light position (logical px) at 100 % zoom, tuned for the
@@ -30,16 +22,14 @@ use crate::models::FolderDetail;
 /// (commit / merge / push / stash / settings / …).
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHT_X: f64 = 12.0;
-
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHT_Y: f64 = 17.0;
-
 /// The workspace windows (local `main` + remote workspace) render the taller
 /// h-10 (40px) `FolderTitleBar` that hosts the relocated conversation + file
-/// tab strips, so their traffic lights sit ~4px lower to stay vertically
+/// tab strips, so their traffic lights sit ~5px lower to stay vertically
 /// centred within the taller bar.
 #[cfg(target_os = "macos")]
-const WORKSPACE_TRAFFIC_LIGHT_Y: f64 = 21.0;
+const WORKSPACE_TRAFFIC_LIGHT_Y: f64 = 22.0;
 
 #[cfg(target_os = "macos")]
 static CURRENT_ZOOM: AtomicU32 = AtomicU32::new(100);
@@ -97,9 +87,7 @@ const APPEARANCE_MODE_DB_KEY: &str = "appearance_mode";
 static CACHED_APPEARANCE_MODE: AtomicU8 = AtomicU8::new(0);
 
 const MODE_SYSTEM: u8 = 0;
-
 const MODE_DARK: u8 = 1;
-
 const MODE_LIGHT: u8 = 2;
 
 fn mode_from_str(s: &str) -> u8 {
@@ -272,6 +260,9 @@ where
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
+        // Linux: drop the native GTK title bar so it doesn't stack on top of
+        // the app's own toolbar (the "double title bar"). The frontend then
+        // renders custom window controls + resize grips, mirroring Windows.
         let builder = if should_use_dark_background() {
             builder.background_color(tauri::window::Color(9, 9, 11, 255))
         } else {
@@ -394,6 +385,9 @@ fn resolve_settings_route(section: Option<&str>) -> &'static str {
         Some("version-control") => "settings/version-control",
         Some("shortcuts") => "settings/shortcuts",
         Some("system") => "settings/system",
+        // Desktop only, like the page itself: the web nav hides it, so the web
+        // `open_settings_window` deliberately has no arm for it.
+        Some("web-service") => "settings/web-service",
         _ => "settings/appearance",
     }
 }
@@ -834,7 +828,10 @@ pub async fn open_import_sessions_window(
             );
             let target_path = format!("/{route}");
             let target_json = serde_json::to_string(&target_path).map_err(|e| {
-                AppCommandError::window("Failed to build import navigation target", e.to_string())
+                AppCommandError::window(
+                    "Failed to build import navigation target",
+                    e.to_string(),
+                )
             })?;
             existing
                 .eval(format!("window.location.replace({target_json});"))
@@ -1305,16 +1302,12 @@ pub async fn open_project_boot_window(
 // ─── Desktop pet window ─────────────────────────────────────────────────
 
 const PET_WINDOW_LABEL: &str = "pet";
-
 const PET_HOVER_ENTER_EVENT: &str = "pet://hover-enter";
-
 const PET_HOVER_LEAVE_EVENT: &str = "pet://hover-leave";
-
 /// Single-frame logical pixel dimensions, locked to the Codex sprite-sheet
 /// contract. The window is sized as one frame × user scale, with no extra
 /// chrome — DPR handling lives inside the webview.
 const PET_BASE_WIDTH: f64 = 192.0;
-
 const PET_BASE_HEIGHT: f64 = 208.0;
 
 /// Process-global "cursor is currently inside the pet window" flag, owned by
@@ -1552,19 +1545,15 @@ pub async fn pet_window_record_position(
 // the pet toggles it; clicking away (blur) dismisses it.
 
 pub const PET_PANEL_LABEL: &str = "pet-panel";
-
 const PET_PANEL_WIDTH: f64 = 300.0;
-
 /// First-frame window height (logical px). The panel reports its real content
 /// height via `resize_pet_panel` right after it mounts, so this is only the
 /// open-time size — tuned to the rendered empty-state card (header + "no active
 /// sessions" message + padding). Keeping it at the common (empty) height means
 /// the common path opens already-correct, with no resize flash.
 const PET_PANEL_DEFAULT_HEIGHT: f64 = 132.0;
-
 /// Floor for `resize_pet_panel`'s clamp — never collapse below a usable header.
 const PET_PANEL_MIN_HEIGHT: f64 = 80.0;
-
 const PET_PANEL_GAP: f64 = 8.0;
 
 /// Guards the toggle-vs-blur race. When the panel auto-closes on blur because
@@ -1573,7 +1562,6 @@ const PET_PANEL_GAP: f64 = 8.0;
 /// panel. The blur handler stamps the close instant here and `toggle_pet_panel`
 /// skips the reopen while the stamp is fresh.
 static PET_PANEL_BLUR_CLOSED_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-
 const PET_PANEL_REOPEN_SUPPRESS_MS: u128 = 300;
 
 /// Close the panel on blur (click-away dismiss) and record the time so a
@@ -1786,16 +1774,7 @@ pub async fn resize_pet_panel(app: AppHandle, height: f64) -> Result<(), AppComm
     let panel_h = height.clamp(PET_PANEL_MIN_HEIGHT, max_h);
 
     let (panel_x, panel_y) = compute_pet_panel_origin(
-        px,
-        py,
-        pw,
-        ph,
-        mon_x,
-        mon_y,
-        mon_w,
-        mon_h,
-        PET_PANEL_WIDTH,
-        panel_h,
+        px, py, pw, ph, mon_x, mon_y, mon_w, mon_h, PET_PANEL_WIDTH, panel_h,
     );
 
     // Size before reposition so the re-anchor uses the final height. Errors are
@@ -1847,13 +1826,9 @@ pub async fn focus_conversation(
 
 /// Stable id namespace for pet menu items.
 pub const PET_MENU_ID_PREFIX: &str = "pet:";
-
 pub const PET_MENU_ID_OPEN_MANAGER: &str = "pet:open_manager";
-
 pub const PET_MENU_ID_CLOSE: &str = "pet:close";
-
 pub const PET_MENU_SCALE_PREFIX: &str = "pet:scale:";
-
 /// Selectable scale steps. Display label is locale-independent (just digits +
 /// "×"), so we don't translate it. The id `suffix` survives a round-trip
 /// through the OS menu and back into our event dispatcher.
@@ -2040,11 +2015,8 @@ fn load_macos_tray_template_icon() -> Result<tauri::image::Image<'static>, Strin
 /// Stable id namespace for tray menu items. Routed through the app-wide
 /// `on_menu_event` handler in `lib.rs`.
 pub const TRAY_MENU_ID_PREFIX: &str = "tray:";
-
 pub const TRAY_MENU_ID_SHOW: &str = "tray:show";
-
 pub const TRAY_MENU_ID_QUIT: &str = "tray:quit";
-
 pub const TRAY_ICON_ID: &str = "houhub-tray";
 
 /// True after `install_tray_icon` returns `Ok`. The hide-on-close path
@@ -2281,7 +2253,10 @@ pub(crate) fn with_macos_fullscreen_drained(
 /// Exit native fullscreen and wait until the Space is gone, then run `then`
 /// on the main thread.
 #[cfg(target_os = "macos")]
-fn drain_macos_fullscreen_then(window: tauri::WebviewWindow, then: impl FnOnce() + Send + 'static) {
+fn drain_macos_fullscreen_then(
+    window: tauri::WebviewWindow,
+    then: impl FnOnce() + Send + 'static,
+) {
     let Some(generation) = claim_macos_fullscreen_drain() else {
         return;
     };
@@ -2467,7 +2442,7 @@ pub fn install_tray_icon(
         .build()?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ICON_ID)
-        .tooltip("Houhub")
+        .tooltip("HouHub")
         .menu(&menu)
         // `false` is required for `on_tray_icon_event::Click` to fire on
         // every platform we ship: the default `true` causes the OS to
@@ -2588,10 +2563,7 @@ mod owner_window_tests {
         state.set_owner("settings".to_string(), "main".to_string());
         state.set_owner("settings".to_string(), "remote-workspace-3".to_string());
 
-        assert_eq!(
-            state.take_owner("settings").as_deref(),
-            Some("remote-workspace-3")
-        );
+        assert_eq!(state.take_owner("settings").as_deref(), Some("remote-workspace-3"));
     }
 
     // Same hand-back-once contract for the shared map, which stash, push,
@@ -2616,10 +2588,7 @@ mod owner_window_tests {
         state.set_owner("import-sessions".to_string(), "main".to_string());
 
         assert_eq!(state.take_owner("stash-7").as_deref(), Some("main"));
-        assert_eq!(
-            state.take_owner("push-7").as_deref(),
-            Some("remote-workspace-3")
-        );
+        assert_eq!(state.take_owner("push-7").as_deref(), Some("remote-workspace-3"));
         assert_eq!(state.take_owner("project-boot").as_deref(), Some("main"));
         assert_eq!(state.take_owner("import-sessions").as_deref(), Some("main"));
     }
@@ -2647,10 +2616,7 @@ mod owner_window_tests {
         state.set_owner("stash-7".to_string(), "main".to_string());
         state.set_owner("stash-7".to_string(), "remote-workspace-3".to_string());
 
-        assert_eq!(
-            state.take_owner("stash-7").as_deref(),
-            Some("remote-workspace-3")
-        );
+        assert_eq!(state.take_owner("stash-7").as_deref(), Some("remote-workspace-3"));
     }
 }
 
@@ -2683,11 +2649,7 @@ mod pet_panel_geometry_tests {
     fn places_above_and_aligns_right_edge() {
         // Pet low on screen: the panel sits above it, gap included.
         let (x, y) = origin(1000.0, 900.0, 380.0);
-        assert_eq!(
-            y,
-            900.0 - 380.0 - PET_PANEL_GAP,
-            "panel bottom hugs pet top"
-        );
+        assert_eq!(y, 900.0 - 380.0 - PET_PANEL_GAP, "panel bottom hugs pet top");
         // Right edges align: panel_x = pet_right - panel_w.
         assert_eq!(x, (1000.0 + PET_W) - PET_PANEL_WIDTH);
     }
@@ -2755,7 +2717,8 @@ mod settings_route_tests {
     /// page must be able to name it and land there. `collaboration` is where
     /// the houhub-mcp tool switches live in full, and it is what the status-bar
     /// houhub-mcp popover links to; `computer-use` is what the Computer use
-    /// popover links to.
+    /// popover links to; `web-service` is what the Web service popover links
+    /// to.
     #[test]
     fn every_named_settings_section_resolves_to_its_own_route() {
         for section in [
@@ -2773,6 +2736,7 @@ mod settings_route_tests {
             "version-control",
             "shortcuts",
             "system",
+            "web-service",
         ] {
             assert_eq!(
                 resolve_settings_route(Some(section)),

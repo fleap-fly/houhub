@@ -23,13 +23,10 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-
 use sea_orm::DatabaseConnection;
-
 use serde::{Deserialize, Serialize};
 
 use crate::db::error::DbError;
-
 use crate::db::service::app_metadata_service;
 
 /// `app_metadata` key holding the whole store.
@@ -41,9 +38,7 @@ const SETTINGS_KEY: &str = "forge_workbench_settings";
 /// forge's core REST quota (5000 requests an hour on GitHub), which one
 /// request a minute per repository does not dent.
 pub const MIN_SCAN_INTERVAL_MINUTES: u32 = 1;
-
 pub const MAX_SCAN_INTERVAL_MINUTES: u32 = 24 * 60;
-
 /// What a fresh scope scans at.
 pub const DEFAULT_SCAN_INTERVAL_MINUTES: u32 = 15;
 
@@ -51,9 +46,7 @@ pub const DEFAULT_SCAN_INTERVAL_MINUTES: u32 = 15;
 /// Sanity bounds on a payload, refused by name rather than trimmed — the same
 /// rule the standing instructions follow.
 pub const MAX_RULE_PATTERNS: usize = 100;
-
 pub const MAX_PATTERN_CHARS: usize = 200;
-
 /// Longest webhook secret accepted. Far above anything a forge generates.
 pub const MAX_SECRET_CHARS: usize = 256;
 
@@ -95,6 +88,13 @@ pub struct ForgePanelSettings {
     /// says when the user presses Create is what gets stored on the task.
     #[serde(default = "default_writeback")]
     pub writeback_default: bool,
+    /// End every comment houhub posts with the "🤖 Generated with HouHub" line.
+    /// On by default (an absent field included, so rows written before it
+    /// existed get it too). Read when the comment is POSTED, not frozen on the
+    /// task: it is how comments look, not a decision about one work item, so
+    /// switching it off applies to every comment not yet sent.
+    #[serde(default = "default_true")]
+    pub comment_footer: bool,
     /// User-authored text appended after a scenario's built-in instruction,
     /// keyed by scenario wire name plus the reserved [`SCENARIO_PROMPT_ALL`].
     /// Unknown keys are kept and ignored, so a future scenario needs no schema
@@ -117,6 +117,7 @@ impl Default for ForgePanelSettings {
             default_issue_scenario: None,
             default_pr_scenario: None,
             writeback_default: default_writeback(),
+            comment_footer: true,
             scenario_prompts: BTreeMap::new(),
             auto: ForgeAutoSettings::default(),
         }
@@ -558,10 +559,7 @@ mod tests {
         assert_eq!(settings.standing_prompt("fix"), None);
         assert_eq!(with_prompts(&[("fix", "   ")]).standing_prompt("fix"), None);
         // Another scenario's text is not this scenario's.
-        assert_eq!(
-            with_prompts(&[("review_only", "x")]).standing_prompt("fix"),
-            None
-        );
+        assert_eq!(with_prompts(&[("review_only", "x")]).standing_prompt("fix"), None);
     }
 
     /// `all` first, then the scenario's own — the reading order of a policy:
@@ -589,6 +587,7 @@ mod tests {
             default_issue_scenario: Some("  plan_first ".into()),
             default_pr_scenario: Some("   ".into()),
             writeback_default: false,
+            comment_footer: false,
             scenario_prompts: [
                 ("all".to_string(), "  keep me  ".to_string()),
                 ("fix".to_string(), "\n \t".to_string()),
@@ -601,10 +600,7 @@ mod tests {
         assert_eq!(stored.default_issue_scenario.as_deref(), Some("plan_first"));
         assert_eq!(stored.default_pr_scenario, None);
         assert!(!stored.writeback_default);
-        assert_eq!(
-            stored.scenario_prompts.get("all").map(String::as_str),
-            Some("keep me")
-        );
+        assert_eq!(stored.scenario_prompts.get("all").map(String::as_str), Some("keep me"));
         assert!(!stored.scenario_prompts.contains_key("fix"));
     }
 
@@ -640,34 +636,17 @@ mod tests {
     fn a_folders_own_settings_replace_the_global_row_wholesale() {
         let mut store = ForgeSettingsStore::default();
         store
-            .apply(
-                None,
-                Some(with_prompts(&[("all", "Reply in English.")])),
-                now(),
-            )
+            .apply(None, Some(with_prompts(&[("all", "Reply in English.")])), now())
             .expect("global");
         // Nothing of its own yet — it follows.
-        assert_eq!(
-            store.effective(7).standing_prompt("fix").as_deref(),
-            Some("Reply in English.")
-        );
+        assert_eq!(store.effective(7).standing_prompt("fix").as_deref(), Some("Reply in English."));
 
         store
-            .apply(
-                Some(7),
-                Some(with_prompts(&[("fix", "Run the tests.")])),
-                now(),
-            )
+            .apply(Some(7), Some(with_prompts(&[("fix", "Run the tests.")])), now())
             .expect("folder 7");
-        assert_eq!(
-            store.effective(7).standing_prompt("fix").as_deref(),
-            Some("Run the tests.")
-        );
+        assert_eq!(store.effective(7).standing_prompt("fix").as_deref(), Some("Run the tests."));
         // Every other folder is untouched by folder 7's save.
-        assert_eq!(
-            store.effective(8).standing_prompt("fix").as_deref(),
-            Some("Reply in English.")
-        );
+        assert_eq!(store.effective(8).standing_prompt("fix").as_deref(), Some("Reply in English."));
     }
 
     /// "Use the global defaults" is a DELETE, and the global row is the one
@@ -675,32 +654,17 @@ mod tests {
     #[test]
     fn dropping_a_folders_row_puts_it_back_on_the_global_one() {
         let mut store = ForgeSettingsStore::default();
-        store
-            .apply(None, Some(with_prompts(&[("all", "global")])), now())
-            .expect("global");
-        store
-            .apply(Some(3), Some(with_prompts(&[("all", "mine")])), now())
-            .expect("folder 3");
-        assert_eq!(
-            store.effective(3).standing_prompt("fix").as_deref(),
-            Some("mine")
-        );
+        store.apply(None, Some(with_prompts(&[("all", "global")])), now()).expect("global");
+        store.apply(Some(3), Some(with_prompts(&[("all", "mine")])), now()).expect("folder 3");
+        assert_eq!(store.effective(3).standing_prompt("fix").as_deref(), Some("mine"));
 
-        store
-            .apply(Some(3), None, now())
-            .expect("follow the global row");
+        store.apply(Some(3), None, now()).expect("follow the global row");
         assert!(!store.folders.contains_key(&3));
-        assert_eq!(
-            store.effective(3).standing_prompt("fix").as_deref(),
-            Some("global")
-        );
+        assert_eq!(store.effective(3).standing_prompt("fix").as_deref(), Some("global"));
         // Idempotent: a folder that already follows stays following.
         store.apply(Some(3), None, now()).expect("still fine");
 
-        assert!(
-            store.apply(None, None, now()).is_err(),
-            "the global row has no fallback"
-        );
+        assert!(store.apply(None, None, now()).is_err(), "the global row has no fallback");
     }
 
     /// The cap applies to a folder's own row too — a per-folder save is not a
@@ -725,6 +689,9 @@ mod tests {
         // as `false`: this is the switch's starting position, and the build
         // that shipped before this setting existed started it on.
         assert!(empty.global.writeback_default);
+        // A blob from before the footer existed signs its comments: the
+        // default, absent field included.
+        assert!(empty.global.comment_footer);
 
         let future = decode(
             r#"{"global":{"writeback_default":false,"scenario_prompts":{"fix":"a"}},
@@ -732,14 +699,9 @@ mod tests {
         )
         .expect("unknown fields are ignored");
         assert!(!future.global.writeback_default);
-        assert_eq!(
-            future.effective(1).standing_prompt("fix").as_deref(),
-            Some("a")
-        );
-        assert_eq!(
-            future.effective(12).standing_prompt("fix").as_deref(),
-            Some("b")
-        );
+        assert!(future.global.comment_footer, "an absent footer field reads as on");
+        assert_eq!(future.effective(1).standing_prompt("fix").as_deref(), Some("a"));
+        assert_eq!(future.effective(12).standing_prompt("fix").as_deref(), Some("b"));
 
         // The shape this key held before scopes existed. It has none of the
         // store's field names, so it has to be recognized by their ABSENCE —
@@ -750,10 +712,7 @@ mod tests {
                 .expect("the un-scoped shape still decodes");
         assert!(!legacy.global.writeback_default);
         assert!(legacy.folders.is_empty());
-        assert_eq!(
-            legacy.effective(9).standing_prompt("fix").as_deref(),
-            Some("Reply in zh.")
-        );
+        assert_eq!(legacy.effective(9).standing_prompt("fix").as_deref(), Some("Reply in zh."));
 
         // Anything that is not JSON at all is the defaults, not an error.
         assert!(decode("not json").is_none());
@@ -765,9 +724,7 @@ mod tests {
     #[test]
     fn folder_keys_survive_the_json_round_trip() {
         let mut store = ForgeSettingsStore::default();
-        store
-            .apply(Some(42), Some(with_prompts(&[("fix", "mine")])), now())
-            .expect("folder 42");
+        store.apply(Some(42), Some(with_prompts(&[("fix", "mine")])), now()).expect("folder 42");
         let encoded = serde_json::to_string(&store).expect("serializable");
         assert!(encoded.contains("\"42\""), "{encoded}");
         assert_eq!(decode(&encoded).expect("decodes"), store);
@@ -782,32 +739,19 @@ mod tests {
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
 
         // Nothing stored is the defaults, not an error.
-        assert_eq!(
-            load(&db.conn).await.expect("empty"),
-            ForgeSettingsStore::default()
-        );
+        assert_eq!(load(&db.conn).await.expect("empty"), ForgeSettingsStore::default());
 
         save(&db.conn, None, Some(with_prompts(&[("all", "global")])))
             .await
             .expect("global");
-        save(
-            &db.conn,
-            Some(2),
-            Some(with_prompts(&[("all", "folder two")])),
-        )
-        .await
-        .expect("folder 2");
+        save(&db.conn, Some(2), Some(with_prompts(&[("all", "folder two")])))
+            .await
+            .expect("folder 2");
         // Saving folder 2 must not have taken the global row with it, and a
         // third folder still follows.
         let store = load(&db.conn).await.expect("reload");
-        assert_eq!(
-            store.effective(2).standing_prompt("fix").as_deref(),
-            Some("folder two")
-        );
-        assert_eq!(
-            store.effective(3).standing_prompt("fix").as_deref(),
-            Some("global")
-        );
+        assert_eq!(store.effective(2).standing_prompt("fix").as_deref(), Some("folder two"));
+        assert_eq!(store.effective(3).standing_prompt("fix").as_deref(), Some("global"));
         assert_eq!(
             load_effective(&db.conn, 2).await.expect("effective"),
             *store.effective(2)
@@ -815,20 +759,12 @@ mod tests {
 
         // A refused save leaves storage exactly as it was.
         let huge = with_prompts(&[("fix", &"x".repeat(PROMPT_CAP + 1))]);
-        save(&db.conn, Some(2), Some(huge))
-            .await
-            .expect_err("over the cap");
+        save(&db.conn, Some(2), Some(huge)).await.expect_err("over the cap");
         assert_eq!(load(&db.conn).await.expect("unchanged"), store);
 
-        save(&db.conn, Some(2), None)
-            .await
-            .expect("follow the global row");
+        save(&db.conn, Some(2), None).await.expect("follow the global row");
         assert_eq!(
-            load_effective(&db.conn, 2)
-                .await
-                .expect("effective")
-                .standing_prompt("fix")
-                .as_deref(),
+            load_effective(&db.conn, 2).await.expect("effective").standing_prompt("fix").as_deref(),
             Some("global")
         );
     }
@@ -849,11 +785,7 @@ mod tests {
         .expect("seed the old shape");
 
         assert_eq!(
-            load_effective(&db.conn, 5)
-                .await
-                .expect("read")
-                .standing_prompt("fix")
-                .as_deref(),
+            load_effective(&db.conn, 5).await.expect("read").standing_prompt("fix").as_deref(),
             Some("Reply in zh.")
         );
 
@@ -863,10 +795,7 @@ mod tests {
             .await
             .expect("folder 5");
         assert!(!store.global.writeback_default);
-        assert_eq!(
-            store.effective(6).standing_prompt("fix").as_deref(),
-            Some("Reply in zh.")
-        );
+        assert_eq!(store.effective(6).standing_prompt("fix").as_deref(), Some("Reply in zh."));
         assert_eq!(load(&db.conn).await.expect("reload"), store);
     }
 
@@ -899,14 +828,8 @@ mod tests {
         assert!(auto.issues && !auto.pull_requests);
         assert!(auto.skip_drafts);
         assert!(auto.auto_start);
-        assert!(
-            !auto.writeback,
-            "an unattended task must not post by default"
-        );
-        assert!(
-            !auto.include_existing,
-            "switching on must not sweep the backlog"
-        );
+        assert!(!auto.writeback, "an unattended task must not post by default");
+        assert!(!auto.include_existing, "switching on must not sweep the backlog");
         assert_eq!(auto.interval_minutes, DEFAULT_SCAN_INTERVAL_MINUTES);
         assert_eq!(auto.active_secret(), None);
 
@@ -934,10 +857,7 @@ mod tests {
         }
         .normalized()
         .expect("valid");
-        assert_eq!(
-            stored.include_labels,
-            vec!["bug".to_string(), "area/*".to_string()]
-        );
+        assert_eq!(stored.include_labels, vec!["bug".to_string(), "area/*".to_string()]);
         assert_eq!(stored.exclude_authors, vec!["*[bot]".to_string()]);
         assert_eq!(stored.interval_minutes, MIN_SCAN_INTERVAL_MINUTES);
         assert_eq!(stored.issue_scenario.as_deref(), Some("plan_first"));
@@ -964,9 +884,7 @@ mod tests {
         assert!(err.to_string().contains("labels to exclude"), "{err}");
 
         let many = ForgeAutoSettings {
-            include_authors: (0..=MAX_RULE_PATTERNS)
-                .map(|i| format!("user{i}"))
-                .collect(),
+            include_authors: (0..=MAX_RULE_PATTERNS).map(|i| format!("user{i}")).collect(),
             ..Default::default()
         };
         let err = many.normalized().expect_err("too many");
@@ -991,11 +909,7 @@ mod tests {
         .normalized()
         .expect("valid");
         assert_eq!(off.webhook_secret.as_deref(), Some(secret.as_str()));
-        assert_eq!(
-            off.active_secret(),
-            None,
-            "off means deliveries are refused"
-        );
+        assert_eq!(off.active_secret(), None, "off means deliveries are refused");
 
         let mine = ForgeAutoSettings {
             webhook_secret: Some("  my-own-secret  ".into()),
@@ -1021,25 +935,13 @@ mod tests {
             enabled_at: Some(later(-9999)),
             ..auto_on(true, false)
         };
-        store
-            .apply(None, Some(with_auto(claimed)), now())
-            .expect("on");
-        assert_eq!(
-            store.global.auto.enabled_at,
-            Some(now()),
-            "a client's claim is ignored"
-        );
+        store.apply(None, Some(with_auto(claimed)), now()).expect("on");
+        assert_eq!(store.global.auto.enabled_at, Some(now()), "a client's claim is ignored");
 
         let mut edited = auto_on(true, false);
         edited.include_labels = vec!["bug".into()];
-        store
-            .apply(None, Some(with_auto(edited)), later(30))
-            .expect("edited");
-        assert_eq!(
-            store.global.auto.enabled_at,
-            Some(now()),
-            "re-saving restarted the clock"
-        );
+        store.apply(None, Some(with_auto(edited)), later(30)).expect("edited");
+        assert_eq!(store.global.auto.enabled_at, Some(now()), "re-saving restarted the clock");
 
         // Swapping one trigger for the other is still "on".
         store
@@ -1048,11 +950,7 @@ mod tests {
         assert_eq!(store.global.auto.enabled_at, Some(now()));
 
         store
-            .apply(
-                None,
-                Some(with_auto(ForgeAutoSettings::default())),
-                later(90),
-            )
+            .apply(None, Some(with_auto(ForgeAutoSettings::default())), later(90))
             .expect("off");
         assert_eq!(store.global.auto.enabled_at, None);
 
@@ -1115,13 +1013,7 @@ mod tests {
                 .expect("decodes");
         assert!(partial.global.auto.schedule);
         assert!(partial.global.auto.issues);
-        assert_eq!(
-            partial.global.auto.interval_minutes,
-            DEFAULT_SCAN_INTERVAL_MINUTES
-        );
-        assert_eq!(
-            partial.global.auto.exclude_labels,
-            vec!["wontfix".to_string()]
-        );
+        assert_eq!(partial.global.auto.interval_minutes, DEFAULT_SCAN_INTERVAL_MINUTES);
+        assert_eq!(partial.global.auto.exclude_labels, vec!["wontfix".to_string()]);
     }
 }

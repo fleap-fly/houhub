@@ -1,16 +1,17 @@
 # Stage 1: Build Next.js static export
-FROM node:22-alpine AS frontend
-RUN corepack enable && corepack prepare pnpm@11.6.0 --activate
+FROM node:24-alpine AS frontend
+RUN corepack enable
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY vendor/ ./vendor/
+# patchedDependencies in pnpm-workspace.yaml are applied during install.
+COPY patches/ ./patches/
 RUN pnpm install --frozen-lockfile
 COPY src/ ./src/
 COPY public/ ./public/
-COPY next.config.ts tsconfig.json postcss.config.mjs components.json ./
+COPY next.config.ts tsconfig.json tsconfig.build.json postcss.config.mjs components.json ./
 RUN pnpm build
 
-# Stage 2: Build Rust server binary + houhub-mcp companion
+# Stage 2: Build Rust server binary + houhub-mcp companion + houhub-cli
 FROM rust:slim-bookworm AS backend
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/src-tauri
@@ -19,10 +20,11 @@ COPY src-tauri/ ./
 # (see acp/delegation/companion.rs). It must ship next to houhub-server so
 # `locate_houhub_mcp_binary()` finds it via the exe-sibling lookup.
 RUN cargo build --release --bin houhub-server --no-default-features --features server-bin \
- && cargo build --release --bin houhub-mcp --no-default-features --features mcp-bin
+ && cargo build --release --bin houhub-mcp --no-default-features --features mcp-bin \
+ && cargo build --release --bin houhub-cli --no-default-features --features cli-bin
 
 # Stage 3: Runtime
-FROM node:22-bookworm-slim
+FROM node:24-bookworm-slim
 RUN apt-get update && apt-get install -y \
     libsqlite3-0 \
     git \
@@ -43,6 +45,9 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=backend /app/src-tauri/target/release/houhub-server /usr/local/bin/houhub-server
 COPY --from=backend /app/src-tauri/target/release/houhub-mcp /usr/local/bin/houhub-mcp
+# houhub-cli: `docker exec <container> houhub-cli run …` finds this server through
+# its discovery file under HOUHUB_DATA_DIR (/data/cli).
+COPY --from=backend /app/src-tauri/target/release/houhub-cli /usr/local/bin/houhub-cli
 COPY --from=frontend /app/out /app/web
 
 ENV HOUHUB_STATIC_DIR=/app/web

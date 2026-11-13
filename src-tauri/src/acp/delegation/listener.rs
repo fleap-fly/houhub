@@ -8,30 +8,23 @@
 //! the broker, plus the place where the per-launch token policy is enforced.
 
 use std::collections::HashMap;
-
 use std::path::{Path, PathBuf};
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
-
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
 use tokio::sync::RwLock;
 
 use crate::acp::delegation::broker::{DelegationBroker, StatusWait};
-
 use crate::acp::browser_tools::{
     BrowserActOutcome, BrowserCaptureOutcome, BrowserConsoleOutcome, BrowserEvalOutcome,
     BrowserSnapshotOutcome, BrowserTabOutcome, BrowserTabsOutcome, BrowserToolAccess,
     ERROR_NO_SUCH_TAB,
 };
-
 use crate::acp::computer_tools::{
     ComputerActOutcome, ComputerAppsOutcome, ComputerCaptureOutcome, ComputerSnapshotOutcome,
     ComputerToolAccess, ComputerVerifyOutcome, ComputerWindowsOutcome, ERROR_NO_SUCH_TARGET,
 };
-
 use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerBrowserActRequest,
     BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
@@ -46,29 +39,19 @@ use crate::acp::delegation::transport::{
     BrokerStatusRequest, BrokerSubmitResultRequest, BrokerTaskCompleteRequest,
     BrokerTaskProgressRequest,
 };
-
 use crate::acp::delegation::assistants::assistant_not_found_message;
-
 use crate::acp::delegation::types::{
     delegation_target_from_args, DelegationRequest, DelegationTarget, DelegationTargetError,
     DelegationTaskReport, ResumeDelegationRequest, TaskStatus,
 };
-
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
-
 use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
-
 #[cfg(unix)]
 use crate::acp::scratch_dir::{is_inside_sweep_scope, SUN_PATH_CAP};
-
 use crate::acp::chat_authoring::{AuthoringContext, AuthoringOutcome, ChatAuthoringAccess};
-
 use crate::acp::result_tool::ResultToolAccess;
-
 use crate::acp::session_info::{SessionInfo, SessionInfoAccess};
-
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
-
 use serde_json::Value;
 
 /// Hard ceiling on a *positive* `get_delegation_status` long-poll, so a single
@@ -77,13 +60,13 @@ use serde_json::Value;
 /// `wait_ms = 0` opts out of the ceiling and blocks until the task is terminal.
 const STATUS_WAIT_MAX_MS: u64 = 60_000;
 
+
 /// The bound-but-not-yet-served socket handed from [`DelegationListener::bind`]
 /// to [`DelegationListener::accept_loop`]. A UDS listener on unix; on Windows,
 /// the first named-pipe server instance (the loop creates each subsequent one
 /// itself).
 #[cfg(unix)]
 pub type BoundSocket = tokio::net::UnixListener;
-
 #[cfg(windows)]
 pub type BoundSocket = tokio::net::windows::named_pipe::NamedPipeServer;
 
@@ -104,6 +87,11 @@ pub trait ParentSessionLookup: Send + Sync {
 pub struct TokenEntry {
     pub parent_connection_id: String,
     pub working_dir: PathBuf,
+    /// The caller runs with `HOUHUB_ACP_HOST_TOOLS=agent`: its own sandbox, not
+    /// houhub, governs what it may read (see
+    /// [`crate::acp::host_tools_policy::HostToolsPolicy::Agent`]). Anything that
+    /// would have houhub touch a file on this caller's behalf must not.
+    pub agent_hosts_tools: bool,
 }
 
 #[derive(Default)]
@@ -369,7 +357,11 @@ impl DelegationListener {
     #[cfg(unix)]
     fn staging_socket_path(socket_path: &Path) -> PathBuf {
         let salt = uuid::Uuid::new_v4().simple().to_string();
-        socket_path.with_file_name(format!(".stg-{}-{}", std::process::id(), &salt[..8]))
+        socket_path.with_file_name(format!(
+            ".stg-{}-{}",
+            std::process::id(),
+            &salt[..8]
+        ))
     }
 
     #[cfg(windows)]
@@ -502,7 +494,10 @@ impl DelegationListener {
                         write_frame(conn, &feedback_response(&[])?).await?;
                     }
                     Some(parent_conn_id) => {
-                        let pending = self.feedback.read_pending_feedback(&parent_conn_id).await;
+                        let pending = self
+                            .feedback
+                            .read_pending_feedback(&parent_conn_id)
+                            .await;
                         // Read-only: the response carries the note ids
                         // (`_commit_ids`); delivery is committed LATER, by the
                         // companion's `CommitFeedback` once it actually returns
@@ -1084,9 +1079,7 @@ impl DelegationListener {
                 crate::acp::computer_tools::no_such_target_note(&req.target_id),
             );
         }
-        self.computer
-            .capture(&req.target_id, req.max_dimension)
-            .await
+        self.computer.capture(&req.target_id, req.max_dimension).await
     }
 
     async fn process_computer_snapshot(
@@ -1183,6 +1176,7 @@ impl DelegationListener {
                 &entry.parent_connection_id,
                 &req.verdict,
                 req.summary.as_deref(),
+                &req.thread_replies,
             )
             .await
     }
@@ -1222,6 +1216,7 @@ impl DelegationListener {
         Some(AuthoringContext {
             conversation_id,
             working_dir: entry.working_dir,
+            host_reads_files: !entry.agent_hosts_tools,
         })
     }
 
@@ -1421,7 +1416,9 @@ fn browser_tabs_response(outcome: BrowserTabsOutcome) -> std::io::Result<BrokerR
 /// Serialize a [`BrowserSnapshotOutcome`] into a [`BrokerResponse`] for the
 /// `BrowserSnapshot` arm — the companion renders it into the `browser_snapshot`
 /// tool result.
-fn browser_snapshot_response(outcome: BrowserSnapshotOutcome) -> std::io::Result<BrokerResponse> {
+fn browser_snapshot_response(
+    outcome: BrowserSnapshotOutcome,
+) -> std::io::Result<BrokerResponse> {
     Ok(BrokerResponse {
         outcome: serde_json::to_value(&outcome).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
@@ -1758,25 +1755,22 @@ pub fn default_socket_path(temp_dir: &Path) -> PathBuf {
 
 #[cfg(windows)]
 pub fn default_socket_path(_temp_dir: &Path) -> PathBuf {
-    PathBuf::from(format!(
-        r"\\.\pipe\houhub-delegation-{}",
-        std::process::id()
-    ))
+    PathBuf::from(format!(r"\\.\pipe\houhub-delegation-{}", std::process::id()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::browser_tools::{NoBrowserTabs, ERROR_GRANT_REQUIRED};
-    use crate::acp::computer_tools::NoComputerDesktop;
+    #[cfg(unix)]
+    use crate::acp::scratch_dir::short_root;
     use crate::acp::delegation::broker::{ConversationDepthLookup, DelegationConfig};
+    use crate::models::AgentType;
     use crate::acp::delegation::spawner::{
         mock::MockSpawner, ConnectionSpawner, ResumedSpawn, SpawnerError,
     };
+    use crate::acp::browser_tools::{NoBrowserTabs, ERROR_GRANT_REQUIRED};
+    use crate::acp::computer_tools::NoComputerDesktop;
     use crate::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationSuccess};
-    #[cfg(unix)]
-    use crate::acp::scratch_dir::short_root;
-    use crate::models::AgentType;
     use serde_json::json;
     use std::time::Duration;
     use tokio::io::duplex;
@@ -1810,7 +1804,10 @@ mod tests {
     }
     #[async_trait]
     impl SessionFeedbackAccess for StubFeedback {
-        async fn read_pending_feedback(&self, parent_connection_id: &str) -> Vec<PendingFeedback> {
+        async fn read_pending_feedback(
+            &self,
+            parent_connection_id: &str,
+        ) -> Vec<PendingFeedback> {
             *self.read_conn.lock().await = Some(parent_connection_id.to_string());
             self.items.lock().await.clone()
         }
@@ -1830,7 +1827,9 @@ mod tests {
     #[derive(Default)]
     struct StubQuestion {
         pending: tokio::sync::Mutex<HashMap<String, oneshot::Sender<QuestionOutcome>>>,
-        registered: tokio::sync::Mutex<Vec<(String, Vec<crate::acp::question::QuestionSpec>)>>,
+        registered: tokio::sync::Mutex<
+            Vec<(String, Vec<crate::acp::question::QuestionSpec>)>,
+        >,
         canceled: tokio::sync::Mutex<Vec<String>>,
     }
     #[async_trait]
@@ -1915,7 +1914,11 @@ mod tests {
                 note: None,
             }
         }
-        async fn snapshot(&self, tab_id: &str, max_chars: Option<usize>) -> BrowserSnapshotOutcome {
+        async fn snapshot(
+            &self,
+            tab_id: &str,
+            max_chars: Option<usize>,
+        ) -> BrowserSnapshotOutcome {
             self.calls
                 .lock()
                 .await
@@ -1969,7 +1972,10 @@ mod tests {
             ));
             BrowserActOutcome::control_required(tab_id)
         }
-        async fn tab_op(&self, op: crate::acp::browser_tools::BrowserTabOp) -> BrowserTabOutcome {
+        async fn tab_op(
+            &self,
+            op: crate::acp::browser_tools::BrowserTabOp,
+        ) -> BrowserTabOutcome {
             self.calls
                 .lock()
                 .await
@@ -2002,6 +2008,7 @@ mod tests {
             _parent: &str,
             _verdict: &str,
             _summary: Option<&str>,
+            _thread_replies: &[crate::acp::delegation::transport::ThreadReply],
         ) -> TaskReportAck {
             TaskReportAck::rejected("no task engine in this process")
         }
@@ -2247,6 +2254,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "other-parent".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2271,6 +2279,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2296,6 +2305,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2327,6 +2337,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2401,6 +2412,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2552,6 +2564,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2657,6 +2670,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2705,6 +2719,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2798,8 +2813,7 @@ mod tests {
         }
 
         let mock = Arc::new(MockSpawner::new());
-        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2")))
-            .await;
+        mock.queue_resume_spawn(Ok(ResumedSpawn::fresh("child-conn-2"))).await;
         mock.queue_resume_send(Ok(())).await;
         let broker = Arc::new(
             DelegationBroker::new(
@@ -2819,6 +2833,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2886,6 +2901,7 @@ mod tests {
             .register(
                 "t1".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "p1".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2895,6 +2911,7 @@ mod tests {
             .register(
                 "t2".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "p1".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2904,6 +2921,7 @@ mod tests {
             .register(
                 "t3".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "p2".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -2942,6 +2960,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3019,6 +3038,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3048,10 +3068,7 @@ mod tests {
         let commit_ids = resp.outcome["_commit_ids"].as_array().unwrap();
         assert_eq!(commit_ids, &vec!["f1", "f2"]);
         // Read was scoped to the token's parent connection id.
-        assert_eq!(
-            feedback.read_conn.lock().await.as_deref(),
-            Some("parent-conn")
-        );
+        assert_eq!(feedback.read_conn.lock().await.as_deref(), Some("parent-conn"));
         // The Feedback arm is READ-ONLY — it does NOT commit (delivery is
         // committed later, by the companion's CommitFeedback).
         assert!(feedback.committed.lock().await.is_empty());
@@ -3070,6 +3087,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3111,6 +3129,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3179,6 +3198,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/repo/app"),
                 },
@@ -3226,6 +3246,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/repo/app"),
                 },
@@ -3244,6 +3265,7 @@ mod tests {
                 prompt: "the retry test is flaky".into(),
                 agent_type: None,
                 folder_path: None,
+                attachments: Vec::new(),
             },
         });
         write_frame(&mut client, &msg).await.unwrap();
@@ -3255,7 +3277,53 @@ mod tests {
         let calls = authoring.work_tasks.lock().await;
         let (ctx, spec) = calls.first().expect("impl was called");
         assert_eq!(ctx.conversation_id, None);
+        assert!(
+            ctx.host_reads_files,
+            "a houhub-hosted caller may attach by value"
+        );
         assert_eq!(spec.title, "Fix the flake");
+    }
+
+    /// A caller launched with `HOUHUB_ACP_HOST_TOOLS=agent` reaches the impl
+    /// with host reads switched off, so its attachments are never read by
+    /// houhub's own (unsandboxed) process.
+    #[tokio::test]
+    async fn create_work_task_from_a_self_sandboxed_agent_forbids_host_reads() {
+        let authoring = Arc::new(StubAuthoring::default());
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/repo/app"),
+                    agent_hosts_tools: true,
+                },
+            )
+            .await;
+        let listener = make_authoring_listener(tokens, authoring.clone(), None);
+
+        let (mut client, mut server) = duplex(8 * 1024);
+        let server_task = tokio::spawn(async move {
+            listener.serve_one(&mut server).await.unwrap();
+        });
+        let msg = BrokerMessage::CreateWorkTask(BrokerCreateWorkTaskRequest {
+            token: "tok".into(),
+            spec: NewWorkTaskSpec {
+                title: "t".into(),
+                prompt: "p".into(),
+                agent_type: None,
+                folder_path: None,
+                attachments: vec!["/secret.png".into()],
+            },
+        });
+        write_frame(&mut client, &msg).await.unwrap();
+        let _: BrokerResponse = read_frame(&mut client).await.unwrap();
+        server_task.await.unwrap();
+
+        let calls = authoring.work_tasks.lock().await;
+        let (ctx, _) = calls.first().expect("impl was called");
+        assert!(!ctx.host_reads_files);
     }
 
     /// An invalid token is a soft refusal that NEVER reaches the impl — nothing
@@ -3303,6 +3371,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3400,6 +3469,7 @@ mod tests {
                     },
                 ],
                 is_secret: false,
+                allow_other: true,
             }],
         })
     }
@@ -3416,6 +3486,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3473,6 +3544,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3495,10 +3567,7 @@ mod tests {
             .await
             .expect("serve_one must return after peer close");
         result.unwrap().unwrap();
-        assert_eq!(
-            questions.canceled.lock().await.as_slice(),
-            &["q-1".to_string()]
-        );
+        assert_eq!(questions.canceled.lock().await.as_slice(), &["q-1".to_string()]);
     }
 
     /// An invalid token never registers a question and returns a `declined`
@@ -3506,8 +3575,7 @@ mod tests {
     #[tokio::test]
     async fn ask_invalid_token_declined() {
         let questions = Arc::new(StubQuestion::default());
-        let listener =
-            make_question_listener(Arc::new(TokenRegistry::default()), questions.clone());
+        let listener = make_question_listener(Arc::new(TokenRegistry::default()), questions.clone());
         let (mut client, mut server) = duplex(8 * 1024);
         let server_task = tokio::spawn(async move {
             listener.serve_one(&mut server).await.unwrap();
@@ -3529,6 +3597,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "conn-1".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -3558,9 +3627,7 @@ mod tests {
 
         let listed = browser_round_trip(
             listener.clone(),
-            BrokerMessage::BrowserTabs(BrokerBrowserTabsRequest {
-                token: "tok".into(),
-            }),
+            BrokerMessage::BrowserTabs(BrokerBrowserTabsRequest { token: "tok".into() }),
         )
         .await;
         assert_eq!(listed.outcome["tabs"][0]["tabId"], "t1");
@@ -3715,10 +3782,7 @@ mod tests {
             },
         );
         let response = browser_capture_response(huge).unwrap();
-        assert_eq!(
-            response.outcome["error"],
-            crate::acp::browser_tools::ERROR_READ_FAILED
-        );
+        assert_eq!(response.outcome["error"], crate::acp::browser_tools::ERROR_READ_FAILED);
         assert_eq!(response.outcome["tabId"], "t1");
         assert!(response.outcome.get("capture").is_none());
         assert!(serde_json::to_vec(&response.outcome).unwrap().len() < 4096);
@@ -3740,10 +3804,7 @@ mod tests {
                 clipped: false,
             },
         );
-        assert_eq!(
-            browser_capture_response(small).unwrap().outcome["capture"]["data"],
-            "AAAA"
-        );
+        assert_eq!(browser_capture_response(small).unwrap().outcome["capture"]["data"], "AAAA");
     }
 
     /// A caller who cannot prove it is a companion is told the same thing a
@@ -3930,9 +3991,7 @@ mod tests {
             PathBuf::from("/tmp"),
             PathBuf::from(format!("/var/folders/hl/{}/T", "z".repeat(30))),
             short_root().join(format!("{}-deadbeef", std::process::id())),
-            std::env::temp_dir()
-                .join("houhub-acp")
-                .join("4242-deadbeef"),
+            std::env::temp_dir().join("houhub-acp").join("4242-deadbeef"),
             PathBuf::from("/tmp/houhub-acp/4242-deadbeef"),
             std::env::temp_dir(),
         ] {
@@ -3976,9 +4035,7 @@ mod tests {
             fits_sun_path(&socket),
             "the real path must fit, or this tests the wrong check"
         );
-        assert!(!fits_sun_path(&DelegationListener::staging_socket_path(
-            &socket
-        )));
+        assert!(!fits_sun_path(&DelegationListener::staging_socket_path(&socket)));
 
         let err = DelegationListener::bind(&socket).await.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
@@ -4334,9 +4391,7 @@ mod tests {
                 mock as Arc<dyn ConnectionSpawner>,
                 Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
             )
-            .with_assistants(Arc::new(StubAssistants(vec![assistant_info(
-                3, "Reviewer",
-            )]))),
+            .with_assistants(Arc::new(StubAssistants(vec![assistant_info(3, "Reviewer")]))),
         );
         broker
             .set_config(DelegationConfig {
@@ -4349,6 +4404,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },
@@ -4398,10 +4454,7 @@ mod tests {
         let spawn = mock.spawn_args.lock().await[0].clone();
         assert_eq!(spawn.agent_type, AgentType::Codex);
         assert_eq!(
-            spawn
-                .preferred_config_values
-                .get("model")
-                .map(String::as_str),
+            spawn.preferred_config_values.get("model").map(String::as_str),
             Some("gpt-5.5")
         );
         let send = mock.send_args.lock().await[0].clone();
@@ -4412,11 +4465,7 @@ mod tests {
     async fn an_unusable_assistant_is_refused_with_the_usable_roster() {
         let mock = Arc::new(MockSpawner::new());
         let (listener, _tokens) = assistant_listener(mock.clone()).await;
-        let refusal = serve(
-            listener.clone(),
-            call(json!({"assistant_id": 9, "task": "x"})),
-        )
-        .await;
+        let refusal = serve(listener.clone(), call(json!({"assistant_id": 9, "task": "x"}))).await;
         assert_eq!(refusal["status"], "failed");
         assert_eq!(refusal["error_code"], "assistant_not_found");
         let message = refusal["message"].as_str().unwrap();
@@ -4432,17 +4481,11 @@ mod tests {
         )
         .await;
         assert_eq!(refusal["error_code"], "assistant_not_found");
-        assert!(
-            mock.spawn_args.lock().await.is_empty(),
-            "nothing was spawned"
-        );
+        assert!(mock.spawn_args.lock().await.is_empty(), "nothing was spawned");
 
         let missing = serve(listener, call(json!({"task": "x"}))).await;
         assert_eq!(missing["error_code"], "invalid_agent_type");
-        assert!(missing["message"]
-            .as_str()
-            .unwrap()
-            .contains("assistant_id"));
+        assert!(missing["message"].as_str().unwrap().contains("assistant_id"));
     }
 
     #[tokio::test]
@@ -4530,6 +4573,7 @@ mod tests {
             .register(
                 "tok".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
                 },

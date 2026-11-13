@@ -21,6 +21,7 @@ import {
 import { isGrepNoMatchCommandResult } from "@/lib/grep-no-match"
 import { isBackgroundTaskToolCall } from "@/lib/background-task"
 import { isContextCompactionMeta } from "@/lib/context-compaction"
+import { readKimiMcpOAuth } from "@/lib/kimi-mcp-oauth"
 import { isUnsettledToolCall } from "@/lib/tool-call-lifecycle"
 import { feedbackCheckHasContent } from "@/lib/feedback-check"
 import {
@@ -1737,7 +1738,10 @@ export function dropEmptyInFlightToolCalls(
       isBackgroundTaskToolCall(part) ||
       // A compaction runs with no arguments until it completes; dropping it
       // would hide the "compacting" divider for as long as it works.
-      isContextCompactionMeta(part.meta)
+      isContextCompactionMeta(part.meta) ||
+      // Kimi's synthetic authenticate tool takes {} and has no result while
+      // awaiting OAuth. Its scoped progress is the content the user needs.
+      readKimiMcpOAuth(part.meta)?.toolName === part.toolName
     ) {
       return true
     }
@@ -2289,7 +2293,7 @@ function isGrepNoMatchResult(
  *
  * codex publishes its Plan-mode plan on two live channels at once: as an
  * ordinary `agent_message` (so it streams as normal assistant prose) and as
- * `rawInput.plan` on the plan-review permission request HouHub seeds a tool call
+ * `rawInput.plan` on the plan-review permission request houhub seeds a tool call
  * from. Both land in one turn — the live turn splitter only cuts a new turn on
  * a content block that FOLLOWS a completed tool call — so the reader sees the
  * whole plan twice, once bare and once boxed.
@@ -2513,10 +2517,15 @@ export function adaptMessageTurn(
                 : undefined,
           })
         } else {
-          // An unmatched tool in a persisted turn is normally historical, but
-          // a caller may prove that its turn is still in flight even when this
-          // client is not the streaming client. Preserve the running state in
-          // that case so status/delegation cards do not claim completion.
+          // For live streaming, unmatched tools are still running.
+          // For DB historical data, default to "completed" since the
+          // conversation has already ended — EXCEPT when the caller can prove
+          // otherwise. A persisted transcript of a conversation that is running
+          // right now (a work-task viewer whose attach missed, a cross-client
+          // reader) carries the in-flight round's calls with no result yet, and
+          // the caller marks them via `inProgressToolCallIds` off the backend's
+          // `in_flight_user_turn_id`. Without that arm a `get_delegation_status`
+          // blocking on its sub-agent shows a green ✓ for the entire wait.
           adaptedContent.push({
             type: "tool-call",
             toolCallId,

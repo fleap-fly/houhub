@@ -28,29 +28,18 @@
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
-
 use serde::{Deserialize, Serialize};
 
 use crate::acp::browser_tools::BrowserToolsRuntimeConfig;
-
 use crate::acp::computer_tools::ComputerToolsRuntimeConfig;
-
 use crate::acp::chat_authoring::ChatAuthoringRuntimeConfig;
-
 use crate::acp::delegation::broker::DelegationBroker;
-
 use crate::acp::delegation::listener::TokenRegistry;
-
 use crate::acp::delegation::service;
-
 use crate::acp::feedback::FeedbackRuntimeConfig;
-
 use crate::acp::question::QuestionRuntimeConfig;
-
 use crate::acp::session_info::SessionInfoRuntimeConfig;
-
 use crate::app_error::AppCommandError;
-
 use crate::web::event_bridge::EventEmitter;
 
 /// Headline verdict. Ordered by which problem to solve first, not by severity:
@@ -175,8 +164,8 @@ pub async fn houhub_mcp_service_status_core(
         None => Default::default(),
     };
 
-    let binary_path =
-        crate::acp::connection::locate_houhub_mcp_binary().map(|p| p.to_string_lossy().to_string());
+    let binary_path = crate::acp::connection::locate_houhub_mcp_binary()
+        .map(|p| p.to_string_lossy().to_string());
 
     let delegation_cfg = sources.broker.config_snapshot().await;
     let authoring_cfg = sources.authoring.snapshot().await;
@@ -278,7 +267,8 @@ pub async fn set_houhub_mcp_tool_group_core(
 ) -> Result<(), AppCommandError> {
     use crate::commands::chat_authoring::ChatAuthoringFlag;
     use crate::commands::{
-        browser_tools, chat_authoring, computer_tools, delegation, feedback, question, session_info,
+        browser_tools, chat_authoring, computer_tools, delegation, feedback, question,
+        session_info,
     };
 
     match key {
@@ -832,6 +822,7 @@ mod tests {
                 .register(
                     token.into(),
                     TokenEntry {
+                        agent_hosts_tools: false,
                         parent_connection_id: "conn-a".into(),
                         working_dir: std::path::PathBuf::from("/tmp"),
                     },
@@ -842,6 +833,7 @@ mod tests {
             .register(
                 "t3".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "conn-b".into(),
                     working_dir: std::path::PathBuf::from("/tmp"),
                 },

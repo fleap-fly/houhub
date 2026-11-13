@@ -1,58 +1,55 @@
 pub mod auth;
-
 pub mod browser_bridge;
-
 pub mod browser_tunnel;
-
 pub mod compression;
-
 pub mod event_bridge;
-
 pub mod handlers;
-
 pub mod port_probe;
-
 pub mod proxy_auth;
-
 pub mod router;
-
 pub mod shutdown;
-
 pub mod socket_inherit;
-
 pub mod ws;
-
 pub mod ws_attach;
 
 pub use port_probe::{PortState, WebServicePortProbe};
 
 use std::net::SocketAddr;
-
 use std::path::PathBuf;
-
 use std::sync::atomic::{AtomicU16, Ordering};
-
 use std::sync::{Arc, Mutex};
 
 use shutdown::ShutdownSignal;
 
 use sea_orm::{DatabaseConnection, TransactionError, TransactionTrait};
-
 use serde::{Deserialize, Serialize};
 
 use crate::app_error::{AppCommandError, AppErrorCode};
-
 use crate::app_state::AppState;
-
 use crate::db::service::app_metadata_service;
 
 const WEB_SERVICE_TOKEN_KEY: &str = "web_service_token";
-
 const WEB_SERVICE_PORT_KEY: &str = "web_service_port";
-
 const WEB_SERVICE_AUTO_START_KEY: &str = "web_service_auto_start";
-
+const WEB_SERVICE_HOST_KEY: &str = "web_service_host";
 pub const DEFAULT_WEB_SERVICE_PORT: u16 = 3080;
+/// Wildcard bind: every interface, so the service is reachable from the LAN.
+pub const DEFAULT_WEB_SERVICE_HOST: &str = "0.0.0.0";
+/// The bind hosts the desktop web service may be configured with. A closed
+/// set rather than free text: the settings page offers exactly these, and a
+/// loopback-only bind (`127.0.0.1`, e.g. behind a reverse proxy or Tailscale
+/// Serve) is the one alternative to the LAN-wide default worth naming. The
+/// standalone `houhub-server` keeps taking any host from `HOUHUB_HOST`.
+pub const WEB_SERVICE_HOST_CANDIDATES: &[&str] = &[DEFAULT_WEB_SERVICE_HOST, "127.0.0.1"];
+
+/// One of [`WEB_SERVICE_HOST_CANDIDATES`], or `None` for anything else.
+fn normalize_web_service_host(raw: &str) -> Option<&'static str> {
+    let raw = raw.trim();
+    WEB_SERVICE_HOST_CANDIDATES
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == raw)
+}
 
 pub struct WebServerState {
     handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -125,6 +122,10 @@ pub struct WebServerInfo {
     pub port: u16,
     pub token: String,
     pub addresses: Vec<String>,
+    /// The address the listener is bound to (`0.0.0.0` for every interface,
+    /// `127.0.0.1` for this machine only), so a UI can say how far the
+    /// service reaches without inferring it from `addresses`.
+    pub bind_host: String,
 }
 
 pub fn generate_random_token() -> String {
@@ -214,12 +215,44 @@ async fn resolve_web_service_port(
     Ok(port)
 }
 
+/// Resolve the desktop bind host: an explicit override (which must be one of
+/// [`WEB_SERVICE_HOST_CANDIDATES`]), else the saved choice, else the wildcard
+/// default. A saved value outside the set (hand-edited database) falls back to
+/// the default instead of failing every start, auto-start included.
+/// Desktop only: `houhub-server` binds whatever `HOUHUB_HOST` names.
+#[cfg(any(feature = "tauri-runtime", test))]
+async fn resolve_web_service_host(
+    conn: &DatabaseConnection,
+    override_host: Option<String>,
+) -> Result<&'static str, AppCommandError> {
+    if let Some(raw) = override_host {
+        return normalize_web_service_host(&raw).ok_or_else(|| unsupported_host_error(&raw));
+    }
+    let saved = app_metadata_service::get_value(conn, WEB_SERVICE_HOST_KEY)
+        .await
+        .map_err(AppCommandError::from)?;
+    Ok(saved
+        .as_deref()
+        .and_then(normalize_web_service_host)
+        .unwrap_or(DEFAULT_WEB_SERVICE_HOST))
+}
+
+fn unsupported_host_error(raw: &str) -> AppCommandError {
+    AppCommandError::new(AppErrorCode::InvalidInput, ERR_INVALID_ADDRESS)
+        .with_detail(format!("unsupported bind host: {raw}"))
+}
+
 /// Persist token and port atomically so a partial failure cannot leave
 /// `app_metadata` in a mixed old/new state.
+///
+/// `host` is written only when given — the desktop start path, whose host is
+/// always one of [`WEB_SERVICE_HOST_CANDIDATES`] — so a later start without
+/// one (the status-bar toggle, auto-start) binds what this one did.
 async fn persist_web_service_config(
     conn: &DatabaseConnection,
     token: &str,
     port: u16,
+    host: Option<&'static str>,
 ) -> Result<(), AppCommandError> {
     // Own the values so the inner future is 'static (required by transaction).
     let token_owned = token.to_string();
@@ -232,6 +265,11 @@ async fn persist_web_service_config(
             app_metadata_service::upsert_value(txn, WEB_SERVICE_PORT_KEY, &port_str)
                 .await
                 .map_err(AppCommandError::from)?;
+            if let Some(host) = host {
+                app_metadata_service::upsert_value(txn, WEB_SERVICE_HOST_KEY, host)
+                    .await
+                    .map_err(AppCommandError::from)?;
+            }
             Ok(())
         })
     })
@@ -258,6 +296,12 @@ pub struct WebServiceConfig {
     pub token: Option<String>,
     pub port: Option<u16>,
     pub auto_start: bool,
+    /// Desktop bind host, one of [`WEB_SERVICE_HOST_CANDIDATES`]. `None` on
+    /// load means "never chosen" (the default applies); `None` on update
+    /// leaves the saved choice alone, so a client that predates the field
+    /// cannot reset it.
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 pub async fn load_web_service_config(
@@ -276,10 +320,17 @@ pub async fn load_web_service_config(
             .await
             .map_err(AppCommandError::from)?,
     );
+    let host = app_metadata_service::get_value(conn, WEB_SERVICE_HOST_KEY)
+        .await
+        .map_err(AppCommandError::from)?
+        .as_deref()
+        .and_then(normalize_web_service_host)
+        .map(str::to_string);
     Ok(WebServiceConfig {
         token: token.filter(|value| !value.trim().is_empty()),
         port,
         auto_start,
+        host,
     })
 }
 
@@ -291,6 +342,12 @@ pub async fn update_web_service_config_core(
     let port = config.port.unwrap_or(DEFAULT_WEB_SERVICE_PORT);
     let auto_start = if config.auto_start { "true" } else { "false" }.to_string();
     let port_str = port.to_string();
+    let host = match config.host {
+        Some(raw) => {
+            Some(normalize_web_service_host(&raw).ok_or_else(|| unsupported_host_error(&raw))?)
+        }
+        None => None,
+    };
 
     conn.transaction::<_, (), AppCommandError>(move |txn| {
         Box::pin(async move {
@@ -303,6 +360,11 @@ pub async fn update_web_service_config_core(
             app_metadata_service::upsert_value(txn, WEB_SERVICE_AUTO_START_KEY, &auto_start)
                 .await
                 .map_err(AppCommandError::from)?;
+            if let Some(host) = host {
+                app_metadata_service::upsert_value(txn, WEB_SERVICE_HOST_KEY, host)
+                    .await
+                    .map_err(AppCommandError::from)?;
+            }
             Ok(())
         })
     })
@@ -320,15 +382,10 @@ pub async fn update_web_service_config_core(
 
 /// Stable i18n-key prefixes — the frontend maps these to localized text.
 const ERR_ALREADY_RUNNING: &str = "web_server.already_running";
-
 const ERR_INVALID_ADDRESS: &str = "web_server.invalid_address";
-
 const ERR_PORT_IN_USE: &str = "web_server.port_in_use";
-
 const ERR_PERMISSION_DENIED: &str = "web_server.permission_denied";
-
 const ERR_ADDRESS_UNAVAILABLE: &str = "web_server.address_unavailable";
-
 const ERR_BIND_FAILED: &str = "web_server.bind_failed";
 
 fn classify_bind_error(err: std::io::Error) -> AppCommandError {
@@ -607,7 +664,7 @@ pub(crate) async fn do_start_web_server_with_state(
     // mode check, so a misconfiguration doesn't overwrite saved state
     // and lock the desktop into a permanent "Web service won't start"
     // loop.
-    persist_web_service_config(&app_state.db.conn, &token, port).await?;
+    persist_web_service_config(&app_state.db.conn, &token, port, None).await?;
 
     // Reset before any handler subscribes, so a leftover signal from the
     // previous cycle cannot make a new handler exit immediately.
@@ -655,6 +712,7 @@ pub(crate) async fn do_start_web_server_with_state(
         port: actual_port,
         token,
         addresses,
+        bind_host: advertised_host,
     })
 }
 
@@ -702,11 +760,7 @@ pub fn describe_ports(ports: &[u16]) -> String {
     let contiguous = ports.windows(2).all(|w| w[1] == w[0] + 1);
     match (ports.first(), ports.last()) {
         (Some(first), Some(last)) if contiguous && ports.len() > 2 => format!("{first}-{last}"),
-        _ => ports
-            .iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>()
-            .join(", "),
+        _ => ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", "),
     }
 }
 
@@ -762,6 +816,7 @@ pub(crate) fn do_get_web_server_status(state: &WebServerState) -> Option<WebServ
         port,
         token,
         addresses,
+        bind_host: host,
     })
 }
 
@@ -806,7 +861,7 @@ pub(crate) async fn do_start_web_server_tauri(
 
     let db = app.state::<crate::db::AppDatabase>();
     let port_val = resolve_web_service_port(&db.conn, port).await?;
-    let host_val = host.unwrap_or_else(|| "0.0.0.0".to_string());
+    let host_val = resolve_web_service_host(&db.conn, host).await?;
     let token = resolve_web_service_token(&db.conn, token).await?;
 
     // Same strict-mode validation as `do_start_web_server_with_state`:
@@ -841,7 +896,7 @@ pub(crate) async fn do_start_web_server_tauri(
     // Persist only after a successful bind AND strict-mode validation,
     // so a misconfiguration doesn't lock the desktop into a permanent
     // "Web service won't start" loop.
-    persist_web_service_config(&db.conn, &token, port_val).await?;
+    persist_web_service_config(&db.conn, &token, port_val, Some(host_val)).await?;
 
     let static_dir = find_static_dir_tauri(&app);
 
@@ -983,7 +1038,7 @@ pub(crate) async fn do_start_web_server_tauri(
     let local_addr = listener.local_addr().ok();
     let actual_port = local_addr.map(|a| a.port()).unwrap_or(port_val);
     // Advertise the IP the socket is actually bound to, not the raw config.
-    let advertised_host = advertise_host(local_addr, &host_val);
+    let advertised_host = advertise_host(local_addr, host_val);
     tracing::info!("[WEB] Starting web server on {}", addr);
     configure_browser_bridge(&advertised_host, actual_port);
 
@@ -1004,13 +1059,27 @@ pub(crate) async fn do_start_web_server_tauri(
     *ws.host.lock().unwrap() = advertised_host.clone();
     // running already true from compare_exchange; disarm guard so it doesn't flip back.
     guard.disarm();
+    // One place for every desktop start: the Settings command, the status-bar
+    // toggle and auto-start at launch all come through here. At launch no
+    // webview is listening yet; each one reads the status when it mounts.
+    emit_web_service_status_changed(&app, true);
 
     let addresses = addresses_for_bind(&advertised_host, actual_port);
     Ok(WebServerInfo {
         port: actual_port,
         token,
         addresses,
+        bind_host: advertised_host,
     })
+}
+
+#[cfg(feature = "tauri-runtime")]
+fn emit_web_service_status_changed(app: &tauri::AppHandle, running: bool) {
+    event_bridge::emit_event(
+        &event_bridge::EventEmitter::Tauri(app.clone()),
+        event_bridge::WEB_SERVICE_STATUS_CHANGED_EVENT,
+        event_bridge::WebServiceStatusChanged { running },
+    );
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1028,9 +1097,14 @@ pub async fn start_web_server(
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn stop_web_server(
+    app: tauri::AppHandle,
     state: tauri::State<'_, WebServerState>,
 ) -> Result<(), AppCommandError> {
     do_stop_web_server(&state).await;
+    // After the listener is released, so a window reacting to this already
+    // finds the service gone. (The app-exit stop does not announce: nothing
+    // is left to listen.)
+    emit_web_service_status_changed(&app, false);
     Ok(())
 }
 
@@ -1070,7 +1144,9 @@ pub async fn probe_web_service_port(
 
 #[cfg(test)]
 mod local_address_tests {
-    use super::{addresses_for_bind, advertise_host, get_local_addresses, is_advertisable_ipv4};
+    use super::{
+        addresses_for_bind, advertise_host, get_local_addresses, is_advertisable_ipv4,
+    };
     use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]
@@ -1080,7 +1156,7 @@ mod local_address_tests {
         assert!(!is_advertisable_ipv4(Ipv4Addr::LOCALHOST)); // 127.0.0.1
         assert!(!is_advertisable_ipv4(Ipv4Addr::new(169, 254, 3, 4))); // link-local
         assert!(!is_advertisable_ipv4(Ipv4Addr::UNSPECIFIED)); // 0.0.0.0
-                                                               // Accepted: ordinary private/LAN addresses the user may want to share.
+        // Accepted: ordinary private/LAN addresses the user may want to share.
         assert!(is_advertisable_ipv4(Ipv4Addr::new(192, 168, 1, 5)));
         assert!(is_advertisable_ipv4(Ipv4Addr::new(10, 0, 0, 4)));
         assert!(is_advertisable_ipv4(Ipv4Addr::new(172, 16, 0, 9)));
@@ -1140,10 +1216,7 @@ mod local_address_tests {
         );
         // A wildcard bind stays wildcard, so addresses_for_bind still enumerates.
         assert_eq!(
-            advertise_host(
-                Some("0.0.0.0:3080".parse::<SocketAddr>().unwrap()),
-                "0.0.0.0"
-            ),
+            advertise_host(Some("0.0.0.0:3080".parse::<SocketAddr>().unwrap()), "0.0.0.0"),
             "0.0.0.0"
         );
         // End to end: a `localhost` config advertises only loopback, never LAN.
@@ -1183,5 +1256,120 @@ mod local_address_tests {
             assert!(addr.ends_with(&format!(":{port}")), "bad port: {addr}");
             assert!(seen.insert(addr.clone()), "duplicate address: {addr}");
         }
+    }
+}
+
+#[cfg(test)]
+mod web_service_host_tests {
+    use super::{
+        load_web_service_config, persist_web_service_config, resolve_web_service_host,
+        update_web_service_config_core, WebServiceConfig, DEFAULT_WEB_SERVICE_HOST,
+        ERR_INVALID_ADDRESS, WEB_SERVICE_HOST_KEY,
+    };
+    use crate::db::service::app_metadata_service;
+    use crate::db::test_helpers::fresh_in_memory_db;
+
+    fn config(host: Option<&str>) -> WebServiceConfig {
+        WebServiceConfig {
+            token: Some("tok".into()),
+            port: Some(3080),
+            auto_start: false,
+            host: host.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn host_defaults_to_wildcard_and_follows_the_saved_choice() {
+        let db = fresh_in_memory_db().await;
+        assert_eq!(
+            resolve_web_service_host(&db.conn, None).await.unwrap(),
+            DEFAULT_WEB_SERVICE_HOST
+        );
+        assert_eq!(load_web_service_config(&db.conn).await.unwrap().host, None);
+
+        let saved = update_web_service_config_core(&db.conn, config(Some(" 127.0.0.1 ")))
+            .await
+            .unwrap();
+        assert_eq!(saved.host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(
+            resolve_web_service_host(&db.conn, None).await.unwrap(),
+            "127.0.0.1"
+        );
+        // An explicit override wins over the saved choice.
+        assert_eq!(
+            resolve_web_service_host(&db.conn, Some("0.0.0.0".into()))
+                .await
+                .unwrap(),
+            "0.0.0.0"
+        );
+    }
+
+    /// A client that predates the field sends no `host`; that must not reset
+    /// a loopback-only choice back to every interface.
+    #[tokio::test]
+    async fn update_without_host_keeps_the_saved_choice() {
+        let db = fresh_in_memory_db().await;
+        update_web_service_config_core(&db.conn, config(Some("127.0.0.1")))
+            .await
+            .unwrap();
+        let wire: WebServiceConfig = serde_json::from_value(serde_json::json!({
+            "token": null,
+            "port": 3080,
+            "autoStart": true,
+        }))
+        .unwrap();
+        let saved = update_web_service_config_core(&db.conn, wire)
+            .await
+            .unwrap();
+        assert_eq!(saved.host.as_deref(), Some("127.0.0.1"));
+        assert!(saved.auto_start);
+    }
+
+    #[tokio::test]
+    async fn hosts_outside_the_candidates_are_rejected() {
+        let db = fresh_in_memory_db().await;
+        for bad in ["192.168.1.5", "localhost", "::", ""] {
+            let Err(err) = update_web_service_config_core(&db.conn, config(Some(bad))).await else {
+                panic!("{bad:?} must be rejected by the config update");
+            };
+            assert_eq!(err.message, ERR_INVALID_ADDRESS);
+            let Err(err) = resolve_web_service_host(&db.conn, Some(bad.into())).await else {
+                panic!("{bad:?} must be rejected as a start override");
+            };
+            assert_eq!(err.message, ERR_INVALID_ADDRESS);
+        }
+        // The rejected updates wrote nothing.
+        assert_eq!(load_web_service_config(&db.conn).await.unwrap().host, None);
+    }
+
+    /// A hand-edited value must not fail every start (auto-start included):
+    /// it reads as "never chosen".
+    #[tokio::test]
+    async fn an_unrecognised_saved_host_falls_back_to_the_default() {
+        let db = fresh_in_memory_db().await;
+        app_metadata_service::upsert_value(&db.conn, WEB_SERVICE_HOST_KEY, "10.0.0.1")
+            .await
+            .unwrap();
+        assert_eq!(
+            resolve_web_service_host(&db.conn, None).await.unwrap(),
+            DEFAULT_WEB_SERVICE_HOST
+        );
+        assert_eq!(load_web_service_config(&db.conn).await.unwrap().host, None);
+    }
+
+    /// A start records the host it bound, so the next start without one (the
+    /// status-bar toggle, auto-start) binds the same.
+    #[tokio::test]
+    async fn persisting_a_start_records_its_host_only_when_given() {
+        let db = fresh_in_memory_db().await;
+        persist_web_service_config(&db.conn, "tok", 3080, Some("127.0.0.1"))
+            .await
+            .unwrap();
+        persist_web_service_config(&db.conn, "tok", 3081, None)
+            .await
+            .unwrap();
+        let saved = load_web_service_config(&db.conn).await.unwrap();
+        assert_eq!(saved.host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(saved.port, Some(3081));
     }
 }
