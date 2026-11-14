@@ -27,38 +27,24 @@
 //! the inner-attribute form here would duplicate the predicate.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-
 use std::future::Future;
-
 use std::path::{Path, PathBuf};
-
 use std::sync::Arc;
-
 use std::time::Duration;
 
 use axum::body::Bytes;
-
 use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     Engine as _,
 };
-
 use futures_util::{SinkExt, Stream, StreamExt};
-
 use hyper_util::client::legacy::connect::HttpConnector;
-
 use hyper_util::rt::TokioIo;
-
 use sea_orm::DatabaseConnection;
-
 use serde_json::Value;
-
 use tauri::{AppHandle, Emitter, EventTarget, State, WebviewWindow};
-
 use tokio::net::TcpStream;
-
 use tokio::sync::{mpsc, watch, Mutex, RwLock};
-
 use tokio_tungstenite::tungstenite::{
     client::IntoClientRequest,
     error::UrlError,
@@ -66,9 +52,7 @@ use tokio_tungstenite::tungstenite::{
     http::{HeaderMap, HeaderValue, Uri},
     Error as WsError, Message,
 };
-
 use tokio_util::sync::CancellationToken;
-
 use tower_service::Service;
 
 /// Outbound mpsc capacity per remote WS. Bounded so a runaway frontend
@@ -86,13 +70,9 @@ const OUTBOUND_SEND_TIMEOUT: Duration = Duration::from_secs(2);
 use crate::app_error::{
     AppCommandError, AppErrorCode, UPLOAD_I18N_KEY_NOT_A_FILE, UPLOAD_I18N_KEY_TOO_LARGE,
 };
-
 use crate::db::service::remote_workspace_connection_service;
-
 use crate::db::AppDatabase;
-
 use crate::models::{RemoteWorkspaceConnectionInfo, ToHeaderMap};
-
 use crate::workspace_transfer::{
     TransferDirection, TransferState, WorkspaceTransferManager, WorkspaceTransferProgress,
     WORKSPACE_TRANSFER_PROGRESS_EVENT,
@@ -115,25 +95,19 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const HTTP_TIMEOUT_MAX: Duration = Duration::from_secs(600);
 
 const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
 const WS_SEND_TIMEOUT: Duration = Duration::from_secs(8);
-
 const WS_PING_INTERVAL: Duration = Duration::from_secs(15);
-
 const WS_SILENCE_LIMIT: Duration = Duration::from_secs(45);
 
 /// Exponential backoff bounds for WS reconnect. 1s/2s/4s/8s/16s/32s.
 const WS_BACKOFF_INITIAL_SECS: u64 = 1;
-
 const WS_BACKOFF_MAX_SECS: u64 = 32;
 
 /// MUST match the values in `src-tauri/src/web/auth.rs` and
 /// `src/lib/transport/ws-auth.ts`. The server's auth middleware reads the
 /// `sec-websocket-protocol` header looking for `houhub-token.{base64url}`.
 const WS_EVENT_PROTOCOL: &str = "houhub-events";
-
 const WS_TOKEN_PROTOCOL_PREFIX: &str = "houhub-token.";
-
 const WS_EVENTS_PATH: &str = "/ws/events";
 
 /// Internal Tauri-event channels emitted by this proxy. The frontend
@@ -142,9 +116,7 @@ const WS_EVENTS_PATH: &str = "/ws/events";
 /// `__disconnected__` / `__unauthorized__` literals in
 /// `src/lib/transport/remote-desktop-transport.ts`.
 const WS_READY_CHANNEL: &str = "__ready__";
-
 const WS_DISCONNECTED_CHANNEL: &str = "__disconnected__";
-
 const WS_UNAUTHORIZED_CHANNEL: &str = "__unauthorized__";
 
 /// One entry per active remote `connection_id` with at least one webview
@@ -474,6 +446,52 @@ pub async fn remote_http_call(
     response.json::<Value>().await.map_err(|e| {
         AppCommandError::network("Failed to parse remote response").with_detail(e.to_string())
     })
+}
+
+/// Cache a previously issued forge image locally. The image URL is a narrow,
+/// capability-bearing resource path, never a caller-supplied host or file.
+#[tauri::command]
+pub async fn remote_cache_forge_image(
+    db: State<'_, AppDatabase>,
+    connection_id: i32,
+    url: String,
+) -> Result<crate::forge::ForgeImage, AppCommandError> {
+    use crate::forge::{image_cache, ForgeError};
+
+    if !image_cache::valid_image_url(&url) {
+        return Err(AppCommandError::invalid_input("Invalid cached forge image URL"));
+    }
+    let conn = remote_workspace_connection_service::get(&db.conn, connection_id)
+        .await
+        .map_err(AppCommandError::db)?
+        .ok_or_else(|| AppCommandError::not_found("Remote connection not found"))?;
+    let endpoint = format!("{}{}", conn.base_url.trim_end_matches('/'), url);
+    let key = image_cache::cache_key(&[
+        "houhub-server", &connection_id.to_string(), &conn.base_url, &conn.token, &url,
+    ]);
+    let client = crate::forge::http_client()?;
+    let image = image_cache::get_or_download(
+        &crate::paths::houhub_forge_images_root(),
+        key,
+        image_cache::IMAGE_MAX_BYTES,
+        || async {
+            let response = client.get(endpoint)
+                .bearer_auth(conn.token.trim())
+                .headers(conn.headers.to_header_map())
+                .header("X-Requested-With", "XMLHttpRequest")
+                .send().await
+                .map_err(|error| ForgeError::Network(error.without_url().to_string()))?;
+            match response.status().as_u16() {
+                200 => Ok(response),
+                401 => Err(ForgeError::Auth("Remote workspace token was rejected".into())),
+                status => Err(ForgeError::Api { status, message: "Remote image download failed".into() }),
+            }
+        },
+    ).await.map_err(|error| match error {
+        ForgeError::Auth(message) => AppCommandError::authentication_failed(message),
+        error => error.into(),
+    })?;
+    Ok(image_cache::local_image_url(image).await?)
 }
 
 // ─── Multipart upload proxy ───────────────────────────────────────────

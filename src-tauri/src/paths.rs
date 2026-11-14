@@ -15,21 +15,13 @@
 use std::path::{Path, PathBuf};
 
 const HOUHUB_DIR_NAME: &str = ".houhub";
-
 const PETS_DIR_NAME: &str = "pets";
-
 const BROWSER_PROFILES_DIR_NAME: &str = "browser-profiles";
-
 const UPLOADS_DIR_NAME: &str = "uploads";
-
 const LOGS_DIR_NAME: &str = "logs";
-
 const TURN_TIMINGS_DIR_NAME: &str = "turn-timings";
-
 const ACP_TRANSCRIPTS_DIR_NAME: &str = "acp-transcripts";
-
 const BACKGROUNDS_DIR_NAME: &str = "backgrounds";
-
 const TEXT_GENERATION_DIR_NAME: &str = "text-generation";
 
 /// `$HOUHUB_HOME` if set (and non-empty), else `~/.houhub/`.
@@ -116,6 +108,12 @@ pub fn houhub_uploads_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(HOUHUB_DIR_NAME).join(UPLOADS_DIR_NAME))
 }
 
+/// Disposable forge image files, beside uploads under the active data root.
+/// Entries expire after seven days and the cache has a bounded disk budget.
+pub fn houhub_forge_images_root() -> PathBuf {
+    houhub_uploads_root().with_file_name("cache").join("forge-images")
+}
+
 /// Root directory for the user-selected workspace background image.
 ///
 /// Resolution mirrors [`houhub_pets_root`] exactly:
@@ -160,7 +158,7 @@ pub fn houhub_logs_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(HOUHUB_DIR_NAME).join(LOGS_DIR_NAME))
 }
 
-/// Root directory for HouHub's own per-turn timing observations (see
+/// Root directory for houhub's own per-turn timing observations (see
 /// `crate::turn_timings`) — wall-clock turn spans the ACP connection layer
 /// records for agents whose native session store carries no per-turn
 /// timestamps (Cursor). Written by the live connection, read back by the
@@ -350,20 +348,12 @@ mod tests {
             Some(platform.join("com.houflow.houhub"))
         );
         assert_eq!(
-            desktop_data_dir(
-                Some(std::ffi::OsStr::new("")),
-                Some(&platform),
-                "com.houflow.houhub"
-            ),
+            desktop_data_dir(Some(std::ffi::OsStr::new("")), Some(&platform), "com.houflow.houhub"),
             Some(platform.join("com.houflow.houhub")),
             "an empty preset is no preset"
         );
         assert_eq!(
-            desktop_data_dir(
-                Some(preset.as_os_str()),
-                Some(&platform),
-                "com.houflow.houhub"
-            ),
+            desktop_data_dir(Some(preset.as_os_str()), Some(&platform), "com.houflow.houhub"),
             Some(preset.clone())
         );
         assert_eq!(
@@ -371,12 +361,8 @@ mod tests {
             Some(preset)
         );
         assert_eq!(desktop_data_dir(None, None, "com.houflow.houhub"), None);
-        let relative = desktop_data_dir(
-            Some(std::ffi::OsStr::new("data")),
-            None,
-            "com.houflow.houhub",
-        )
-        .expect("a relative preset");
+        let relative = desktop_data_dir(Some(std::ffi::OsStr::new("data")), None, "com.houflow.houhub")
+            .expect("a relative preset");
         assert!(relative.is_absolute(), "{}", relative.display());
         assert!(relative.ends_with("data"));
     }

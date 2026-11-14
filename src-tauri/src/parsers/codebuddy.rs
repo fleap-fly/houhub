@@ -1,27 +1,20 @@
 use std::ffi::OsString;
-
 use std::fs;
-
 use std::io::{BufRead, BufReader};
-
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-
 use serde_json::Value;
-
 use walkdir::WalkDir;
 
 use crate::models::{
     AgentExecutionStats, AgentToolCall, AgentType, ContentBlock, ConversationDetail,
     ConversationSummary, MessageRole, MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
 };
-
 use crate::parsers::claude::{
     capture_tag, task_notification_status_regex, task_notification_summary_regex,
     task_notification_task_id_regex, BACKGROUND_TASK_MARKER,
 };
-
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, is_safe_subagent_id, latest_turn_total_usage_tokens,
@@ -490,11 +483,11 @@ impl AgentParser for CodeBuddyParser {
             if is_subagent_transcript(&self.base_dir, path) {
                 continue;
             }
-            if let Ok(Some(summary)) =
-                super::summary_cache::get_or_parse(AgentType::CodeBuddy, path, || {
-                    Ok(self.parse_summary(path))
-                })
-            {
+            if let Ok(Some(summary)) = super::summary_cache::get_or_parse(
+                AgentType::CodeBuddy,
+                path,
+                || Ok(self.parse_summary(path)),
+            ) {
                 conversations.push(summary);
             }
         }
@@ -894,11 +887,7 @@ fn deferred_result_envelope(value: &Value) -> Option<String> {
     }
     let text = value
         .get("output")
-        .and_then(|o| {
-            o.get("text")
-                .and_then(|t| t.as_str())
-                .or_else(|| o.as_str())
-        })
+        .and_then(|o| o.get("text").and_then(|t| t.as_str()).or_else(|| o.as_str()))
         .or_else(|| tool_result.get("content").and_then(|c| c.as_str()))
         .unwrap_or("");
     let is_error = mcp_meta
@@ -913,6 +902,45 @@ fn deferred_result_envelope(value: &Value) -> Option<String> {
     .ok()
 }
 
+/// `text` without the line-range hint CodeBuddy (2.184.0 on) appends to a Read
+/// result, or `text` itself when it has none.
+///
+/// The hint is one line addressed to the model, after the numbered lines and
+/// the empty `N→` line that ends them:
+/// `\n<system-reminder data-role="tool-hint">Read lines 1-2 of 2.</system-reminder>`
+/// (a partial read gets a `[Truncated: …]` notice naming the next offset, a
+/// read past the end "Read 0 lines from line N"). It reaches houhub live, in a
+/// `session/load` replay and in the transcript's `output.text`, and left in
+/// place it would become the last line of the file card's text. Only a hint
+/// that closes the text, right after a numbered line, is taken off, so any
+/// other result keeps its text as sent; what is left is exactly what 2.183.0
+/// sent for the same read.
+pub(crate) fn strip_read_range_hint(text: &str) -> &str {
+    const OPEN: &str = "\n<system-reminder data-role=\"tool-hint\">";
+    const CLOSE: &str = "</system-reminder>";
+    let Some(body) = text.strip_suffix(CLOSE) else {
+        return text;
+    };
+    let Some(at) = body.rfind(OPEN) else {
+        return text;
+    };
+    let hint = &body[at + OPEN.len()..];
+    if hint.contains('\n') || hint.contains("<system-reminder") {
+        return text;
+    }
+    let kept = &text[..at];
+    let last_line = kept.rsplit('\n').next().unwrap_or(kept);
+    let is_numbered = last_line
+        .trim_start()
+        .split_once('→')
+        .is_some_and(|(num, _)| !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()));
+    if is_numbered {
+        kept
+    } else {
+        text
+    }
+}
+
 /// `function_call_result.output` is `{type:"text", text}`; fall back to the raw
 /// string or `providerData.toolResult.content`. Deferred MCP tools first surface
 /// their structured `mcpMeta` envelope (see `deferred_result_envelope`).
@@ -923,16 +951,13 @@ fn tool_output_preview(value: &Value) -> Option<String> {
     if let Some(output) = value.get("output") {
         if let Some(text) = output.as_str() {
             if !text.is_empty() {
-                return Some(text.to_string());
+                return Some(strip_read_range_hint(text).to_string());
             }
         } else if let Some(text) = output.get("text").and_then(|t| t.as_str()) {
-            return Some(text.to_string());
+            return Some(strip_read_range_hint(text).to_string());
         }
     }
-    let content = value
-        .get("providerData")?
-        .get("toolResult")?
-        .get("content")?;
+    let content = value.get("providerData")?.get("toolResult")?.get("content")?;
     if let Some(text) = content.as_str() {
         Some(text.to_string())
     } else {
@@ -987,7 +1012,7 @@ fn tool_is_error(value: &Value) -> bool {
 /// `_meta["codebuddy.ai"].isMeta` (advertised as
 /// `agentCapabilities.metaPromptSupport`; per the 2.159.0 changelog it reaches
 /// the model but is not shown, broadcast or replayed as a user message):
-/// `markAcpMetaPromptItems` stamps the same flag on its user items. HouHub never
+/// `markAcpMetaPromptItems` stamps the same flag on its user items. houhub never
 /// sends one, but another client's would land here. It also covers the
 /// task-list reminders CodeBuddy 2.162.0 through 2.164.0 persisted for the
 /// model: a `<system-reminder>` text flagged `{isMeta, skipRun,
@@ -1371,11 +1396,8 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::models::TurnRole;
-
     use serde_json::json;
-
     use std::io::Write;
 
     #[test]
@@ -1396,10 +1418,8 @@ mod tests {
 
     #[test]
     fn empty_env_falls_back_to_home() {
-        let resolved = resolve_codebuddy_config_dir_from(
-            Some(OsString::new()),
-            Some(PathBuf::from("/home/u")),
-        );
+        let resolved =
+            resolve_codebuddy_config_dir_from(Some(OsString::new()), Some(PathBuf::from("/home/u")));
         assert_eq!(resolved, PathBuf::from("/home/u/.codebuddy"));
     }
 
@@ -1409,12 +1429,8 @@ mod tests {
         let mut file =
             std::fs::File::create(dir.join(format!("{session_id}.jsonl"))).expect("create jsonl");
         for record in records {
-            writeln!(
-                file,
-                "{}",
-                serde_json::to_string(record).expect("serialize")
-            )
-            .expect("write line");
+            writeln!(file, "{}", serde_json::to_string(record).expect("serialize"))
+                .expect("write line");
         }
     }
 
@@ -1457,9 +1473,9 @@ mod tests {
 
         let has_user_text = detail.turns.iter().any(|t| {
             matches!(t.role, TurnRole::User)
-                && t.blocks.iter().any(
-                    |b| matches!(b, ContentBlock::Text { text } if text.contains("你会做什么")),
-                )
+                && t.blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("你会做什么")))
         });
         assert!(has_user_text, "user input_text must become a User turn");
 
@@ -1472,9 +1488,9 @@ mod tests {
 
         let has_assistant_text = detail.turns.iter().any(|t| {
             matches!(t.role, TurnRole::Assistant)
-                && t.blocks
-                    .iter()
-                    .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("CodeBuddy")))
+                && t.blocks.iter().any(
+                    |b| matches!(b, ContentBlock::Text { text } if text.contains("CodeBuddy")),
+                )
         });
         assert!(has_assistant_text, "assistant output_text must render");
 
@@ -1496,8 +1512,7 @@ mod tests {
     /// then the answer. Both requests must count.
     #[test]
     fn usage_written_on_a_function_call_counts() {
-        let root =
-            std::env::temp_dir().join(format!("houhub-cb-fc-usage-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("houhub-cb-fc-usage-{}", uuid::Uuid::new_v4()));
         let sid = "sess-fc-usage";
         write_session(
             &root,
@@ -1748,8 +1763,7 @@ mod tests {
     /// user turn and no message count.
     #[test]
     fn task_list_reminders_are_not_prompts() {
-        let root =
-            std::env::temp_dir().join(format!("houhub-cb-reminder-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("houhub-cb-reminder-{}", uuid::Uuid::new_v4()));
         let sid = "sess-reminder";
         let reminder = "<system-reminder>\nThe TodoWrite tool hasn't been used recently. If you're working on tasks that would benefit from tracking progress, consider using the TodoWrite tool to track progress. Make sure that you NEVER mention this reminder to the user\n\n</system-reminder>";
         write_session(
@@ -2006,10 +2020,7 @@ mod tests {
             .iter()
             .find(|(id, _, _)| id.as_deref() == Some("call_1"))
             .expect("bash result");
-        assert!(
-            bash.1,
-            "toolResult.error must set is_error even when status=completed"
-        );
+        assert!(bash.1, "toolResult.error must set is_error even when status=completed");
 
         let glob = results
             .iter()
@@ -2133,6 +2144,82 @@ mod tests {
         assert!(
             !read_output.contains("1→"),
             "line-number prefixes must be stripped, got: {read_output}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A 2.184.0 Read result as its transcript stores it: the numbered lines,
+    /// the empty `N→` line and the line-range hint for the model (captured).
+    const READ_2184: &str = "   1→outside one\n   2→outside two\n   3→\n<system-reminder data-role=\"tool-hint\">Read lines 1-2 of 2.</system-reminder>";
+
+    #[test]
+    fn read_range_hint_comes_off_and_leaves_what_2183_sent() {
+        assert_eq!(
+            strip_read_range_hint(READ_2184),
+            "   1→outside one\n   2→outside two\n   3→"
+        );
+        // A partial read's notice and a read past the end (captured).
+        let partial = " 119→big line 119\n 120→\n<system-reminder data-role=\"tool-hint\">[Truncated: PARTIAL view — big.txt: showing lines 100-119 (total unknown). Call Read with offset=120 limit=20 for the next page, or Grep to find a specific section. Do NOT answer from this page alone if the answer may be further in the file.]</system-reminder>";
+        assert_eq!(strip_read_range_hint(partial), " 119→big line 119\n 120→");
+        let past_end = "1000→\n<system-reminder data-role=\"tool-hint\">Read 0 lines from line 1000 (total unknown).</system-reminder>";
+        assert_eq!(strip_read_range_hint(past_end), "1000→");
+    }
+
+    #[test]
+    fn a_tool_hint_after_anything_but_numbered_lines_stays() {
+        // A background task snapshot's hint follows prose, not numbered lines.
+        let snapshot = "Status: running\n<system-reminder data-role=\"tool-hint\">Do NOT poll TaskOutput in a loop.</system-reminder>";
+        assert_eq!(strip_read_range_hint(snapshot), snapshot);
+        // Not at the end, another role, or spanning lines: kept as sent.
+        let not_last = format!("{READ_2184}\nmore");
+        assert_eq!(strip_read_range_hint(&not_last), not_last);
+        let other_role = "   1→a\n   2→\n<system-reminder data-role=\"other\">x</system-reminder>";
+        assert_eq!(strip_read_range_hint(other_role), other_role);
+        let multi_line =
+            "   1→a\n   2→\n<system-reminder data-role=\"tool-hint\">x\ny</system-reminder>";
+        assert_eq!(strip_read_range_hint(multi_line), multi_line);
+        assert_eq!(strip_read_range_hint("   1→a\n   2→b"), "   1→a\n   2→b");
+    }
+
+    #[test]
+    fn read_result_with_a_range_hint_shows_only_the_file_lines() {
+        let root = std::env::temp_dir().join(format!("houhub-cb-readhint-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-readhint";
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"type":"message","role":"user","timestamp":1781821844000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":"read it"}]}),
+                json!({"type":"function_call","timestamp":1781821845000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "name":"Read","callId":"r1","arguments":"{\"file_path\": \"/x\"}"}),
+                json!({"type":"function_call_result","timestamp":1781821845100i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "name":"Read","callId":"r1","status":"completed",
+                       "output":{"type":"text","text":READ_2184}}),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let detail = parser.get_conversation(sid).expect("detail");
+        let read_output = detail
+            .turns
+            .iter()
+            .flat_map(|t| &t.blocks)
+            .find_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview,
+                    ..
+                } if id == "r1" => output_preview.clone(),
+                _ => None,
+            })
+            .expect("read tool result");
+        assert_eq!(
+            Some(read_output),
+            crate::parsers::strip_numbered_lines("   1→outside one\n   2→outside two\n   3→"),
+            "the card gets the same lines as for 2.183.0's result"
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -2269,19 +2356,14 @@ mod tests {
         let mut file =
             std::fs::File::create(dir.join(format!("{agent_id}.jsonl"))).expect("create subagent");
         for record in records {
-            writeln!(
-                file,
-                "{}",
-                serde_json::to_string(record).expect("serialize")
-            )
-            .expect("write line");
+            writeln!(file, "{}", serde_json::to_string(record).expect("serialize"))
+                .expect("write line");
         }
     }
 
     #[test]
     fn subagent_tool_calls_loaded_into_agent_stats() {
-        let root =
-            std::env::temp_dir().join(format!("houhub-cb-substats-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("houhub-cb-substats-{}", uuid::Uuid::new_v4()));
         let sid = "sess-substats";
         write_session(
             &root,
@@ -2508,10 +2590,9 @@ mod tests {
         // `providerData.isMeta` user message. It used to render as a SECOND user
         // bubble inside one exchange, dumping the raw notification XML and its
         // model-facing guidance prose into the chat. CodeBuddy's own renderer
-        // skips these records; HouHub folds the payload onto the launch card
+        // skips these records; houhub folds the payload onto the launch card
         // instead.
-        let root =
-            std::env::temp_dir().join(format!("houhub-cb-meta-user-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("houhub-cb-meta-user-{}", uuid::Uuid::new_v4()));
         let sid = "sess-bg";
         let mut records = async_launch_records();
         records.push(task_notification_record(
@@ -2589,8 +2670,7 @@ mod tests {
         // No `<task-notification>` yet (the worker is still running, or the CLI
         // died): `status: null` renders as "launched, result pending" — never as
         // a zombie "running". Mirrors `claude.rs`.
-        let root =
-            std::env::temp_dir().join(format!("houhub-cb-unsettled-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("houhub-cb-unsettled-{}", uuid::Uuid::new_v4()));
         let sid = "sess-bg";
         write_session(&root, "Users-demo-app", sid, &async_launch_records());
 
@@ -2639,8 +2719,7 @@ mod tests {
         // BLOCKING delegation finishes), but the detached worker still writes
         // `<session>/subagents/<taskId>.jsonl`. Without the spawn-renderer
         // fallback every backgrounded worker's nested tool calls were dropped.
-        let root =
-            std::env::temp_dir().join(format!("houhub-cb-asyncsub-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("houhub-cb-asyncsub-{}", uuid::Uuid::new_v4()));
         let sid = "sess-bg";
         write_session(&root, "Users-demo-app", sid, &async_launch_records());
         write_subagent(
@@ -2977,7 +3056,7 @@ mod tests {
     }
 
     /// #948: built with an agent's launch env, the parser reads where THAT
-    /// env puts the agent's files, not where HouHub's own environment does.
+    /// env puts the agent's files, not where houhub's own environment does.
     #[test]
     fn for_env_reads_the_config_dir_of_the_launch_env() {
         let env = AgentEnv::with_overrides(&[("CODEBUDDY_CONFIG_DIR", "/relocated/codebuddy")]);

@@ -64,6 +64,12 @@ export function rehypePluginsAllowingHouhub(
           "dataHouhubImageLinked",
           "data-houhub-local-image",
           "data-houhub-image-linked",
+          "dataHouHubForgeImage",
+          "dataHouHubImageWidth",
+          "dataHouHubImageHeight",
+          "data-houhub-forge-image",
+          "data-houhub-image-width",
+          "data-houhub-image-height",
         ],
       },
       protocols: {
