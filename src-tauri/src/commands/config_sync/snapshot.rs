@@ -17,27 +17,20 @@
 //! over but the agents still point at the old ones") are worse than no apply.
 
 use std::collections::BTreeMap;
-
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-
 use sea_orm::{DatabaseConnection, TransactionTrait};
-
 use serde::{Deserialize, Serialize};
-
 use serde_json::Value;
-
 use sha2::{Digest, Sha256};
 
 use super::domains::{count_entries, CONFIG_DOMAINS, DOMAIN_ASSISTANTS};
-
 use crate::app_error::{
     AppCommandError, CONFIG_SYNC_I18N_KEY_BAD_DOMAIN, CONFIG_SYNC_I18N_KEY_CHECKSUM,
     CONFIG_SYNC_I18N_KEY_INVALID_SNAPSHOT, CONFIG_SYNC_I18N_KEY_NEWER_SCHEMA,
     CONFIG_SYNC_I18N_KEY_NO_ROLLBACK,
 };
-
 use crate::web::event_bridge::{
     emit_event, AssistantChange, EventEmitter, ASSISTANT_CHANGED_EVENT,
 };
@@ -51,14 +44,12 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// self-authenticated WebDAV endpoint, which is a real one for a self-hosted
 /// share and a weaker one on a hosted drive — hence the opt-in below.
 pub const ENCRYPTION_NONE: &str = "none";
-
 /// Opt-in passphrase encryption ([`super::crypto`]). The manifest stays
 /// plaintext either way, so "whose copy is on the remote, from when" is
 /// readable without the passphrase; only `config.json` is wrapped.
 pub const ENCRYPTION_AES_GCM: &str = "aes-256-gcm";
 
 pub const CONFIG_FILE_NAME: &str = "config.json";
-
 pub const MANIFEST_FILE_NAME: &str = "manifest.json";
 
 /// How many pre-apply rollback snapshots to keep on disk. They are tens of KB
@@ -119,6 +110,11 @@ pub struct ApplyReport {
     /// unique) — so the confirmation can say so.
     #[serde(default)]
     pub renamed: usize,
+    /// `localStorage` appearance values the client that ran this apply should
+    /// adopt (see `appearance::appearance_to_adopt`). Returned to that client
+    /// only — never broadcast, because every browser has its own storage.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub appearance: BTreeMap<String, String>,
 }
 
 /// Read every domain out of the local database.
@@ -192,6 +188,9 @@ pub async fn apply_snapshot_core(
     {
         emit_event(emitter, ASSISTANT_CHANGED_EVENT, AssistantChange::Resync);
     }
+    // Only now, after the commit: a rolled-back apply must not tell the client
+    // to restyle itself with values that never landed.
+    report.appearance = super::appearance::appearance_to_adopt(snapshot);
     Ok(report)
 }
 
@@ -553,13 +552,9 @@ pub fn read_rollback(path: &Path) -> Result<ConfigSnapshot, AppCommandError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::db::entities::{agent_setting, custom_agent, model_provider, quick_message};
-
     use crate::db::service::app_metadata_service;
-
     use crate::db::test_helpers::fresh_in_memory_db;
-
     use sea_orm::{ActiveModelTrait, ActiveValue::NotSet, EntityTrait, Set};
 
     async fn seed_source(conn: &DatabaseConnection) {
@@ -572,8 +567,6 @@ mod tests {
             agent_types_json: Set("[\"deepseek\"]".to_string()),
             agent_type: Set("deepseek".to_string()),
             model: Set(Some("deepseek-chat".to_string())),
-            // HouHub-only column (the agent-side model picker's list).
-            models_json: Set("[\"deepseek-chat\"]".to_string()),
             created_at: Set(now),
             updated_at: Set(now),
         }
@@ -904,7 +897,10 @@ mod tests {
         let mut tampered = bytes.clone();
         tampered.extend_from_slice(b"\n");
         let err = validate_manifest(&manifest, &tampered).expect_err("must reject");
-        assert_eq!(err.i18n_key.as_deref(), Some(CONFIG_SYNC_I18N_KEY_CHECKSUM));
+        assert_eq!(
+            err.i18n_key.as_deref(),
+            Some(CONFIG_SYNC_I18N_KEY_CHECKSUM)
+        );
     }
 
     #[test]
@@ -989,10 +985,7 @@ mod tests {
         .expect("bytes");
 
         let err = parse_snapshot(&bytes).expect_err("must refuse");
-        assert_eq!(
-            err.i18n_key.as_deref(),
-            Some(CONFIG_SYNC_I18N_KEY_BAD_DOMAIN)
-        );
+        assert_eq!(err.i18n_key.as_deref(), Some(CONFIG_SYNC_I18N_KEY_BAD_DOMAIN));
         assert_eq!(
             err.i18n_params
                 .as_ref()
@@ -1087,8 +1080,7 @@ mod tests {
         // this machine" about a file sitting right there, because the resolver
         // holds ids to an alphabet with no room for a space or a bracket.
         std::fs::copy(
-            dir.path()
-                .join(format!("{}.json", list_rollback_infos(dir.path())[0].id)),
+            dir.path().join(format!("{}.json", list_rollback_infos(dir.path())[0].id)),
             dir.path().join("config-20240101T000000001 (1).json"),
         )
         .expect("copy");

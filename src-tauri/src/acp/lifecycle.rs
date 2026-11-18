@@ -10,41 +10,25 @@
 //! `acp://event` channel from the global firehose entirely.
 
 use std::collections::HashMap;
-
 use std::future::Future;
-
 use std::sync::atomic::Ordering;
-
 use std::sync::Arc;
-
 use std::time::Duration;
 
 use sea_orm::DatabaseConnection;
-
 use tokio::sync::{broadcast, mpsc};
 
 use crate::acp::delegation::broker::{DelegationBroker, DelegationMatchKey};
-
 use crate::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationSuccess};
-
 use crate::acp::internal_bus::InternalEventBus;
-
 use crate::acp::manager::ConnectionManager;
-
 use crate::acp::session_state::{SessionState, TurnStatusWriter};
-
 use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope};
-
 use crate::db::entities::conversation::ConversationStatus;
-
 use crate::db::error::DbError;
-
 use crate::db::service::{conversation_service, tool_approval_service};
-
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
-
 use crate::web::event_bridge::{emit_with_state, EventEmitter};
-
 use tokio::sync::RwLock;
 
 /// Per-connection worker queue depth. Sized for the **filtered** event set
@@ -444,9 +428,13 @@ pub(crate) async fn handle_event(
                     return Ok(());
                 };
                 let continues: Vec<String> = current.external_id.into_iter().collect();
-                let preserved =
-                    conversation_service::bind_external_id(db_conn, cid, transcript_id, &continues)
-                        .await?;
+                let preserved = conversation_service::bind_external_id(
+                    db_conn,
+                    cid,
+                    transcript_id,
+                    &continues,
+                )
+                .await?;
                 crate::commands::conversations::emit_conversation_upsert(&emitter, db_conn, cid)
                     .await;
                 crate::commands::conversations::emit_preserved_conversation(
@@ -1911,7 +1899,9 @@ mod delegation_title_tests {
             assert_eq!(key.task, "review");
         }
         // An invalid id is no key at all (the listener refuses the call).
-        assert!(extract_delegation_match_key(Some(r#"{"assistant_id":0,"task":"x"}"#)).is_none());
+        assert!(
+            extract_delegation_match_key(Some(r#"{"assistant_id":0,"task":"x"}"#)).is_none()
+        );
     }
 
     #[test]
@@ -3428,17 +3418,11 @@ pub fn lifecycle_subscriber_task(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::acp::session_state::SessionState;
-
     use crate::db::test_helpers;
-
     use crate::models::agent::AgentType;
-
     use crate::web::event_bridge::EventEmitter;
-
     use std::sync::Arc;
-
     use tokio::sync::{mpsc, RwLock};
 
     fn fake_connection_with_state(
@@ -3454,10 +3438,10 @@ mod tests {
             None,
         );
         state.conversation_id = conv_id;
+        state.status = crate::acp::types::ConnectionStatus::Connected;
         crate::acp::connection::AgentConnection {
             id: id.to_string(),
             agent_type: AgentType::ClaudeCode,
-            status: crate::acp::types::ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -4370,10 +4354,7 @@ mod tests {
         let env = EventEnvelope {
             seq: 1,
             connection_id: "c1".to_string(),
-            payload: AcpEvent::ContentDelta {
-                text: "hi".into(),
-                parent_tool_use_id: None,
-            },
+            payload: AcpEvent::ContentDelta { text: "hi".into(), parent_tool_use_id: None },
         };
         handle_event(&db.conn, &mgr, &env, None).await.unwrap();
 
@@ -4393,7 +4374,6 @@ mod tests {
     // filter predicate and the worker's match arms cannot silently drift.
 
     use crate::acp::internal_bus::{EventBusMetrics, InternalEventBus};
-
     use std::time::Duration;
 
     /// Predicate must accept exactly the event types the worker handles.
@@ -4811,11 +4791,8 @@ mod tests {
     // broker chain is exercised the same way it runs in production.
 
     use crate::acp::delegation::broker::{ConversationDepthLookup, DelegationBroker};
-
     use crate::acp::delegation::spawner::{mock::MockSpawner, ConnectionSpawner};
-
     use crate::acp::delegation::types::{DelegationError, DelegationOutcome, DelegationRequest};
-
     use async_trait::async_trait;
 
     struct NoopDepthLookup;

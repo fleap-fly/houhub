@@ -21,53 +21,37 @@
 //!    and would turn "bring my config over" into "make this machine a clone".
 
 use chrono::Utc;
-
 use futures::future::BoxFuture;
-
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, DatabaseTransaction,
     EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
 };
-
 use serde::de::DeserializeOwned;
-
 use serde::{Deserialize, Serialize};
-
 use serde_json::{Map, Value};
 
 use super::portable_keys::{is_portable_key, PORTABLE_PREFERENCE_KEYS};
-
 use crate::acp::delegation::types::AgentDelegationDefaults;
-
 use crate::app_error::AppCommandError;
-
 use crate::db::entities::{
     agent_setting, app_metadata, custom_agent, model_provider, quick_message, work_task_template,
 };
-
 use crate::db::service::{app_metadata_service, assistant_service};
-
 use crate::models::{
     AgentType, AssistantAgentConfig, AssistantAvatar, AssistantDraft, AssistantLabelSnapshot,
 };
 
 pub const DOMAIN_MODEL_PROVIDERS: &str = "modelProviders";
-
 pub const DOMAIN_AGENT_SETTINGS: &str = "agentSettings";
-
 pub const DOMAIN_CUSTOM_AGENTS: &str = "customAgents";
-
 pub const DOMAIN_ASSISTANTS: &str = "assistants";
-
 pub const DOMAIN_QUICK_MESSAGES: &str = "quickMessages";
-
 pub const DOMAIN_TASK_TEMPLATES: &str = "taskTemplates";
-
 pub const DOMAIN_PREFERENCES: &str = "preferences";
+pub const DOMAIN_APPEARANCE: &str = "appearance";
 
 type CollectFn =
     for<'a> fn(&'a DatabaseConnection) -> BoxFuture<'a, Result<Value, AppCommandError>>;
-
 type ApplyFn = for<'a> fn(
     &'a DatabaseTransaction,
     &'a Value,
@@ -90,9 +74,7 @@ impl From<usize> for DomainApplied {
         }
     }
 }
-
 type ValidateFn = fn(&Value) -> Result<(), AppCommandError>;
-
 type CountFn = fn(&Value) -> usize;
 
 /// One configuration domain: how it is read out of the local database, how it
@@ -174,6 +156,15 @@ pub const CONFIG_DOMAINS: &[ConfigDomain] = &[
         validate: validate_preferences,
         count: count_portable_preferences,
         apply: apply_preferences,
+    },
+    // The webview's localStorage appearance settings, via their database
+    // mirror — see `appearance`.
+    ConfigDomain {
+        id: DOMAIN_APPEARANCE,
+        collect: super::appearance::collect_appearance,
+        validate: super::appearance::validate_appearance,
+        count: super::appearance::count_appearance,
+        apply: super::appearance::apply_appearance,
     },
 ];
 
@@ -258,10 +249,7 @@ fn encode<T: Serialize>(rows: Vec<T>) -> Result<Value, AppCommandError> {
     })
 }
 
-fn decode_rows<T: DeserializeOwned>(
-    domain: &str,
-    value: &Value,
-) -> Result<Vec<T>, AppCommandError> {
+fn decode_rows<T: DeserializeOwned>(domain: &str, value: &Value) -> Result<Vec<T>, AppCommandError> {
     // A domain missing from an older snapshot is not an error; it simply
     // carries nothing.
     if value.is_null() {
@@ -286,12 +274,6 @@ pub struct ModelProviderDto {
     pub agent_type: String,
     #[serde(default)]
     pub model: Option<String>,
-    /// The provider's discovered/edited model list. HouHub-only column: it
-    /// backs the agent-side model picker, so it has to travel with the rest of
-    /// the provider row for a synced machine to offer the same models.
-    /// `default` keeps snapshots written before the column existed readable.
-    #[serde(default)]
-    pub models_json: String,
 }
 
 fn collect_model_providers(
@@ -312,7 +294,6 @@ fn collect_model_providers(
                     agent_types_json: m.agent_types_json,
                     agent_type: m.agent_type,
                     model: m.model,
-                    models_json: m.models_json,
                 })
                 .collect::<Vec<_>>(),
         )
@@ -353,11 +334,6 @@ fn apply_model_providers<'a>(
                     active.api_key = Set(dto.api_key);
                     active.agent_types_json = Set(dto.agent_types_json);
                     active.model = Set(dto.model);
-                    // An older snapshot carries no model list; leaving the
-                    // local column alone beats blanking a machine's picker.
-                    if !dto.models_json.is_empty() {
-                        active.models_json = Set(dto.models_json);
-                    }
                     active.updated_at = Set(now);
                     active.update(tx).await.map_err(db_err)?;
                 }
@@ -368,13 +344,12 @@ fn apply_model_providers<'a>(
                         api_url: Set(dto.api_url),
                         api_key: Set(dto.api_key),
                         agent_types_json: Set(dto.agent_types_json),
+                        // HouHub stores the model catalogue alongside the
+                        // provider; an imported provider starts empty and the
+                        // gateway sync fills it.
+                        models_json: Set("[]".to_string()),
                         agent_type: Set(dto.agent_type),
                         model: Set(dto.model),
-                        models_json: Set(if dto.models_json.is_empty() {
-                            "[]".to_string()
-                        } else {
-                            dto.models_json
-                        }),
                         created_at: Set(now),
                         updated_at: Set(now),
                     }
@@ -1109,10 +1084,7 @@ mod tests {
         mixed.insert(portable.to_string(), Value::from("kept"));
         // Not on the allowlist: refused on the way in, so it must not be
         // counted on the way out.
-        mixed.insert(
-            "definitely_not_portable".to_string(),
-            Value::from("dropped"),
-        );
+        mixed.insert("definitely_not_portable".to_string(), Value::from("dropped"));
         // On the allowlist but not a string — preferences are stored as text,
         // and the applier skips anything else rather than stringifying it.
         mixed.insert("appearance_zoom_level".to_string(), Value::from(7));

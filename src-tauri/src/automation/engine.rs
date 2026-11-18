@@ -12,50 +12,34 @@
 //!   `sweep_idle` already skips (it only reaps `Connected`).
 
 use std::collections::HashMap;
-
 use std::path::{Path, PathBuf};
-
 use std::sync::{Arc, OnceLock};
-
 use std::time::Duration;
 
 use chrono::Utc;
-
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
-
 use tokio::sync::broadcast::error::RecvError;
-
 use tokio::sync::Mutex;
-
 use tokio::time::MissedTickBehavior;
+use tokio_util::sync::CancellationToken;
 
 use crate::acp::manager::ConnectionManager;
-
+use crate::acp::turn_end_hold;
 use crate::acp::types::{AcpEvent, EventEnvelope, PromptInputBlock};
-
 use crate::acp::InternalEventBus;
-
 use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
-
 use crate::commands::conversations::{create_conversation_core, emit_conversation_upsert};
-
 use crate::commands::folders::{
     emit_folder_upsert, get_folder_core, git_checkout, git_is_clean, git_list_branches,
     git_worktree_add, open_worktree_folder_core, resolve_worktree_folder_core,
 };
-
 use crate::db::entities::conversation::{self, ConversationStatus};
-
 use crate::db::service::{automation_service, conversation_service};
-
 use crate::db::AppDatabase;
-
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
-
 use crate::models::{
     AgentType, AutomationConfig, AutomationInfo, AutomationRunStatus, IsolationMode,
 };
-
 use crate::web::event_bridge::{
     emit_event, AutomationChange, EventEmitter, AUTOMATION_CHANGED_EVENT,
 };
@@ -73,7 +57,6 @@ const SCHEDULER_INTERVAL_SECS: u64 = 30;
 
 /// Run-history prune cadence + retention window.
 const PRUNE_INTERVAL_SECS: u64 = 6 * 60 * 60;
-
 const RUN_RETENTION_DAYS: i64 = 30;
 
 static ENGINE: OnceLock<Arc<AutomationEngine>> = OnceLock::new();
@@ -96,6 +79,18 @@ pub fn engine() -> Option<Arc<AutomationEngine>> {
     ENGINE.get().cloned()
 }
 
+/// A run held open for its agent's background work (see
+/// [`AutomationEngine::held`]).
+struct HeldRun {
+    /// Ends the wait early: a later turn on the connection that did not end
+    /// normally.
+    stop: CancellationToken,
+    /// The turns that ended on the connection after the held one.
+    later: turn_end_hold::LaterTurns,
+    /// The waiter is settling the run; later turns no longer change it.
+    settling: bool,
+}
+
 pub struct AutomationEngine {
     db: AppDatabase,
     manager: ConnectionManager,
@@ -107,6 +102,13 @@ pub struct AutomationEngine {
     /// restart — which is why boot reconcile + the conversation-status backstop
     /// exist.
     index: Arc<Mutex<HashMap<String, (i32, i32)>>>,
+    /// Connections whose run's turn ended while the agent still had work going
+    /// (a background shell, the turn Claude Code starts on its own to read it,
+    /// a delegation), held open instead of settled — settling ends the
+    /// connection and the work with it (see `acp::turn_end_hold`). The hold's
+    /// waiter settles the run once that work is done, and drops the entry only
+    /// after that settle.
+    held: Arc<Mutex<HashMap<String, HeldRun>>>,
     /// Per-automation fire lock. Serializes the overlap-check + run-row insert (and
     /// the whole launch) so a manual run-now, a scheduled fire, and a double-click
     /// can't all pass `has_active_run` and start duplicate concurrent runs.
@@ -174,6 +176,7 @@ pub fn build_engine(
         bus,
         data_dir,
         index: Arc::new(Mutex::new(HashMap::new())),
+        held: Arc::new(Mutex::new(HashMap::new())),
         automation_locks: Arc::new(Mutex::new(HashMap::new())),
         root_locks: Arc::new(Mutex::new(HashMap::new())),
         _engine_lock: engine_lock,
@@ -204,13 +207,12 @@ fn engine_lock_path(data_dir: &Path) -> PathBuf {
 }
 
 /// Take an exclusive, non-blocking advisory lock on the engine lock file, held
-/// for the process lifetime. Uses the standard library's cross-platform file
-/// lock (`flock` on Unix, `LockFileEx` on Windows), so the single-engine
-/// invariant is enforced on every supported Rust toolchain and platform. The
-/// aggressive boot reconcile
-/// (every `running` row is treated as interrupted) is only sound when this
-/// process is the sole engine on the DB; the held lock is the proof of that. The
-/// OS releases it on exit/crash, so the next boot reconciles correctly.
+/// for the process lifetime. Uses the std cross-platform file lock (`flock` on
+/// Unix, `LockFileEx` on Windows), so the single-engine invariant is enforced on
+/// every platform. The aggressive boot reconcile (every `running` row is treated
+/// as interrupted) is only sound when this process is the sole engine on the DB;
+/// the held lock is the proof of that. The OS releases it on exit/crash, so the
+/// next boot reconciles correctly.
 fn acquire_engine_ownership(data_dir: &Path) -> Ownership {
     let path = engine_lock_path(data_dir);
     let file = match std::fs::OpenOptions::new()
@@ -255,9 +257,7 @@ pub async fn run_automation_engine(engine: Arc<AutomationEngine>) {
     // holding the exclusive data-dir lock (see `build_engine`), so a process
     // sharing the data dir never reaches this point against another's live runs.
     match automation_service::boot_reconcile_interrupted(&engine.db.conn).await {
-        Ok(n) if n > 0 => {
-            tracing::info!("[automation] boot reconcile failed {n} interrupted run(s)")
-        }
+        Ok(n) if n > 0 => tracing::info!("[automation] boot reconcile failed {n} interrupted run(s)"),
         Ok(_) => {}
         Err(e) => tracing::warn!("[automation] boot reconcile error: {e}"),
     }
@@ -353,21 +353,16 @@ impl AutomationEngine {
             .await
             .map_err(|e| e.to_string())?
         {
-            let _ = automation_service::record_skipped_run(
-                &self.db.conn,
-                automation_id,
-                trigger,
-                scheduled_for,
-            )
-            .await;
+            let _ =
+                automation_service::record_skipped_run(&self.db.conn, automation_id, trigger, scheduled_for)
+                    .await;
             self.emit(AutomationChange::Upsert { id: automation_id });
             return Err("previous run still active".to_string());
         }
 
-        let run =
-            automation_service::start_run(&self.db.conn, automation_id, trigger, scheduled_for)
-                .await
-                .map_err(|e| e.to_string())?;
+        let run = automation_service::start_run(&self.db.conn, automation_id, trigger, scheduled_for)
+            .await
+            .map_err(|e| e.to_string())?;
         // Broadcast the running row immediately so every client sees it the
         // instant it exists — `launch` can take seconds (worktree add + agent
         // spawn) before it re-emits RunStarted with the live "View conversation"
@@ -434,10 +429,9 @@ impl AutomationEngine {
         };
         // The command core (not the bare service) so the task board gets its
         // `task://changed` broadcast and the work-task pump its nudge for free.
-        let info =
-            crate::commands::work_task::work_task_create_core(&self.emitter, &self.db, draft)
-                .await
-                .map_err(|e| e.to_string())?;
+        let info = crate::commands::work_task::work_task_create_core(&self.emitter, &self.db, draft)
+            .await
+            .map_err(|e| e.to_string())?;
 
         let settled = automation_service::settle_run(
             &self.db.conn,
@@ -538,13 +532,17 @@ impl AutomationEngine {
             .await
             .map_err(|e| e.to_string())?;
 
-        // Name the run after its automation, not the repeated prompt. Lock the
-        // seed before broadcasting the row so auto-title backfill cannot replace
-        // it with the agent's session-file title.
+        // Create the conversation row, then adopt it in send_prompt (Branch A).
+        // Named after the AUTOMATION, not its prompt — the same name the
+        // enqueue-a-task branch already gives the card it files, and the only
+        // label that says which automation this run belongs to. Locked right
+        // after, so the per-turn auto-title backfill can't swap it for whatever
+        // the agent's session file parses to (issue #495). A prompt-derived
+        // title was no more distinguishing anyway: the prompt is fixed, so
+        // every run of an automation carried the identical one.
         let title = first_chars(&auto.name, 80);
         let conversation_id =
-            match create_conversation_core(&self.db.conn, cwd.folder_id, agent_type, Some(title))
-                .await
+            match create_conversation_core(&self.db.conn, cwd.folder_id, agent_type, Some(title)).await
             {
                 Ok(id) => id,
                 Err(e) => {
@@ -552,7 +550,10 @@ impl AutomationEngine {
                     return Err(e.to_string());
                 }
             };
-
+        // Strictly before the upsert below: that broadcast is how any client
+        // first learns this id, so locking first makes a backfill on this row
+        // impossible rather than merely unlikely. Failing to lock only costs
+        // the nice title — never the run.
         if let Err(e) = conversation_service::lock_title(&self.db.conn, conversation_id).await {
             tracing::warn!(
                 "[automation] run {run_id}: could not lock conversation {conversation_id} title: {e}"
@@ -768,7 +769,7 @@ impl AutomationEngine {
 
     // ── completion ────────────────────────────────────────────────────────────
 
-    async fn on_event(&self, env: &EventEnvelope) {
+    async fn on_event(self: &Arc<Self>, env: &EventEnvelope) {
         let AcpEvent::TurnComplete { stop_reason, .. } = &env.payload else {
             return;
         };
@@ -777,9 +778,110 @@ impl AutomationEngine {
         let Some((run_id, automation_id)) = entry else {
             return; // not an automation run
         };
-
-        let (status, status_str) = classify_stop_reason(stop_reason);
+        // A later turn on a connection already held for its agent's background
+        // work (one Grok started on its own, or a prompt sent to the session):
+        // the waiter settles the run — with this turn's answer, if it is the
+        // newest, and as this turn ended, if it did not end normally.
+        if self.held.lock().await.contains_key(&conn_id) {
+            let reply = turn_end_hold::last_turn_reply(&self.manager, &conn_id).await;
+            let mut held = self.held.lock().await;
+            if let Some(run) = held.get_mut(&conn_id).filter(|run| !run.settling) {
+                if run.later.record(stop_reason, reply) {
+                    run.stop.cancel();
+                }
+            }
+            return;
+        }
         let summary = self.capture_summary(&conn_id).await;
+        if let Some(timing) = turn_end_hold::HoldTiming::from_env() {
+            if let Some(probe) =
+                turn_end_hold::should_hold(&self.manager, &conn_id, stop_reason).await
+            {
+                self.hold_run(
+                    conn_id,
+                    (run_id, automation_id),
+                    stop_reason.clone(),
+                    summary,
+                    timing,
+                    probe.turn_ended_at(),
+                )
+                .await;
+                return;
+            }
+        }
+        self.settle_turn(&conn_id, run_id, automation_id, stop_reason, summary)
+            .await;
+    }
+
+    /// Hold a run whose turn ended with work still going (see
+    /// [`AutomationEngine::held`]), and settle it from the background once that
+    /// work is done — with the answer the agent gave after reading its result.
+    /// A cancel meanwhile settles the run itself and drops its index entry,
+    /// which tells the waiter there is nothing left to settle.
+    async fn hold_run(
+        self: &Arc<Self>,
+        conn_id: String,
+        (run_id, automation_id): (i32, i32),
+        stop_reason: String,
+        summary: Option<String>,
+        timing: turn_end_hold::HoldTiming,
+        since: chrono::DateTime<Utc>,
+    ) {
+        tracing::info!(
+            "[automation] run {run_id} turn ended with work still going; holding \
+             connection={conn_id} until it finishes"
+        );
+        let stop = CancellationToken::new();
+        self.held.lock().await.insert(
+            conn_id.clone(),
+            HeldRun {
+                stop: stop.clone(),
+                later: turn_end_hold::LaterTurns::default(),
+                settling: false,
+            },
+        );
+        let engine = Arc::clone(self);
+        tokio::spawn(async move {
+            let result =
+                turn_end_hold::wait_until_settled(&engine.manager, &conn_id, timing, &stop).await;
+            // Still marked held while it settles: the reconcile tick, seeing
+            // the connection gone, would otherwise settle the run from the
+            // conversation first, without the stop reason or the reply.
+            let later = match engine.held.lock().await.get_mut(&conn_id) {
+                Some(run) => {
+                    run.settling = true;
+                    std::mem::take(&mut run.later)
+                }
+                None => turn_end_hold::LaterTurns::default(),
+            };
+            let stop_reason = later.ended.clone().unwrap_or(stop_reason);
+            tracing::info!(
+                "[automation] run {run_id} hold on connection={conn_id} ended: {} ({stop_reason})",
+                result.outcome.as_str()
+            );
+            if engine.index.lock().await.contains_key(&conn_id) {
+                let summary = match result.latest_reply(since, &later) {
+                    Some(reply) => Some(reply),
+                    None => engine.capture_summary(&conn_id).await.or(summary),
+                };
+                engine
+                    .settle_turn(&conn_id, run_id, automation_id, &stop_reason, summary)
+                    .await;
+            } // else canceled meanwhile: the cancel settled the run
+            engine.held.lock().await.remove(&conn_id);
+        });
+    }
+
+    /// Settle a run from how its turn ended, and let its connection go.
+    async fn settle_turn(
+        &self,
+        conn_id: &str,
+        run_id: i32,
+        automation_id: i32,
+        stop_reason: &str,
+        summary: Option<String>,
+    ) {
+        let (status, status_str) = classify_stop_reason(stop_reason);
         let error = if status == AutomationRunStatus::Failed {
             Some(format!("agent stopped: {stop_reason}"))
         } else {
@@ -790,7 +892,7 @@ impl AutomationEngine {
             &self.db.conn,
             run_id,
             status,
-            Some(stop_reason.clone()),
+            Some(stop_reason.to_string()),
             error,
             summary,
         )
@@ -798,8 +900,8 @@ impl AutomationEngine {
 
         // One prompt, one turn, then disconnect (last_assistant_text is cleared
         // at the next turn start, so an automation connection is never reused).
-        self.index.lock().await.remove(&conn_id);
-        let _ = self.manager.disconnect(&conn_id).await;
+        self.index.lock().await.remove(conn_id);
+        let _ = self.manager.disconnect(conn_id).await;
 
         if let Ok(true) = settled {
             self.emit(AutomationChange::RunSettled {
@@ -849,6 +951,11 @@ impl AutomationEngine {
                 // settling here from coarse conversation status would race on_event
                 // and discard stop_reason fidelity (and could mislabel a cancel).
                 if self.manager.get_state_and_emitter(conn_id).await.is_some() {
+                    continue;
+                }
+                // Held for its background work: the waiter sees the connection
+                // go and settles the run itself.
+                if self.held.lock().await.contains_key(conn_id) {
                     continue;
                 }
                 // Connection gone but still Running: the TurnComplete can never
@@ -1189,10 +1296,7 @@ mod tests {
     fn worktree_names_carry_ids() {
         assert_eq!(basename("/home/me/repo"), "repo");
         assert_eq!(basename("/home/me/repo/"), "repo");
-        assert_eq!(
-            sibling_path("/home/me/repo", "repo-automation-3-run-7"),
-            "/home/me/repo-automation-3-run-7"
-        );
+        assert_eq!(sibling_path("/home/me/repo", "repo-automation-3-run-7"), "/home/me/repo-automation-3-run-7");
     }
 
     // Windows folders are registered with backslashes, so a `/`-only split
