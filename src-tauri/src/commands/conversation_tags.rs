@@ -45,18 +45,15 @@ impl From<TagError> for AppCommandError {
             TagError::EmptyName => {
                 AppCommandError::invalid_input(message).with_i18n(I18N_EMPTY_NAME, no_params())
             }
-            TagError::DuplicateName(name) => AppCommandError::already_exists(message).with_i18n(
-                I18N_DUPLICATE_NAME,
-                BTreeMap::from([("name".to_string(), name)]),
-            ),
+            TagError::DuplicateName(name) => AppCommandError::already_exists(message)
+                .with_i18n(I18N_DUPLICATE_NAME, BTreeMap::from([("name".to_string(), name)])),
             TagError::InvalidColor(_) => {
                 AppCommandError::invalid_input(message).with_i18n(I18N_INVALID_COLOR, no_params())
             }
             TagError::FolderNotTaggable(_) => AppCommandError::invalid_input(message)
                 .with_i18n(I18N_FOLDER_NOT_TAGGABLE, no_params()),
-            TagError::NotApplicable { .. } => {
-                AppCommandError::invalid_input(message).with_i18n(I18N_NOT_APPLICABLE, no_params())
-            }
+            TagError::NotApplicable { .. } => AppCommandError::invalid_input(message)
+                .with_i18n(I18N_NOT_APPLICABLE, no_params()),
             TagError::TagNotFound(_) => {
                 AppCommandError::not_found(message).with_i18n(I18N_TAG_NOT_FOUND, no_params())
             }
@@ -100,9 +97,13 @@ pub async fn update_conversation_tag_core(
     name: Option<String>,
     color: Option<String>,
 ) -> Result<ConversationTagDetail, AppCommandError> {
-    let tag =
-        conversation_tag_service::update_tag(&db.conn, tag_id, name.as_deref(), color.as_deref())
-            .await?;
+    let tag = conversation_tag_service::update_tag(
+        &db.conn,
+        tag_id,
+        name.as_deref(),
+        color.as_deref(),
+    )
+    .await?;
     emit_tag_change(emitter, ConversationTagChange::Upsert { tag: tag.clone() });
     Ok(tag)
 }
@@ -209,7 +210,7 @@ pub async fn create_conversation_tag(
     name: String,
     color: String,
 ) -> Result<ConversationTagDetail, AppCommandError> {
-    create_conversation_tag_core(&EventEmitter::Tauri(app), &db, folder_id, name, color).await
+    create_conversation_tag_core(&EventEmitter::from_app(&app), &db, folder_id, name, color).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -221,7 +222,7 @@ pub async fn update_conversation_tag(
     name: Option<String>,
     color: Option<String>,
 ) -> Result<ConversationTagDetail, AppCommandError> {
-    update_conversation_tag_core(&EventEmitter::Tauri(app), &db, tag_id, name, color).await
+    update_conversation_tag_core(&EventEmitter::from_app(&app), &db, tag_id, name, color).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -231,7 +232,7 @@ pub async fn delete_conversation_tag(
     db: State<'_, AppDatabase>,
     tag_id: i32,
 ) -> Result<(), AppCommandError> {
-    delete_conversation_tag_core(&EventEmitter::Tauri(app), &db, tag_id).await
+    delete_conversation_tag_core(&EventEmitter::from_app(&app), &db, tag_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -241,7 +242,7 @@ pub async fn reorder_conversation_tags(
     db: State<'_, AppDatabase>,
     tag_ids: Vec<i32>,
 ) -> Result<(), AppCommandError> {
-    reorder_conversation_tags_core(&EventEmitter::Tauri(app), &db, tag_ids).await
+    reorder_conversation_tags_core(&EventEmitter::from_app(&app), &db, tag_ids).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -253,7 +254,7 @@ pub async fn update_conversation_tags(
     add: Vec<i32>,
     remove: Vec<i32>,
 ) -> Result<DbConversationSummary, AppCommandError> {
-    update_conversation_tags_core(&EventEmitter::Tauri(app), &db, conversation_id, add, remove)
+    update_conversation_tags_core(&EventEmitter::from_app(&app), &db, conversation_id, add, remove)
         .await
 }
 
@@ -273,7 +274,7 @@ pub async fn update_conversation_branch_tag(
     enabled: bool,
     color: String,
 ) -> Result<ConversationBranchTag, AppCommandError> {
-    update_conversation_branch_tag_core(&EventEmitter::Tauri(app), &db, enabled, color).await
+    update_conversation_branch_tag_core(&EventEmitter::from_app(&app), &db, enabled, color).await
 }
 
 #[cfg(test)]

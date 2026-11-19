@@ -1,11 +1,22 @@
 "use client"
 
 import { useEffect, useState, type CSSProperties } from "react"
-
-import { usePlatform } from "@/hooks/use-platform"
 import { isDesktop } from "@/lib/platform"
-
+import { usePlatform } from "@/hooks/use-platform"
 import { WINDOW_CONTROLS_WIDTH } from "./window-controls"
+
+/**
+ * Invisible edge/corner resize handles for undecorated Linux windows.
+ *
+ * Only Linux needs this: macOS keeps native resizing via the overlay title
+ * bar, and Windows gets invisible resize borders from Tauri's WndProc hook.
+ * Undecorated GTK windows, however, lose edge resizing entirely, so we
+ * reproduce it by initiating a window-manager resize drag on mouse-down.
+ *
+ * Mounted once at the app root; it self-guards and renders nothing unless the
+ * current window is a resizable, non-maximized Linux desktop window. Pet
+ * windows (resizable: false) therefore get no grips.
+ */
 
 type ResizeDir =
   | "North"
@@ -16,12 +27,23 @@ type ResizeDir =
   | "SouthWest"
   | "SouthEast"
 
+/** Edge strip thickness — matches the feel of native invisible resize borders. */
 const EDGE = 4
+/** Corner hit-zone size. */
 const CORNER = 14
+/**
+ * Height of the window-controls strip — always h-8 (2rem), even when the title
+ * bar itself is h-11 at narrow widths. The right edge starts below it. Uses rem
+ * (not a fixed 32px) so it tracks the app zoom level (root font-size, set by
+ * appearance-script); a px value would let the grip overlap the close button at
+ * zoom levels above 100%.
+ */
 const CONTROLS_HEIGHT = "2rem"
 
 async function beginResize(dir: ResizeDir) {
   try {
+    // `ResizeDirection` is a string-union type in @tauri-apps/api; the method
+    // accepts the literal directly (our `ResizeDir` values match it exactly).
     const { getCurrentWindow } = await import("@tauri-apps/api/window")
     await getCurrentWindow().startResizeDragging(dir)
   } catch (err) {
@@ -30,6 +52,8 @@ async function beginResize(dir: ResizeDir) {
 }
 
 const GRIPS: { dir: ResizeDir; cursor: string; style: CSSProperties }[] = [
+  // Edges. The top edge stops before the controls strip so the close button
+  // stays fully clickable; the right edge starts below the controls bar.
   {
     dir: "North",
     cursor: "ns-resize",
@@ -50,6 +74,7 @@ const GRIPS: { dir: ResizeDir; cursor: string; style: CSSProperties }[] = [
     cursor: "ew-resize",
     style: { top: CONTROLS_HEIGHT, bottom: 0, right: 0, width: EDGE },
   },
+  // Corners (NorthEast is omitted — the window controls occupy that corner).
   {
     dir: "NorthWest",
     cursor: "nwse-resize",
@@ -73,6 +98,7 @@ export function WindowResizeGrips() {
 
   useEffect(() => {
     if (!isLinux || !isDesktop()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- browser-only isDesktop() read after mount (hydration-safe)
       setEnabled(false)
       return
     }
@@ -82,11 +108,12 @@ export function WindowResizeGrips() {
 
     void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
       if (disposed) return
-      const appWindow = getCurrentWindow()
+      const win = getCurrentWindow()
 
+      // Non-resizable windows (pet, pet-panel) get no grips.
       let resizable = true
       try {
-        resizable = await appWindow.isResizable()
+        resizable = await win.isResizable()
       } catch {
         resizable = true
       }
@@ -97,7 +124,7 @@ export function WindowResizeGrips() {
 
       const sync = async () => {
         try {
-          const maximized = await appWindow.isMaximized()
+          const maximized = await win.isMaximized()
           if (!disposed) setEnabled(!maximized)
         } catch {
           if (!disposed) setEnabled(true)
@@ -105,7 +132,7 @@ export function WindowResizeGrips() {
       }
 
       await sync()
-      appWindow
+      win
         .onResized(() => void sync())
         .then((u) => {
           if (disposed) u()
@@ -131,9 +158,9 @@ export function WindowResizeGrips() {
           key={grip.dir}
           className="pointer-events-auto absolute"
           style={{ ...grip.style, cursor: grip.cursor }}
-          onMouseDown={(event) => {
-            if (event.button !== 0) return
-            event.preventDefault()
+          onMouseDown={(e) => {
+            if (e.button !== 0) return
+            e.preventDefault()
             void beginResize(grip.dir)
           }}
         />

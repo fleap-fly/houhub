@@ -9,14 +9,14 @@ use crate::app_error::AppCommandError;
 use crate::db::service::app_metadata_service;
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
-use crate::models::{
-    AvailableTerminalShells, SystemLanguageSettings, SystemProxySettings, SystemTerminalSettings,
-    TerminalShellOption,
-};
 #[cfg(feature = "tauri-runtime")]
 use crate::models::{
     CloseWindowBehavior, SystemAutostartSettings, SystemCloseBehaviorSettings,
     SystemCloseBehaviorSettingsView, SystemRenderingSettings,
+};
+use crate::models::{
+    AvailableTerminalShells, SystemLanguageSettings, SystemProxySettings, SystemTerminalSettings,
+    TerminalShellOption,
 };
 use crate::network::proxy;
 #[cfg(feature = "tauri-runtime")]
@@ -201,10 +201,7 @@ fn shell_exists(value: &str) -> bool {
 /// with launches that predate this setting). So the "system default" row is the
 /// one case where this line can name a shell an agent's command would not use.
 pub(crate) fn resolve_effective_shell(default_shell: Option<&str>) -> String {
-    match default_shell
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    match default_shell.map(str::trim).filter(|value| !value.is_empty()) {
         None => resolve_shell(),
         Some(selected) => resolve_shell_path(selected).unwrap_or_else(|| selected.to_string()),
     }
@@ -336,9 +333,8 @@ pub async fn apply_persisted_terminal_settings(
     }
 }
 
-/// Persist, apply, and broadcast the default shell through one shared path.
-/// This keeps desktop and hosted workspace updates in sync with connections
-/// that are already alive.
+/// Persist, apply, and broadcast the default shell in one path shared by the
+/// desktop command and web handler.
 pub(crate) async fn set_system_terminal_settings_core(
     conn: &DatabaseConnection,
     config: &TerminalShellRuntimeConfig,
@@ -390,7 +386,8 @@ static CLOSE_BEHAVIOR_CACHE: std::sync::atomic::AtomicU8 =
 /// while the dialog is up, and every click re-enters `CloseRequested` — without
 /// this the user stacks a dialog per click and has to dismiss all of them.
 #[cfg(feature = "tauri-runtime")]
-static CLOSE_PROMPT_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CLOSE_PROMPT_OPEN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// When the outstanding claim was taken, so an unanswered one can expire.
 #[cfg(feature = "tauri-runtime")]
@@ -464,8 +461,7 @@ pub(crate) fn store_close_behavior_cache(behavior: CloseWindowBehavior) {
 pub(crate) async fn load_system_close_behavior_settings(
     conn: &DatabaseConnection,
 ) -> SystemCloseBehaviorSettings {
-    let raw = match app_metadata_service::get_value(conn, SYSTEM_CLOSE_BEHAVIOR_SETTINGS_KEY).await
-    {
+    let raw = match app_metadata_service::get_value(conn, SYSTEM_CLOSE_BEHAVIOR_SETTINGS_KEY).await {
         Ok(Some(raw)) => raw,
         Ok(None) => return SystemCloseBehaviorSettings::default(),
         Err(err) => {
@@ -672,8 +668,11 @@ pub async fn resolve_close_request(
     match behavior {
         CloseWindowBehavior::Minimize => {
             if let Some(window) = tauri::Manager::get_webview_window(&app, "main") {
+                let handle = app.clone();
                 crate::commands::windows::with_macos_fullscreen_drained(&app, move || {
                     let _ = window.hide();
+                    // Closed as far as the next launch is concerned.
+                    crate::commands::workspace_windows::note_hidden(&handle, window.label());
                 });
             }
         }
@@ -769,7 +768,7 @@ pub async fn update_system_language_settings(
         .await
         .map_err(AppCommandError::from)?;
 
-    let emitter = crate::web::event_bridge::EventEmitter::Tauri(app);
+    let emitter = crate::web::event_bridge::EventEmitter::from_app(&app);
     crate::web::event_bridge::emit_event(
         &emitter,
         LANGUAGE_SETTINGS_UPDATED_EVENT,
@@ -787,8 +786,8 @@ pub async fn update_system_terminal_settings(
     app: tauri::AppHandle,
     manager: State<'_, ConnectionManager>,
 ) -> Result<SystemTerminalSettings, AppCommandError> {
-    let emitter = crate::web::event_bridge::EventEmitter::Tauri(app);
     let config = manager.terminal_shell_config();
+    let emitter = crate::web::event_bridge::EventEmitter::from_app(&app);
     set_system_terminal_settings_core(&db.conn, &config, &emitter, settings).await
 }
 
@@ -1162,10 +1161,7 @@ mod tests {
         // An IPv6 literal keeps its brackets — without them the address is
         // indistinguishable from a host and a port.
         assert_eq!(normalized_url("[::1]:7890"), "http://[::1]:7890");
-        assert_eq!(
-            normalized_url("  127.0.0.1:7890  "),
-            "http://127.0.0.1:7890"
-        );
+        assert_eq!(normalized_url("  127.0.0.1:7890  "), "http://127.0.0.1:7890");
     }
 
     /// The repaired value is the user's own string with a prefix, never the
@@ -1178,10 +1174,7 @@ mod tests {
             normalized_url("proxy.corp.com:8080/gateway"),
             "http://proxy.corp.com:8080/gateway"
         );
-        assert_eq!(
-            normalized_url("http://127.0.0.1:7890"),
-            "http://127.0.0.1:7890"
-        );
+        assert_eq!(normalized_url("http://127.0.0.1:7890"), "http://127.0.0.1:7890");
     }
 
     /// Re-running normalization over its own output must be a no-op: the value
@@ -1296,10 +1289,7 @@ mod tests {
         for blank in ["", " , ;\n", "，、 "] {
             let normalized =
                 normalize_proxy_settings(enabled_proxy_bypassing(blank)).expect("blank is valid");
-            assert_eq!(
-                normalized.no_proxy, None,
-                "{blank:?} leaves nothing to store"
-            );
+            assert_eq!(normalized.no_proxy, None, "{blank:?} leaves nothing to store");
         }
     }
 

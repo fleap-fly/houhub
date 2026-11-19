@@ -364,7 +364,9 @@ pub(crate) async fn dispatch_external_after_stage(
 /// Agents whose process could still be holding a transcript open. A torn-down
 /// or errored connection has no writer behind it, so counting it would
 /// downgrade a restore that was perfectly safe.
-async fn live_agent_names(connections: &crate::acp::manager::ConnectionManager) -> Vec<String> {
+async fn live_agent_names(
+    connections: &crate::acp::manager::ConnectionManager,
+) -> Vec<String> {
     // One call, not "list the map then ask about draining": `disconnect`
     // removes the map entry and registers the draining child under a single
     // lock, and only this query observes both under that same lock. Reading
@@ -596,7 +598,9 @@ pub fn discard_pending_restore_core(data_dir: &Path) -> Result<bool, AppCommandE
 /// `paths::*` resolvers (production), then delegates to
 /// [`apply_pending_restore_with_paths`]. Tests call the inner fn with temp
 /// paths so they never touch the real `~/.houhub`.
-pub fn apply_pending_restore_on_startup(data_dir: &Path) -> Result<RestoreApplied, std::io::Error> {
+pub fn apply_pending_restore_on_startup(
+    data_dir: &Path,
+) -> Result<RestoreApplied, std::io::Error> {
     apply_pending_restore_with_paths(data_dir, &LiveRoots::resolve(data_dir))
 }
 
@@ -627,8 +631,7 @@ pub(crate) fn apply_pending_restore_with_paths(
 
     tracing::info!(
         "[RESTORE] applying staged restore (backup app_version={}, migration={})",
-        pending.app_version,
-        pending.latest_migration
+        pending.app_version, pending.latest_migration
     );
 
     // The snapshot directory is DERIVED from the marker, so every retry of the
@@ -644,8 +647,29 @@ pub(crate) fn apply_pending_restore_with_paths(
     write_snapshot_manifest(&backup_dir, &pending.created_at, &units)?;
 
     let state_dir = staging.join(SWAP_STATE_DIR);
+    // Replacing HouHub's skill store happens under the skills lock, like every
+    // other write to it (another HouHub of this user may be writing there).
+    // Not had in time: nothing moves, and the next start tries again.
+    let skills_unit = units.iter().find(|unit| unit.id == "skills");
+    let _skills_lock = match skills_unit {
+        Some(_) => Some(crate::skills::startup::lock_for_restore().map_err(|err| {
+            std::io::Error::other(format!(
+                "{err}; the restore will be applied at the next start"
+            ))
+        })?),
+        None => None,
+    };
     for unit in &units {
         swap_unit(&state_dir, unit)?;
+    }
+    if let Some(unit) = skills_unit {
+        // The link record from before the restore knows the copies made
+        // since the backup; the startup reconcile then follows the disk.
+        if let Err(err) =
+            crate::skills::startup::absorb_record_after_restore(&unit.live, &unit.snapshot)
+        {
+            tracing::warn!("[RESTORE] skills link record: {err}");
+        }
     }
 
     // Commit only after a fully successful swap. On a mid-swap crash we return
@@ -1009,10 +1033,7 @@ async fn handle_external(
                 .await
                 .map_err(spawn_err)?
                 .map_err(AppCommandError::io)?;
-            Ok((
-                Some(dest.to_string_lossy().into_owned()),
-                Default::default(),
-            ))
+            Ok((Some(dest.to_string_lossy().into_owned()), Default::default()))
         }
         ExternalRestoreMode::OriginalLocations { on_conflict } => {
             let staged_c = staged_external.clone();
@@ -1046,22 +1067,19 @@ fn write_pending_marker(
     )
 }
 
-fn commit_pending_marker(data_dir: &Path, pending: &PendingRestore) -> Result<(), AppCommandError> {
-    let json = serde_json::to_vec_pretty(pending).map_err(|e| {
-        AppCommandError::task_execution_failed("Serialize restore marker")
-            .with_detail(e.to_string())
-    })?;
+fn commit_pending_marker(
+    data_dir: &Path,
+    pending: &PendingRestore,
+) -> Result<(), AppCommandError> {
+    let json = serde_json::to_vec_pretty(pending)
+        .map_err(|e| AppCommandError::task_execution_failed("Serialize restore marker").with_detail(e.to_string()))?;
     let marker = data_dir.join(PENDING_MARKER);
     // Atomic, no-clobber claim: `create_new` lets exactly one concurrent stage
     // commit. A second one fails with AlreadyExists rather than racing a rename
     // and silently committing a different staging dir. A crash mid-write leaves
     // a partial marker, which `apply_pending_restore_*` treats as malformed and
     // discards (its staging is then reaped by `cleanup_transient_dirs`).
-    let mut f = match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&marker)
-    {
+    let mut f = match OpenOptions::new().write(true).create_new(true).open(&marker) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(already_pending_error())
@@ -1107,11 +1125,7 @@ fn sanitize_stamp(rfc3339: &str) -> String {
 }
 
 fn emit(emitter: &EventEmitter, op_id: &str, phase: BackupPhase) {
-    emit_event(
-        emitter,
-        BACKUP_PROGRESS_EVENT,
-        BackupProgress::phase(op_id, phase),
-    );
+    emit_event(emitter, BACKUP_PROGRESS_EVENT, BackupProgress::phase(op_id, phase));
 }
 
 fn emit_progress(
@@ -1157,10 +1171,10 @@ mod tests {
     fn write_archive(dest: &Path, managed: Option<Vec<String>>, files: &[(&str, &[u8])]) {
         use super::super::manifest::{BACKUP_FORMAT_VERSION, BACKUP_KIND};
         let cancel = CancellationToken::new();
-        let scratch = dest
-            .parent()
-            .unwrap()
-            .join(format!("src-{}", uuid::Uuid::new_v4().simple()));
+        let scratch = dest.parent().unwrap().join(format!(
+            "src-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         std::fs::create_dir_all(&scratch).unwrap();
         let mut b = archive::ArchiveBuilder::create(dest).unwrap();
         let mut prog = archive::null_progress();
@@ -1206,9 +1220,15 @@ mod tests {
         std::fs::write(&transcript, b"KEEP-ME").unwrap();
 
         let cancel = CancellationToken::new();
-        stage_restore_core(&src, &data_dir, &EventEmitter::Noop, "lg", &cancel)
-            .await
-            .unwrap();
+        stage_restore_core(
+            &src,
+            &data_dir,
+                        &EventEmitter::Noop,
+            "lg",
+            &cancel,
+        )
+        .await
+        .unwrap();
 
         let staging = data_dir.join(STAGING_DIR).join("lg");
         assert!(
@@ -1233,11 +1253,7 @@ mod tests {
         let data_dir = dir.path();
         let staging = data_dir.join(STAGING_DIR).join("op1");
         std::fs::create_dir_all(staging.join(DB_STAGING_DIR)).unwrap();
-        std::fs::write(
-            staging.join(DB_STAGING_DIR).join(DB_STAGING_NAME),
-            b"NEW-DB",
-        )
-        .unwrap();
+        std::fs::write(staging.join(DB_STAGING_DIR).join(DB_STAGING_NAME), b"NEW-DB").unwrap();
         std::fs::create_dir_all(staging.join("uploads")).unwrap();
         std::fs::write(staging.join("uploads").join("a.txt"), b"A").unwrap();
         std::fs::create_dir_all(staging.join("acp-transcripts")).unwrap();
@@ -1281,11 +1297,7 @@ mod tests {
         let data_dir = dir.path();
         let staging = data_dir.join(STAGING_DIR).join("op1");
         std::fs::create_dir_all(staging.join(DB_STAGING_DIR)).unwrap();
-        std::fs::write(
-            staging.join(DB_STAGING_DIR).join(DB_STAGING_NAME),
-            b"NEW-DB",
-        )
-        .unwrap();
+        std::fs::write(staging.join(DB_STAGING_DIR).join(DB_STAGING_NAME), b"NEW-DB").unwrap();
         std::fs::create_dir_all(staging.join("pets")).unwrap();
         std::fs::write(staging.join("pets").join("evil.png"), b"SMUGGLED").unwrap();
 
@@ -1372,11 +1384,7 @@ mod tests {
 
         let staging = data_dir.join(STAGING_DIR).join("op1");
         std::fs::create_dir_all(staging.join(DB_STAGING_DIR)).unwrap();
-        std::fs::write(
-            staging.join(DB_STAGING_DIR).join(DB_STAGING_NAME),
-            b"NEW-DB",
-        )
-        .unwrap();
+        std::fs::write(staging.join(DB_STAGING_DIR).join(DB_STAGING_NAME), b"NEW-DB").unwrap();
         std::fs::create_dir_all(staging.join("uploads")).unwrap();
         std::fs::write(staging.join("uploads").join("new.png"), b"NEW").unwrap();
         write_marker(data_dir, &staging, &["uploads"]);
@@ -1426,11 +1434,7 @@ mod tests {
         let data_dir = dir.path();
         let staging = data_dir.join(STAGING_DIR).join("op1");
         std::fs::create_dir_all(staging.join(DB_STAGING_DIR)).unwrap();
-        std::fs::write(
-            staging.join(DB_STAGING_DIR).join(DB_STAGING_NAME),
-            b"NEW-DB",
-        )
-        .unwrap();
+        std::fs::write(staging.join(DB_STAGING_DIR).join(DB_STAGING_NAME), b"NEW-DB").unwrap();
         // Staged uploads still present: the copy into live succeeded, the
         // source removal did not.
         std::fs::create_dir_all(staging.join("uploads")).unwrap();
@@ -1444,17 +1448,16 @@ mod tests {
         let snap = data_dir.join(SAFETY_DIR).join(snapshot_dir_name(&marker));
         std::fs::create_dir_all(snap.join("uploads")).unwrap();
         std::fs::write(snap.join("uploads").join("old.png"), b"ORIGINAL").unwrap();
-        write_swap_state(
-            &staging.join(SWAP_STATE_DIR),
-            "uploads",
-            SwapState::BackedUp,
-        )
-        .unwrap();
+        write_swap_state(&staging.join(SWAP_STATE_DIR), "uploads", SwapState::BackedUp).unwrap();
 
         // Live uploads is the half-restored copy.
         let live_base = dir.path().join("live");
         std::fs::create_dir_all(live_base.join("uploads")).unwrap();
-        std::fs::write(live_base.join("uploads").join("new.png"), b"FROM-BACKUP").unwrap();
+        std::fs::write(
+            live_base.join("uploads").join("new.png"),
+            b"FROM-BACKUP",
+        )
+        .unwrap();
 
         apply_pending_restore_with_paths(data_dir, &LiveRoots::rooted_at(&live_base)).unwrap();
 
@@ -1500,8 +1503,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join(SAFETY_DIR);
         for name in [
-            "20260101-000000-deadbeef",  // legacy naming, oldest
-            "20260901-120000-op-newest", // current naming, newest
+            "20260101-000000-deadbeef",     // legacy naming, oldest
+            "20260901-120000-op-newest",    // current naming, newest
             "20260501-000000-op-middle",
         ] {
             std::fs::create_dir_all(root.join(name)).unwrap();
@@ -1528,7 +1531,12 @@ mod tests {
     }
 
     /// Build a rollback-capable snapshot directory by hand.
-    fn write_snapshot(data_dir: &Path, id: &str, present: &[&str], absent: &[&str]) -> PathBuf {
+    fn write_snapshot(
+        data_dir: &Path,
+        id: &str,
+        present: &[&str],
+        absent: &[&str],
+    ) -> PathBuf {
         let dir = data_dir.join(SAFETY_DIR).join(id);
         std::fs::create_dir_all(&dir).unwrap();
         let manifest = SnapshotManifest {
@@ -1597,8 +1605,7 @@ mod tests {
         std::fs::create_dir_all(snap.join(DB_STAGING_DIR)).unwrap();
         std::fs::write(snap.join(DB_STAGING_DIR).join(DB_STAGING_NAME), b"OLD-DB").unwrap();
         std::fs::write(
-            snap.join(DB_STAGING_DIR)
-                .join(format!("{DB_STAGING_NAME}-wal")),
+            snap.join(DB_STAGING_DIR).join(format!("{DB_STAGING_NAME}-wal")),
             b"OLD-WAL",
         )
         .unwrap();
@@ -1696,10 +1703,7 @@ mod tests {
             std::fs::read(side.join("claude").join("projects").join("x.jsonl")).unwrap(),
             b"TRANSCRIPT"
         );
-        assert_eq!(
-            staged.restored_external_path.as_deref(),
-            Some(downgrade.path.as_str())
-        );
+        assert_eq!(staged.restored_external_path.as_deref(), Some(downgrade.path.as_str()));
     }
 
     /// The escape hatch must not eat the parachute. A rollback's marker points
@@ -1837,11 +1841,7 @@ mod tests {
         std::fs::write(data_dir.join(format!("{db_name}-wal")), b"OLD-WAL").unwrap();
         let staging = data_dir.join(STAGING_DIR).join("op1");
         std::fs::create_dir_all(staging.join(DB_STAGING_DIR)).unwrap();
-        std::fs::write(
-            staging.join(DB_STAGING_DIR).join(DB_STAGING_NAME),
-            b"NEW-DB",
-        )
-        .unwrap();
+        std::fs::write(staging.join(DB_STAGING_DIR).join(DB_STAGING_NAME), b"NEW-DB").unwrap();
 
         let marker = PendingRestore {
             staging_dir: staging.to_string_lossy().into_owned(),

@@ -97,12 +97,29 @@ const LAUNCHER_VALUES: &[&str] = &[
 /// houhub's), except that a launcher value houhub sets on purpose stays.
 ///
 /// For a command that inherits houhub's environment: after `env_clear` this
-/// would add variables back. Does nothing outside an AppImage.
+/// would add variables back. Does nothing outside an AppImage — except that
+/// everywhere it also drops [`HOUHUB_ONLY`]: settings for houhub itself that
+/// no program it starts has any business with.
 pub fn restore(command: &mut Command) {
+    drop_houhub_only(command);
     if let Some(image) = Image::current() {
         image.restore_command(command, |key| std::env::var_os(key));
     }
 }
+
+/// Only the [`HOUHUB_ONLY`] half of [`restore`], for a spawn that keeps the
+/// rest of houhub's environment on purpose (`commands::local_command`).
+pub fn drop_houhub_only(command: &mut Command) {
+    for key in HOUHUB_ONLY {
+        command.env_remove(key);
+    }
+}
+
+/// houhub's own settings that never reach a program it starts, AppImage or
+/// not: HouHub Web's SRN sign-in (`srn::web::config`) — the public URL, the
+/// client ID and, above all, the path of the client secret's file. Agents,
+/// terminals and their MCP servers run code the operator does not control.
+pub const HOUHUB_ONLY: &[&str] = crate::srn::web::config::CHILD_HIDDEN_ENV;
 
 /// [`restore`] for a tokio command.
 pub fn restore_tokio(command: &mut tokio::process::Command) {
@@ -112,6 +129,9 @@ pub fn restore_tokio(command: &mut tokio::process::Command) {
 /// [`restore`] for the built-in terminal's shell, whose command carries a
 /// copy of the whole environment.
 pub fn restore_pty(command: &mut portable_pty::CommandBuilder) {
+    for key in HOUHUB_ONLY {
+        command.env_remove(key);
+    }
     if let Some(image) = Image::current() {
         image.restore_pty_command(command);
     }
@@ -522,13 +542,9 @@ mod tests {
             .iter_full_env_as_str()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        // Content, not order: which keys survive is the contract, while the
-        // order comes from `portable_pty`'s env storage (it changed between
-        // releases, and our lockfile resolves a different one than upstream's).
-        let keys: Vec<&str> = env.keys().map(String::as_str).collect();
         assert_eq!(
-            keys,
-            ["HOME", "HOUHUB_CLI", "LANG", "PATH", "XDG_DATA_DIRS"]
+            env.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["HOUHUB_CLI", "HOME", "LANG", "PATH", "XDG_DATA_DIRS"]
         );
         assert_eq!(
             env["PATH"],

@@ -53,16 +53,11 @@ export type SidebarSectionKey = (typeof SIDEBAR_SECTION_KEYS)[number]
  * list or the reorder menu. The Pinned section (when present) always stays on
  * top regardless.
  */
-export type SidebarSectionOrder =
-  | readonly SidebarSectionId[]
-  /** Legacy values kept readable for the existing sidebar settings surface. */
-  | "folders-first"
-  | "chats-first"
+export type SidebarSectionOrder = readonly SidebarSectionId[]
 
 /** Folders, then Chat, then Recent — the historical layout with the (newest)
  *  Recent section appended at the bottom. */
-export const DEFAULT_SECTION_ORDER: readonly SidebarSectionId[] =
-  SIDEBAR_SECTION_IDS
+export const DEFAULT_SECTION_ORDER: SidebarSectionOrder = SIDEBAR_SECTION_IDS
 
 /** Collapsed state of the top-level sidebar sections. Absent key = expanded
  *  (the default), so a fresh user sees every section open. */
@@ -87,6 +82,7 @@ export const SIDEBAR_NAV_ITEM_IDS = [
   "tasks",
   "forge",
   "canvas",
+  "harness",
 ] as const
 
 export type SidebarNavItemId = (typeof SIDEBAR_NAV_ITEM_IDS)[number]
@@ -124,9 +120,7 @@ function isSectionId(value: unknown): value is SidebarSectionId {
  *   user's existing top/bottom choice survives the upgrade.
  * - anything else (corrupt / absent) → {@link DEFAULT_SECTION_ORDER}.
  */
-export function normalizeSectionOrder(
-  value: unknown
-): readonly SidebarSectionId[] {
+export function normalizeSectionOrder(value: unknown): SidebarSectionOrder {
   if (value === "chats-first") return ["chats", "folders", "recent"]
   if (value === "folders-first") return DEFAULT_SECTION_ORDER
   if (!Array.isArray(value)) return DEFAULT_SECTION_ORDER
@@ -154,18 +148,11 @@ export function moveSectionInOrder(
   id: SidebarSectionId,
   delta: number
 ): SidebarSectionOrder {
-  const normalized = normalizeSectionOrder(order)
-  const source: SidebarSectionOrder =
-    Array.isArray(order) &&
-    order.length === normalized.length &&
-    order.every((entry, index) => entry === normalized[index])
-      ? order
-      : normalized
-  const from = normalized.indexOf(id)
-  if (from < 0) return source
+  const from = order.indexOf(id)
+  if (from < 0) return order
   const to = from + delta
-  if (to < 0 || to >= normalized.length || to === from) return source
-  const next: SidebarSectionId[] = normalized.slice()
+  if (to < 0 || to >= order.length || to === from) return order
+  const next = order.slice()
   next.splice(from, 1)
   next.splice(to, 0, id)
   return next
@@ -436,10 +423,7 @@ export function loadSectionOrder(): SidebarSectionOrder {
 export function saveSectionOrder(value: SidebarSectionOrder): void {
   if (typeof window === "undefined") return
   try {
-    localStorage.setItem(
-      SECTION_ORDER_KEY,
-      JSON.stringify(normalizeSectionOrder(value))
-    )
+    localStorage.setItem(SECTION_ORDER_KEY, JSON.stringify(value))
   } catch {
     /* ignore */
   }

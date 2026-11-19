@@ -210,7 +210,7 @@ pub async fn workbench_ai_send_message(
         session_id,
         query,
         request_id.unwrap_or_default(),
-        crate::web::event_bridge::EventEmitter::Tauri(app),
+        crate::web::event_bridge::EventEmitter::from_app(&app),
     )
     .await
 }

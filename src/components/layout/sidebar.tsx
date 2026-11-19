@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react"
 import {
+  DraftingCompass,
   Crosshair,
   Eye,
   FolderSync,
@@ -28,6 +29,7 @@ import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions } from "@/contexts/tab-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
+import { useHarnessView } from "@/contexts/harness-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useFolderTabsStore } from "@/stores/folder-tabs-store"
@@ -35,8 +37,7 @@ import {
   SidebarConversationList,
   type SidebarConversationListHandle,
 } from "@/components/conversations/sidebar-conversation-list"
-import { CloudSessionsSidebarSection } from "@/components/houflow/cloud-sessions-sidebar-section"
-import { HouhubAccountMenu } from "@/components/layout/houhub-account-menu"
+import { HarnessUpdatesBadge } from "@/components/harness/harness-updates-badge"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -98,7 +99,7 @@ import {
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
 
-// Keyboard-shortcut hint at the trailing edge of the New chat / Search rows.
+// Keyboard-shortcut hint at the trailing edge of the New chat row.
 // Mirrors the folder count badge exactly — same chip (0.9375rem height,
 // 0.3125rem radius, bg-primary/10, text-primary, 0.625rem text) per the request
 // to match it. That pairing is also solidly legible (text-primary on
@@ -122,12 +123,13 @@ const RECENT_HIDDEN: ReadonlySet<SidebarSectionId> = new Set(["recent"])
 
 // Icon per optional nav row. The visibility checkboxes in the view-options menu
 // carry the same glyph as the row they switch, so that group reads as a mirror
-// of the nav block rather than three bare labels.
+// of the nav block rather than a column of bare labels.
 const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
   automations: Zap,
   tasks: ListTodo,
   forge: LayoutTemplate,
   canvas: MapIcon,
+  harness: DraftingCompass,
 }
 
 /**
@@ -178,6 +180,7 @@ export function Sidebar() {
   const { openNewConversationTab, openChatModeTab } = useTabActions()
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
+  const { updatesCount: harnessUpdates } = useHarnessView()
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
   const isMac = useIsMac()
   const { isMac: platformIsMac } = usePlatform()
@@ -191,10 +194,10 @@ export function Sidebar() {
   // rem-sized overlay buttons. Mobile has no overlay (the sidebar is a Drawer).
   const leftReserve = leftChromeReserve(platformIsMac && isDesktop(), zoomLevel)
 
-  // `showCompleted` defaults OFF and `showWorktrees` defaults ON (the mount
-  // effect below reconciles a persisted override). Each initial value matches
-  // its own default so the pre-hydration render doesn't flash as the stored
-  // preference is applied.
+  // `showCompleted` defaults OFF; `showWorktrees` and `showRecent` default ON
+  // (the mount effect below reconciles a persisted override). Each initial
+  // value matches its own default so the pre-hydration render doesn't flash as
+  // the stored preference is applied.
   const [showCompleted, setShowCompleted] = useState(false)
   const [showWorktrees, setShowWorktrees] = useState(true)
   const [showRecent, setShowRecent] = useState(true)
@@ -291,6 +294,9 @@ export function Sidebar() {
     saveSortMode(mode)
   }, [])
 
+  // Nudge one section up/down a slot. `moveSectionInOrder` returns the SAME
+  // array when the move would fall off an end, so a clamped nudge neither
+  // re-renders the list nor rewrites localStorage.
   const handleMoveSection = useCallback(
     (id: SidebarSectionId, delta: number) => {
       setSectionOrder((prev) => {
@@ -537,10 +543,16 @@ export function Sidebar() {
                 value={sortMode}
                 onValueChange={handleSetSortMode}
               >
-                <DropdownMenuRadioItem value="created">
+                <DropdownMenuRadioItem
+                  value="created"
+                  onSelect={(event) => event.preventDefault()}
+                >
                   {t("sortByCreatedAt")}
                 </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="updated">
+                <DropdownMenuRadioItem
+                  value="updated"
+                  onSelect={(event) => event.preventDefault()}
+                >
                   {t("sortByUpdatedAt")}
                 </DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
@@ -585,7 +597,7 @@ export function Sidebar() {
             "Navigation items" group — for a workspace that never uses one of
             them, this block is pure noise above the list. The routes stay
             reachable from the status bar's quick-actions menu either way.
-            All three close the mobile Drawer on the way out, like tapping a
+            They all close the mobile Drawer on the way out, like tapping a
             conversation card (handled by the list wrapper below) — otherwise the
             page they just opened stays hidden behind the sidebar. */}
         {isNavItemVisible(navItems, "automations") && (
@@ -654,6 +666,29 @@ export function Sidebar() {
             }}
           />
         )}
+        {isNavItemVisible(navItems, "harness") && (
+          <SidebarNavButton
+            icon={DraftingCompass}
+            label={t("harness")}
+            active={routeId === "harness"}
+            onClick={() => {
+              if (isMobile) toggle()
+              // Opens on the section the page was last on: which one that is
+              // lives in HarnessViewProvider, not in the route.
+              setRoute("harness")
+            }}
+            trailing={
+              harnessUpdates > 0 ? (
+                // Updates waiting (not a failure): the To-dos chip's primary
+                // tint.
+                <HarnessUpdatesBadge
+                  count={harnessUpdates}
+                  className="ml-auto"
+                />
+              ) : null
+            }
+          />
+        )}
       </div>
 
       {/* On mobile, clicking a conversation card auto-closes the Drawer */}
@@ -670,7 +705,6 @@ export function Sidebar() {
             : undefined
         }
       >
-        <CloudSessionsSidebarSection />
         <SidebarTagFilterBar filter={tagFilter} onChange={handleSetTagFilter} />
         <SidebarConversationList
           ref={listRef}
@@ -681,9 +715,6 @@ export function Sidebar() {
           sectionOrder={sectionOrder}
           tagFilter={tagFilter}
         />
-      </div>
-      <div className="shrink-0 border-t border-border/50 px-1.5 py-1.5">
-        <HouhubAccountMenu />
       </div>
     </aside>
   )

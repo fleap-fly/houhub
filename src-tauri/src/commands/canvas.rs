@@ -10,27 +10,18 @@
 //! response — so response/event arrival order cannot lose state.
 
 use serde::{Deserialize, Serialize};
-
 use std::sync::OnceLock;
-
 use tokio::sync::Mutex;
 
 use crate::app_error::AppCommandError;
-
 use crate::db::entities::canvas_node::CanvasNodeKind;
-
 use crate::db::error::DbError;
-
 use crate::db::service::canvas_service;
-
 use crate::db::AppDatabase;
-
 use crate::models::canvas::{
     CanvasBoard, CanvasBoardSummary, CanvasMutation, CanvasNode, CanvasSnapshot,
 };
-
 use crate::terminal::manager::TerminalManager;
-
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 /// Serializes each mutation's `commit → broadcast` PAIR. The service's
@@ -235,12 +226,14 @@ fn region_geometry(
     input: &GroupIntoRegionInput,
 ) -> Result<Option<canvas_service::RegionGeometry>, AppCommandError> {
     match (input.x, input.y, input.width, input.height) {
-        (Some(x), Some(y), Some(width), Some(height)) => Ok(Some(canvas_service::RegionGeometry {
-            x,
-            y,
-            width,
-            height,
-        })),
+        (Some(x), Some(y), Some(width), Some(height)) => {
+            Ok(Some(canvas_service::RegionGeometry {
+                x,
+                y,
+                width,
+                height,
+            }))
+        }
         (None, None, None, None) => Ok(None),
         _ => Err(AppCommandError::invalid_input(
             "a region frame needs x, y, width and height together",
@@ -537,6 +530,7 @@ pub async fn canvas_detach_member_core(
         revision: outcome.revision,
     })
 }
+
 
 /// The PTY id a `terminal` card owns. Mirrors `canvasTerminalId` in
 /// `canvas-model.ts` — the card spawns under this name, so the two spellings
@@ -852,7 +846,7 @@ pub async fn canvas_create_board(
     db: tauri::State<'_, AppDatabase>,
     input: CreateCanvasBoard,
 ) -> Result<CanvasBoard, AppCommandError> {
-    canvas_create_board_core(&EventEmitter::Tauri(app), &db, input).await
+    canvas_create_board_core(&EventEmitter::from_app(&app), &db, input).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -863,7 +857,7 @@ pub async fn canvas_update_board(
     board_id: i32,
     patch: CanvasBoardPatchInput,
 ) -> Result<CanvasBoard, AppCommandError> {
-    canvas_update_board_core(&EventEmitter::Tauri(app), &db, board_id, patch).await
+    canvas_update_board_core(&EventEmitter::from_app(&app), &db, board_id, patch).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -874,7 +868,7 @@ pub async fn canvas_delete_board(
     terminals: tauri::State<'_, TerminalManager>,
     board_id: i32,
 ) -> Result<CanvasMutation<Vec<i32>>, AppCommandError> {
-    canvas_delete_board_core(&EventEmitter::Tauri(app), &db, &terminals, board_id).await
+    canvas_delete_board_core(&EventEmitter::from_app(&app), &db, &terminals, board_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -884,7 +878,7 @@ pub async fn canvas_create_node(
     db: tauri::State<'_, AppDatabase>,
     input: CreateCanvasNode,
 ) -> Result<CanvasMutation<CanvasNode>, AppCommandError> {
-    canvas_create_node_core(&EventEmitter::Tauri(app), &db, input).await
+    canvas_create_node_core(&EventEmitter::from_app(&app), &db, input).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -894,7 +888,7 @@ pub async fn canvas_group_into_region(
     db: tauri::State<'_, AppDatabase>,
     input: GroupIntoRegionInput,
 ) -> Result<CanvasMutation<GroupIntoRegionResult>, AppCommandError> {
-    canvas_group_into_region_core(&EventEmitter::Tauri(app), &db, input).await
+    canvas_group_into_region_core(&EventEmitter::from_app(&app), &db, input).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -905,7 +899,7 @@ pub async fn canvas_update_node(
     node_id: i32,
     patch: CanvasNodePatchInput,
 ) -> Result<CanvasMutation<CanvasNode>, AppCommandError> {
-    canvas_update_node_core(&EventEmitter::Tauri(app), &db, node_id, patch).await
+    canvas_update_node_core(&EventEmitter::from_app(&app), &db, node_id, patch).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -915,7 +909,7 @@ pub async fn canvas_move_nodes(
     db: tauri::State<'_, AppDatabase>,
     moves: Vec<CanvasNodeMovePayload>,
 ) -> Result<CanvasMutation<Vec<CanvasNodeMovePayload>>, AppCommandError> {
-    canvas_move_nodes_core(&EventEmitter::Tauri(app), &db, moves).await
+    canvas_move_nodes_core(&EventEmitter::from_app(&app), &db, moves).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -928,15 +922,8 @@ pub async fn canvas_detach_member(
     x: f64,
     y: f64,
 ) -> Result<CanvasMutation<CanvasNode>, AppCommandError> {
-    canvas_detach_member_core(
-        &EventEmitter::Tauri(app),
-        &db,
-        region_id,
-        conversation_id,
-        x,
-        y,
-    )
-    .await
+    canvas_detach_member_core(&EventEmitter::from_app(&app), &db, region_id, conversation_id, x, y)
+        .await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -947,7 +934,7 @@ pub async fn canvas_delete_node(
     terminals: tauri::State<'_, TerminalManager>,
     node_id: i32,
 ) -> Result<CanvasMutation<()>, AppCommandError> {
-    canvas_delete_node_core(&EventEmitter::Tauri(app), &db, &terminals, node_id).await
+    canvas_delete_node_core(&EventEmitter::from_app(&app), &db, &terminals, node_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -958,7 +945,7 @@ pub async fn canvas_delete_nodes(
     terminals: tauri::State<'_, TerminalManager>,
     node_ids: Vec<i32>,
 ) -> Result<CanvasMutation<Vec<i32>>, AppCommandError> {
-    canvas_delete_nodes_core(&EventEmitter::Tauri(app), &db, &terminals, node_ids).await
+    canvas_delete_nodes_core(&EventEmitter::from_app(&app), &db, &terminals, node_ids).await
 }
 
 #[cfg(test)]
@@ -1018,7 +1005,9 @@ mod tests {
         canvas_delete_node_core(&emitter(), &db, &terminals, node.id)
             .await
             .expect("delete succeeds even when there is no shell to end");
-        assert!(terminals.kill(&canvas_terminal_id(node.id)).is_err());
+        assert!(terminals
+            .kill(&canvas_terminal_id(node.id))
+            .is_err());
     }
 
     pub(super) fn region_input(board_id: i32, kind: CanvasNodeKind) -> CreateCanvasNode {
@@ -1120,14 +1109,9 @@ mod tests {
         assert!(moved.value.is_empty(), "nothing was written");
         assert_eq!(moved.revision, after_create, "and nothing was consumed");
 
-        let deleted = canvas_delete_nodes_core(
-            &emitter(),
-            &db,
-            &TerminalManager::new(),
-            vec![region + 4242],
-        )
-        .await
-        .expect("delete of a ghost is not an error");
+        let deleted = canvas_delete_nodes_core(&emitter(), &db, &TerminalManager::new(), vec![region + 4242])
+            .await
+            .expect("delete of a ghost is not an error");
         assert!(deleted.value.is_empty());
         assert_eq!(deleted.revision, after_create);
 
@@ -1181,10 +1165,7 @@ mod tests {
             },
         )
         .await;
-        assert!(
-            dead.is_err(),
-            "conversation node for a deleted conversation"
-        );
+        assert!(dead.is_err(), "conversation node for a deleted conversation");
     }
 
     #[tokio::test]
@@ -1307,9 +1288,10 @@ mod tests {
         .await
         .expect("folder region")
         .value;
-        let copied = canvas_detach_member_core(&emitter(), &db, folder_region.id, conv, 12.0, 24.0)
-            .await
-            .expect("copy detach");
+        let copied =
+            canvas_detach_member_core(&emitter(), &db, folder_region.id, conv, 12.0, 24.0)
+                .await
+                .expect("copy detach");
         assert_eq!(copied.value.conversation_id, Some(conv));
     }
 
@@ -1374,7 +1356,8 @@ mod tests {
         .await
         .expect("move batch");
         assert_eq!(moved.revision, 3, "one bump for the whole batch");
-        let applied: Vec<(i32, f64, f64)> = moved.value.iter().map(|m| (m.id, m.x, m.y)).collect();
+        let applied: Vec<(i32, f64, f64)> =
+            moved.value.iter().map(|m| (m.id, m.x, m.y)).collect();
         assert_eq!(
             applied,
             vec![(a.id, 5.0, 6.0), (b.id, 7.0, 1_000_000.0)],
@@ -1493,10 +1476,7 @@ mod tests {
             },
         )
         .await;
-        assert!(
-            missing.is_err(),
-            "unknown group id must not create a region"
-        );
+        assert!(missing.is_err(), "unknown group id must not create a region");
         assert_eq!(
             canvas_list_nodes_core(&db, board)
                 .await
@@ -1623,10 +1603,7 @@ mod tests {
         )
         .await;
 
-        assert!(
-            result.is_err(),
-            "a deleted conversation cannot be collected"
-        );
+        assert!(result.is_err(), "a deleted conversation cannot be collected");
         let snapshot = canvas_list_nodes_core(&db, board).await.expect("snapshot");
         assert_eq!(snapshot.revision, 0);
         assert!(
@@ -1908,14 +1885,9 @@ mod tests {
             .expect("snapshot")
             .revision;
 
-        let deleted = canvas_delete_nodes_core(
-            &emitter(),
-            &db,
-            &TerminalManager::new(),
-            vec![first, second, 4242],
-        )
-        .await
-        .expect("delete batch");
+        let deleted = canvas_delete_nodes_core(&emitter(), &db, &TerminalManager::new(), vec![first, second, 4242])
+            .await
+            .expect("delete batch");
         assert_eq!(deleted.value, vec![first, second], "ghost ids are skipped");
         assert_eq!(deleted.revision, before + 1);
         assert!(canvas_list_nodes_core(&db, board)
@@ -2129,14 +2101,10 @@ mod broadcast_tests {
         let mut rx = broadcaster.subscribe();
         let emitter = EventEmitter::test_web_only(broadcaster.clone());
 
-        let deleted = canvas_delete_nodes_core(
-            &emitter,
-            &db,
-            &TerminalManager::new(),
-            vec![first.value.id, second.value.id],
-        )
-        .await
-        .expect("delete batch");
+        let deleted =
+            canvas_delete_nodes_core(&emitter, &db, &TerminalManager::new(), vec![first.value.id, second.value.id])
+                .await
+                .expect("delete batch");
 
         let event = rx.try_recv().expect("one canvas event");
         assert_eq!(event.channel, CANVAS_CHANGED_EVENT);

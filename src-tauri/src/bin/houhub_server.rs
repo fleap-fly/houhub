@@ -1,13 +1,9 @@
 use std::path::PathBuf;
-
 use std::process::ExitCode;
-
 use std::sync::Arc;
 
 use houhub_lib::app_state::AppState;
-
 use houhub_lib::web::event_bridge::{EventEmitter, WebEventBroadcaster};
-
 use houhub_lib::web::{
     addresses_for_bind, advertise_host, find_static_dir_standalone, resolve_persisted_server_token,
     WebServerState,
@@ -100,13 +96,7 @@ fn main() -> ExitCode {
     // (`cli_run::shim`): the matching one, whatever else is on their PATH.
     if let Some(cli) = houhub_lib::update::runtime::self_exe()
         .parent()
-        .map(|dir| {
-            dir.join(if cfg!(windows) {
-                "houhub-cli.exe"
-            } else {
-                "houhub-cli"
-            })
-        })
+        .map(|dir| dir.join(if cfg!(windows) { "houhub-cli.exe" } else { "houhub-cli" }))
         .filter(|p| p.metadata().is_ok_and(|m| m.is_file() && m.len() > 0))
     {
         std::env::set_var(houhub_lib::cli_run::shim::CLI_ENV, cli);
@@ -315,7 +305,9 @@ async fn async_main(
         // bearer credential and must never enter the durable log files or the
         // in-app log viewer. `eprintln!` bypasses the tracing sinks (file +
         // ring buffer); only the local terminal / Docker stderr sees it.
-        eprintln!("[SERVER] No HOUHUB_TOKEN set; generated an access token (persisted): {token}");
+        eprintln!(
+            "[SERVER] No HOUHUB_TOKEN set; generated an access token (persisted): {token}"
+        );
         eprintln!("[SERVER] Pin your own by setting the HOUHUB_TOKEN environment variable.");
     }
 
@@ -497,16 +489,16 @@ async fn async_main(
             );
         }
     }
-    // A server unpacked into %LOCALAPPDATA%\houhub shares that folder with the
-    // desktop app once it is installed there too: each install replaces the
-    // other's houhub-mcp.exe, houhub-computer-helper.exe and web\. Say so
-    // instead of leaving the collision to be discovered later.
+    // A server an earlier install.ps1 put in %LOCALAPPDATA%\houhub shares that
+    // folder with the desktop app once it is installed there too: each
+    // install replaces the other's houhub-mcp.exe, houhub-computer-helper.exe
+    // and web\. install.ps1 moves the server out.
     #[cfg(windows)]
     if std::env::current_exe().is_ok_and(|exe| beside_the_desktop_app(&exe)) {
         eprintln!(
             "[SERVER] This houhub-server is in the houhub desktop app's folder, where each \
-             replaces the other's houhub-mcp.exe, houhub-computer-helper.exe and web\\. Move \
-             it to %LOCALAPPDATA%\\houhub-server."
+             replaces the other's houhub-mcp.exe, houhub-computer-helper.exe and web\\. Re-run \
+             install.ps1 to move it to %LOCALAPPDATA%\\houhub-server."
         );
     }
     // Before accepting connections: keep ACP model terminal fallbacks aligned
@@ -535,13 +527,11 @@ async fn async_main(
             Arc::new(houhub_lib::acp::manager::ConnectionManagerQuestionLookup {
                 manager: Arc::new(state.connection_manager.clone_ref()),
             }),
-            Arc::new(
-                houhub_lib::commands::session_info::DbSessionInfoLookup::new(Arc::new(
-                    houhub_lib::db::AppDatabase {
-                        conn: state.db.conn.clone(),
-                    },
-                )),
-            ),
+            Arc::new(houhub_lib::commands::session_info::DbSessionInfoLookup::new(
+                Arc::new(houhub_lib::db::AppDatabase {
+                    conn: state.db.conn.clone(),
+                }),
+            )),
             Arc::new(houhub_lib::work_task::EngineWorkTaskTools),
             Arc::new(houhub_lib::commands::chat_authoring::DbChatAuthoring::new(
                 Arc::new(houhub_lib::db::AppDatabase {
@@ -563,11 +553,9 @@ async fn async_main(
                     as Arc<dyn houhub_lib::acp::computer_tools::ComputerToolAccess>,
                 None => Arc::new(houhub_lib::acp::computer_tools::NoComputerDesktop),
             },
-            Arc::new(
-                houhub_lib::acp::result_tool::ConnectionManagerResultLookup {
-                    manager: Arc::new(state.connection_manager.clone_ref()),
-                },
-            ),
+            Arc::new(houhub_lib::acp::result_tool::ConnectionManagerResultLookup {
+                manager: Arc::new(state.connection_manager.clone_ref()),
+            }),
         );
         // Bind through the service handle rather than a bare `listener.run`
         // spawn: it keeps the bind error and the accept-loop handle around, so
@@ -585,46 +573,13 @@ async fn async_main(
         });
     }
 
-    // Install bundled expert skills into the central store
-    // (`~/.houhub/skills/`). Runs in the background; failures are logged
-    // but non-fatal.
-    tokio::spawn(async move {
-        let report = houhub_lib::commands::experts::ensure_central_experts_installed().await;
-        if !report.errors.is_empty() {
-            tracing::error!(
-                "[Experts] install finished with {} error(s): {:?}",
-                report.errors.len(),
-                report.errors
-            );
-        } else {
-            tracing::info!(
-                "[Experts] install ok: installed={} updated={} pending_review={}",
-                report.installed_count,
-                report.updated_count,
-                report.pending_user_review.len()
-            );
-        }
-    });
-
-    // Install bundled scientific-research skills into the same central store.
-    // Runs in the background; failures are logged but non-fatal.
-    tokio::spawn(async move {
-        let report = houhub_lib::commands::science::ensure_central_science_installed().await;
-        if !report.errors.is_empty() {
-            tracing::error!(
-                "[Science] install finished with {} error(s): {:?}",
-                report.errors.len(),
-                report.errors
-            );
-        } else {
-            tracing::info!(
-                "[Science] install ok: installed={} updated={} pending_review={}",
-                report.installed_count,
-                report.updated_count,
-                report.pending_user_review.len()
-            );
-        }
-    });
+    // The skills engine's startup work in the central store
+    // (`~/.houhub/skills/`): finish what a crash left half-moved, move older
+    // backups aside, extract the bundled Experts and Science skills, reconcile
+    // the link record — each step under the skills lock, shared with a desktop
+    // app of the same user. Runs in the background; failures are logged but
+    // non-fatal.
+    tokio::spawn(houhub_lib::skills::startup::run(state.emitter.clone()));
 
     // Start chat channel background tasks (event subscriber, command dispatcher, scheduler, auto-connect)
     state
@@ -747,6 +702,19 @@ async fn async_main(
         });
     }
 
+    // The Codex model list refresher (mirrors lib.rs setup).
+    if let Some(scheduler) = houhub_lib::acp::codex_catalog_refresh::build(state.emitter.clone()) {
+        tokio::spawn(houhub_lib::acp::codex_catalog_refresh::run(scheduler));
+    }
+
+    // The Harness update check (mirrors lib.rs setup): daily, in the
+    // background, only tells; not started under HOUHUB_HARNESS=off.
+    if let Some(checker) =
+        houhub_lib::harness::updates::build(&state.data_dir, state.emitter.clone())
+    {
+        tokio::spawn(houhub_lib::harness::updates::run(checker));
+    }
+
     // Label worktree folders registered before aliases were seeded at creation
     // with the branch they have checked out (mirrors lib.rs setup). Background;
     // changed folders are broadcast, so a browser that already fetched its
@@ -757,8 +725,8 @@ async fn async_main(
         };
         let emitter = state.emitter.clone();
         tokio::spawn(async move {
-            let n = houhub_lib::commands::folders::backfill_worktree_folder_aliases(&emitter, &db)
-                .await;
+            let n =
+                houhub_lib::commands::folders::backfill_worktree_folder_aliases(&emitter, &db).await;
             if n > 0 {
                 tracing::info!("[folders] labeled {n} worktree folder(s) by branch");
             }
@@ -770,6 +738,13 @@ async fn async_main(
     // `main` so strict-mode misconfigurations abort before we touch
     // disk; no second log line here.
     houhub_lib::web::handlers::files::purge_upload_staging().await;
+
+    // HouHub Web's SRN sign-in: its settings (HOUHUB_PUBLIC_URL,
+    // HOUHUB_SRN_CLIENT_ID, HOUHUB_SRN_CLIENT_SECRET_FILE) checked and logged
+    // once, its key in the data directory, its hourly cleanup. Anything
+    // missing or invalid only turns SRN sign-in off; instance access does
+    // not depend on it.
+    houhub_lib::srn::web::start_for_server(&state.db.conn, &state.data_dir);
 
     // Build router
     let proxy_auth = match proxy_auth_config {
@@ -833,11 +808,9 @@ async fn async_main(
     // Publish runtime state so the settings page (served by us) shows
     // the truth — running on `actual_port` with this token — instead of
     // the placeholder "stopped" that triggers the stale-port banner.
-    state.web_server_state.mark_externally_running(
-        advertised_host.clone(),
-        actual_port,
-        token.clone(),
-    );
+    state
+        .web_server_state
+        .mark_externally_running(advertised_host.clone(), actual_port, token.clone());
     let addresses = addresses_for_bind(&advertised_host, actual_port);
 
     // Token on stderr ONLY (bearer credential — keep it out of the log files

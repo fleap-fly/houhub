@@ -7,35 +7,25 @@
 //! together.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-
 use sea_orm::DatabaseConnection;
-
 use serde::{Deserialize, Serialize};
 
 use crate::acp::manager::ConnectionManager;
-
 use crate::app_error::AppCommandError;
-
 use crate::db::service::{app_metadata_service, conversation_service};
-
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
-
 use crate::models::pet::{
     ImportCodexPetsRequest, ImportCodexPetsResult, ImportablePet, NewPetInput, PetCelebrationKind,
     PetDetail, PetMetaPatch, PetParentRef, PetSessionEntry, PetSessionsPayload, PetSpriteAsset,
     PetState, PetSummary, PetWindowConfig, PetWindowStatePatch,
 };
-
 use crate::pet_state_mapper::{read_pet_state, PetStateHandle};
-
 use crate::pets;
-
 use crate::pets::marketplace::{
     MarketplaceInstallRequest, MarketplaceInstallResponse, MarketplaceListParams,
     MarketplaceListResponse,
 };
-
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 /// KV key used by `app_metadata_service` for the persisted pet UI state.
@@ -336,13 +326,17 @@ pub async fn pet_marketplace_install_core(
     pets::marketplace::install(request).await
 }
 
-/// Proxy marketplace artwork through the backend and return the same payload
-/// shape as the local spritesheet reader.
+/// Proxy a marketplace image (poster / preview / spritesheet) through the
+/// backend so the renderer loads it as a blob URL instead of fetching
+/// codex-pets.net directly — the webview can't always reach the CDN, but this
+/// backend can (it already downloads packages for install). Returns the same
+/// `{ mime, dataBase64 }` shape as `pet_read_spritesheet`, so the frontend
+/// reuses `createPetSpriteObjectUrl`.
 pub async fn pet_marketplace_asset_core(url: String) -> Result<PetSpriteAsset, AppCommandError> {
     let (mime, bytes) = pets::marketplace::fetch_asset(&url).await?;
     Ok(PetSpriteAsset {
         mime,
-        data_base64: BASE64.encode(bytes),
+        data_base64: BASE64.encode(&bytes),
     })
 }
 
@@ -486,7 +480,7 @@ pub async fn pet_set_active(
     db: tauri::State<'_, AppDatabase>,
     pet_id: Option<String>,
 ) -> Result<PetWindowConfig, AppCommandError> {
-    pet_set_active_core(&db.conn, &EventEmitter::Tauri(app), pet_id).await
+    pet_set_active_core(&db.conn, &EventEmitter::from_app(&app), pet_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -495,7 +489,7 @@ pub async fn pet_celebrate(
     app: tauri::AppHandle,
     kind: PetCelebrationKind,
 ) -> Result<(), AppCommandError> {
-    pet_celebrate_core(&EventEmitter::Tauri(app), kind);
+    pet_celebrate_core(&EventEmitter::from_app(&app), kind);
     Ok(())
 }
 
@@ -754,10 +748,7 @@ mod tests {
             child_row.connection_id, "conn-child",
             "the row must answer through the CHILD connection, not the parent"
         );
-        let parent_ref = child_row
-            .parent
-            .as_ref()
-            .expect("sub-agent row names its parent");
+        let parent_ref = child_row.parent.as_ref().expect("sub-agent row names its parent");
         assert_eq!(parent_ref.conversation_id, parent_id);
         assert_eq!(parent_ref.folder_id, folder_id);
         assert_eq!(parent_ref.agent_type, AgentType::ClaudeCode);

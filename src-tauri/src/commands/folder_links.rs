@@ -254,7 +254,8 @@ fn validate_target(
     if trimmed.is_empty() {
         return Err(FolderLinkRejection::NotFound);
     }
-    let canonical = std::fs::canonicalize(trimmed).map_err(|_| FolderLinkRejection::NotFound)?;
+    let canonical =
+        std::fs::canonicalize(trimmed).map_err(|_| FolderLinkRejection::NotFound)?;
     if !canonical.is_dir() {
         return Err(FolderLinkRejection::NotADirectory);
     }
@@ -281,11 +282,8 @@ fn validate_target(
 #[cfg(unix)]
 fn create_dir_symlink(target: &Path, link: &Path) -> Result<(), AppCommandError> {
     std::os::unix::fs::symlink(target, link).map_err(|e| {
-        AppCommandError::io_error("Failed to create the folder link").with_detail(format!(
-            "{} -> {}: {e}",
-            link.display(),
-            target.display()
-        ))
+        AppCommandError::io_error("Failed to create the folder link")
+            .with_detail(format!("{} -> {}: {e}", link.display(), target.display()))
     })
 }
 
@@ -398,12 +396,9 @@ fn git_exclude_line(toplevel: &Path, root: &Path, name: &str) -> String {
     let rel = std::fs::canonicalize(root)
         .ok()
         .and_then(|canonical_root| {
-            std::fs::canonicalize(toplevel).ok().and_then(|top| {
-                canonical_root
-                    .strip_prefix(&top)
-                    .map(Path::to_path_buf)
-                    .ok()
-            })
+            std::fs::canonicalize(toplevel)
+                .ok()
+                .and_then(|top| canonical_root.strip_prefix(&top).map(Path::to_path_buf).ok())
         })
         .unwrap_or_default();
     let prefix = rel.to_string_lossy().replace('\\', "/");
@@ -448,10 +443,7 @@ async fn add_to_git_exclude(root: &Path, name: &str) {
     next.push_str(&line);
     next.push('\n');
     if let Err(e) = std::fs::write(&exclude_path, next) {
-        tracing::debug!(
-            "[folder-link] could not update {}: {e}",
-            exclude_path.display()
-        );
+        tracing::debug!("[folder-link] could not update {}: {e}", exclude_path.display());
     }
 }
 
@@ -949,7 +941,7 @@ pub async fn create_folder_links(
     git_exclude: Option<bool>,
 ) -> Result<Vec<FolderLinkDetail>, AppCommandError> {
     create_folder_links_core(
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         &db,
         folder_id,
         items,
@@ -966,7 +958,7 @@ pub async fn rename_folder_link(
     link_id: i32,
     new_name: String,
 ) -> Result<FolderLinkDetail, AppCommandError> {
-    rename_folder_link_core(&EventEmitter::Tauri(app), &db, link_id, new_name).await
+    rename_folder_link_core(&EventEmitter::from_app(&app), &db, link_id, new_name).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -976,7 +968,7 @@ pub async fn repair_folder_link(
     db: tauri::State<'_, AppDatabase>,
     link_id: i32,
 ) -> Result<FolderLinkDetail, AppCommandError> {
-    repair_folder_link_core(&EventEmitter::Tauri(app), &db, link_id).await
+    repair_folder_link_core(&EventEmitter::from_app(&app), &db, link_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -988,7 +980,7 @@ pub async fn remove_folder_link(
     delete_link: Option<bool>,
 ) -> Result<(), AppCommandError> {
     remove_folder_link_core(
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         &db,
         link_id,
         delete_link.unwrap_or(true),
@@ -1091,7 +1083,10 @@ mod tests {
         std::fs::create_dir_all(&nested).expect("mkdir");
 
         assert_eq!(git_exclude_line(&top, &top, "api"), "/api");
-        assert_eq!(git_exclude_line(&top, &nested, "api"), "/packages/app/api");
+        assert_eq!(
+            git_exclude_line(&top, &nested, "api"),
+            "/packages/app/api"
+        );
 
         let _ = std::fs::remove_dir_all(&top);
     }
@@ -1228,11 +1223,6 @@ mod unix_tests {
         // A read-only parent makes unlink fail with EACCES. That must be an
         // error, not a silent success — the caller drops the DB row on success
         // and would otherwise strand a symlink the UI can no longer manage.
-        // Root can unlink from a mode-0500 directory, so this permission-based
-        // fixture cannot express the intended failure in that environment.
-        if unsafe { libc::geteuid() } == 0 {
-            return;
-        }
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().expect("root");
         let linked = tempfile::tempdir().expect("linked");
@@ -1277,7 +1267,11 @@ mod lifecycle_tests {
         let mut names: Vec<String> = std::fs::read_dir(root)
             .expect("read_dir")
             .flatten()
-            .filter(|e| e.file_type().map(|ft| ft.is_symlink()).unwrap_or(false))
+            .filter(|e| {
+                e.file_type()
+                    .map(|ft| ft.is_symlink())
+                    .unwrap_or(false)
+            })
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
         names.sort();
@@ -1289,10 +1283,12 @@ mod lifecycle_tests {
         targets: &[&Path],
     ) -> (crate::db::AppDatabase, i32, Vec<FolderLinkDetail>) {
         let db = fresh_in_memory_db().await;
-        let folder =
-            crate::commands::folders::open_folder_core(&db, root.to_string_lossy().into_owned())
-                .await
-                .expect("open folder");
+        let folder = crate::commands::folders::open_folder_core(
+            &db,
+            root.to_string_lossy().into_owned(),
+        )
+        .await
+        .expect("open folder");
         let items = targets
             .iter()
             .map(|t| FolderLinkRequest {
@@ -1315,9 +1311,14 @@ mod lifecycle_tests {
         let link_id = created[0].id;
         let original = created[0].name.clone();
 
-        let renamed = rename_folder_link_core(&emitter(), &db, link_id, original.to_uppercase())
-            .await
-            .expect("case-only rename");
+        let renamed = rename_folder_link_core(
+            &emitter(),
+            &db,
+            link_id,
+            original.to_uppercase(),
+        )
+        .await
+        .expect("case-only rename");
 
         assert_eq!(renamed.name, original.to_uppercase());
         // The row must describe something that is actually there. Skipping the
@@ -1331,7 +1332,9 @@ mod lifecycle_tests {
         // Exactly one link, whatever the filesystem's case sensitivity.
         assert_eq!(link_names(root.path()).len(), 1);
 
-        let listed = list_folder_links_core(&db, folder_id).await.expect("list");
+        let listed = list_folder_links_core(&db, folder_id)
+            .await
+            .expect("list");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].status, FolderLinkStatus::Ok);
     }
@@ -1362,12 +1365,6 @@ mod lifecycle_tests {
     async fn a_failed_unlink_keeps_the_record_instead_of_reporting_success() {
         use std::os::unix::fs::PermissionsExt;
 
-        // Root bypasses directory write permissions; skip this EACCES fixture
-        // rather than asserting a failure the kernel will not produce.
-        if unsafe { libc::geteuid() } == 0 {
-            return;
-        }
-
         let root = tempfile::tempdir().expect("root");
         let linked = tempfile::tempdir().expect("linked");
         let (db, folder_id, created) = setup(root.path(), &[linked.path()]).await;
@@ -1397,13 +1394,10 @@ mod lifecycle_tests {
     async fn the_same_directory_submitted_twice_links_once() {
         let root = tempfile::tempdir().expect("root");
         let linked = tempfile::tempdir().expect("linked");
-        let (_db, _folder_id, created) = setup(root.path(), &[linked.path(), linked.path()]).await;
+        let (_db, _folder_id, created) =
+            setup(root.path(), &[linked.path(), linked.path()]).await;
 
-        assert_eq!(
-            created.len(),
-            1,
-            "no `api` + `api-2` pair for one directory"
-        );
+        assert_eq!(created.len(), 1, "no `api` + `api-2` pair for one directory");
         assert_eq!(link_names(root.path()).len(), 1);
     }
 

@@ -21,11 +21,13 @@ import {
 export type WorkbenchRouteId =
   | "conversations"
   | "automations"
-  | "cloud"
   | "tasks"
   | "forge"
   | "tokenUsage"
   | "canvas"
+  | "harness"
+  // HouHub: the cloud agent hub lives on its own route.
+  | "cloud"
 
 interface WorkbenchRouteContextValue {
   routeId: WorkbenchRouteId

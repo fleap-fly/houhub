@@ -52,6 +52,7 @@ import {
   WorkbenchRouteStrip,
   useHasWorkbenchRouteStrip,
 } from "@/components/workbench/workbench-content"
+import { HarnessViewProvider } from "@/contexts/harness-view-context"
 import { AuxPanelProvider } from "@/contexts/aux-panel-context"
 import { useAuxPanelStore } from "@/stores/aux-panel-store"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -1590,9 +1591,11 @@ export default function WorkspaceLayout({
           {/* Upstream components (search dialog, session-details tab) read the
               aux panel through its context; the panel itself stays store driven,
               so the provider only bridges the two. */}
-          <AuxPanelProvider>
-            <WorkspaceLayoutInner>{children}</WorkspaceLayoutInner>
-          </AuxPanelProvider>
+          <HarnessViewProvider>
+            <AuxPanelProvider>
+              <WorkspaceLayoutInner>{children}</WorkspaceLayoutInner>
+            </AuxPanelProvider>
+          </HarnessViewProvider>
         </UpdateProvider>
       </RemoteConnectionGate>
     </Suspense>

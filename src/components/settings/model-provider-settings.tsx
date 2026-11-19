@@ -1,8 +1,8 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Loader2, Pencil, Play, Plus, Server, Trash2 } from "lucide-react"
-import { useLocale, useTranslations } from "next-intl"
+import { Loader2, Pencil, Plus, Server, Trash2 } from "lucide-react"
+import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -34,52 +34,14 @@ import {
 import { getAgentLabel } from "@/lib/custom-agents"
 import { AddModelProviderDialog } from "./add-model-provider-dialog"
 import { EditModelProviderDialog } from "./edit-model-provider-dialog"
-import { TestModelProviderDialog } from "./test-model-provider-dialog"
-
-const MODEL_PROVIDER_COPY = {
-  zh: {
-    sectionDescription:
-      "登录 Houflow 后，订阅内的默认模型网关会自动同步到这里；手动供应商仅用于本地兼容运行时。",
-    localProviders: "供应商",
-    localProvidersDescription:
-      "保存 API 地址、密钥和可用模型；智能体运行时只绑定并投影配置。",
-  },
-  en: {
-    sectionDescription:
-      "After Houflow sign-in, the subscription model gateway is synced here automatically. Manual providers remain for local compatible runtimes.",
-    localProviders: "Providers",
-    localProvidersDescription:
-      "Store API URL, key, and available models; agent runtimes bind and project their own config.",
-  },
-} as const
-
-function providerSupportsAgent(
-  provider: ModelProviderInfo,
-  agentType: AgentType
-): boolean {
-  const types =
-    provider.agent_types.length > 0
-      ? provider.agent_types
-      : [provider.agent_type]
-  return types.includes(agentType)
-}
 
 export function ModelProviderSettings() {
   const t = useTranslations("ModelProviderSettings")
-  const locale = useLocale()
-  const copy = useMemo(
-    () =>
-      locale.toLowerCase().startsWith("zh")
-        ? MODEL_PROVIDER_COPY.zh
-        : MODEL_PROVIDER_COPY.en,
-    [locale]
-  )
   const [providers, setProviders] = useState<ModelProviderInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<AgentType | null>(null)
   const [addDialogOpen, setAddDialogOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<ModelProviderInfo | null>(null)
-  const [testTarget, setTestTarget] = useState<ModelProviderInfo | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ModelProviderInfo | null>(
     null
   )
@@ -96,12 +58,13 @@ export function ModelProviderSettings() {
   }, [t])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial provider list fetch
     loadProviders().catch(console.error)
   }, [loadProviders])
 
   const filteredProviders = useMemo(() => {
     if (!filter) return providers
-    return providers.filter((p) => providerSupportsAgent(p, filter))
+    return providers.filter((p) => p.agent_type === filter)
   }, [providers, filter])
 
   const handleDelete = useCallback(async () => {
@@ -135,18 +98,12 @@ export function ModelProviderSettings() {
         <div>
           <h1 className="text-sm font-semibold">{t("sectionTitle")}</h1>
           <p className="text-sm text-muted-foreground">
-            {copy.sectionDescription}
+            {t("sectionDescription")}
           </p>
         </div>
       </section>
 
       <section className="mt-4 space-y-2 px-3 pb-3 md:px-4 md:pb-4">
-        <div>
-          <h2 className="text-sm font-medium">{copy.localProviders}</h2>
-          <p className="text-xs text-muted-foreground">
-            {copy.localProvidersDescription}
-          </p>
-        </div>
         <div className="flex items-center justify-between gap-2">
           <Select
             value={filter ?? "__all__"}
@@ -200,30 +157,12 @@ export function ModelProviderSettings() {
                     </div>
                   </div>
                   <div className="flex shrink-0 gap-1">
-                    {(p.agent_types.length > 0
-                      ? p.agent_types
-                      : [p.agent_type]
-                    ).map((agentType) => (
-                      <Badge
-                        key={agentType}
-                        variant="secondary"
-                        className="text-[10px] px-1.5 py-0"
-                      >
-                        {getAgentLabel(agentType) ?? agentType}
-                      </Badge>
-                    ))}
+                    <Badge variant="secondary" className="text-3xs px-1.5 py-0">
+                      {getAgentLabel(p.agent_type) ?? p.agent_type}
+                    </Badge>
                   </div>
                 </div>
                 <div className="flex shrink-0 gap-1">
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7"
-                    title={t("testProvider")}
-                    onClick={() => setTestTarget(p)}
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                  </Button>
                   <Button
                     size="icon"
                     variant="ghost"
@@ -249,9 +188,7 @@ export function ModelProviderSettings() {
 
       <AddModelProviderDialog
         open={addDialogOpen}
-        onOpenChange={(open) => {
-          setAddDialogOpen(open)
-        }}
+        onOpenChange={setAddDialogOpen}
         onProviderAdded={loadProviders}
       />
 
@@ -261,13 +198,6 @@ export function ModelProviderSettings() {
           if (!open) setEditTarget(null)
         }}
         onProviderUpdated={loadProviders}
-      />
-
-      <TestModelProviderDialog
-        provider={testTarget}
-        onOpenChange={(open) => {
-          if (!open) setTestTarget(null)
-        }}
       />
 
       <AlertDialog

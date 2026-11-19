@@ -48,7 +48,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs"
-import { dirname, join, resolve } from "node:path"
+import { dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import process from "node:process"
 
@@ -98,6 +98,32 @@ function resolveHostTriple() {
   }
 }
 
+function resolveCargoTargetDirectory() {
+  try {
+    const metadata = JSON.parse(
+      execFileSync(
+        "cargo",
+        ["metadata", "--no-deps", "--format-version", "1"],
+        {
+          cwd: SRC_TAURI,
+          encoding: "utf8",
+        }
+      )
+    )
+    if (
+      typeof metadata?.target_directory !== "string" ||
+      !isAbsolute(metadata.target_directory)
+    ) {
+      throw new Error(
+        "cargo metadata did not return an absolute target_directory"
+      )
+    }
+    return metadata.target_directory
+  } catch (e) {
+    die(`cannot determine Cargo output directory: ${e.message}`)
+  }
+}
+
 // The helper as an app: its Info.plist (identifier `com.houflow.houhub.computer-helper`,
 // no Dock icon), its executable, houhub's icon. Sealed ad hoc, so a bundle
 // signed around it accepts it; release.yml signs it again with the Developer
@@ -130,15 +156,6 @@ function stageHelperApp(built) {
     log(`not on macOS: ${HELPER_APP} is left unsigned`)
   }
   log(`helper app staged at ${HELPER_APP}`)
-}
-
-// Where cargo puts the release binaries: `CARGO_TARGET_DIR` when the caller
-// sets one (the release workflow stages the Windows sidecar into
-// `target/sidecar` so it does not share the desktop cache), else the default.
-function cargoTargetRoot() {
-  const configured = process.env.CARGO_TARGET_DIR?.trim()
-  if (!configured) return join(SRC_TAURI, "target")
-  return resolve(SRC_TAURI, configured)
 }
 
 function main() {
@@ -184,9 +201,12 @@ function main() {
     { stdio: "inherit", cwd: SRC_TAURI }
   )
 
+  // Cargo resolves CARGO_TARGET_DIR and build.target-dir (including relative
+  // configuration paths). The binaries need not live under src-tauri/target.
+  const targetDirectory = resolveCargoTargetDirectory()
   mkdirSync(BINARIES_DIR, { recursive: true })
   for (const name of BIN_NAMES) {
-    const built = join(cargoTargetRoot(), target, "release", `${name}${ext}`)
+    const built = join(targetDirectory, target, "release", `${name}${ext}`)
     if (!existsSync(built)) {
       die(`expected ${built} after cargo build, but it does not exist`)
     }

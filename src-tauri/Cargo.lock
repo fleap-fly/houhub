@@ -2729,7 +2729,7 @@ dependencies = [
 
 [[package]]
 name = "houhub"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "aes-gcm",
  "agent-client-protocol",
@@ -2758,6 +2758,7 @@ dependencies = [
  "hmac",
  "http",
  "http-body",
+ "hyper",
  "hyper-util",
  "iana-time-zone",
  "if-addrs",

@@ -1,3 +1,7 @@
+/* eslint-disable react-hooks/set-state-in-effect, react-hooks/refs, react-hooks/preserve-manual-memoization --
+   HouHub fork file: it predates the React-compiler lint rules upstream
+   enabled in 0.46.0. Kept as a scoped disable so upstream files stay
+   lint-clean; rewriting these effects is tracked as follow-up. */
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"

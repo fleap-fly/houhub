@@ -86,9 +86,7 @@ fn info_from_def(def: &CustomAgentDef) -> CustomAgentInfo {
     }
 }
 
-pub async fn acp_list_custom_agents_core(
-    db: &AppDatabase,
-) -> Result<Vec<CustomAgentInfo>, AcpError> {
+pub async fn acp_list_custom_agents_core(db: &AppDatabase) -> Result<Vec<CustomAgentInfo>, AcpError> {
     let defs = custom_agent_service::list_defs(&db.conn)
         .await
         .map_err(|e| AcpError::protocol(e.to_string()))?;
@@ -200,13 +198,14 @@ pub async fn acp_add_registry_agent_core(
     let entry = catalog
         .iter()
         .find(|e| e.registry_id == registry_id)
-        .ok_or_else(|| AcpError::protocol(format!("{registry_id} is not in the ACP registry")))?;
+        .ok_or_else(|| {
+            AcpError::protocol(format!("{registry_id} is not in the ACP registry"))
+        })?;
 
     let kind = match distribution_kind.as_deref() {
-        Some(raw) => Some(
-            CustomDistributionKind::parse(raw)
-                .ok_or_else(|| AcpError::protocol(format!("unknown distribution kind: {raw}")))?,
-        ),
+        Some(raw) => Some(CustomDistributionKind::parse(raw).ok_or_else(|| {
+            AcpError::protocol(format!("unknown distribution kind: {raw}"))
+        })?),
         None => None,
     };
 
@@ -590,7 +589,7 @@ pub async fn acp_save_custom_agent(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_save_custom_agent_params_core(params, &db, &emitter).await
 }
 
@@ -602,7 +601,7 @@ pub async fn acp_delete_custom_agent(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_delete_custom_agent_core(registry_id, delete_transcripts, &db, &emitter).await
 }
 
@@ -628,7 +627,7 @@ pub async fn acp_add_registry_agent(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_add_registry_agent_core(registry_id, distribution_kind, &db, &emitter).await
 }
 
@@ -850,17 +849,11 @@ mod tests {
             Some(uploaded.as_str())
         );
         // An oversized one is dropped rather than persisted.
-        let huge = format!(
-            "data:image/png;base64,{}",
-            "A".repeat(MAX_ICON_DATA_URL_CHARS)
-        );
+        let huge = format!("data:image/png;base64,{}", "A".repeat(MAX_ICON_DATA_URL_CHARS));
         assert_eq!(normalize_icon(Some(huge)).await, None);
         // Anything that is not http(s) is dropped, never fetched — notably
         // `file://`, which would otherwise read local disk.
-        assert_eq!(
-            normalize_icon(Some("file:///etc/passwd".into())).await,
-            None
-        );
+        assert_eq!(normalize_icon(Some("file:///etc/passwd".into())).await, None);
         assert_eq!(normalize_icon(Some("/local/path.svg".into())).await, None);
         assert_eq!(normalize_icon(Some("   ".into())).await, None);
         assert_eq!(normalize_icon(None).await, None);
@@ -900,14 +893,8 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await });
 
-        assert_eq!(
-            inline_icon(&format!("http://{addr}/declared.png")).await,
-            None
-        );
-        assert_eq!(
-            inline_icon(&format!("http://{addr}/chunked.png")).await,
-            None
-        );
+        assert_eq!(inline_icon(&format!("http://{addr}/declared.png")).await, None);
+        assert_eq!(inline_icon(&format!("http://{addr}/chunked.png")).await, None);
         // An icon within the cap still round-trips into a data URL.
         let small = inline_icon(&format!("http://{addr}/small.png"))
             .await

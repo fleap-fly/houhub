@@ -12,8 +12,12 @@ import {
 import { CanvasPage, CanvasPageTitle } from "@/components/canvas/canvas-page"
 import { ForgeChromeActions } from "@/components/forge/forge-chrome-actions"
 import { ForgePage, ForgePageTitle } from "@/components/forge/forge-page"
+import { HarnessChromeActions } from "@/components/harness/harness-chrome-actions"
+import {
+  HarnessPage,
+  HarnessPageTitle,
+} from "@/components/harness/harness-page"
 import { TasksChromeActions } from "@/components/tasks/tasks-chrome-actions"
-import { CloudSessionPage } from "@/components/houflow/cloud-session-page"
 import { TasksPage, TasksPageTitle } from "@/components/tasks/tasks-page"
 import {
   TokenUsagePage,
@@ -29,13 +33,15 @@ import {
  */
 const WORKBENCH_ROUTES: Partial<Record<WorkbenchRouteId, ComponentType>> = {
   automations: AutomationsPage,
-  cloud: CloudSessionPage,
   tasks: TasksPage,
   forge: ForgePage,
   tokenUsage: TokenUsagePage,
   canvas: CanvasPage,
+  harness: HarnessPage,
 }
 
+/** Optional per-route content for the window-chrome strip above the page
+ *  (the h-10 band the fixed corner overlays sit on) — e.g. the page title. */
 const WORKBENCH_ROUTE_STRIPS: Partial<Record<WorkbenchRouteId, ComponentType>> =
   {
     automations: AutomationsPageTitle,
@@ -43,18 +49,27 @@ const WORKBENCH_ROUTE_STRIPS: Partial<Record<WorkbenchRouteId, ComponentType>> =
     forge: ForgePageTitle,
     tokenUsage: TokenUsagePageTitle,
     canvas: CanvasPageTitle,
+    harness: HarnessPageTitle,
   }
 
+/** What a chrome cluster hands its route's buttons: the host's own button
+ *  metrics, so one component fits both the desktop overlay (`h-6`) and the
+ *  mobile title bar (`h-8`) without knowing which it is in. */
 export interface WorkbenchChromeActionsProps {
   buttonClassName: string
   iconClassName: string
 }
 
+/** Optional per-route buttons for the window's top-right chrome cluster, drawn
+ *  to the LEFT of the settings gear. A full-page route hides the terminal and
+ *  aux toggles (they act on the workspace it covers), so its own page-level
+ *  controls take that space instead of crowding the page. */
 const WORKBENCH_ROUTE_CHROME_ACTIONS: Partial<
   Record<WorkbenchRouteId, ComponentType<WorkbenchChromeActionsProps>>
 > = {
   forge: ForgeChromeActions,
   tasks: TasksChromeActions,
+  harness: HarnessChromeActions,
 }
 
 /**
@@ -68,12 +83,15 @@ export function WorkbenchRoutePage() {
   return Page ? <Page /> : null
 }
 
+/** The active route's strip content (page title), or nothing. */
 export function WorkbenchRouteStrip() {
   const { routeId } = useWorkbenchRoute()
   const Strip = WORKBENCH_ROUTE_STRIPS[routeId]
   return Strip ? <Strip /> : null
 }
 
+/** The active route's chrome-cluster buttons, or nothing. Rendered by both
+ *  chrome hosts (RightEdgeChrome on desktop, FolderTitleBar on mobile). */
 export function WorkbenchRouteChromeActions(
   props: WorkbenchChromeActionsProps
 ) {
@@ -82,6 +100,8 @@ export function WorkbenchRouteChromeActions(
   return Actions ? <Actions {...props} /> : null
 }
 
+/** Whether the active route contributes chrome-strip content — lets the host
+ *  style the band (e.g. its bottom border) only when a title renders. */
 export function useHasWorkbenchRouteStrip(): boolean {
   const { routeId } = useWorkbenchRoute()
   return WORKBENCH_ROUTE_STRIPS[routeId] != null

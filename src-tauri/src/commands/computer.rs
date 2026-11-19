@@ -46,15 +46,11 @@
 //! this screen.
 
 use std::collections::BTreeSet;
-
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-
 use std::sync::Arc;
-
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-
 #[cfg(feature = "tauri-runtime")]
 use tauri::{AppHandle, Manager};
 
@@ -79,51 +75,36 @@ use crate::acp::computer_tools::{
     SCREEN_RULES_CHANGED_NOTE, SCREEN_STALE_CAPTURE_NOTE, SECRET_FIELD_NOTE, SESSION_CHORD_NOTE,
     STOPPED_NOTE,
 };
-
 use crate::app_error::AppCommandError;
-
 use crate::computer::agent::{
     grantable, visible_title, ActivityOutcome, Blocklist, ComputerAction, ComputerActivityPayload,
     ComputerGrantPayload, GrantChange, GrantLevel, GrantScope, NotGrantable, SelfIdentity,
 };
-
 use crate::computer::backend::{
     ActRefusal, BackendError, BackendStatus, ComputerBackend, SnapshotOptions,
 };
-
 use crate::computer::driver_admin::{DriverAdmin, DriverInfo, DriverTask};
-
 use crate::computer::events::ComputerEvents;
-
 #[cfg(feature = "tauri-runtime")]
 use crate::computer::indicator::{Indicator, Strip};
-
 use crate::computer::local::LocalBackend;
-
 #[cfg(feature = "tauri-runtime")]
 use crate::computer::marker::Marker;
-
 use crate::computer::procinfo::process_start;
-
 use crate::computer::protocol::{
     ClipboardUse, OsPermission, PermissionAsked, PermissionReport, RawAct, ScreenRules,
 };
-
 #[cfg(feature = "tauri-runtime")]
 use crate::computer::stop_key::StopKey;
-
 use crate::computer::stop_shortcut::StopKeyStatus;
-
 use crate::computer::targets::{
     ActDenied, Aim, AppChange, AppTarget, ReadMark, ReadRefusal, ReadTicket, ShareError, SharedApp,
     SharedScreen, SharedWindow, Staleness, TargetTable, WindowIdentity, SCREEN_TARGET_ID,
 };
-
 use crate::computer::types::{
     ActDelivery, ActReport, AgentAppRef, AgentAppSummary, AgentScreen, ComputerActRequest, Rect,
     VerifyOutcome, VerifyRequest, WindowCapture, WindowSnapshot, MAX_HOLD_MS, MAX_KEY_REPEAT,
 };
-
 use crate::web::event_bridge::{EventEmitter, WebEventBroadcaster};
 
 /// How often lapsed grants are swept, so the panel shows a window as no
@@ -600,7 +581,7 @@ impl ComputerService {
             #[cfg(feature = "tauri-runtime")]
             ComputerHost::Desktop(app) => (
                 ComputerEvents::Desktop(app.clone()),
-                EventEmitter::Tauri(app.clone()),
+                EventEmitter::from_app(app),
             ),
             ComputerHost::Server {
                 broadcaster,
@@ -1300,9 +1281,10 @@ impl ComputerService {
             Err((why, ended)) => {
                 self.announce(&ended.into_iter().collect::<Vec<_>>());
                 Err(match why {
-                    ReadRefusal::NotGrantable(why) => {
-                        Refusal::refused(ERROR_BLOCKED, blocked_note(&ticket.target_id, why.note()))
-                    }
+                    ReadRefusal::NotGrantable(why) => Refusal::refused(
+                        ERROR_BLOCKED,
+                        blocked_note(&ticket.target_id, why.note()),
+                    ),
                     ReadRefusal::NoSuchTarget | ReadRefusal::GrantRequired => refused(),
                 })
             }
@@ -2211,7 +2193,6 @@ struct LaterPress {
 /// before it repeats, then at the rate it repeats — as fast as the
 /// presses go through, and no faster.
 const HOLD_DELAY: Duration = Duration::from_millis(500);
-
 const HOLD_INTERVAL: Duration = Duration::from_millis(50);
 
 /// How many times an action goes out: once; `repeat` times back to back for

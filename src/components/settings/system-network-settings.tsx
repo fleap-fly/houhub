@@ -197,7 +197,11 @@ export function SystemNetworkSettings() {
     languageSettings.mode === "system" ? "system" : languageSettings.language
   )
 
+  // Follow the stored setting on every update from the provider, including
+  // one that saves back the same value: the backend's answer overrides an
+  // optimistic pick in the select.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- re-syncs from the provider's stored setting object
     setAppLanguage(
       languageSettings.mode === "system" ? "system" : languageSettings.language
     )
@@ -227,16 +231,17 @@ export function SystemNetworkSettings() {
     }).format(lastCheckedAt)
   }, [lastCheckedAt, locale])
 
+  const availableUpdateDate = availableUpdate?.date
   const formattedUpdateDate = useMemo(() => {
-    if (!availableUpdate?.date) return null
+    if (!availableUpdateDate) return null
 
-    const parsed = new Date(availableUpdate.date)
-    if (Number.isNaN(parsed.getTime())) return availableUpdate.date
+    const parsed = new Date(availableUpdateDate)
+    if (Number.isNaN(parsed.getTime())) return availableUpdateDate
 
     return new Intl.DateTimeFormat(locale, {
       dateStyle: "medium",
     }).format(parsed)
-  }, [availableUpdate?.date, locale])
+  }, [availableUpdateDate, locale])
 
   const updateNotes = useMemo(
     () => availableUpdate?.body?.trim() ?? "",
@@ -289,6 +294,7 @@ export function SystemNetworkSettings() {
   }, [autostartVisible])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial settings fetch
     loadSettings().catch((err) => {
       console.error("[Settings] load system settings failed:", err)
     })
@@ -422,12 +428,11 @@ export function SystemNetworkSettings() {
   // Close a stale rollback confirm dialog if the lifecycle leaves a
   // rollback-able state — e.g. another window staged an update while the dialog
   // sat open — so it can't fire a now-conflicting rollback. The backend also
-  // rejects such a rollback; this avoids the user even reaching it.
-  useEffect(() => {
-    if (rollbackConfirmOpen && !canRollback) {
-      setRollbackConfirmOpen(false)
-    }
-  }, [rollbackConfirmOpen, canRollback])
+  // rejects such a rollback; this avoids the user even reaching it. Adjusted
+  // while rendering, so the stale dialog never paints.
+  if (rollbackConfirmOpen && !canRollback) {
+    setRollbackConfirmOpen(false)
+  }
 
   // Manual rollback runs through the provider (it owns the restart + verify
   // flow); afterwards refresh the rollback affordance — a single-generation
@@ -456,7 +461,7 @@ export function SystemNetworkSettings() {
             <Button
               variant="ghost"
               className="size-5 rounded-full"
-              onClick={() => openUrl("https://agent.houflow.com")}
+              onClick={() => openUrl("https://github.com/fleap-fly/houhub")}
             >
               <GithubMarkIcon className="size-5" />
             </Button>
@@ -536,7 +541,7 @@ export function SystemNetworkSettings() {
                     size="sm"
                     onClick={() =>
                       openUrl(
-                        "https://agent.houflow.com/downloads/houhub/latest.json"
+                        "https://github.com/fleap-fly/houhub/releases/latest"
                       )
                     }
                   >
@@ -641,11 +646,14 @@ export function SystemNetworkSettings() {
               <p className="text-2xs leading-5 text-amber-500">{blockerHint}</p>
             )}
 
-            {availableUpdate && serverRuntime === "docker" && (
-              <p className="text-muted-foreground/80 text-2xs leading-5">
-                {t("dockerUpgradeHint")}
-              </p>
-            )}
+            {availableUpdate &&
+              serverSelfUpdate &&
+              !selfUpdateBlocker &&
+              serverRuntime === "docker" && (
+                <p className="text-muted-foreground/80 text-2xs leading-5">
+                  {t("dockerUpgradeHint")}
+                </p>
+              )}
 
             {availableUpdate && (
               <div className="space-y-2 pt-2 border-t border-border/70">
