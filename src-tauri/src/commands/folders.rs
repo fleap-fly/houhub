@@ -8181,8 +8181,11 @@ mod tests {
         let refused = git_delete_branch(repo.clone(), "wt".into(), false)
             .await
             .expect_err("git refuses a branch held by a worktree");
+        // Git words this differently across versions: 2.39 says "checked out
+        // at <path>", newer releases "used by worktree at <path>".
+        let refusal = format!("{refused:?}");
         assert!(
-            format!("{refused:?}").contains("used by worktree"),
+            refusal.contains("used by worktree") || refusal.contains("checked out at"),
             "expected git's worktree refusal, got: {refused:?}"
         );
 

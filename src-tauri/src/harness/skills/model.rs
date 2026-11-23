@@ -312,6 +312,11 @@ pub enum TakenBy {
     Store,
     /// A link (or copy) HouHub made under that name in an agent's directory,
     /// which would come alive (`path`, `agents` = who reads it).
+    ///
+    /// The serde name is pinned: `rename_all = "snake_case"` would emit
+    /// `hou_hub_link`, while the UI (and this module's tests) speak
+    /// `houhub_link`.
+    #[serde(rename = "houhub_link")]
     HouHubLink,
     /// Something under that name in a target agent's skill directory
     /// (`path`, `agents`). Only the default name avoids it; a name the user

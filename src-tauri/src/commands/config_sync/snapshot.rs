@@ -565,6 +565,7 @@ mod tests {
             api_url: Set("https://api.deepseek.com".to_string()),
             api_key: Set("sk-secret".to_string()),
             agent_types_json: Set("[\"deepseek\"]".to_string()),
+            models_json: Set("[]".to_string()),
             agent_type: Set("deepseek".to_string()),
             model: Set(Some("deepseek-chat".to_string())),
             created_at: Set(now),

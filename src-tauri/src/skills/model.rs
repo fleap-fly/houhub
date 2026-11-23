@@ -280,6 +280,8 @@ pub enum CellState {
 #[serde(rename_all = "snake_case")]
 pub enum EntryKind {
     /// A link HouHub made, to this skill in the store.
+    /// Pinned: `rename_all` would emit `hou_hub_link`.
+    #[serde(rename = "houhub_link")]
     HouHubLink,
     /// A copy HouHub made (its record says so).
     HouHubCopy,

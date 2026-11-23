@@ -542,9 +542,13 @@ mod tests {
             .iter_full_env_as_str()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
+        // The key SET is what matters; portable_pty keeps its own internal
+        // order, which differs between platforms.
+        let mut keys: Vec<&str> = env.keys().map(String::as_str).collect();
+        keys.sort_unstable();
         assert_eq!(
-            env.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["HOUHUB_CLI", "HOME", "LANG", "PATH", "XDG_DATA_DIRS"]
+            keys,
+            ["HOME", "HOUHUB_CLI", "LANG", "PATH", "XDG_DATA_DIRS"]
         );
         assert_eq!(
             env["PATH"],
