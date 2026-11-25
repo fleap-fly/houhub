@@ -542,6 +542,11 @@ jobs:
         run: |
           if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            # A re-run (a moved tag, a retried build) finds the release already
+            # there; uploading assets alone leaves it a draft, which then makes
+            # the manifest sync below fail with "release not found". Publishing
+            # explicitly keeps the job idempotent.
+            gh release edit "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
           else
             gh release create "$TAG_NAME" dist/* \
               --repo "$GITHUB_REPOSITORY" \
