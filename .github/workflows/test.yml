@@ -111,7 +111,11 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
-          shared-key: test-${{ matrix.os }}-${{ matrix.mode }}
+          # Salted: a poisoned cache (stale `libhouhub_lib.a` shadowing the
+          # rlib, "found staticlib `windows` instead of rlib") otherwise
+          # survives every re-run of the same commit. Bumping the version
+          # orphans it, and a future poisoning is one bump away too.
+          shared-key: test-v2-${{ matrix.os }}-${{ matrix.mode }}
 
       - name: Install Linux desktop dependencies
         # Only the Linux desktop build needs webkit/appindicator. Windows
