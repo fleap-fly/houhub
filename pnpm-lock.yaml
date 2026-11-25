@@ -12,6 +12,7 @@ overrides:
 
 patchedDependencies:
   '@tauri-apps/api@2.12.4': d028b59c6e5591cf2e23346a24e10ea74825bb4314ba2cdf4b439c33abc5563a
+  motion-dom@13.3.0: e7f7f6d3629b24eaf008596652d1196d961a63ee196f5081e79b500c7543d7ad
   overlayscrollbars@2.15.1: d31b0912d157c6838f7cea20573a5917730580b13fceaa2c7c53b4856f605328
   streamdown@2.7.1: 37dc22ee017cf9114cea238a0a4ea19ff599b2380dcb9b2529014158178b73ea
 
@@ -6586,8 +6587,8 @@ packages:
   unrs-resolver@1.13.0:
     resolution: {integrity: sha512-mcPQo9Vm6kXd84d/WqMiYBi2CcA57QHBX/ev5PoUEb8b2oQzUvJ6xYsfseQblnCncgnVmCZGWiFwK7KkS5JZJA==}
 
-  until-async@3.0.2:
-    resolution: {integrity: sha512-IiSk4HlzAMqTUseHHe3VhIGyuFmN90zMTpD3Z3y8jeQbzLIq500MVM7Jq2vUAnTKAFPJrqwkzr6PoTcPhGcOiw==}
+  until-async@3.0.3:
+    resolution: {integrity: sha512-Ix78tBf1shsd8V8zc+msjiUk8Yf6upBuqR9iTgcWTyNFkTPy7hMonnsG/W6jhu53vrNTB0VZHxSNayRHrF+Auw==}
 
   update-browserslist-db@1.3.4:
     resolution: {integrity: sha512-t8wonIOdQyOjtPd2VktlBu6QjTVTks6v8bSi7kd0r2Vll8TK1JYDZtRRdbmCHOAMphkZgrzK+L+vXK4pyZ8t4A==}
@@ -11093,7 +11094,7 @@ snapshots:
 
   framer-motion@13.4.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4):
     dependencies:
-      motion-dom: 13.3.0
+      motion-dom: 13.3.0(patch_hash=e7f7f6d3629b24eaf008596652d1196d961a63ee196f5081e79b500c7543d7ad)
       motion-utils: 13.3.0
       tslib: 2.8.1
     optionalDependencies:
@@ -12406,7 +12407,7 @@ snapshots:
       dompurify: 3.4.17
       marked: 14.0.0
 
-  motion-dom@13.3.0:
+  motion-dom@13.3.0(patch_hash=e7f7f6d3629b24eaf008596652d1196d961a63ee196f5081e79b500c7543d7ad):
     dependencies:
       motion-utils: 13.3.0
 
@@ -12442,7 +12443,7 @@ snapshots:
       strict-event-emitter: 0.5.1
       tough-cookie: 6.0.1
       type-fest: 5.4.4
-      until-async: 3.0.2
+      until-async: 3.0.3
       yargs: 17.7.3
     optionalDependencies:
       typescript: 5.8.3
@@ -13871,7 +13872,7 @@ snapshots:
       '@unrs/resolver-binding-win32-ia32-msvc': 1.13.0
       '@unrs/resolver-binding-win32-x64-msvc': 1.13.0
 
-  until-async@3.0.2:
+  until-async@3.0.3:
     optional: true
 
   update-browserslist-db@1.3.4(browserslist@4.29.3):

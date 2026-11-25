@@ -1,45 +1,28 @@
 use std::collections::BTreeMap;
-
 use std::path::Path;
-
 use std::sync::Arc;
-
 use std::time::Instant;
 
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
-
 use tokio::sync::Mutex;
 
 use super::i18n::{self, Lang};
-
 use super::manager::ChatChannelManager;
-
 use super::session_bridge::{ActiveSession, SessionBridge};
-
 use super::types::{
     ButtonStyle, ChannelMessageTarget, InteractiveMessage, MessageButton, MessageLevel, RichMessage,
 };
-
 use crate::acp::manager::ConnectionManager;
-
 use crate::acp::registry::all_acp_agents;
-
 use crate::acp::types::{PermissionAnswerOrigin, PermissionOptionInfo, PromptInputBlock};
-
 use crate::db::entities::{chat_channel_thread_binding, conversation};
-
 use crate::db::service::{
     conversation_service, folder_service, sender_context_service, thread_binding_service,
 };
-
 use crate::db::AppDatabase;
-
 use crate::models::agent::AgentType;
-
 use crate::models::conversation::DbConversationSummary;
-
 use crate::models::folder::FolderDetail;
-
 use crate::web::event_bridge::EventEmitter;
 
 pub struct FollowupRequest<'a> {
@@ -905,18 +888,21 @@ pub async fn handle_resume(
 
     // Spawn agent with session_id for resume
     let owner_label = owner_label_for(channel_id, sender_id, target);
-    let connection_id = match conn_mgr
-        .spawn_agent(
-            conv.agent_type,
-            Some(folder.path.clone()),
-            conv.external_id.clone(),
-            runtime_env,
-            owner_label,
-            emitter.clone(),
-            None,
-            BTreeMap::new(),
-        )
-        .await
+    // The conversation's own stored selection is replayed (houhub#1179).
+    let connection_id = match crate::commands::acp::spawn_with_conversation_selection(
+        conn_mgr,
+        db,
+        conv.agent_type,
+        Some(folder.path.clone()),
+        conv.external_id.clone(),
+        runtime_env,
+        owner_label,
+        emitter.clone(),
+        Some(conv.id),
+        None,
+        BTreeMap::new(),
+    )
+    .await
     {
         Ok(id) => id,
         Err(e) => {
@@ -1512,7 +1498,7 @@ fn owner_label_for(channel_id: i32, sender_id: &str, target: &ChannelMessageTarg
 
 fn truncate_topic_title(task_description: &str) -> String {
     let title = truncate_title(task_description);
-    format!("Houhub: {title}").chars().take(128).collect()
+    format!("HouHub: {title}").chars().take(128).collect()
 }
 
 async fn build_chat_session_runtime_env(
@@ -1550,19 +1536,22 @@ async fn spawn_chat_connection_for_conversation(
             .await
             .map_err(|e| e.to_string())?;
     let owner_label = owner_label_for(channel_id, sender_id, target);
-    let connection_id = conn_mgr
-        .spawn_agent(
-            conv.agent_type,
-            Some(folder.path.clone()),
-            conv.external_id.clone(),
-            runtime_env,
-            owner_label,
-            emitter.clone(),
-            None,
-            BTreeMap::new(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    // The conversation's own stored selection is replayed (houhub#1179).
+    let connection_id = crate::commands::acp::spawn_with_conversation_selection(
+        conn_mgr,
+        db,
+        conv.agent_type,
+        Some(folder.path.clone()),
+        conv.external_id.clone(),
+        runtime_env,
+        owner_label,
+        emitter.clone(),
+        Some(conv.id),
+        None,
+        BTreeMap::new(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok((connection_id, folder))
 }
@@ -1747,13 +1736,9 @@ fn truncate_title(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::acp::connection::ConnectionCommand;
-
     use crate::chat_channel::session_bridge::PendingPermission;
-
     use crate::db::service::{agent_setting_service, chat_channel_service, sender_context_service};
-
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
 
     async fn seed_chat_channel(db: &crate::db::AppDatabase) -> i32 {
@@ -2110,9 +2095,7 @@ mod tests {
             .insert_test_connection_live(
                 "conn-followup",
                 AgentType::OpenCode,
-                Some(std::path::PathBuf::from(
-                    "/tmp/houhub-topic-followup-active",
-                )),
+                Some(std::path::PathBuf::from("/tmp/houhub-topic-followup-active")),
                 EventEmitter::Noop,
             )
             .await;

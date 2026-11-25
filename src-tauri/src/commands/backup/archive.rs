@@ -66,7 +66,8 @@ impl ArchiveBuilder {
     ) -> Result<(), AppCommandError> {
         let opts = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Deflated)
-            .large_file(true);
+            .large_file(true)
+            .unix_permissions(entry_mode(src));
         self.writer
             .start_file(entry_name.to_string(), opts)
             .map_err(zip_err)?;
@@ -116,9 +117,8 @@ impl ArchiveBuilder {
             if cancel.is_cancelled() {
                 return Err(cancelled_error());
             }
-            let entry = entry.map_err(|e| {
-                AppCommandError::io_error("Failed to walk directory").with_detail(e.to_string())
-            })?;
+            let entry = entry
+                .map_err(|e| AppCommandError::io_error("Failed to walk directory").with_detail(e.to_string()))?;
             let ft = entry.file_type();
             if !ft.is_file() {
                 // Skip directories, symlinks, and special files.
@@ -145,14 +145,10 @@ impl ArchiveBuilder {
 
     /// Write `manifest.json` (uncompressed) as the last entry and close the
     /// archive. Returns the manifest with its `entries` populated.
-    pub fn finish(
-        mut self,
-        mut manifest: BackupManifest,
-    ) -> Result<BackupManifest, AppCommandError> {
+    pub fn finish(mut self, mut manifest: BackupManifest) -> Result<BackupManifest, AppCommandError> {
         manifest.entries = std::mem::take(&mut self.entries);
-        let json = serde_json::to_vec_pretty(&manifest).map_err(|e| {
-            AppCommandError::task_execution_failed("Serialize manifest").with_detail(e.to_string())
-        })?;
+        let json = serde_json::to_vec_pretty(&manifest)
+            .map_err(|e| AppCommandError::task_execution_failed("Serialize manifest").with_detail(e.to_string()))?;
         let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
         self.writer
             .start_file(MANIFEST_ENTRY_NAME, opts)
@@ -245,11 +241,7 @@ pub fn extract_all(
     // path -> manifest-declared size, used to bound each entry's decompressed
     // output (a decompression bomb stops at the declared size + 1 and is
     // rejected, rather than filling the disk before checksum verification).
-    let sizes: HashMap<&str, u64> = manifest
-        .entries
-        .iter()
-        .map(|e| (e.path.as_str(), e.size))
-        .collect();
+    let sizes: HashMap<&str, u64> = manifest.entries.iter().map(|e| (e.path.as_str(), e.size)).collect();
     let f = File::open(zip_path).map_err(AppCommandError::io)?;
     let mut ar = ZipArchive::new(BufReader::new(f)).map_err(|_| unknown_format_error())?;
     let mut processed = 0u64;
@@ -292,10 +284,44 @@ pub fn extract_all(
         if n > expected {
             return Err(corrupted_error());
         }
+        drop(w);
+        // An executable file comes back executable (a plugin's hook is run
+        // in place, and its revision is checked with the bit); nothing more
+        // of the mode than that is taken from the archive.
+        // Only who may read it now may run it: the file's own (umask-given)
+        // mode is never widened.
+        #[cfg(unix)]
+        if entry.unix_mode().is_some_and(|mode| mode & 0o111 != 0) {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&out)
+                .map_err(AppCommandError::io)?
+                .permissions()
+                .mode()
+                & 0o777;
+            std::fs::set_permissions(
+                &out,
+                std::fs::Permissions::from_mode(mode | ((mode & 0o444) >> 2)),
+            )
+            .map_err(AppCommandError::io)?;
+        }
         processed += n;
         progress(&rel_str, processed);
     }
     Ok(())
+}
+
+/// The mode an entry is stored with: `0o755` for a file someone may run,
+/// else `0o644`.
+fn entry_mode(src: &Path) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::metadata(src).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0) {
+            return 0o755;
+        }
+    }
+    let _ = src;
+    0o644
 }
 
 /// Re-hash extracted files against the manifest. Any size or digest mismatch
@@ -378,6 +404,48 @@ mod tests {
         }
     }
 
+    /// A file someone may run comes back so (a plugin's hook runs in place),
+    /// for whoever may read it as extracted; the others, and nothing more of
+    /// the mode, do not.
+    #[cfg(unix)]
+    #[test]
+    fn an_executable_file_comes_back_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("db.bin"), b"db").unwrap();
+        std::fs::write(src.join("hook"), b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(src.join("hook"), std::fs::Permissions::from_mode(0o4750))
+            .unwrap();
+        std::fs::write(src.join("notes.md"), b"x").unwrap();
+        std::fs::set_permissions(src.join("notes.md"), std::fs::Permissions::from_mode(0o600))
+            .unwrap();
+        let zip_path = dir.path().join("backup.zip");
+        let cancel = CancellationToken::new();
+        let mut prog = null_progress();
+        let mut b = ArchiveBuilder::create(&zip_path).unwrap();
+        b.add_file("db/houhub.db", &src.join("db.bin"), &cancel, &mut prog)
+            .unwrap();
+        b.add_dir("plugins", &src, &|_| false, &cancel, &mut prog)
+            .unwrap();
+        let manifest = b.finish(sample_manifest()).unwrap();
+        let out = dir.path().join("out");
+        extract_all(&zip_path, &out, &manifest, &cancel, &mut null_progress()).unwrap();
+        let mode = |rel: &str| {
+            std::fs::metadata(out.join(rel))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777
+        };
+        let readable = |rel: &str| mode(rel) & 0o444;
+        assert_eq!(mode("plugins/hook") & 0o111, readable("plugins/hook") >> 2);
+        assert_ne!(mode("plugins/hook") & 0o100, 0);
+        assert_eq!(mode("plugins/hook") & 0o7000, 0);
+        assert_eq!(mode("plugins/notes.md") & 0o111, 0);
+    }
+
     #[test]
     fn build_read_extract_verify_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
@@ -408,7 +476,10 @@ mod tests {
 
         // Manifest captured 3 files, excluded the .tmp one.
         assert_eq!(manifest.entries.len(), 3);
-        assert!(manifest.entries.iter().all(|e| !e.path.contains(".tmp")));
+        assert!(manifest
+            .entries
+            .iter()
+            .all(|e| !e.path.contains(".tmp")));
 
         let reread = read_manifest(&zip_path).unwrap();
         assert_eq!(reread.entries.len(), 3);

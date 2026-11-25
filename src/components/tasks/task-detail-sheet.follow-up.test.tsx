@@ -14,7 +14,7 @@ import { useEffect } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
-import type { WorkTask } from "@/lib/types"
+import type { PromptInputBlock, WorkTask } from "@/lib/types"
 
 import { TaskDetailSheet } from "./task-detail-sheet"
 import type {
@@ -27,12 +27,7 @@ const workTaskRetry = vi.fn().mockResolvedValue(undefined)
 const workTaskRequeue = vi.fn().mockResolvedValue(undefined)
 
 vi.mock("@/lib/api", () => ({
-  describeAgentOptions: vi.fn().mockResolvedValue([]),
-  expertsList: vi.fn().mockResolvedValue([]),
-  expertsListAllInstallStatuses: vi.fn().mockResolvedValue([]),
-  officecliSkillListAllInstallStatuses: vi.fn().mockResolvedValue([]),
-  scienceList: vi.fn().mockResolvedValue([]),
-  scienceListAllInstallStatuses: vi.fn().mockResolvedValue([]),
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskArchive: vi.fn().mockResolvedValue(undefined),
   workTaskCancel: vi.fn().mockResolvedValue(undefined),
   getFolderConversation: vi.fn().mockRejectedValue(new Error("no transcript")),
@@ -47,7 +42,6 @@ vi.mock("@/lib/api", () => ({
   workTaskStart: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock("@/lib/platform", () => ({
-  isDesktop: () => false,
   subscribe: vi.fn().mockResolvedValue(() => {}),
   onTransportReconnect: vi.fn(() => () => {}),
 }))
@@ -80,25 +74,23 @@ vi.mock("./task-transcript-dialog", () => ({
  * caught up with) and the props the drawer passes in.
  */
 let editorText = ""
+let editorBlocks: PromptInputBlock[] = []
+let uploading = false
 let composerProps: TaskMessageComposerProps | null = null
 vi.mock("./task-message-composer", () => ({
   TaskMessageComposer: (props: TaskMessageComposerProps) => {
     composerProps = props
     const ref = props.ref
     useEffect(() => {
-      if (ref && typeof ref === "object") {
-        ref.current = {
-          getText: () => editorText,
-          getEditor: () => null,
-          getPromptBlocks: () => [],
-          getAttachmentBlocks: () => [],
-          hasUploadingImage: () => false,
-          hasAttachments: () => false,
-          clear: () => {},
-        } satisfies TaskMessageComposerHandle
-      }
+      if (!ref || typeof ref === "function") return
+      ref.current = {
+        getText: () => editorText,
+        getAttachmentBlocks: () => editorBlocks,
+        hasUploadingImage: () => uploading,
+        hasAttachments: () => editorBlocks.length > 0,
+      } as TaskMessageComposerHandle
       return () => {
-        if (ref && typeof ref === "object") ref.current = null
+        ref.current = null
       }
     }, [ref])
     return <div data-testid="follow-up-composer" />
@@ -144,6 +136,8 @@ function mount(row: WorkTask) {
 
 beforeEach(() => {
   editorText = ""
+  editorBlocks = []
+  uploading = false
   composerProps = null
   vi.clearAllMocks()
 })
@@ -257,5 +251,100 @@ describe("task drawer follow-up", () => {
     await user.click(screen.getByRole("button", { name: /^send$/i }))
     await waitFor(() => expect(workTaskRequeue).toHaveBeenCalledTimes(1))
     expect(workTaskRequeue).toHaveBeenCalledWith(7, null, [], false)
+  })
+
+  it("keeps the note box open on a resurrection refusal and waives on the retry", async () => {
+    const user = userEvent.setup()
+    workTaskRetry.mockRejectedValueOnce(
+      new Error(
+        "validation error: duplicate_active_source: task #9 (Same issue) is already active for this work item"
+      )
+    )
+    mount(task({ status: "failed", last_error: "boom" }))
+    await user.click(screen.getByRole("button", { name: /^retry$/i }))
+    await screen.findByTestId("follow-up-composer")
+
+    editorText = "this note must survive"
+    await user.click(screen.getByRole("button", { name: /^send$/i }))
+    // Announced, not just drawn: focus is in the editor when this arrives.
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /#9 \(Same issue\) is already active/
+    )
+    // A restart that did NOT happen must not close the box with the note in
+    // it — the whole point is that the user answers and sends the same note.
+    expect(screen.getByTestId("follow-up-composer")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Restart anyway" }))
+    await waitFor(() => expect(workTaskRetry).toHaveBeenCalledTimes(2))
+    expect(workTaskRetry).toHaveBeenLastCalledWith(
+      7,
+      "this note must survive",
+      [],
+      true
+    )
+  })
+
+  it("retires the guard's warning when the note box is closed again", async () => {
+    const user = userEvent.setup()
+    workTaskRetry.mockRejectedValueOnce(
+      new Error(
+        "validation error: duplicate_active_source: task #9 (Same issue) is already active for this work item"
+      )
+    )
+    mount(task({ status: "failed", last_error: "boom" }))
+    const retry = screen.getByRole("button", { name: /^retry$/i })
+    await user.click(retry)
+    await screen.findByTestId("follow-up-composer")
+    await user.click(screen.getByRole("button", { name: /^send$/i }))
+    await screen.findByRole("button", { name: "Restart anyway" })
+
+    // Fold the box away and open it again: the refusal belonged to the box it
+    // was raised in. Reopening on a stale "restart anyway" would waive a guard
+    // the user never saw refuse anything on this pass.
+    await user.click(retry)
+    await user.click(retry)
+    await screen.findByTestId("follow-up-composer")
+    expect(
+      screen.queryByRole("button", { name: "Restart anyway" })
+    ).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: /^send$/i }))
+    await waitFor(() => expect(workTaskRetry).toHaveBeenCalledTimes(2))
+    expect(workTaskRetry).toHaveBeenLastCalledWith(7, null, [], false)
+  })
+
+  it("follows up on a pasted screenshot with no prose", async () => {
+    const user = userEvent.setup()
+    editorBlocks = [
+      { type: "image", data: "aGk=", mime_type: "image/png", uri: null },
+    ]
+    mount(task())
+    await user.click(screen.getByRole("button", { name: /follow up/i }))
+    await screen.findByTestId("follow-up-composer")
+    // `revise` normally demands text; an attachment is content in its own
+    // right, so the send is live and the image travels as its own block.
+    await act(async () => {
+      composerProps?.onAttachmentsChange?.(1)
+    })
+    await user.click(screen.getByRole("button", { name: /^send$/i }))
+    await waitFor(() => expect(workTaskReturn).toHaveBeenCalledTimes(1))
+    expect(workTaskReturn).toHaveBeenCalledWith(7, "", "revise", editorBlocks)
+  })
+
+  it("refuses to send while an image upload is still in flight", async () => {
+    const user = userEvent.setup()
+    uploading = true
+    editorText = "look at this"
+    editorBlocks = [
+      { type: "image", data: "", mime_type: "image/png", uri: null },
+    ]
+    mount(task())
+    await user.click(screen.getByRole("button", { name: /follow up/i }))
+    await screen.findByTestId("follow-up-composer")
+    await act(async () => {
+      composerProps?.onSubmit?.()
+    })
+    // The block would reach the agent with neither bytes nor a uri.
+    expect(workTaskReturn).not.toHaveBeenCalled()
   })
 })

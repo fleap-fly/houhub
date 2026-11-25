@@ -47,11 +47,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::acp::session_state::SessionState;
-
 use crate::acp::types::AcpEvent;
-
 use crate::models::agent::AgentType;
-
 use crate::web::event_bridge::{emit_with_state, EventEmitter};
 
 /// Pull a usable session title out of ACP `session_info_update.title`.
@@ -85,6 +82,90 @@ pub(crate) fn wire_title(agent_type: AgentType, title: Option<&str>) -> Option<S
     match agent_type {
         AgentType::KimiCode => crate::parsers::kimi_code::displayed_session_title(title?),
         _ => native_title_from_session_info(title),
+    }
+}
+
+/// The name pi-acp (0.0.35+) gives a session it created after its first
+/// prompt, so the live path can leave it out.
+///
+/// pi-acp names a session from `session/new` when its first turn starts,
+/// unless pi already has a name for it: the prompt's text, collapsed and cut
+/// to 80 characters (`parsers::pi::pi_acp_prompt_title`). It stores that
+/// through pi's `set_session_name` and publishes it as
+/// `session_info_update.title`: first pi's `session_info_changed` echo, which
+/// carries the name as pi stored it, trimmed, then the cut itself, unless that
+/// is the same string (pi-acp skips a repeat). The history parser does not
+/// take that name for one (`parsers::pi::is_pi_acp_prompt_name`), so the
+/// session keeps the title its first prompt gives it; adopting the wire copy
+/// would have the row renamed to it at the first turn and back at the next
+/// detail load.
+///
+/// The name is known before it arrives: the first prompt sent on the
+/// connection that has text and does not start with a slash command
+/// ([`Self::note_prompt`]), which on a new session is the prompt whose turn
+/// pi-acp names it after. pi-acp runs some of those commands itself without a
+/// turn, and names the session after one expanded from a prompt file, which
+/// the parser keeps as well (`parsers::pi::is_pi_slash_prompt`).
+///
+/// The two publishes are told apart by their exact wire strings. The echo is
+/// left out only as the first title to arrive: one arriving before it (a name
+/// pi already had) means pi-acp names nothing, and a title after it is a name
+/// unless it is pi-acp's own copy. That copy is left out whenever it comes
+/// before the next prompt is sent, even after a name an extension gave in
+/// answer to the echo (which makes pi-acp publish a copy it would otherwise
+/// have skipped as a repeat). A `/name` is a prompt of its own, so it is
+/// never taken for the copy, even spelling the name again. (A `/name`
+/// spelling the echo right after it never reaches houhub: pi-acp skips the
+/// repeat. The next detail load adopts it.) On a loaded session pi-acp names
+/// nothing; what is noted there only matters to a title spelling the first
+/// prompt sent on this connection that arrives during that prompt's turn.
+#[derive(Debug, Default)]
+pub(crate) struct PiPromptTitle {
+    /// A prompt has been noted; the next one ends the naming.
+    noted: bool,
+    /// pi's echo of the name, until a title arrives.
+    echo: Option<String>,
+    /// pi-acp's own copy of the name, until it arrives or the next prompt.
+    cut: Option<String>,
+    /// A title has arrived; later prompts cannot be the one named after.
+    settled: bool,
+}
+
+impl PiPromptTitle {
+    /// Note a prompt sent to pi-acp, its text blocks in order.
+    pub(crate) fn note_prompt(&mut self, texts: &[&str]) {
+        if self.noted {
+            self.echo = None;
+            self.cut = None;
+            return;
+        }
+        if self.settled || crate::parsers::pi::is_pi_slash_prompt(&texts.concat()) {
+            return;
+        }
+        let Some(cut) = crate::parsers::pi::pi_acp_prompt_title(texts.iter().copied()) else {
+            return;
+        };
+        self.noted = true;
+        self.echo = Some(
+            cut.trim_matches(crate::acp::js_text::is_js_whitespace)
+                .to_string(),
+        );
+        self.cut = Some(cut);
+    }
+
+    /// Whether the title published as `raw` (the wire string, before
+    /// [`wire_title`]) is pi-acp publishing the name it gave the session after
+    /// its first prompt.
+    pub(crate) fn is_prompt_title(&mut self, raw: &str) -> bool {
+        self.settled = true;
+        if self.echo.take().is_some_and(|echo| echo == raw) {
+            return true;
+        }
+        if self.cut.as_deref() == Some(raw) {
+            self.cut = None;
+            return true;
+        }
+        false
     }
 }
 
@@ -177,8 +258,8 @@ pub(crate) async fn publish_native_title(
 ) {
     let admit = {
         let mut s = state.write().await;
-        let admit =
-            s.conversation_id.is_some() && s.last_native_title.as_deref() != Some(title.as_str());
+        let admit = s.conversation_id.is_some()
+            && s.last_native_title.as_deref() != Some(title.as_str());
         if admit {
             s.last_native_title = Some(title.clone());
         }

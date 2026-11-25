@@ -708,9 +708,10 @@ async fn async_main(
     }
 
     // The Harness update check (mirrors lib.rs setup): daily, in the
-    // background, only tells; not started under HOUHUB_HARNESS=off.
+    // background, only tells (but switches off a plugin's autorun parts SRN
+    // no longer vouches for); not started under HOUHUB_HARNESS=off.
     if let Some(checker) =
-        houhub_lib::harness::updates::build(&state.data_dir, state.emitter.clone())
+        houhub_lib::harness::updates::build(&state.data_dir, state.emitter.clone(), &state.db)
     {
         tokio::spawn(houhub_lib::harness::updates::run(checker));
     }

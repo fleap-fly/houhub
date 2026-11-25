@@ -14,30 +14,21 @@ use serde::{Deserialize, Serialize};
 /// for 11 rows (1536×2288). Height therefore grows in whole 208px steps and
 /// is validated per sheet rather than pinned to a single value.
 pub const SPRITE_SHEET_WIDTH: u32 = 1536;
-
 /// Height of the base 9-row sheet. Treated as the canonical *minimum*; taller
 /// sheets are accepted as long as the height is a whole multiple of a row.
 pub const SPRITE_SHEET_HEIGHT: u32 = 1872;
-
 #[allow(dead_code)]
 pub const SPRITE_GRID_COLS: u32 = 8;
-
 /// Row count of the base format, i.e. the minimum number of rows a sheet must
 /// carry (all base animation states). Newer sheets append rows beyond this.
 pub const SPRITE_GRID_ROWS: u32 = 9;
-
 #[allow(dead_code)]
-pub const SPRITE_FRAME_WIDTH: u32 = SPRITE_SHEET_WIDTH / SPRITE_GRID_COLS;
-
-// 192
-pub const SPRITE_FRAME_HEIGHT: u32 = SPRITE_SHEET_HEIGHT / SPRITE_GRID_ROWS;
-
-// 208
+pub const SPRITE_FRAME_WIDTH: u32 = SPRITE_SHEET_WIDTH / SPRITE_GRID_COLS; // 192
+pub const SPRITE_FRAME_HEIGHT: u32 = SPRITE_SHEET_HEIGHT / SPRITE_GRID_ROWS; // 208
 
 /// Filename codex writes inside each pet directory. Stored as a relative path
 /// in `pet.json::spritesheetPath`; we resolve it against the pet directory.
 pub const SPRITESHEET_FILENAME: &str = "spritesheet.webp";
-
 pub const PET_MANIFEST_FILENAME: &str = "pet.json";
 
 /// Animation rows in the spritesheet, top-to-bottom, mirroring the
@@ -224,6 +215,13 @@ pub struct PetWindowConfig {
     pub x: Option<f64>,
     #[serde(default)]
     pub y: Option<f64>,
+    /// Monitor scale factor captured when `(x, y)` was recorded. On macOS,
+    /// `tao`'s physical monitor rects can overlap across mixed-DPI layouts
+    /// (e.g. a 1× display to the right of a 2× primary); storing the recorded
+    /// scale factor lets restore convert `(x, y)` back into unambiguous Cocoa
+    /// logical points before matching monitors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_scale_factor: Option<f64>,
     #[serde(default = "default_scale")]
     pub scale: f64,
     #[serde(default = "default_always_on_top")]
@@ -245,17 +243,20 @@ impl Default for PetWindowConfig {
             active_pet_id: None,
             x: None,
             y: None,
+            position_scale_factor: None,
             scale: 0.75,
             always_on_top: true,
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PetWindowStatePatch {
     pub x: Option<f64>,
     pub y: Option<f64>,
+    #[serde(default)]
+    pub position_scale_factor: Option<f64>,
     pub scale: Option<f64>,
     pub always_on_top: Option<bool>,
     pub enabled: Option<bool>,
@@ -448,7 +449,7 @@ mod tests {
         let payload = PetSessionsPayload::from_entries(vec![
             session_entry(ConnectionStatus::Prompting, false), // running
             session_entry(ConnectionStatus::Prompting, true), // waiting: pending outranks prompting
-            session_entry(ConnectionStatus::Error, false),    // error
+            session_entry(ConnectionStatus::Error, false),     // error
             session_entry(ConnectionStatus::Connected, false), // idle-ish: counted nowhere
         ]);
         assert_eq!(payload.running_count, 1);
@@ -471,10 +472,7 @@ mod tests {
     fn pet_session_entry_omits_pending_when_absent() {
         let entry = session_entry(crate::acp::types::ConnectionStatus::Prompting, false);
         let v = serde_json::to_value(&entry).unwrap();
-        assert!(
-            v.get("pending").is_none(),
-            "pending must be omitted when None"
-        );
+        assert!(v.get("pending").is_none(), "pending must be omitted when None");
         assert_eq!(v["connectionId"], "c");
     }
 }

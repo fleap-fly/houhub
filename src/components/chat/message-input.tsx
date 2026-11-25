@@ -242,7 +242,7 @@ import {
 export type ComposerInjectContent =
   | {
       text: string
-      skill?: { id: string; label: string }
+      skill?: { id: string; label: string; expertId?: string }
       /** Replace the document (default) or append the text at the caret. */
       mode?: "replace" | "append"
     }
