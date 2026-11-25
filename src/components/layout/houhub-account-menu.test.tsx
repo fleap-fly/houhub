@@ -55,6 +55,14 @@ vi.mock("@/workbench", () => ({
     selector(state.workbench),
 }))
 
+// The menu now also draws the quick actions, which reach for the automations
+// and harness views; the dialog/handler machinery is not what this test covers.
+vi.mock("@/components/layout/quick-actions-menu", () => ({
+  useQuickActions: () => ({}),
+  QuickActionsItems: () => null,
+  QuickActionsDialogs: () => null,
+}))
+
 vi.mock("@/lib/platform", () => ({
   openUrl: vi.fn(),
 }))

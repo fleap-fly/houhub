@@ -24,8 +24,10 @@ vi.mock("@/components/layout/status-bar-update", () => ({
 vi.mock("@/components/layout/command-dropdown", () => ({
   CommandDropdown: () => null,
 }))
-vi.mock("@/components/layout/status-bar-srn", () => ({
-  StatusBarSrn: ({ compact }: { compact?: boolean }) => (
+// HouHub replaces upstream's SRN entry with its own Houflow account menu, which
+// keeps the same leading-corner contract (and the quick actions inside it).
+vi.mock("@/components/layout/houhub-account-menu", () => ({
+  HouhubAccountMenu: ({ compact }: { compact?: boolean }) => (
     <span data-testid="srn" data-compact={compact ? "true" : "false"} />
   ),
 }))

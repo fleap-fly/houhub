@@ -8,7 +8,7 @@ import { StatusBarComputer } from "@/components/layout/status-bar-computer"
 import { StatusBarUpdate } from "@/components/layout/status-bar-update"
 import { StatusBarWebService } from "@/components/layout/status-bar-web-service"
 import { CommandDropdown } from "@/components/layout/command-dropdown"
-import { StatusBarSrn } from "@/components/layout/status-bar-srn"
+import { HouhubAccountMenu } from "@/components/layout/houhub-account-menu"
 import { useIsMobile } from "@/hooks/use-mobile"
 
 export function StatusBar() {
@@ -25,7 +25,7 @@ export function StatusBar() {
     return (
       <div className="h-8 shrink-0 border-t border-border ws-chrome-border ws-surface-muted px-3 flex items-center justify-between text-xs text-muted-foreground">
         <div className="flex items-center gap-3">
-          <StatusBarSrn compact />
+          <HouhubAccountMenu compact />
           <StatusBarStats />
         </div>
         <div className="flex items-center gap-3">
@@ -71,7 +71,7 @@ export function StatusBar() {
           are now the rows of the entry's menu, so nothing else sits
           on the rail. */}
       <div className="flex min-w-0 items-center gap-3">
-        <StatusBarSrn />
+        <HouhubAccountMenu />
         <StatusBarStats />
       </div>
       <div className="flex items-center gap-4">

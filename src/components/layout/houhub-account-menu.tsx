@@ -26,6 +26,11 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  QuickActionsDialogs,
+  QuickActionsItems,
+  useQuickActions,
+} from "@/components/layout/quick-actions-menu"
 import { useHouflowDesktopStore } from "@/houflow"
 import { gatewayDailyQuotaDisplay } from "@/houflow/quota-display"
 import { toErrorMessage } from "@/lib/app-error"
@@ -218,7 +223,12 @@ function resolveCopy(locale: string): AccountMenuCopy {
   return COPY[normalized.split("-")[0]] ?? COPY.en
 }
 
-export function HouhubAccountMenu() {
+export function HouhubAccountMenu({
+  compact = false,
+}: {
+  /** Phones: the glyph only, no name — the bar has no width for one. */
+  compact?: boolean
+} = {}) {
   const locale = useLocale()
   const copy = useMemo(() => resolveCopy(locale), [locale])
   const houflow = useHouflowDesktopStore(
@@ -241,6 +251,7 @@ export function HouhubAccountMenu() {
     }))
   )
   const [pending, setPending] = useState<"houflow" | "project" | null>(null)
+  const quick = useQuickActions()
 
   const houflowConnected = houflow.session.status === "signed_in"
   const projectConnected = workbench.session.status === "signed_in"
@@ -332,9 +343,11 @@ export function HouhubAccountMenu() {
               )}
             />
           </span>
-          <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-medium">
-            {checking ? copy.checking : displayLabel}
-          </span>
+          {compact ? null : (
+            <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-medium">
+              {checking ? copy.checking : displayLabel}
+            </span>
+          )}
           {busy ? (
             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
           ) : (
@@ -507,7 +520,12 @@ export function HouhubAccountMenu() {
             ) : null}
           </>
         ) : null}
+        {/* Quick actions live in this menu too, so replacing upstream's SRN
+            entry with the Houflow one keeps them reachable. */}
+        <DropdownMenuSeparator />
+        <QuickActionsItems actions={quick} />
       </DropdownMenuContent>
+      <QuickActionsDialogs actions={quick} />
     </DropdownMenu>
   )
 }
