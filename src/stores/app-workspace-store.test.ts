@@ -13,17 +13,6 @@ import {
 } from "./app-workspace-store"
 import type { DbConversationSummary, FolderDetail } from "@/lib/types"
 
-// Our fork reads the workspace through the local-first layer
-// (`@/stores/local-workspace-read`), not straight from `@/lib/api`, so the
-// offline-hydration cases below have to drive that layer instead.
-const localRead = vi.hoisted(() => ({
-  listOpenFolderDetails: vi.fn(async () => [] as FolderDetail[]),
-  listAllFolderDetails: vi.fn(async () => [] as FolderDetail[]),
-  listAllConversations: vi.fn(async () => [] as DbConversationSummary[]),
-}))
-
-vi.mock("@/stores/local-workspace-read", () => localRead)
-
 vi.mock("@/lib/api", () => ({
   getFolder: vi.fn(),
   getGitHead: vi.fn(),
@@ -45,12 +34,14 @@ vi.mock("@/lib/api", () => ({
 const {
   getFolder,
   getGitHead,
+  listAllFolderDetails,
+  listOpenFolderDetails,
   listFolderGroups: readFolderGroups,
 } = await import("@/lib/api")
 const mockGetFolder = vi.mocked(getFolder)
 const mockGetGitHead = vi.mocked(getGitHead)
-const mockListAllFolders = localRead.listAllFolderDetails
-const mockListOpenFolders = localRead.listOpenFolderDetails
+const mockListAllFolders = vi.mocked(listAllFolderDetails)
+const mockListOpenFolders = vi.mocked(listOpenFolderDetails)
 const mockListFolderGroups = vi.mocked(readFolderGroups)
 
 function makeSummary(
@@ -67,6 +58,7 @@ function makeSummary(
     git_branch: null,
     external_id: null,
     message_count: 0,
+    child_count: 0,
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
     pinned_at: null,
@@ -74,12 +66,32 @@ function makeSummary(
     parent_tool_use_id: null,
     delegation_call_id: null,
     ...overrides,
-    child_count: overrides.child_count ?? 0,
   }
 }
 
 beforeEach(() => {
   resetAppWorkspaceStore()
+})
+
+describe("applyConversationUpsert — rows the sidebar doesn't list", () => {
+  it("keeps an ask conversation out, and takes it in once unlinked", () => {
+    const store = useAppWorkspaceStore.getState()
+    store.applyConversationUpsert(makeSummary({ id: 1 }))
+    store.applyConversationUpsert(
+      makeSummary({ id: 2, kind: "ask", parent_id: 1 })
+    )
+    expect(
+      useAppWorkspaceStore.getState().conversations.map((c) => c.id)
+    ).toEqual([1])
+
+    // "Convert to a normal conversation" broadcasts the row without its link.
+    store.applyConversationUpsert(
+      makeSummary({ id: 2, kind: "regular", parent_id: null })
+    )
+    expect(
+      useAppWorkspaceStore.getState().conversations.map((c) => c.id)
+    ).toEqual([2, 1])
+  })
 })
 
 describe("updateConversationLocal — stats reference stability", () => {

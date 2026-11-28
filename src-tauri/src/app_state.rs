@@ -1,27 +1,16 @@
 use std::path::PathBuf;
-
 use std::sync::Arc;
 
 use crate::acp::delegation::broker::DelegationBroker;
-
 use crate::acp::delegation::listener::TokenRegistry;
-
 use crate::acp::manager::ConnectionManager;
-
 use crate::acp::InternalEventBus;
-
 use crate::chat_channel::manager::ChatChannelManager;
-
 use crate::db::AppDatabase;
-
 use crate::pet_state_mapper::PetStateHandle;
-
 use crate::terminal::manager::TerminalManager;
-
 use crate::web::event_bridge::{EventEmitter, WebEventBroadcaster};
-
 use crate::web::WebServerState;
-
 use crate::workspace_transfer::WorkspaceTransferManager;
 
 pub struct AppState {
@@ -176,6 +165,7 @@ pub fn build_delegation_stack(
     let db_arc = Arc::new(AppDatabase {
         conn: db_conn.clone(),
     });
+    let assistants_dir = data_dir.clone();
     let spawner = Arc::new(ConnectionManagerSpawner {
         manager: cm_arc.clone(),
         db: db_arc.clone(),
@@ -183,12 +173,14 @@ pub fn build_delegation_stack(
     }) as Arc<dyn ConnectionSpawner>;
     let depth_lookup =
         Arc::new(DbDepthLookup { db: db_arc.clone() }) as Arc<dyn ConversationDepthLookup>;
-    let agent_availability =
-        Arc::new(crate::acp::connection::DbAgentAvailabilityLookup { db: db_arc.clone() })
-            as Arc<dyn crate::acp::connection::AgentAvailabilityLookup>;
-    let assistants =
-        Arc::new(crate::acp::delegation::assistants::DbAssistantLookup { db: db_arc.clone() })
-            as Arc<dyn crate::acp::delegation::assistants::AssistantLookup>;
+    let agent_availability = Arc::new(crate::acp::connection::DbAgentAvailabilityLookup {
+        db: db_arc.clone(),
+    })
+        as Arc<dyn crate::acp::connection::AgentAvailabilityLookup>;
+    let assistants = Arc::new(crate::acp::delegation::assistants::DbAssistantLookup {
+        db: db_arc.clone(),
+        data_dir: assistants_dir,
+    }) as Arc<dyn crate::acp::delegation::assistants::AssistantLookup>;
     let status_lookup = Arc::new(DbChildStatusLookup { db: db_arc }) as Arc<dyn ChildStatusLookup>;
     let meta_writer = Arc::new(ConnectionManagerMetaWriter {
         manager: cm_arc.clone(),
@@ -239,15 +231,7 @@ pub fn build_delegation_stack(
     });
 
     (
-        broker,
-        tokens,
-        socket_path,
-        feedback,
-        ask,
-        sessions,
-        authoring,
-        browser,
-        computer,
+        broker, tokens, socket_path, feedback, ask, sessions, authoring, browser, computer,
     )
 }
 

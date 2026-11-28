@@ -1,5 +1,11 @@
 "use client"
 
+import {
+  useVisibleConversationLayout,
+  useVisibleConversationTabs,
+} from "@/stores/tab-store"
+import { leafIds } from "@/lib/tab-group-layout"
+import { useFolderTabsStore } from "@/stores/folder-tabs-store"
 import { BrowserEvalConfirm } from "@/components/browser/browser-eval-confirm"
 import { BrowserEventsBridge } from "@/components/browser/browser-events-bridge"
 import { BrowserScreenshotMarkupHost } from "@/components/browser/browser-screenshot-markup"
@@ -18,16 +24,15 @@ import {
 import type { ImperativePanelGroupHandle } from "react-resizable-panels"
 import { FolderTitleBar } from "@/components/layout/folder-title-bar"
 import { Sidebar } from "@/components/layout/sidebar"
+import { WorkspaceDocumentTitle } from "@/components/layout/workspace-document-title"
 import { StatusBar } from "@/components/layout/status-bar"
 import {
   AppWorkspaceProvider,
   ConversationStatusEventBridge,
 } from "@/contexts/app-workspace-context"
-import { WorkbenchCloudProvider } from "@/workbench/workbench-cloud-context"
 import { AssistantsSync } from "@/stores/assistants-store"
 import { ConversationTagsSync } from "@/stores/conversation-tags-store"
 import { ConversationTagsManagerHost } from "@/components/conversations/conversation-tags-manager"
-import { useActiveFolder } from "@/contexts/active-folder-context"
 import { TaskProvider } from "@/contexts/task-context"
 import { AlertProvider } from "@/contexts/alert-context"
 import {
@@ -36,26 +41,29 @@ import {
 } from "@/contexts/acp-connections-context"
 import { DelegationProvider } from "@/contexts/delegation-context"
 import { ConversationRuntimeProvider } from "@/contexts/conversation-runtime-context"
-import { TabProvider, useTabStore, useTabActions } from "@/contexts/tab-context"
-import { selectIsSplit } from "@/stores/tab-store"
+import { TabProvider, useTabStore } from "@/contexts/tab-context"
 import { SidebarProvider, useSidebarContext } from "@/contexts/sidebar-context"
 import { SearchDialogProvider } from "@/contexts/search-dialog-context"
 import { AutomationsViewProvider } from "@/contexts/automations-view-context"
+import { HarnessViewHost } from "@/components/harness/harness-view-host"
+import { HarnessUpdatesSync } from "@/lib/harness/use-harness-updates"
 import { TasksViewProvider } from "@/contexts/tasks-view-context"
+import { PersonalAgentProvider } from "@/contexts/personal-agent-context"
+import { PersonalAgentViewScope } from "@/components/personal-agent/view-scope"
+import { TaskFromMessageHost } from "@/components/tasks/task-from-message-host"
 import {
   WorkbenchRouteProvider,
   useWorkbenchRoute,
 } from "@/contexts/workbench-route-context"
-import { HouflowCloudWorkspaceProvider } from "@/houflow"
 import {
   WorkbenchRoutePage,
   WorkbenchRouteStrip,
   useHasWorkbenchRouteStrip,
 } from "@/components/workbench/workbench-content"
-import { HarnessViewProvider } from "@/contexts/harness-view-context"
-import { AuxPanelProvider } from "@/contexts/aux-panel-context"
-import { useAuxPanelStore } from "@/stores/aux-panel-store"
-import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import {
+  AuxPanelProvider,
+  useAuxPanelContext,
+} from "@/contexts/aux-panel-context"
 import {
   TerminalProvider,
   useTerminalContext,
@@ -78,6 +86,7 @@ import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { LeftEdgeChrome } from "@/components/layout/left-edge-chrome"
 import { RightEdgeChrome } from "@/components/layout/right-edge-chrome"
 import { WorkspaceChromeController } from "@/components/layout/workspace-chrome-controller"
+import { MobileWorkspacePanes } from "@/components/layout/mobile-workspace-panes"
 import { WindowControls } from "@/components/layout/window-controls"
 import { FileWorkspaceTabBar } from "@/components/files/file-workspace-tab-bar"
 import { FileWorkspaceHeader } from "@/components/files/file-workspace-header"
@@ -88,7 +97,10 @@ import {
   DeepLinkBootstrap,
   PetFocusBridge,
 } from "@/components/workspace/deep-link-bootstrap"
+import { HarnessLinkBootstrap } from "@/components/workspace/harness-link-bootstrap"
 import { WorkspaceOpenFolderListener } from "@/components/workspace/workspace-open-folder-listener"
+import { WorkbenchRouteConversationSync } from "@/components/workspace/workbench-route-conversation-sync"
+import { PersonalAgentOpenBridge } from "@/components/personal-agent/open-bridge"
 import { WorkspaceRestoreNotices } from "@/components/workspace/workspace-restore-notices"
 import { HeavyPluginsWarmup } from "@/components/ai-elements/heavy-plugins-warmup"
 import {
@@ -107,16 +119,6 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { usePlatform } from "@/hooks/use-platform"
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer"
 import { OverlayHostHiddenProvider } from "@/components/ui/overlay-host-hidden"
-
-function WorkspaceDocumentTitle() {
-  const { activeFolder } = useActiveFolder()
-
-  useEffect(() => {
-    document.title = activeFolder ? `${activeFolder.name} - houhub` : "houhub"
-  }, [activeFolder])
-
-  return null
-}
 
 const TOAST_DURATION_MS = 15000
 const WORKSPACE_PANEL_GROUP_ID = "workspace-panel-group"
@@ -157,21 +159,6 @@ function TabKeysSync() {
   useEffect(() => {
     registerOpenTabKeys(keys)
   }, [keys, registerOpenTabKeys])
-  return null
-}
-
-function AuxPanelStoreLifecycle() {
-  const activeFolderId = useAppWorkspaceStore((state) => state.activeFolderId)
-  const hydrate = useAuxPanelStore((state) => state.hydrate)
-  const resetPendingRevealPath = useAuxPanelStore(
-    (state) => state.resetPendingRevealPath
-  )
-
-  useEffect(() => hydrate(), [hydrate])
-  useEffect(
-    () => resetPendingRevealPath(),
-    [activeFolderId, resetPendingRevealPath]
-  )
   return null
 }
 
@@ -226,6 +213,7 @@ function usePanelSlideOnToggle(open: boolean, ready: boolean): boolean {
 
   if (ready) {
     if (prevOpen === null) {
+      // Adopt the hydrated value as the baseline without animating.
       setPrevOpen(open)
     } else if (prevOpen !== open) {
       setPrevOpen(open)
@@ -357,13 +345,16 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
   const { isConversations } = useWorkbenchRoute()
   const hasRouteStrip = useHasWorkbenchRouteStrip()
   const { isOpen: sidebarOpen } = useSidebarContext()
-  const auxOpen = useAuxPanelStore((state) => state.isOpen)
+  const { isOpen: auxOpen } = useAuxPanelContext()
   const { isMac, isWindows, isLinux } = usePlatform()
   const { zoomLevel } = useZoomLevel()
-  const hasConvTabs = useTabStore((s) => s.tabs.length > 0)
-  const isConvSplit = useTabStore(selectIsSplit)
+  const hasConvTabs = useVisibleConversationTabs().length > 0
+  // Tabs following the folder keep the strip (and its "+") for an empty one.
+  const tabsFollowFolder = useFolderTabsStore((s) => s.enabled)
+  const showConvStrip = hasConvTabs || tabsFollowFolder
+  const isConvSplit = leafIds(useVisibleConversationLayout()).length > 1
   const winLinuxControls = isDesktop() && (isWindows || isLinux)
-  // The window chrome (toggle/remote left, terminal/aux/settings right) now
+  // The window chrome (toggle/search left, terminal/aux/settings right) now
   // lives in fixed corner overlays (see FolderLayoutShell) that never move on
   // panel toggles. Each edge column just reserves the overlay's width so its
   // tabs never render underneath. The reserve scales with the app zoom so it
@@ -458,7 +449,7 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                   <div className="flex h-10 shrink-0 items-stretch bg-muted ws-transparent-bg">
                     <ChromeReserve width={leftCornerWidth} />
                     <div className="flex min-w-0 flex-1 items-stretch">
-                      {hasConvTabs ? (
+                      {showConvStrip ? (
                         // The unsplit strip IS the column's top-right strip,
                         // so it carries the maximize/restore button.
                         <TabBar maximizeControl />
@@ -601,6 +592,10 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
         </ResizablePanelGroup>
       </KeptMountedSurface>
       {!isConversations ? (
+        // `bg-background ws-transparent-bg` matches the conversation surface
+        // exactly: opaque background normally, fully transparent (image shows
+        // through, no frost) with a workspace background image on — the
+        // conversation beneath is `invisible` so nothing else paints through.
         <div className="absolute inset-0 z-40 flex flex-col bg-background ws-transparent-bg">
           {/* Window-chrome strip: reserves the fixed corner overlays' h-10
               band, hosts the active route's title on the left, and keeps the
@@ -649,33 +644,23 @@ function MobileWorkspaceContent({ children }: { children: React.ReactNode }) {
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
       <KeptMountedSurface hidden={!isConversations}>
-        {showConversation ? (
-          // Mobile mirrors the desktop chrome: no tab strip — the conversation
-          // detail header (folder › title) renders inside {children}, and tabs
-          // are navigated from the sidebar (single active conversation at a time).
-          <section
-            className="flex h-full min-h-0 flex-col overflow-hidden"
-            data-workspace-pane="conversation"
-          >
-            <div className="relative flex-1 min-h-0 overflow-hidden">
-              {children}
-            </div>
-          </section>
-        ) : (
-          // File view: the shared FileWorkspaceHeader (folder › file breadcrumb)
-          // replaces the file tab strip, matching the desktop file column.
-          <section
-            className="flex h-full min-h-0 flex-col overflow-hidden"
-            data-workspace-pane="files"
-          >
-            <FileWorkspaceHeader />
-            <div className="flex-1 min-h-0 overflow-hidden">
-              <FileWorkspacePanel />
-            </div>
-          </section>
-        )}
+        <MobileWorkspacePanes
+          showConversation={showConversation}
+          files={
+            <>
+              <FileWorkspaceHeader />
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <FileWorkspacePanel />
+              </div>
+            </>
+          }
+        >
+          {children}
+        </MobileWorkspacePanes>
       </KeptMountedSurface>
       {!isConversations ? (
+        // Same canvas as the desktop overlay: conversation-identical background
+        // (opaque normally, transparent under a workspace background image).
         <div className="absolute inset-0 z-40 flex flex-col bg-background ws-transparent-bg">
           {hasRouteStrip ? (
             <div className="flex h-10 shrink-0 items-stretch border-b border-border/50 ws-chrome-border">
@@ -702,23 +687,20 @@ function MobileFolderWorkspaceShell({
     restored: sidebarRestored,
     toggle: toggleSidebar,
   } = useSidebarContext()
-  const { isConversations } = useWorkbenchRoute()
   const {
-    isOpen: auxOpenRequested,
+    isOpen: auxOpen,
     restored: auxRestored,
     toggle: toggleAux,
-  } = useAuxPanelStore()
-  const { isOpen: terminalOpenRequested, toggle: toggleTerminal } =
-    useTerminalContext()
-  const auxOpen = auxOpenRequested && isConversations
-  const terminalOpen = terminalOpenRequested && isConversations
+    setOpen: setAuxOpen,
+  } = useAuxPanelContext()
+  const { isOpen: terminalOpen, toggle: toggleTerminal } = useTerminalContext()
 
   // A full-page route opened from inside the aux drawer — a work tab's "open
   // full page", a repository row's task chip — would otherwise land UNDER the
   // drawer, which on a phone covers nearly the whole screen. The desktop panel
   // collapses for a route by itself (see FolderWorkspaceShell); here the drawer
   // closes, and its toggle stays hidden until the conversations come back.
-  const setAuxOpen = useAuxPanelStore((state) => state.setOpen)
+  const { isConversations } = useWorkbenchRoute()
   useEffect(() => {
     if (!isConversations) setAuxOpen(false)
   }, [isConversations, setAuxOpen])
@@ -761,7 +743,7 @@ function MobileFolderWorkspaceShell({
 
       <Drawer
         open={auxRestored && auxOpen}
-        onOpenChange={useAuxPanelStore.getState().setOpen}
+        onOpenChange={toggleAux}
         swipeDirection="right"
         disablePointerDismissal={false}
       >
@@ -807,7 +789,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     minWidth: auxMinWidth,
     maxWidth: auxMaxWidth,
     setWidth: setAuxWidth,
-  } = useAuxPanelStore()
+  } = useAuxPanelContext()
   const {
     isOpen: terminalOpenRequested,
     height: terminalHeight,
@@ -815,10 +797,22 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     maxHeight: terminalMaxHeight,
     setHeight: setTerminalHeight,
   } = useTerminalContext()
+  // A full-page workbench route (tasks / automations) replaces only the CENTER
+  // panel — the terminal sits below it and the aux panel beside it, both
+  // outside the overlay. Their toggles are hidden on those routes
+  // (RightEdgeChrome), so anything left open would be stranded on screen with
+  // no way to close it. Collapse both for the duration; the contexts keep the
+  // user's real open state (and the terminal keeps running), so switching back
+  // to conversations restores exactly what was there.
   const { isConversations } = useWorkbenchRoute()
   const auxOpen = auxOpenRequested && isConversations
   const terminalOpen = terminalOpenRequested && isConversations
 
+  // Animate the shell (horizontal) group while the sidebar/aux toggle and the
+  // main (vertical) group while the terminal toggles, so the panes slide open
+  // and closed instead of snapping. Gated on `restored` so hydrating the
+  // persisted open/closed state on load doesn't animate. The terminal has no
+  // persisted state (always starts closed), so it's always "ready".
   const sidebarAnimating = usePanelSlideOnToggle(sidebarOpen, sidebarRestored)
   const auxAnimating = usePanelSlideOnToggle(auxOpen, auxRestored)
   const terminalAnimating = usePanelSlideOnToggle(terminalOpen, true)
@@ -1252,6 +1246,19 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     terminalMaxHeight,
     safeMainHeight
   )
+  // A panel's starting size inside the bounds it has now (none while it is
+  // closed): one outside them is what the panels library clamps anyway, and
+  // warns about in the console on every launch.
+  const startSize = (
+    open: boolean,
+    size: number,
+    range: { minSize: number; maxSize: number }
+  ) => (open ? clamp(size, range.minSize, range.maxSize) : 0)
+  // The middle takes the rest, so the starting sizes still add up to the
+  // whole (the library warns about a layout that does not, too).
+  const sidebarStart = startSize(sidebarOpen, 18, sidebarSizeRange)
+  const auxStart = startSize(auxOpen, 18, auxSizeRange)
+  const terminalStart = startSize(terminalOpen, 28, terminalSizeRange)
 
   return (
     <div
@@ -1268,7 +1275,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         <ResizablePanel
           id={FOLDER_SHELL_LEFT_PANEL_ID}
           order={1}
-          defaultSize={18}
+          defaultSize={sidebarStart}
           style={sidebarPanelStyle}
           minSize={sidebarOpen ? sidebarSizeRange.minSize : 0}
           maxSize={sidebarOpen ? sidebarSizeRange.maxSize : 0}
@@ -1294,7 +1301,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         <ResizablePanel
           id={FOLDER_SHELL_MAIN_PANEL_ID}
           order={2}
-          defaultSize={64}
+          defaultSize={Math.max(10, 100 - sidebarStart - auxStart)}
           minSize={10}
         >
           <main
@@ -1313,7 +1320,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
               <ResizablePanel
                 id={FOLDER_MAIN_WORKSPACE_PANEL_ID}
                 order={1}
-                defaultSize={72}
+                defaultSize={Math.max(15, 100 - terminalStart)}
                 minSize={15}
               >
                 {workspaceElement}
@@ -1344,7 +1351,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
               <ResizablePanel
                 id={FOLDER_MAIN_TERMINAL_PANEL_ID}
                 order={2}
-                defaultSize={28}
+                defaultSize={terminalStart}
                 style={terminalPanelStyle}
                 minSize={terminalOpen ? terminalSizeRange.minSize : 0}
                 maxSize={terminalOpen ? terminalSizeRange.maxSize : 0}
@@ -1368,7 +1375,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         <ResizablePanel
           id={FOLDER_SHELL_RIGHT_PANEL_ID}
           order={3}
-          defaultSize={18}
+          defaultSize={auxStart}
           style={auxPanelStyle}
           minSize={auxOpen ? auxSizeRange.minSize : 0}
           maxSize={auxOpen ? auxSizeRange.maxSize : 0}
@@ -1451,7 +1458,7 @@ function FolderLayoutShell({ children }: { children: React.ReactNode }) {
       {/* Desktop window chrome, pinned to the window corners so it never moves —
           or re-mounts — when the side panels open/close (that re-parenting is
           what made the old in-header clusters flicker). Left = sidebar toggle +
-          remote; right = terminal/aux/settings, sitting to the LEFT of the
+          search; right = terminal/aux/settings, sitting to the LEFT of the
           Windows/Linux caption buttons; then the caption buttons themselves
           (self-null on macOS/web). Each edge column reserves the matching width
           beneath these (see leftChromeReserve / rightChromeReserve). */}
@@ -1480,32 +1487,6 @@ function FolderLayoutShell({ children }: { children: React.ReactNode }) {
   )
 }
 
-// Single chokepoint that keeps the workbench route honest: opening or switching
-// to a conversation from ANY entry point (sidebar, ⌘T, search, deep links, pet
-// focus, branch switch, run history …) activates a tab, so leaving a non-default
-// route whenever activeTabId changes covers every opener — present and future —
-// without patching each call site. Re-selecting the ALREADY-active tab does not
-// change activeTabId, so the interactive conversation pickers (sidebar list,
-// search dialog, run history) also call openConversations() directly.
-function WorkbenchRouteConversationSync() {
-  const activeTabId = useTabStore((s) => s.activeTabId)
-  const { consumeRemoteActivation } = useTabActions()
-  const { openConversations } = useWorkbenchRoute()
-  const prevRef = useRef(activeTabId)
-  useEffect(() => {
-    if (prevRef.current === activeTabId) return
-    prevRef.current = activeTabId
-    // A remote tab snapshot that mirrors another client's focus also changes
-    // activeTabId. That's not a local conversation activation, so don't hijack
-    // this window into the conversations route — doing so would unmount whatever
-    // non-conversation view it's on (e.g. the Automations editor + unsaved
-    // edits). Local activations leave the flag false and switch as before.
-    if (consumeRemoteActivation()) return
-    openConversations()
-  }, [activeTabId, openConversations, consumeRemoteActivation])
-  return null
-}
-
 function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
   return (
     <AppWorkspaceProvider>
@@ -1527,11 +1508,16 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                 <ConversationRuntimeProvider>
                   <WorkspaceProvider>
                     <TabProvider>
-                      <WorkspaceDocumentTitle />
                       <TabKeysSync />
-                      <AuxPanelStoreLifecycle />
                       <BrowserEventsBridge />
+                      {/* Beside the events bridge and not inside it: that one
+                          stops where no built-in browser exists, and a local
+                          server is worth hearing about in web mode too (the
+                          port bridge can show it). */}
                       <BrowserServiceBridge />
+                      {/* Mounted beside the bridge, not inside a tab: the tab
+                          an agent asks to run code on is usually not the one
+                          the person is looking at. */}
                       <BrowserEvalConfirm />
                       {/* Here and not in the browser tab it is opened from:
                           only the tab on screen is mounted, and a tab opening
@@ -1540,32 +1526,76 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                       <BrowserTabsPersistence />
                       <BrowserTabsSuspender />
                       <HeavyPluginsWarmup />
-                      <DeepLinkBootstrap />
-                      <PetFocusBridge />
                       <WorkspaceRestoreNotices />
                       {/* Always mounted: external-change conflicts must be
                             resolvable even with the aux file tree closed. */}
                       <ExternalConflictDialog />
                       <SidebarProvider>
-                        <TerminalProvider>
-                          <SearchDialogProvider>
-                            <AutomationsViewProvider>
-                              <TasksViewProvider>
-                                <WorkbenchRouteProvider>
-                                  <WorkbenchCloudProvider>
-                                    <HouflowCloudWorkspaceProvider>
-                                      <WorkbenchRouteConversationSync />
-                                      <WorkspaceOpenFolderListener />
-                                      <FolderLayoutShell>
-                                        {children}
-                                      </FolderLayoutShell>
-                                    </HouflowCloudWorkspaceProvider>
-                                  </WorkbenchCloudProvider>
-                                </WorkbenchRouteProvider>
-                              </TasksViewProvider>
-                            </AutomationsViewProvider>
-                          </SearchDialogProvider>
-                        </TerminalProvider>
+                        <AuxPanelProvider>
+                          <TerminalProvider>
+                            <SearchDialogProvider>
+                              <AutomationsViewProvider>
+                                <TasksViewProvider>
+                                  {/* Always mounted, like the two view
+                                        providers around it: the Harness page
+                                        unmounts whenever its route is left,
+                                        so the section it was on, what it was
+                                        asked to open and its sections' state
+                                        are kept here. The host is the provider
+                                        plus the backend's answer on whether
+                                        the catalog is offered (the
+                                        HOUHUB_HARNESS switch). */}
+                                  <HarnessViewHost>
+                                    {/* The host's update check of what it
+                                          installed from Harness: the
+                                          sidebar's badge count, kept current
+                                          with the page closed. */}
+                                    <HarnessUpdatesSync />
+                                    <PersonalAgentProvider>
+                                      <PersonalAgentViewScope>
+                                        <WorkbenchRouteProvider>
+                                          <WorkbenchRouteConversationSync />
+                                          {/* Inside WorkbenchRouteProvider: they
+                                              show the conversations for the one
+                                              they open, which may be the tab
+                                              already active under the view the
+                                              window opened on. */}
+                                          <DeepLinkBootstrap />
+                                          <PetFocusBridge />
+                                          {/* The task editor a message's "create
+                                              task" opens over the page it is on:
+                                              a transcript shows in a tab, a canvas
+                                              card or a drawer on any route, and
+                                              none of them keeps one of its own. */}
+                                          <TaskFromMessageHost />
+                                          {/* Inside WorkbenchRouteProvider: the
+                                              listener calls openConversations() to
+                                              surface a launcher-opened folder. */}
+                                          <WorkspaceOpenFolderListener />
+                                          {/* Another window's "open the
+                                              assistants page's settings". */}
+                                          <PersonalAgentOpenBridge />
+                                          {/* Inside the assistants' provider:
+                                              the web's title counts them. */}
+                                          <WorkspaceDocumentTitle />
+                                          {/* An "Open in HouHub" link for a Harness
+                                              item opens it here, inside the route
+                                              and the Harness view it needs: the
+                                              page's own ?harness=, or the address
+                                              PetFocusBridge claimed. */}
+                                          <HarnessLinkBootstrap />
+                                          <FolderLayoutShell>
+                                            {children}
+                                          </FolderLayoutShell>
+                                        </WorkbenchRouteProvider>
+                                      </PersonalAgentViewScope>
+                                    </PersonalAgentProvider>
+                                  </HarnessViewHost>
+                                </TasksViewProvider>
+                              </AutomationsViewProvider>
+                            </SearchDialogProvider>
+                          </TerminalProvider>
+                        </AuxPanelProvider>
                       </SidebarProvider>
                     </TabProvider>
                   </WorkspaceProvider>
@@ -1588,14 +1618,7 @@ export default function WorkspaceLayout({
     <Suspense>
       <RemoteConnectionGate>
         <UpdateProvider>
-          {/* Upstream components (search dialog, session-details tab) read the
-              aux panel through its context; the panel itself stays store driven,
-              so the provider only bridges the two. */}
-          <HarnessViewProvider>
-            <AuxPanelProvider>
-              <WorkspaceLayoutInner>{children}</WorkspaceLayoutInner>
-            </AuxPanelProvider>
-          </HarnessViewProvider>
+          <WorkspaceLayoutInner>{children}</WorkspaceLayoutInner>
         </UpdateProvider>
       </RemoteConnectionGate>
     </Suspense>

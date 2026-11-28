@@ -27,13 +27,10 @@
 //! `commands::conversations::inject_delegation_meta` on a cold reload.
 
 use async_trait::async_trait;
-
 use std::sync::Arc;
 
 use crate::acp::manager::ConnectionManager;
-
 use crate::acp::types::AcpEvent;
-
 use crate::web::event_bridge::{emit_with_state, emit_with_state_gated};
 
 /// Top-level key under which delegation state lives on a tool call's
@@ -371,6 +368,14 @@ pub fn build_delegation_meta(
             "assistant_name".to_string(),
             serde_json::Value::String(a.name.clone()),
         );
+        // The owner's assistant it runs as: with it, `assistant_id` is that
+        // assistant's row, not the collaboration settings' one.
+        if let Some(uid) = a.bot_uid.as_deref() {
+            inner.insert(
+                "bot_uid".to_string(),
+                serde_json::Value::String(uid.to_string()),
+            );
+        }
     }
     let mut outer = serde_json::Map::new();
     outer.insert(
@@ -431,17 +436,7 @@ mod tests {
 
     #[test]
     fn build_meta_with_error_code() {
-        let v = build_delegation_meta(
-            "failed",
-            None,
-            Some(7),
-            Some("timeout"),
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
+        let v = build_delegation_meta("failed", None, Some(7), Some("timeout"), None, None, None, None, None);
         let inner = v.get(DELEGATION_META_KEY).unwrap().as_object().unwrap();
         assert_eq!(inner.get("status").unwrap().as_str().unwrap(), "failed");
         assert_eq!(
@@ -497,10 +492,7 @@ mod tests {
         let writer = ConnectionManagerMetaWriter {
             manager: manager.clone(),
         };
-        let state = manager
-            .get_state("p1")
-            .await
-            .expect("test connection state");
+        let state = manager.get_state("p1").await.expect("test connection state");
 
         // While the parent's `delegate_to_agent` call is live, the write lands.
         state.write().await.apply_event(&AcpEvent::ToolCall {
@@ -538,17 +530,7 @@ mod tests {
             .write_meta(
                 "p1",
                 "tu-1",
-                build_delegation_meta(
-                    "completed",
-                    None,
-                    Some(9),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                ),
+                build_delegation_meta("completed", None, Some(9), None, None, None, None, None, None),
             )
             .await;
         assert!(

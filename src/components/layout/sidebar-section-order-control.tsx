@@ -9,7 +9,6 @@ import type {
   SidebarSectionId,
   SidebarSectionOrder,
 } from "@/lib/sidebar-view-mode-storage"
-import { normalizeSectionOrder } from "@/lib/sidebar-view-mode-storage"
 import { cn } from "@/lib/utils"
 
 // Position chip at the row's leading edge. Same geometry/palette as the sidebar
@@ -78,24 +77,24 @@ export function SidebarSectionOrderControl({
   }, [order])
 
   const label = (id: SidebarSectionId) =>
-    id === "folders"
-      ? t("sectionFolders")
-      : id === "chats"
-        ? t("sectionChats")
-        : t("sectionRecent")
+    id === "assistants"
+      ? t("sectionAssistants")
+      : id === "folders"
+        ? t("sectionFolders")
+        : id === "chats"
+          ? t("sectionChats")
+          : t("sectionRecent")
 
   const move = (id: SidebarSectionId, delta: number, viaKeyboard: boolean) => {
     if (viaKeyboard) pendingFocusRef.current = id
     onMove(id, delta)
   }
 
-  const normalizedOrder = normalizeSectionOrder(order)
-
   return (
     <>
-      {normalizedOrder.map((id, index) => {
+      {order.map((id, index) => {
         const first = index === 0
-        const last = index === normalizedOrder.length - 1
+        const last = index === order.length - 1
         const hidden = hiddenSections?.has(id) ?? false
         const name = label(id)
         return (
@@ -123,7 +122,7 @@ export function SidebarSectionOrderControl({
             aria-label={t("sectionOrderItemLabel", {
               name,
               position: index + 1,
-              total: normalizedOrder.length,
+              total: order.length,
             })}
             aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
             className={cn("gap-2 py-1.5", hidden && "opacity-50")}

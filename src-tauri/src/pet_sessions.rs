@@ -18,21 +18,15 @@
 //! `status` kind to avoid a redundant rebuild.
 
 use std::future::Future;
-
 use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
-
 use tokio::sync::broadcast;
 
 use crate::acp::manager::ConnectionManager;
-
 use crate::acp::types::AcpEvent;
-
 use crate::acp::InternalEventBus;
-
 use crate::commands::pet::pet_list_active_sessions_core;
-
 use crate::web::event_bridge::{
     emit_event, EventEmitter, WebEvent, WebEventBroadcaster, CONVERSATION_CHANGED_EVENT,
 };
@@ -50,6 +44,11 @@ fn is_sessions_relevant(payload: &AcpEvent) -> bool {
             | AcpEvent::Error { .. }
             | AcpEvent::PermissionRequest { .. }
             | AcpEvent::PermissionResolved { .. }
+            // A question or plan approval waits on the user too (18 #2).
+            | AcpEvent::QuestionRequest { .. }
+            | AcpEvent::QuestionResolved { .. }
+            | AcpEvent::PlanApprovalRequest { .. }
+            | AcpEvent::PlanApprovalResolved { .. }
             | AcpEvent::TurnComplete { .. }
             | AcpEvent::ConversationLinked { .. }
             | AcpEvent::ConversationStatusChanged { .. }
@@ -178,6 +177,24 @@ mod tests {
                 stop_reason: "end_turn".into(),
                 agent_type: "claude_code".into(),
             },
+            // A question or plan approval changes who waits (18 #2).
+            AcpEvent::QuestionRequest {
+                question_id: "q1".into(),
+                questions: vec![],
+            },
+            AcpEvent::QuestionResolved {
+                question_id: "q1".into(),
+                resolution: None,
+            },
+            AcpEvent::PlanApprovalRequest {
+                approval_id: "a1".into(),
+                tool_call_id: "t1".into(),
+                plan_markdown: "# Plan".into(),
+            },
+            AcpEvent::PlanApprovalResolved {
+                approval_id: "a1".into(),
+                resolution: None,
+            },
         ];
         for ev in &accepted {
             assert!(is_sessions_relevant(ev), "expected {ev:?} to be relevant");
@@ -187,14 +204,8 @@ mod tests {
     #[test]
     fn relevant_filter_ignores_high_volume_events() {
         let ignored = [
-            AcpEvent::ContentDelta {
-                text: "x".into(),
-                parent_tool_use_id: None,
-            },
-            AcpEvent::Thinking {
-                text: "x".into(),
-                parent_tool_use_id: None,
-            },
+            AcpEvent::ContentDelta { text: "x".into(), parent_tool_use_id: None },
+            AcpEvent::Thinking { text: "x".into(), parent_tool_use_id: None },
             AcpEvent::UsageUpdate { used: 1, size: 1 },
         ];
         for ev in &ignored {

@@ -24,7 +24,7 @@ import type {
 import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 
 // Picking this clears the override (inherit the agent's own default); the
-// HouHub prefix avoids colliding with a real option id.
+// houhub prefix avoids colliding with a real option id.
 const DEFAULT_SENTINEL = "__houhub_default__"
 
 interface AgentConfigSectionProps {
@@ -83,9 +83,9 @@ export function AgentConfigSection({
         className={cn(
           "flex items-center gap-2 text-xs text-muted-foreground",
           // Inline shares the composer's bottom bar with the "+" button: hold
-          // the same 24px the chip will occupy so the bar neither jumps nor
+          // the same 32px the chip will occupy so the bar neither jumps nor
           // leaves this line sitting lower than the "+" while the probe runs.
-          inline && "h-6"
+          inline && "h-8"
         )}
       >
         <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
@@ -94,6 +94,28 @@ export function AgentConfigSection({
     )
   }
   if (error) {
+    // Same 32px line in the composer bar — a stacked message plus a full-size
+    // button would double the bottom bar's height on a failed probe.
+    if (inline) {
+      return (
+        <div className="flex h-8 min-w-0 items-center gap-2">
+          <p
+            className="min-w-0 truncate text-xs text-destructive"
+            title={error}
+          >
+            {error}
+          </p>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="shrink-0"
+            onClick={onReload}
+          >
+            {t("retry")}
+          </Button>
+        </div>
+      )
+    }
     return (
       <div className="flex flex-col items-start gap-2">
         <p className="text-xs text-destructive">{error}</p>
@@ -117,7 +139,7 @@ export function AgentConfigSection({
     <div
       className={cn(
         "flex min-w-0 items-center gap-2",
-        inline ? "h-6" : "justify-between"
+        inline ? "h-8" : "justify-between"
       )}
     >
       <p
@@ -286,10 +308,9 @@ export function effectiveSelections(
 // Friendly name for a selected value within a select option — checks groups
 // first, then the flat list, mirroring how ConfigOptionRow renders them.
 function selectValueLabel(
-  kind: SessionConfigOptionInfo["kind"],
+  kind: Extract<SessionConfigOptionInfo["kind"], { type: "select" }>,
   value: string
 ): string | undefined {
-  if (kind.type !== "select") return undefined
   for (const group of kind.groups) {
     const hit = group.options.find((o) => o.value === value)
     if (hit) return hit.name

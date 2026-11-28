@@ -5,7 +5,7 @@ import { openSettingsWindow } from "@/lib/api"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { useSidebarContext } from "@/contexts/sidebar-context"
-import { useAuxPanelStore } from "@/stores/aux-panel-store"
+import { useAuxPanelContext } from "@/contexts/aux-panel-context"
 import { useTerminalContext } from "@/contexts/terminal-context"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import {
@@ -22,7 +22,9 @@ import {
   useAppWorkspaceStore,
 } from "@/stores/app-workspace-store"
 import { popClosedTab } from "@/lib/closed-tab-stack"
+import { isAssistantsPageCurrent } from "@/lib/assistants-page"
 import {
+  assistantShortcutFromEvent,
   matchShortcutEvent,
   numberedTabIndexFromEvent,
   pickNumberedTabId,
@@ -54,7 +56,7 @@ export function WorkspaceChromeController() {
   const { activeFolder } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
   const { toggle } = useSidebarContext()
-  const toggleAuxPanel = useAuxPanelStore((state) => state.toggle)
+  const { toggle: toggleAuxPanel } = useAuxPanelContext()
   const { toggle: toggleTerminal } = useTerminalContext()
   const { openNewConversationTab, openTab, switchTab, closeTab } =
     useTabActions()
@@ -225,6 +227,8 @@ export function WorkspaceChromeController() {
         return
       }
       if (matchShortcutEvent(e, shortcuts.toggle_aux_panel)) {
+        // The aux panel hosts the Session Details tab, so it's usable in chat
+        // mode too; only suppress the toggle when there's nothing to show.
         if (!activeFolder && !isChatMode) return
         e.preventDefault()
         toggleAuxPanel()
@@ -255,6 +259,15 @@ export function WorkspaceChromeController() {
       // mod+shift+tab working at every width — and, crucially, keeps
       // preventDefault firing so mod+w never falls through to closing the OS
       // window. Routing mirrors the old split: conversation pane vs files pane.
+      // On the assistants page its own keys switch assistants on these
+      // chords (`useAssistantShortcuts`); the tabs are under the page there.
+      if (
+        isAssistantsPageCurrent() &&
+        assistantShortcutFromEvent(e, shortcuts) !== null
+      ) {
+        return
+      }
+
       const { conversation: conversationPaneActive, files: filesPaneActive } =
         tabShortcutTarget(
           mode,

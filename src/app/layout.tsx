@@ -18,16 +18,18 @@ import {
 import { AppearanceProvider } from "@/components/appearance-provider"
 import { OverlayScrollbarsInit } from "@/components/overlay-scrollbars-init"
 import { ClipboardFallbackInit } from "@/components/clipboard-fallback-init"
+import { PersonalAgentNotifier } from "@/components/personal-agent-notifier"
+import { PresenceHeartbeat } from "@/components/presence-heartbeat"
 import { ServiceWorkerInit } from "@/components/service-worker-init"
 import { WebConnectionGuard } from "@/components/connection/web-connection-guard"
 import { WebVersionNotice } from "@/components/connection/web-version-notice"
 import { WindowResizeGrips } from "@/components/layout/window-resize-grips"
+import { CloseRequestDialog } from "@/components/workspace/close-request-dialog"
 import {
   HouflowDesktopProvider,
   WorkbenchClientCapabilityProvider,
 } from "@/houflow"
 import { WorkbenchProvider } from "@/workbench"
-import { CloseRequestDialog } from "@/components/workspace/close-request-dialog"
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -44,7 +46,7 @@ export const viewport: Viewport = {
 
 export const metadata: Metadata = {
   title: "houhub",
-  description: "Desktop workspace for Agent Hub managed and local agents",
+  description: "AI Coding Agent Conversation Manager",
   icons: {
     icon: [
       { url: "/icon-32x32.png", sizes: "32x32", type: "image/png" },
@@ -107,20 +109,29 @@ export default async function RootLayout({
               defaultTheme="system"
               enableSystem
               disableTransitionOnChange
+              // The theme is on the page before it paints by
+              // APPEARANCE_INIT_SCRIPT above. next-themes' own script is
+              // only ever made on the client here — its provider mounts once
+              // the language settings are read — where a script React makes
+              // never runs, and React reports one made as code: a data block
+              // is what it is.
+              scriptProps={{ type: "application/json" }}
             >
               <AppearanceProvider>
                 <HouflowDesktopProvider>
                   <WorkbenchProvider>
                     <WorkbenchClientCapabilityProvider />
                     <OverlayScrollbarsInit />
-                    <ClipboardFallbackInit />
-                    <ServiceWorkerInit />
-                    <WebConnectionGuard />
-                    <WebVersionNotice />
-                    <WindowResizeGrips />
-                    {/* Self-gated to the main window: every route it can show
-                        (/workspace, /login, the redirecting /) must be able to
-                        answer a close press. */}
+                <ClipboardFallbackInit />
+                <PresenceHeartbeat />
+                <PersonalAgentNotifier />
+                <ServiceWorkerInit />
+                <WebConnectionGuard />
+                <WebVersionNotice />
+                <WindowResizeGrips />
+                {/* Self-gated to the main window: every route it can show
+                    (/workspace, /login, the redirecting /) must be able to
+                    answer a close press. */}
                     <CloseRequestDialog />
                     {children}
                   </WorkbenchProvider>

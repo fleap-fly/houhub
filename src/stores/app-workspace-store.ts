@@ -6,7 +6,10 @@ import {
   deleteFolderGroup as apiDeleteFolderGroup,
   getFolder as apiGetFolder,
   getGitHead,
+  listAllConversations,
+  listAllFolderDetails,
   listFolderGroups,
+  listOpenFolderDetails,
   openFolder as apiOpenFolder,
   openFolderById as apiOpenFolderById,
   openWorktreeFolder as apiOpenWorktreeFolder,
@@ -14,11 +17,6 @@ import {
   setFolderGroup as apiSetFolderGroup,
   updateFolderGroup as apiUpdateFolderGroup,
 } from "@/lib/api"
-import {
-  listAllConversations,
-  listAllFolderDetails,
-  listOpenFolderDetails,
-} from "@/stores/local-workspace-read"
 import { isPsPath } from "@/workbench/space-fs"
 import { toErrorMessage } from "@/lib/app-error"
 import {
@@ -389,6 +387,9 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
           }
         }
         set({
+          // HouHub: a project-system mount (`ps://…`) belongs to the workbench
+          // panel, not the local folder sidebar — the store keeps the full list
+          // in `allFolders`, and the sidebar reads the filtered one.
           folders: openList.filter((folder) => !isPsPath(folder.path)),
           allFolders: allList,
           folderGroups: groupList,
@@ -408,6 +409,9 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
         const list = await listAllConversations()
         set({ ...withConversations(list), conversationsError: null })
       } catch (err) {
+        // HouHub keeps the cached list on screen when a refresh fails (a
+        // transient DB/IPC error must not blank the sidebar); the error is
+        // only surfaced when there is nothing cached to show.
         if (get().conversations.length === 0) {
           set({ conversationsError: toErrorMessage(err) })
         } else {
@@ -464,10 +468,15 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
     },
 
     // Insert-or-replace a conversation by id (create + field updates). Root-only:
-    // delegation children (parent_id set) are not sidebar rows. New rows prepend
-    // (most-recent-first); existing rows replace in place to keep their position.
+    // children (parent_id set) — delegation sub-sessions and ask conversations
+    // — are not root rows; `useSubsessionSync` nests them under their parent.
+    // New rows prepend (most-recent-first); existing rows replace in place to
+    // keep their position.
     applyConversationUpsert: (summary) => {
       if (summary.parent_id != null) return
+      // The personal agent's own sessions live on its page, never in the
+      // sidebar (the backend's list leaves them out too).
+      if (summary.kind === "personal") return
       if (deletedIds.has(summary.id)) return
       const prev = get().conversations
       const idx = prev.findIndex((c) => c.id === summary.id)
@@ -592,7 +601,7 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       // lookups). Seeding a chat folder into `folders` would render a "Chat"
       // header row in the sidebar until the next refetch.
       set({
-        ...(detail.kind !== "chat" && !isPsPath(detail.path)
+        ...(detail.kind !== "chat" && detail.kind !== "personal"
           ? { folders: upsert(folders) }
           : {}),
         allFolders: upsert(allFolders),

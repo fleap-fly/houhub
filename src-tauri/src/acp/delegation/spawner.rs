@@ -36,7 +36,11 @@ pub struct DelegationLink {
 /// The assistant a delegated child runs as, and what the child row keeps of it.
 #[derive(Debug, Clone)]
 pub struct AssistantLink {
-    pub id: i32,
+    /// The collaboration settings' assistant it ran as — only a child from
+    /// before the owner's assistants; one of theirs is named by `bot_uid`.
+    pub id: Option<i32>,
+    /// The owner's assistant it runs as.
+    pub bot_uid: Option<String>,
     pub snapshot: crate::models::AssistantRunSnapshot,
 }
 
@@ -388,22 +392,21 @@ pub mod mock {
             preferred_mode_id: Option<String>,
             preferred_config_values: BTreeMap<String, String>,
         ) -> Result<ResumedSpawn, SpawnerError> {
-            self.resume_spawn_args
-                .lock()
-                .await
-                .push(ResumeSpawnCallArgs {
-                    parent_connection_id: parent_connection_id.to_string(),
-                    agent_type,
-                    working_dir,
-                    external_session_id: external_session_id.to_string(),
-                    preferred_mode_id,
-                    preferred_config_values,
-                });
+            self.resume_spawn_args.lock().await.push(ResumeSpawnCallArgs {
+                parent_connection_id: parent_connection_id.to_string(),
+                agent_type,
+                working_dir,
+                external_session_id: external_session_id.to_string(),
+                preferred_mode_id,
+                preferred_config_values,
+            });
             self.resume_spawn_results
                 .lock()
                 .await
                 .pop_front()
-                .unwrap_or_else(|| Err(SpawnerError::Spawn("no queued resume spawn result".into())))
+                .unwrap_or_else(|| {
+                    Err(SpawnerError::Spawn("no queued resume spawn result".into()))
+                })
         }
 
         async fn send_resume_prompt(

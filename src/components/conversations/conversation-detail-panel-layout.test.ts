@@ -210,7 +210,7 @@ describe("ConversationDetailPanel new conversation layout", () => {
     expect(welcomeHeroSource).not.toContain("bg-gradient-to-r")
   })
 
-  it.skip("uses the shared attached folder branch picker treatment for all chat inputs", () => {
+  it("uses the shared attached folder branch picker treatment for all chat inputs", () => {
     expect(source).not.toContain("attachFolderBranchPickerToInput")
     expect(conversationShellSource).not.toContain(
       "attachFolderBranchPickerToInput"
@@ -224,10 +224,12 @@ describe("ConversationDetailPanel new conversation layout", () => {
     const pickerStart = messageInputSource.indexOf(
       "{hasFolderBranchPicker && ("
     )
-    // The picker row is the last thing inside the composer wrapper; the
-    // server-file dialog that follows it sits outside, so it anchors the slice.
+    // The picker row is the last thing inside the composer wrapper; the next
+    // block after it sits outside, so it anchors the slice. (The fork composer
+    // has no native-paperclip branch there — its upload path is the paste
+    // handler, not a hidden file input.)
     const pickerEnd = messageInputSource.indexOf(
-      "{!attach.showNativePaperclip && (",
+      "{hasContextLocation && (",
       pickerStart
     )
     expect(pickerStart).toBeGreaterThan(-1)
@@ -333,7 +335,7 @@ describe("ConversationDetailPanel split-group render model", () => {
   // A selected folder with nothing open is not a blank column: the panel says
   // so and offers a first conversation, whether or not other folders have
   // tabs, and the workspace keeps the strip (and its "+") up for it.
-  it.skip("shows the empty-folder state instead of a blank column", () => {
+  it("shows the empty-folder state instead of a blank column", () => {
     expect(source).toContain(
       "return tabsFollowFolder ? <FolderTabsEmptyState /> : null"
     )
@@ -525,7 +527,14 @@ describe("ConversationDetailPanel send-path hardening", () => {
     )
     expect(effectWithDeps).toContain("if (queueSteerInFlight) return")
     // …and as a dependency, so releasing the hold re-runs the flush.
-    expect(effectWithDeps).toContain("queueSteerInFlight])")
+    expect(effectWithDeps).toMatch(
+      /queueSteerInFlight,\s+editInFlight,\s+\]\)$/
+    )
+    // An edited message between its rewind and its send holds it the same
+    // way (`handleEditUserTurn`): nothing else may take the cut session's
+    // first turn, so the timer re-checks the ref too.
+    expect(effectWithDeps).toContain("if (editInFlight) return")
+    expect(effectWithDeps).toContain("if (editInFlightRef.current) return")
 
     const steerStart = source.indexOf("const handleQueueSteer = useCallback")
     expect(steerStart).toBeGreaterThan(-1)
@@ -567,7 +576,7 @@ describe("ConversationDetailPanel send-path hardening", () => {
     const guardIdx = source.indexOf("shouldRejectDuplicateCreate(")
     // The CALL site (assignment), not the function definition earlier in the file.
     const optimisticIdx = source.indexOf(
-      "const optimisticTurn = buildOptimisticUserTurnFromDraft("
+      "const builtTurn = buildOptimisticUserTurnFromDraft("
     )
     expect(guardIdx).toBeGreaterThan(-1)
     expect(optimisticIdx).toBeGreaterThan(guardIdx)
